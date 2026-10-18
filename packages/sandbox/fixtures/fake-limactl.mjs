@@ -45,7 +45,8 @@ switch (args[0]) {
     const name = flag("name");
     if (read(name)) fatal(`instance "${name}" already exists`);
     if (process.env.FAKE_LIMA_FAIL_CREATE) fatal("simulated create failure");
-    const mounts = args.filter((a) => a.startsWith("--mount-only=")).map((a) => a.slice("--mount-only=".length));
+    const set = flag("set");
+    const mounts = set?.startsWith(".mounts = ") ? JSON.parse(set.slice(".mounts = ".length)) : [];
     info(`Using the template ${positional.at(-1)}`);
     await sleep(delay);
     write({

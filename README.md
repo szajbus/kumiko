@@ -70,10 +70,17 @@ State: Lima owns the VMs (`~/.lima/bm-*`). Bentomo keeps one JSON file per sandb
 Checked against Lima 2.2.1 (the spec's open questions):
 
 - `limactl list --format json` prints one JSON object per line, with `name`, `status`, `cpus`, `memory` and `disk` (bytes) and `sshConfigFile`.
-- `--mount-only` repeats. Lima splits its values on commas, so a mount path containing a comma is rejected.
+- `--mount-only` repeats, but it splits its values on commas and can't set a path in the VM. Bentomo passes mounts with `--set '.mounts = […]'` instead.
 - The remote `bash -s` hands the rest of stdin to the command after `exec`. Forwarded values containing quotes, `$` and newlines arrive intact.
 
 Beyond the spec:
+
+- **Mounts land in `/workspace` by default.** This replaces the spec's same-path rule.
+  - A host folder `/a/b/c/d` is offered at `/workspace/d` in the VM, with a `-2` suffix if that path is taken. The user can override it.
+  - `~/…` in the VM path means the VM user's home; it becomes Lima's `{{.Home}}`.
+  - When the host has `~/.claude`, the form starts with it mounted writable at `~/.claude` in the VM (`GET /api/defaults`).
+  - VM paths can't be `/` or `~` and can't overlap.
+  - Mounts saved without a VM path keep the host path.
 
 - **`SandboxProvider`** has three more methods: `provision` (re-run), `validate` (so the server can answer `400` before going async) and `templates`.
 - **Provisioning output:**

@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { execScript, parseLimaList, provisionCommand, tidyLimaLine, validateSpec } from "../src/index.js";
+import { defaultGuestPath } from "@bentomo/shared";
+import { execScript, mountsExpression, parseLimaList, provisionCommand, tidyLimaLine, validateSpec } from "../src/index.js";
 import { fakeLima } from "./helpers.js";
 
 const spec = (over = {}) => ({ name: "web", cpus: 4, memoryGiB: 4, diskGiB: 100, mounts: [], env: [], ...over });
@@ -24,6 +25,20 @@ describe("parsing", () => {
   it("quotes forwarded values and skips unset ones", () => {
     const s = execScript("cat", ["A", "B"], { A: "it's $x" });
     assert.equal(s, "export A='it'\\''s $x'\nexec cat\n");
+  });
+
+  it("builds the mounts expression with VM paths and ~ as Lima's {{.Home}}", () => {
+    assert.equal(
+      mountsExpression([
+        { hostPath: "/a/b,c", writable: true, guestPath: "/workspace/b,c" },
+        { hostPath: "/Users/me/.claude", writable: false, guestPath: "~/.claude" },
+        { hostPath: "/same", writable: false },
+      ]),
+      '.mounts = [{"location":"/a/b,c","mountPoint":"/workspace/b,c","writable":true},' +
+        '{"location":"/Users/me/.claude","mountPoint":"{{.Home}}/.claude","writable":false},' +
+        '{"location":"/same","mountPoint":"/same","writable":false}]',
+    );
+    assert.equal(defaultGuestPath("/a/b/c/d/"), "/workspace/d");
   });
 
   it("wraps a provisioning script so it can't be read from stdin", () => {
@@ -53,14 +68,32 @@ describe("validateSpec", () => {
           { hostPath: join(mountDir, "sub"), writable: false },
           { hostPath: "/does/not/exist", writable: false },
           { hostPath: "relative", writable: false },
-          { hostPath: "/tmp/a,b", writable: false },
+          { hostPath: mountDir, writable: false, guestPath: "relative/in/vm" },
+          { hostPath: mountDir, writable: false, guestPath: "~" },
         ],
       }),
     );
     const text = v.errors.join("\n");
-    for (const needle of ["Name", "CPUs", "Disk", "does not exist", "absolute", "comma", "overlap"]) {
+    for (const needle of ["Name", "CPUs", "Disk", "does not exist", "absolute", "relative/in/vm can't", "~ can't", "overlap in the VM"]) {
       assert.ok(text.includes(needle), `expected an error about ${needle}:\n${text}`);
     }
+  });
+
+  it("defaults the VM path to the host path and normalizes VM paths", async () => {
+    const { mountDir } = await fakeLima();
+    const v = await validateSpec(
+      spec({
+        mounts: [
+          { hostPath: mountDir, writable: true },
+          { hostPath: mountDir, writable: false, guestPath: "/workspace/d/" },
+          { hostPath: mountDir, writable: false, guestPath: "~/.claude" },
+        ],
+      }),
+    );
+    assert.deepEqual(v.errors, []);
+    assert.deepEqual(v.spec.mounts.map((m) => m.guestPath), [mountDir, "/workspace/d", "~/.claude"]);
+    const clash = await validateSpec(spec({ mounts: [{ hostPath: mountDir, writable: false, guestPath: "/workspace" }, { hostPath: mountDir, writable: false, guestPath: "/workspace/d" }] }));
+    assert.match(clash.errors.join(), /overlap in the VM/);
   });
 
   it("warns, not fails, on unset variables", async () => {
@@ -95,7 +128,11 @@ describe("LimaProvider against a fake limactl", () => {
     assert.equal(await readFile(join(mountDir, "token"), "utf8"), "s3cr3t 'quoted'");
     const calls = (await readFile(join(limaDir, "calls.log"), "utf8")).trim().split("\n").map((l) => JSON.parse(l));
     const create = calls.find((c) => c[0] === "create");
-    assert.deepEqual(create, ["create", "--tty=false", "--name=bm-web", "--cpus=4", "--memory=4", "--disk=100", `--mount-only=${mountDir}:w`, "template:default"]);
+    assert.deepEqual(create, [
+      "create", "--tty=false", "--name=bm-web", "--cpus=4", "--memory=4", "--disk=100",
+      `--set=.mounts = [{"location":"${mountDir}","mountPoint":"${mountDir}","writable":true}]`,
+      "template:default",
+    ]);
     assert.ok(lines.some((l) => l.includes('+ printf \'%s\' "$TOKEN"')), "trace shows the command unexpanded");
     assert.ok(!lines.some((l) => l.includes("s3cr3t")), "the value never reaches the log");
 

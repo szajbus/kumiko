@@ -15,6 +15,7 @@ describe("server", () => {
   let server: RunningServer;
   let limaDir: string;
   let mountDir: string;
+  let home: string;
   const events: ServerEvent[] = [];
   let ws: WebSocket;
 
@@ -24,6 +25,8 @@ describe("server", () => {
     mountDir = join(root, "mount");
     await mkdir(limaDir);
     await mkdir(mountDir);
+    home = join(root, "home");
+    await mkdir(home);
     await writeFile(join(limaDir, "wm-foreign.json"), JSON.stringify({ name: "wm-foreign", status: "Running" }));
     process.env.FAKE_LIMA_DIR = limaDir;
     process.env.FAKE_LIMA_DELAY = "150";
@@ -34,7 +37,7 @@ describe("server", () => {
       metadata: new MetadataStore(join(root, "sandboxes")),
       env,
     });
-    server = await startServer({ provider, port: 0, refreshMs: 200, env });
+    server = await startServer({ provider, port: 0, refreshMs: 200, env, home });
     ws = new WebSocket(`${server.url.replace("http", "ws")}/api/events`);
     ws.on("message", (m) => events.push(JSON.parse(String(m))));
     await new Promise((r) => ws.once("open", r));
@@ -73,6 +76,15 @@ describe("server", () => {
     assert.equal(t.preferred, "template:debian-12");
     const env = await json(await api("/api/env?names=TOKEN,NOPE,bad-name"));
     assert.deepEqual(env, { TOKEN: true, NOPE: false });
+  });
+
+  it("offers ~/.claude as a default mount only when the host has one", async () => {
+    let d = await json(await api("/api/defaults"));
+    assert.equal(d.home, home);
+    assert.deepEqual(d.mounts, []);
+    await mkdir(join(home, ".claude"));
+    d = await json(await api("/api/defaults"));
+    assert.deepEqual(d.mounts, [{ hostPath: join(home, ".claude"), guestPath: "~/.claude", writable: true }]);
   });
 
   it("rejects invalid specs with 400", async () => {

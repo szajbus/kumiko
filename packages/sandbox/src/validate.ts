@@ -1,6 +1,6 @@
 import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join, normalize, sep } from "node:path";
+import { isAbsolute, join, normalize, posix, sep } from "node:path";
 import { ENV_NAME_PATTERN, NAME_PATTERN, type SandboxSpec } from "@bentomo/shared";
 
 export interface Validation {
@@ -16,10 +16,22 @@ export function expandHome(p: string): string {
   return p;
 }
 
-function isWithin(child: string, parent: string): boolean {
+function isWithin(child: string, parent: string, separator = sep): boolean {
   if (child === parent) return true;
-  const base = parent.endsWith(sep) ? parent : parent + sep;
+  const base = parent.endsWith(separator) ? parent : parent + separator;
   return child.startsWith(base);
+}
+
+/** Normalizes a path inside the VM: absolute, or "~/…" for the VM user's home. Undefined if it is neither. */
+export function normalizeGuestPath(p: string): string | undefined {
+  const t = p.trim();
+  if (t.startsWith("~/")) {
+    const rest = posix.normalize(t.slice(2)).replace(/\/+$/, "");
+    return rest && rest !== "." && !rest.startsWith("..") ? `~/${rest}` : undefined;
+  }
+  if (!t.startsWith("/")) return undefined;
+  const n = posix.normalize(t).replace(/(.)\/+$/, "$1");
+  return n === "/" ? undefined : n;
 }
 
 /**
@@ -45,10 +57,11 @@ export async function validateSpec(input: SandboxSpec, env: NodeJS.ProcessEnv = 
   const memoryGiB = num(input.memoryGiB, "Memory", 1);
   const diskGiB = num(input.diskGiB, "Disk", 10);
 
-  const mounts = (Array.isArray(input.mounts) ? input.mounts : []).map((m) => ({
-    hostPath: normalize(expandHome(String(m?.hostPath ?? "").trim())).replace(/(.)\/+$/, "$1"),
-    writable: Boolean(m?.writable),
-  }));
+  const mounts = (Array.isArray(input.mounts) ? input.mounts : []).map((m) => {
+    const hostPath = normalize(expandHome(String(m?.hostPath ?? "").trim())).replace(/(.)\/+$/, "$1");
+    const rawGuest = String(m?.guestPath ?? "").trim();
+    return { hostPath, writable: Boolean(m?.writable), guestPath: rawGuest || hostPath };
+  });
   for (const m of mounts) {
     if (!m.hostPath || m.hostPath === ".") {
       errors.push("A mount has no folder selected.");
@@ -58,11 +71,6 @@ export async function validateSpec(input: SandboxSpec, env: NodeJS.ProcessEnv = 
       errors.push(`Mount ${m.hostPath} must be an absolute path.`);
       continue;
     }
-    if (m.hostPath.includes(",")) {
-      // limactl splits --mount-only values on commas.
-      errors.push(`Mount ${m.hostPath} contains a comma, which limactl cannot accept.`);
-      continue;
-    }
     try {
       const st = await stat(m.hostPath);
       if (!st.isDirectory()) errors.push(`Mount ${m.hostPath} is not a folder.`);
@@ -70,10 +78,18 @@ export async function validateSpec(input: SandboxSpec, env: NodeJS.ProcessEnv = 
       errors.push(`Mount ${m.hostPath} does not exist on the host.`);
     }
   }
+  for (const m of mounts) {
+    if (m.guestPath === m.hostPath && !isAbsolute(m.hostPath)) continue; // already reported above
+    const g = normalizeGuestPath(m.guestPath);
+    if (!g) errors.push(`${m.guestPath} can't be a path in the VM: use an absolute path or ~/…, not / or ~.`);
+    else if (g.includes("{{")) errors.push(`${m.guestPath} can't contain "{{".`);
+    else m.guestPath = g;
+  }
+  // Two mounts can share a host folder, but not a place in the VM.
   for (let i = 0; i < mounts.length; i++) {
     for (let j = i + 1; j < mounts.length; j++) {
-      const a = mounts[i].hostPath, b = mounts[j].hostPath;
-      if (a && b && (isWithin(a, b) || isWithin(b, a))) errors.push(`Mounts ${a} and ${b} overlap.`);
+      const a = mounts[i].guestPath, b = mounts[j].guestPath;
+      if (isWithin(a, b, "/") || isWithin(b, a, "/")) errors.push(`Mounts at ${a} and ${b} overlap in the VM.`);
     }
   }
 

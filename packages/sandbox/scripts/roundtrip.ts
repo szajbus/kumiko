@@ -3,6 +3,7 @@
 //   node packages/sandbox/dist/scripts/roundtrip.js [--name rt] [--template template:debian-12] [--keep]
 //
 // Done when the provisioning command writes a forwarded variable into a writable mount on the host.
+// The folder is mounted twice: writable at /workspace/out and read-only under the VM user's home.
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,7 +33,7 @@ const status = async () => (await provider.list()).find((s) => s.name === name);
 const dir = await mkdtemp(join(tmpdir(), "bentomo-roundtrip-"));
 let ok = false;
 try {
-  step(`create bm-${name} with writable mount ${dir}`);
+  step(`create bm-${name} with ${dir} at /workspace/out (writable) and ~/.bentomo-ro (read-only)`);
   await provider.create(
     {
       name,
@@ -40,9 +41,18 @@ try {
       cpus: Number(values.cpus),
       memoryGiB: Number(values.memory),
       diskGiB: Number(values.disk),
-      mounts: [{ hostPath: dir, writable: true }],
+      mounts: [
+        { hostPath: dir, writable: true, guestPath: "/workspace/out" },
+        { hostPath: dir, writable: false, guestPath: "~/.bentomo-ro" },
+      ],
       env: ["BENTOMO_ROUNDTRIP_TOKEN"],
-      provision: `echo "provisioning as $(whoami) on $(hostname)"\nsudo true\nprintf '%s' "$BENTOMO_ROUNDTRIP_TOKEN" > ${dir}/token`,
+      provision: [
+        `echo "provisioning as $(whoami) on $(hostname)"`,
+        "sudo true",
+        "test -d ~/.bentomo-ro",
+        "! touch ~/.bentomo-ro/should-fail 2>/dev/null",
+        `printf '%s' "$BENTOMO_ROUNDTRIP_TOKEN" > /workspace/out/token`,
+      ].join("\n"),
     },
     log,
   );

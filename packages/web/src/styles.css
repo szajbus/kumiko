@@ -236,6 +236,12 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 .input-prefixed input { flex: 1; min-width: 0; min-height: 42px; padding: 0 12px; border: 0; background: transparent; font-size: 14px; outline: none; }
 .list-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border-soft); border-radius: 8px; }
 .list-row-env { padding: 6px 6px 6px 12px; }
+.mount-row { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px 12px; border: 1px solid var(--border-soft); border-radius: 8px; }
+.mount-line { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.mount-line .path { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
+.mount-guest { padding-left: 30px; }
+.mount-guest-label { flex: none; width: 72px; font-size: 13px; color: var(--muted); }
+.input-compact[aria-invalid="true"] { border-color: var(--danger); }
 .list-row .path { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
 .check { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; }
 .check input { width: 18px; height: 18px; accent-color: #5b78d8; margin: 0; }

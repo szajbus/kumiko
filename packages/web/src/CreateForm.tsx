@@ -1,5 +1,14 @@
 import { useEffect, useId, useMemo, useState } from "react";
-import { DEFAULTS, ENV_NAME_PATTERN, NAME_PATTERN, vmName, type SandboxSpec, type TemplatesResponse } from "@bentomo/shared";
+import {
+  DEFAULTS,
+  defaultGuestPath,
+  ENV_NAME_PATTERN,
+  mountsExpression,
+  NAME_PATTERN,
+  vmName,
+  type SandboxSpec,
+  type TemplatesResponse,
+} from "@bentomo/shared";
 import { api, RequestError } from "./api";
 import { Header } from "./Header";
 import { Cross, Folder, Plus } from "./icons";
@@ -14,7 +23,26 @@ interface Props {
 interface MountRow {
   id: number;
   hostPath: string;
+  /** Where it lands in the VM; follows the host folder's name until the user edits it. */
+  guestPath: string;
+  guestEdited: boolean;
   writable: boolean;
+}
+
+/** /workspace/<name>, with -2, -3… if another row already uses it. */
+function freeGuestPath(hostPath: string, rows: MountRow[], self?: number): string {
+  const base = defaultGuestPath(hostPath);
+  const taken = new Set(rows.filter((r) => r.id !== self).map((r) => r.guestPath.trim()));
+  let p = base;
+  for (let i = 2; taken.has(p); i++) p = `${base}-${i}`;
+  return p;
+}
+
+function guestPathOk(p: string, rows: MountRow[], self: number): boolean {
+  const t = p.trim();
+  if (!t) return true; // falls back to the default
+  const shape = (t.startsWith("/") && t !== "/") || (t.startsWith("~/") && t.length > 2);
+  return shape && !rows.some((r) => r.id !== self && r.guestPath.trim() === t);
 }
 
 interface EnvRow {
@@ -34,12 +62,28 @@ export function CreateForm({ onCancel, onCreated }: Props) {
   const [memory, setMemory] = useState(String(DEFAULTS.memoryGiB));
   const [disk, setDisk] = useState(String(DEFAULTS.diskGiB));
   const [mounts, setMounts] = useState<MountRow[]>([]);
+  const [home, setHome] = useState<string | undefined>();
   const [envRows, setEnvRows] = useState<EnvRow[]>([]);
   const [envSet, setEnvSet] = useState<Record<string, boolean>>({});
   const [provision, setProvision] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const [touched, setTouched] = useState(false);
+
+  // Start from the server's default mounts (~/.claude when the host has one), unless the user already added rows.
+  useEffect(() => {
+    api.defaults().then(
+      (d) => {
+        setHome(d.home);
+        setMounts((cur) =>
+          cur.length
+            ? cur
+            : d.mounts.map((m) => ({ id: nextId++, hostPath: m.hostPath, guestPath: m.guestPath ?? m.hostPath, guestEdited: true, writable: m.writable })),
+        );
+      },
+      () => {},
+    );
+  }, []);
 
   useEffect(() => {
     api.templates().then(
@@ -68,18 +112,28 @@ export function CreateForm({ onCancel, onCreated }: Props) {
   const nameOk = NAME_PATTERN.test(name);
   const shownName = name || "<name>";
 
+  const tilde = (p: string) => (home && (p === home || p.startsWith(home + "/")) ? `~${p.slice(home.length)}` : p);
+
   const addFolder = async () => {
     if (hasPicker()) {
       const path = await window.bentomo!.pickFolder();
-      if (path) setMounts((m) => [...m, { id: nextId++, hostPath: path, writable: false }]);
+      if (path) setMounts((all) => [...all, { id: nextId++, hostPath: path, guestPath: freeGuestPath(path, all), guestEdited: false, writable: false }]);
     } else {
-      setMounts((m) => [...m, { id: nextId++, hostPath: "", writable: false }]);
+      setMounts((all) => [...all, { id: nextId++, hostPath: "", guestPath: "", guestEdited: false, writable: false }]);
     }
   };
+  /** A new host folder also moves the VM path along, unless the user chose that path themselves. */
+  const setHost = (id: number, path: string) =>
+    setMounts((all) =>
+      all.map((r) =>
+        r.id !== id ? r : { ...r, hostPath: path, guestPath: r.guestEdited ? r.guestPath : path.trim() ? freeGuestPath(path, all, id) : "" },
+      ),
+    );
   const changeFolder = async (id: number) => {
     const path = await window.bentomo!.pickFolder();
-    if (path) setMounts((m) => m.map((r) => (r.id === id ? { ...r, hostPath: path } : r)));
+    if (path) setHost(id, path);
   };
+  const patchMount = (id: number, patch: Partial<MountRow>) => setMounts((all) => all.map((r) => (r.id === id ? { ...r, ...patch } : r)));
 
   const spec = (): SandboxSpec => ({
     name: name.trim(),
@@ -87,7 +141,9 @@ export function CreateForm({ onCancel, onCreated }: Props) {
     cpus: Number(cpus),
     memoryGiB: Number(memory),
     diskGiB: Number(disk),
-    mounts: mounts.filter((m) => m.hostPath.trim()).map(({ hostPath, writable }) => ({ hostPath: hostPath.trim(), writable })),
+    mounts: mounts
+      .filter((m) => m.hostPath.trim())
+      .map((m) => ({ hostPath: m.hostPath.trim(), writable: m.writable, guestPath: m.guestPath.trim() || defaultGuestPath(m.hostPath.trim()) })),
     env: envNames,
     provision: provision.trim() ? provision : undefined,
   });
@@ -116,8 +172,7 @@ export function CreateForm({ onCancel, onCreated }: Props) {
     const s = spec();
     const vm = vmName(s.name || "<name>");
     const parts = [`limactl create --tty=false --name=${vm} --cpus=${s.cpus} --memory=${s.memoryGiB} --disk=${s.diskGiB}`];
-    if (s.mounts.length === 0) parts.push("--mount-none");
-    for (const m of s.mounts) parts.push(`--mount-only=${m.hostPath}${m.writable ? ":w" : ""}`);
+    parts.push(s.mounts.length === 0 ? "--mount-none" : `--set '${mountsExpression(s.mounts).replace(/'/g, `'\\''`)}'`);
     parts.push(s.template || "template:default");
     const lines = [parts.join(" \\\n  "), `limactl start --tty=false ${vm}`];
     if (s.provision) {
@@ -215,47 +270,75 @@ export function CreateForm({ onCancel, onCreated }: Props) {
           </div>
         </Section>
 
-        <Section title="Mounts" id="sec-mounts" description="Host folders shared into the VM at the same path. None by default.">
-          {mounts.map((m) => (
-            <div key={m.id} className="list-row">
-              <Folder />
-              {hasPicker() ? (
-                <span className="mono path">{m.hostPath}</span>
-              ) : (
-                <input
-                  className="input input-compact mono path"
-                  type="text"
-                  value={m.hostPath}
-                  placeholder="/absolute/path/on/host"
-                  aria-label="Host folder"
-                  autoFocus={!m.hostPath}
-                  spellCheck={false}
-                  onChange={(e) => setMounts((all) => all.map((r) => (r.id === m.id ? { ...r, hostPath: e.target.value } : r)))}
-                />
-              )}
-              <label className="check">
-                <input
-                  type="checkbox"
-                  checked={m.writable}
-                  onChange={(e) => setMounts((all) => all.map((r) => (r.id === m.id ? { ...r, writable: e.target.checked } : r)))}
-                />
-                Writable
-              </label>
-              {hasPicker() && (
-                <button type="button" className="btn-small" onClick={() => changeFolder(m.id)}>
-                  Change…
-                </button>
-              )}
-              <button
-                type="button"
-                className="icon-btn icon-btn-small"
-                aria-label={`Remove mount ${m.hostPath || "row"}`}
-                onClick={() => setMounts((all) => all.filter((r) => r.id !== m.id))}
-              >
-                <Cross />
-              </button>
-            </div>
-          ))}
+        <Section
+          title="Mounts"
+          id="sec-mounts"
+          description={
+            <>
+              Host folders shared into the VM, each at <code className="mono">/workspace/&lt;folder&gt;</code> unless you change it.{" "}
+              <code className="mono">~</code> in the VM is the VM user's home.
+            </>
+          }
+        >
+          {mounts.map((m) => {
+            const guestOk = guestPathOk(m.guestPath, mounts, m.id);
+            return (
+              <div key={m.id} className="mount-row">
+                <div className="mount-line">
+                  <Folder />
+                  {hasPicker() ? (
+                    <span className="mono path" title={m.hostPath}>
+                      {tilde(m.hostPath)}
+                    </span>
+                  ) : (
+                    <input
+                      className="input input-compact mono path"
+                      type="text"
+                      value={m.hostPath}
+                      placeholder="/absolute/path/on/host"
+                      aria-label="Host folder"
+                      autoFocus={!m.hostPath}
+                      spellCheck={false}
+                      onChange={(e) => setHost(m.id, e.target.value)}
+                    />
+                  )}
+                  <label className="check">
+                    <input type="checkbox" checked={m.writable} onChange={(e) => patchMount(m.id, { writable: e.target.checked })} />
+                    Writable
+                  </label>
+                  {hasPicker() && (
+                    <button type="button" className="btn-small" onClick={() => changeFolder(m.id)}>
+                      Change…
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="icon-btn icon-btn-small"
+                    aria-label={`Remove mount ${m.hostPath || "row"}`}
+                    onClick={() => setMounts((all) => all.filter((r) => r.id !== m.id))}
+                  >
+                    <Cross />
+                  </button>
+                </div>
+                <div className="mount-line mount-guest">
+                  <label htmlFor={`guest-${m.id}`} className="mount-guest-label">
+                    In the VM
+                  </label>
+                  <input
+                    id={`guest-${m.id}`}
+                    className="input input-compact input-dark mono path"
+                    type="text"
+                    value={m.guestPath}
+                    placeholder={m.hostPath.trim() ? defaultGuestPath(m.hostPath.trim()) : "/workspace/…"}
+                    aria-invalid={!guestOk}
+                    title={guestOk ? undefined : "Use an absolute path or ~/…, not used by another mount"}
+                    spellCheck={false}
+                    onChange={(e) => patchMount(m.id, { guestPath: e.target.value, guestEdited: true })}
+                  />
+                </div>
+              </div>
+            );
+          })}
           <button type="button" className="btn-add" onClick={addFolder}>
             <Plus size={14} color="#8FA6F0" />
             {hasPicker() ? "Add folder…" : "Add folder"}

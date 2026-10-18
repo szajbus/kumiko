@@ -11,9 +11,43 @@ export const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export const DEFAULTS = { cpus: 4, memoryGiB: 4, diskGiB: 100 } as const;
 
+/** Where mounts land in the VM unless the user picks another path. */
+export const WORKSPACE_DIR = "/workspace";
+
 export interface Mount {
   hostPath: string;
   writable: boolean;
+  /** Where the folder appears in the VM; "~/…" is the VM user's home. Omitted: the same path as on the host. */
+  guestPath?: string;
+}
+
+/** The default place in the VM for a host folder: /workspace/<folder name>. */
+export function defaultGuestPath(hostPath: string): string {
+  const base = hostPath.replace(/\/+$/, "").split("/").pop() || "folder";
+  return `${WORKSPACE_DIR}/${base}`;
+}
+
+/**
+ * The `--set` expression that replaces the template's mounts. Unlike `--mount-only`, it can give each
+ * mount its own place in the VM, and it doesn't split on commas. "~/" in the VM is Lima's {{.Home}}.
+ */
+export function mountsExpression(mounts: Mount[]): string {
+  const list = mounts.map((m) => {
+    const guest = m.guestPath ?? m.hostPath;
+    return {
+      location: m.hostPath,
+      mountPoint: guest.startsWith("~/") ? `{{.Home}}/${guest.slice(2)}` : guest,
+      writable: m.writable,
+    };
+  });
+  return `.mounts = ${JSON.stringify(list)}`;
+}
+
+/** Defaults the create form starts from. */
+export interface DefaultsResponse {
+  /** The host user's home, so the UI can show paths as ~/…. */
+  home: string;
+  mounts: Mount[];
 }
 
 export interface SandboxSpec {
@@ -22,7 +56,7 @@ export interface SandboxSpec {
   cpus: number;
   memoryGiB: number;
   diskGiB: number;
-  mounts: Mount[];         // same path inside the VM
+  mounts: Mount[];         // guestPath defaults to the host path
   env: string[];           // names of host variables to forward; values never stored
   provision?: string;      // shell script, run once after first start
 }

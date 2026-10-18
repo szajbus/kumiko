@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { vmName, VM_PREFIX, type SandboxInfo, type SandboxSpec, type SandboxStatus } from "@bentomo/shared";
+import { mountsExpression, vmName, VM_PREFIX, type SandboxInfo, type SandboxSpec, type SandboxStatus } from "@bentomo/shared";
 import { MetadataStore } from "./metadata.js";
 import { eachLine, exitCode, run, runOk } from "./proc.js";
 import { ProviderError, type Log, type SandboxProvider } from "./provider.js";
@@ -170,10 +170,10 @@ export class LimaProvider implements SandboxProvider {
       `--disk=${spec.diskGiB}`,
     ];
     if (spec.mounts.length === 0) args.push("--mount-none");
-    for (const m of spec.mounts) args.push(`--mount-only=${m.hostPath}${m.writable ? ":w" : ""}`);
+    else args.push(`--set=${mountsExpression(spec.mounts)}`);
     args.push(spec.template || "template:default");
 
-    log(`$ limactl ${args.join(" ")}`, "cmd");
+    log(`$ limactl ${args.map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a))).join(" ")}`, "cmd");
     try {
       await runOk(this.limactl, args, { log, lima: true });
     } catch (err) {

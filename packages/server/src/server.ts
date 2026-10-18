@@ -1,4 +1,7 @@
+import { stat } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { Server } from "node:http";
 import { serve } from "@hono/node-server";
 import { Hono, type Context } from "hono";
@@ -9,6 +12,7 @@ import {
   vmName,
   type ApiError,
   type CreateResponse,
+  type DefaultsResponse,
   type OpKind,
   type SandboxInfo,
   type SandboxSpec,
@@ -30,6 +34,8 @@ export interface ServerOptions {
   webDir?: string;
   /** How often to re-read `limactl list`, in ms. */
   refreshMs?: number;
+  /** The host user's home; defaults to the real one. */
+  home?: string;
   /** Where forwarded variables are looked up for the form's "set on host" dots. */
   env?: () => NodeJS.ProcessEnv;
 }
@@ -124,6 +130,17 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     } catch (err) {
       return c.json(fail(err instanceof Error ? err.message : String(err)), 500);
     }
+  });
+
+  /** What the create form starts from: ~/.claude mounted at ~/.claude in the VM, when the host has one. */
+  app.get("/api/defaults", async (c) => {
+    const home = opts.home ?? homedir();
+    const claude = join(home, ".claude");
+    const hasClaude = await stat(claude).then((s) => s.isDirectory(), () => false);
+    return c.json({
+      home,
+      mounts: hasClaude ? [{ hostPath: claude, guestPath: "~/.claude", writable: true }] : [],
+    } satisfies DefaultsResponse);
   });
 
   /** Which of the given variable names are set in Bentomo's environment. Never returns values. */

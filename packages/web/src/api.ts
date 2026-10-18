@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { ApiError, CreateResponse, LogLine, SandboxSpec, SandboxView, ServerEvent, TemplatesResponse } from "@bentomo/shared";
+import type { ApiError, CreateResponse, DefaultsResponse, LogLine, SandboxSpec, SandboxView, ServerEvent, TemplatesResponse } from "@bentomo/shared";
 
 declare global {
   interface Window {
@@ -27,6 +27,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 export const api = {
   templates: () => request<TemplatesResponse>("GET", "/api/templates"),
+  defaults: () => request<DefaultsResponse>("GET", "/api/defaults"),
   env: (names: string[]) => request<Record<string, boolean>>("GET", `/api/env?names=${encodeURIComponent(names.join(","))}`),
   create: (spec: SandboxSpec) => request<CreateResponse>("POST", "/api/sandboxes", spec),
   start: (name: string) => request("POST", `/api/sandboxes/${name}/start`),
