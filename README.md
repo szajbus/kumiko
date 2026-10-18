@@ -89,6 +89,7 @@ Beyond the spec:
   - stderr is merged into stdout, so the log keeps its order.
   - The script reaches `bash -c` through a quoted heredoc, so commands that read stdin (`apt`, `curl | sh`) can't consume the rest of the script.
 - **If the first start fails** during create, provisioning runs on the next successful start. A sandbox counts as set up only once provisioning has run.
+- **Sandbox page** (`#/sandbox/<name>`) in place of the spec's log drawer. Clicking a row opens it, and so does creating a sandbox. It shows status and actions, resources, template, setup state, creation time, mounts, forwarded variables, the provisioning script, and the log at full width.
 - **Recreate** (in the design's row menu) deletes a sandbox and creates it again from its stored spec: `POST /api/sandboxes/:name/recreate`.
 - **`GET /api/env?names=A,B`** backs the form's "set on host" dots. It answers `true`/`false`, never values.
 - **Request guard:** the server listens on `127.0.0.1` only. It also refuses requests whose `Host` or `Origin` isn't local, so a web page open in your browser can't drive it (DNS rebinding, CSRF).

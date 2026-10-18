@@ -1,31 +1,25 @@
 import { useLayoutEffect, useRef } from "react";
-import { vmName, type LogLine, type SandboxView } from "@bentomo/shared";
+import type { LogLine, SandboxView } from "@bentomo/shared";
 import { opPill } from "./status";
 
 const LINE_COLORS = { cmd: "#8A93A3", note: "#8A93A3", ok: "#7FD3A6", err: "#F29B8F" } as const;
 
-export function LogDrawer({ name, sandbox, lines }: { name?: string; sandbox?: SandboxView; lines: LogLine[] }) {
+/** The current or last operation's output, following new lines while the reader is at the bottom. */
+export function LogPanel({ sandbox, lines }: { sandbox?: SandboxView; lines: LogLine[] }) {
   const box = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
 
-  // Follow new output while the reader is at the bottom; leave them be once they scroll up.
   useLayoutEffect(() => {
     const el = box.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
-  }, [lines, name]);
-  useLayoutEffect(() => {
-    stick.current = true;
-  }, [name]);
+  }, [lines]);
 
   const pill = opPill(sandbox);
 
   return (
-    <aside className="log-drawer" aria-label="Operation log">
+    <section className="card log-panel" aria-labelledby="log-title">
       <div className="log-head">
-        <div className="log-title">
-          <span className="eyebrow">Log</span>
-          <span className="mono log-vm">{name ? vmName(name) : "No sandbox selected"}</span>
-        </div>
+        <h2 id="log-title">Log</h2>
         {pill && (
           <span className="pill" style={{ color: pill.color, borderColor: pill.color }}>
             {pill.text}
@@ -42,14 +36,13 @@ export function LogDrawer({ name, sandbox, lines }: { name?: string; sandbox?: S
           stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
         }}
       >
-        {!name && <div className="log-empty">Select a sandbox to see the output of its current or last operation.</div>}
-        {name && lines.length === 0 && <div className="log-empty">No operation has run in this session yet.</div>}
+        {lines.length === 0 && <div className="log-empty">No operation has run on this sandbox since Bentomo started.</div>}
         {lines.map((l, i) => (
           <div key={i} className="log-line" style={l.kind ? { color: LINE_COLORS[l.kind] } : undefined}>
             {l.text || " "}
           </div>
         ))}
       </div>
-    </aside>
+    </section>
   );
 }
