@@ -192,8 +192,7 @@ code, .mono { font-family: var(--mono); }
 .detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
 .detail-grid .section { gap: 10px; }
 .detail-grid p { margin: 0; }
-.detail-mount { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border-soft); }
-.detail-mount-paths { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 13px; overflow-wrap: anywhere; }
+.detail-mount { padding: 10px 0; border-top: 1px solid var(--border-soft); row-gap: 4px; font-size: 13px; }
 .detail-env { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border-soft); font-size: 13px; }
 .detail-env .env-state { width: auto; }
 .details-empty { margin: 0 0 16px; }
@@ -243,11 +242,17 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 .input-prefixed input { flex: 1; min-width: 0; min-height: 42px; padding: 0 12px; border: 0; background: transparent; font-size: 14px; outline: none; }
 .list-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border-soft); border-radius: 8px; }
 .list-row-env { padding: 6px 6px 6px 12px; }
-.mount-row { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px 12px; border: 1px solid var(--border-soft); border-radius: 8px; }
-.mount-line { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-.mount-line .path { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
-.mount-guest { padding-left: 30px; }
-.mount-guest-label { flex: none; width: 72px; font-size: 13px; color: var(--muted); }
+/* A mount on two rows, in both the form and the sandbox page:
+   [folder] host path   [controls]
+   at       path in VM                 — the icon and "at" share a column, so the paths line up. */
+.mount-grid { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; column-gap: 12px; row-gap: 6px; }
+.mount-grid .path { min-width: 0; overflow-wrap: anywhere; }
+.mount-icon { display: flex; justify-content: center; }
+.mount-at { justify-self: center; font-size: 13px; color: var(--muted); }
+.mount-controls { display: flex; align-items: center; gap: 12px; }
+.mount-row { padding: 8px 12px 12px; border: 1px solid var(--border-soft); border-radius: 8px; }
+/* Text, not a field, in the desktop app: indent it like the field below so both paths start together. */
+.mount-host-text { padding-left: 11px; }
 .input-compact[aria-invalid="true"] { border-color: var(--danger); }
 .list-row .path { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
 .check { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; }

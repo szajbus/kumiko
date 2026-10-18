@@ -283,25 +283,27 @@ export function CreateForm({ onCancel, onCreated }: Props) {
           {mounts.map((m) => {
             const guestOk = guestPathOk(m.guestPath, mounts, m.id);
             return (
-              <div key={m.id} className="mount-row">
-                <div className="mount-line">
+              <div key={m.id} className="mount-row mount-grid">
+                <span className="mount-icon">
                   <Folder />
-                  {hasPicker() ? (
-                    <span className="mono path" title={m.hostPath}>
-                      {tilde(m.hostPath)}
-                    </span>
-                  ) : (
-                    <input
-                      className="input input-compact mono path"
-                      type="text"
-                      value={m.hostPath}
-                      placeholder="/absolute/path/on/host"
-                      aria-label="Host folder"
-                      autoFocus={!m.hostPath}
-                      spellCheck={false}
-                      onChange={(e) => setHost(m.id, e.target.value)}
-                    />
-                  )}
+                </span>
+                {hasPicker() ? (
+                  <span className="mono path mount-host-text" title={m.hostPath}>
+                    {tilde(m.hostPath)}
+                  </span>
+                ) : (
+                  <input
+                    className="input input-compact mono path"
+                    type="text"
+                    value={m.hostPath}
+                    placeholder="/absolute/path/on/host"
+                    aria-label="Host folder"
+                    autoFocus={!m.hostPath}
+                    spellCheck={false}
+                    onChange={(e) => setHost(m.id, e.target.value)}
+                  />
+                )}
+                <div className="mount-controls">
                   <label className="check">
                     <input type="checkbox" checked={m.writable} onChange={(e) => patchMount(m.id, { writable: e.target.checked })} />
                     Writable
@@ -320,22 +322,20 @@ export function CreateForm({ onCancel, onCreated }: Props) {
                     <Cross />
                   </button>
                 </div>
-                <div className="mount-line mount-guest">
-                  <label htmlFor={`guest-${m.id}`} className="mount-guest-label">
-                    In the VM
-                  </label>
-                  <input
-                    id={`guest-${m.id}`}
-                    className="input input-compact input-dark mono path"
-                    type="text"
-                    value={m.guestPath}
-                    placeholder={m.hostPath.trim() ? defaultGuestPath(m.hostPath.trim()) : "/workspace/…"}
-                    aria-invalid={!guestOk}
-                    title={guestOk ? undefined : "Use an absolute path or ~/…, not used by another mount"}
-                    spellCheck={false}
-                    onChange={(e) => patchMount(m.id, { guestPath: e.target.value, guestEdited: true })}
-                  />
-                </div>
+                <label htmlFor={`guest-${m.id}`} className="mount-at">
+                  at
+                </label>
+                <input
+                  id={`guest-${m.id}`}
+                  className="input input-compact input-dark mono path"
+                  type="text"
+                  value={m.guestPath}
+                  placeholder={m.hostPath.trim() ? defaultGuestPath(m.hostPath.trim()) : "/workspace/…"}
+                  aria-invalid={!guestOk}
+                  title={guestOk ? "Where the folder appears in the VM" : "Use an absolute path or ~/…, not used by another mount"}
+                  spellCheck={false}
+                  onChange={(e) => patchMount(m.id, { guestPath: e.target.value, guestEdited: true })}
+                />
               </div>
             );
           })}

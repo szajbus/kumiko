@@ -118,15 +118,16 @@ function Details({ sb, home }: { sb: SandboxView; home?: string }) {
             <h2 id="d-mounts">Mounts</h2>
             {spec.mounts.length === 0 && <p className="muted">None.</p>}
             {spec.mounts.map((m) => (
-              <div key={m.hostPath + (m.guestPath ?? "")} className="detail-mount">
-                <Folder />
-                <div className="detail-mount-paths">
-                  <span className="mono" title={m.hostPath}>
-                    {tilde(m.hostPath)}
-                  </span>
-                  <span className="mono dim">→ {m.guestPath ?? m.hostPath}</span>
-                </div>
+              <div key={m.hostPath + (m.guestPath ?? "")} className="detail-mount mount-grid">
+                <span className="mount-icon">
+                  <Folder />
+                </span>
+                <span className="mono path" title={m.hostPath}>
+                  {tilde(m.hostPath)}
+                </span>
                 <span className="badge">{m.writable ? "Writable" : "Read-only"}</span>
+                <span className="mount-at">at</span>
+                <span className="mono path">{m.guestPath ?? m.hostPath}</span>
               </div>
             ))}
           </section>
