@@ -199,7 +199,8 @@ function applyClaude(s: ChatState, m: Json & { type: string }, key: string): Cha
 
     case "result": {
       const total = num(m.total_cost_usd);
-      const costUsd = total !== undefined ? Math.max(0, total - s.totalCost) : undefined;
+      // The running total starts over when a session is resumed, so a drop means this turn's cost is all of it.
+      const costUsd = total !== undefined ? (total >= s.totalCost ? total - s.totalCost : total) : undefined;
       const ok = m.subtype === "success" && m.is_error !== true;
       const base = { ...s, totalCost: total ?? s.totalCost, interruptPending: false };
       // A slash command like /model is a turn of its own with nothing to sum up.

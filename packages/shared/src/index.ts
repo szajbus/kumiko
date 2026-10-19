@@ -137,6 +137,8 @@ export interface SessionInfo {
   prompt: string;
   startedAt: string;
   endedAt?: string;
+  /** When the session was last saved to disk; orders the list of sessions that can be resumed. */
+  updatedAt?: string;
   /** Claude's own session id and model, from its `system/init`. */
   claudeSessionId?: string;
   model?: string;
@@ -160,6 +162,9 @@ export interface StartSessionRequest {
   sandbox: string;
   prompt: string;
 }
+
+/** A session saved on disk that can be resumed: closed, or left behind when Bentomo quit. */
+export type ResumableSession = SessionInfo & { claudeSessionId: string };
 
 export interface TemplatesResponse {
   templates: string[];

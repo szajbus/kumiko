@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { LIVE_SESSION_STATUSES, type EndReason, type SessionEvent, type SessionInfo } from "@bentomo/shared";
-import type { AgentDriver, AgentMessage } from "@bentomo/agent";
+import { LIVE_SESSION_STATUSES, type EndReason, type ResumableSession, type SessionEvent, type SessionInfo } from "@bentomo/shared";
+import type { AgentDriver, AgentMessage, StartOptions } from "@bentomo/agent";
+import { chatEvents, type SessionStore, type StoredSession } from "./store.js";
 
 /** A SessionEvent before it has its place in the buffer. */
 type WithoutSeq<E> = E extends unknown ? Omit<E, "seq"> : never;
@@ -24,10 +25,14 @@ interface Session {
   /** Set by `end`, so the exit that follows is recorded with the right reason. */
   ending?: EndReason;
   exited: Promise<void>;
+  /** Saves to the store run one after another, so an older state never lands over a newer one. */
+  saving: Promise<void>;
 }
 
 export class SessionNotFound extends Error {}
 export class SessionEnded extends Error {}
+/** A session can't be resumed or forked: it is open already, or has nothing of Claude's to continue. */
+export class SessionNotResumable extends Error {}
 
 const isLive = (s: SessionInfo) => LIVE_SESSION_STATUSES.includes(s.status);
 
@@ -39,7 +44,10 @@ const isLive = (s: SessionInfo) => LIVE_SESSION_STATUSES.includes(s.status);
 export class Sessions extends EventEmitter<{ changed: [] }> {
   private sessions = new Map<string, Session>();
 
-  constructor(private readonly makeDriver: () => AgentDriver) {
+  constructor(
+    private readonly makeDriver: () => AgentDriver,
+    private readonly store?: SessionStore,
+  ) {
     super();
   }
 
@@ -59,14 +67,55 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
   }
 
   start(opts: { sandbox: string; workdir: string; env: string[]; prompt: string }): SessionInfo {
+    const info: SessionInfo = { id: this.newId(), sandbox: opts.sandbox, workdir: opts.workdir, status: "starting", prompt: opts.prompt, startedAt: new Date().toISOString() };
+    return this.launch(info, [{ kind: "user_prompt", payload: { text: opts.prompt } }], { sandbox: opts.sandbox, workdir: opts.workdir, env: opts.env, prompt: opts.prompt });
+  }
+
+  /**
+   * Continues a saved session under its own id, with its chat restored. Claude has no turn running, so it is
+   * ready (`idle`) at once instead of waiting for an init message that only comes with the next prompt.
+   */
+  resume(stored: StoredSession, env: string[]): SessionInfo {
+    const { info: saved } = stored;
+    if (!saved.claudeSessionId || this.sessions.has(saved.id)) throw new SessionNotResumable(`Session ${saved.id} can't be resumed.`);
+    const { endedAt: _endedAt, updatedAt: _updatedAt, ...rest } = saved;
+    const info: SessionInfo = { ...rest, status: "idle" };
+    return this.launch(info, stored.events, { sandbox: info.sandbox, workdir: info.workdir, env, resume: saved.claudeSessionId });
+  }
+
+  /** Starts a new session from a copy of this one's conversation, which carries on as it was. */
+  fork(id: string, env: string[]): SessionInfo {
+    const from = this.sessions.get(id);
+    if (!from) throw new SessionNotFound(`No session ${id}.`);
+    const { claudeSessionId, sandbox, workdir, prompt, model } = from.info;
+    if (!claudeSessionId) throw new SessionNotResumable("There is nothing to fork yet: Claude hasn't started this session.");
+    const info: SessionInfo = { id: this.newId(), sandbox, workdir, prompt, model, status: "idle", startedAt: new Date().toISOString() };
+    return this.launch(info, chatEvents(from.events), { sandbox, workdir, env, resume: claudeSessionId, fork: true });
+  }
+
+  /** Saved sessions that aren't open, most recently used first. */
+  async resumable(): Promise<ResumableSession[]> {
+    const saved = await this.store?.readAll();
+    return (saved ?? [])
+      .map((s) => s.info)
+      .filter((i): i is ResumableSession => Boolean(i.claudeSessionId) && !this.sessions.has(i.id))
+      .map((i) => ({ ...i, status: "ended" as const }))
+      .sort((a, b) => (b.updatedAt ?? b.startedAt).localeCompare(a.updatedAt ?? a.startedAt));
+  }
+
+  private newId(): string {
     let id: string;
     do id = randomBytes(6).toString("hex");
     while (this.sessions.has(id));
+    return id;
+  }
+
+  private launch(info: SessionInfo, seed: NewEvent[], driverOpts: StartOptions): SessionInfo {
     const driver = this.makeDriver();
-    const info: SessionInfo = { id, sandbox: opts.sandbox, workdir: opts.workdir, status: "starting", prompt: opts.prompt, startedAt: new Date().toISOString() };
     let resolveExit!: () => void;
-    const s: Session = { info, driver, events: [], seq: 0, subscribers: new Set(), blocks: new Map(), exited: new Promise((r) => (resolveExit = r)) };
-    this.sessions.set(id, s);
+    const s: Session = { info, driver, events: [], seq: 0, subscribers: new Set(), blocks: new Map(), exited: new Promise((r) => (resolveExit = r)), saving: Promise.resolve() };
+    for (const ev of seed) this.push(s, ev);
+    this.sessions.set(info.id, s);
 
     driver.onEvent((ev) => {
       switch (ev.kind) {
@@ -82,16 +131,29 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
           const failed = !s.ending && (ev.code !== 0 || s.info.status === "starting");
           this.setInfo(s, { status: failed ? "failed" : "ended", endedAt: new Date().toISOString() });
           this.push(s, { kind: "ended", payload: { reason, code: ev.code } });
+          this.save(s);
           resolveExit();
           break;
         }
       }
     });
 
-    this.push(s, { kind: "user_prompt", payload: { text: opts.prompt } });
-    driver.start({ sandbox: opts.sandbox, workdir: opts.workdir, env: opts.env, prompt: opts.prompt });
+    driver.start(driverOpts);
     this.emit("changed");
     return info;
+  }
+
+  /** Writes the session's chat to the store, once Claude has given it an id to resume by. */
+  private save(s: Session) {
+    const { store } = this;
+    if (!store || !s.info.claudeSessionId) return;
+    const stored: StoredSession = { info: { ...s.info, updatedAt: new Date().toISOString() }, events: chatEvents(s.events) };
+    s.saving = s.saving.then(() => store.write(stored)).catch(() => {});
+  }
+
+  /** Resolves once everything handed to the store has been written. */
+  async flush(): Promise<void> {
+    await Promise.all([...this.sessions.values()].map((s) => s.saving));
   }
 
   private onMessage(s: Session, m: AgentMessage) {
@@ -109,11 +171,14 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
 
     if (m.type === "system" && m.subtype === "init") {
       // Claude sends init at the start of every turn, so it also marks a queued prompt's turn starting.
+      const isNew = typeof m.session_id === "string" && m.session_id !== s.info.claudeSessionId;
       this.setInfo(s, {
         claudeSessionId: typeof m.session_id === "string" ? m.session_id : s.info.claudeSessionId,
         model: typeof m.model === "string" ? m.model : s.info.model,
         status: "running",
       });
+      // Saved as soon as it can be resumed, in case the app goes away before the first turn ends.
+      if (isNew) this.save(s);
     } else if (m.type === "assistant" && isLive(s.info)) {
       // /model shows up here first, as the model of the next real reply.
       const model = (m.message as { model?: unknown } | undefined)?.model;
@@ -125,6 +190,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
       const done = new Set([...s.blocks].filter(([, c]) => c.finished >= c.started).map(([id]) => id));
       s.events = s.events.filter((e) => !(e.kind === "claude" && e.payload.type === "stream_event" && done.has(String(e.payload.api_message_id))));
       s.blocks.clear();
+      this.save(s);
     }
   }
 
@@ -189,6 +255,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     await this.end(id, "user");
     const s = this.sessions.get(id);
     if (!s) return;
+    await s.saving;
     for (const sub of s.subscribers) sub.gone();
     s.subscribers.clear();
     this.sessions.delete(id);

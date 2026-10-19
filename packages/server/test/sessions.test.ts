@@ -81,7 +81,7 @@ describe("sessions", () => {
       metadata: new MetadataStore(join(root, "sandboxes")),
       env,
     });
-    server = await startServer({ provider, port: 0, refreshMs: 200, env, home: root });
+    server = await startServer({ provider, port: 0, refreshMs: 200, env, home: root, sessionsDir: join(root, "sessions") });
     ws = new WebSocket(`${server.url.replace("http", "ws")}/api/events`);
     ws.on("message", (m) => events.push(JSON.parse(String(m))));
     await new Promise((r) => ws.once("open", r));
@@ -199,6 +199,55 @@ describe("sessions", () => {
     await waitFor(async () => (await session(id))?.status === "idle" || undefined);
     await writeFile(join(limaDir, "bm-two.json"), JSON.stringify({ name: "bm-two", status: "Stopped" }));
     await waitFor(async () => (await session(id))?.status === "ended" || undefined);
+  });
+
+  it("resumes a closed session with its chat, and forks one", async () => {
+    const id = await startSession("one", "remember me");
+    const idle = (x: string) => waitFor(async () => { const i = await session(x); return i?.status === "idle" && i.claudeSessionId ? i : undefined; });
+    const claudeId = (await idle(id)).claudeSessionId!;
+    await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: "second" }) });
+    const first = await listen(id);
+    await waitFor(() => first.results().length === 2);
+    assert.equal((await api(`/api/sessions/${id}`, { method: "DELETE" })).status, 200);
+    assert.equal(await session(id), undefined, "closing the tab forgets the session");
+
+    const listed = (await json(await api("/api/sessions/resumable"))) as SessionInfo[];
+    assert.equal(listed[0].id, id, "the most recent session comes first");
+    assert.equal(listed[0].status, "ended");
+    assert.equal(listed[0].claudeSessionId, claudeId);
+    assert.deepEqual(listed.map((x) => x.updatedAt), listed.map((x) => x.updatedAt).sort().reverse());
+
+    assert.equal((await api("/api/sessions/abc123/resume", { method: "POST" })).status, 404);
+    const res = await api(`/api/sessions/${id}/resume`, { method: "POST" });
+    assert.equal(res.status, 201);
+    assert.equal((await json(res)).id, id);
+    assert.equal((await api(`/api/sessions/${id}/resume`, { method: "POST" })).status, 409, "an open session can't be resumed again");
+    assert.ok(!((await json(await api("/api/sessions/resumable"))) as SessionInfo[]).some((x) => x.id === id));
+
+    // The chat is back, without the streaming events; Claude is ready for a prompt at once.
+    const resumed = await listen(id);
+    const kinds = resumed.got.map((e) => e.kind === "claude" ? e.payload.type : e.kind);
+    assert.deepEqual(kinds, ["user_prompt", "assistant", "result", "user_prompt", "assistant", "result"]);
+    assert.equal((await session(id))?.status, "idle");
+    await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: "third" }) });
+    await waitFor(() => resumed.results().length === 3);
+    assert.ok(resumed.got.some((e) => e.kind === "claude" && JSON.stringify(e.payload).includes("You said: third")));
+    assert.equal((await idle(id)).claudeSessionId, claudeId, "resuming continues Claude's session");
+
+    // A fork starts from a copy of the chat, under a new Claude session; the original carries on.
+    const forked = await api(`/api/sessions/${id}/fork`, { method: "POST" });
+    assert.equal(forked.status, 201);
+    const forkId = (await json(forked)).id as string;
+    assert.notEqual(forkId, id);
+    const copy = await listen(forkId);
+    assert.deepEqual(copy.got.map((e) => e.kind === "claude" ? e.payload.type : e.kind), [...kinds, "user_prompt", "assistant", "result"]);
+    await api(`/api/sessions/${forkId}/prompt`, { method: "POST", body: JSON.stringify({ text: "on a branch" }) });
+    assert.notEqual((await idle(forkId)).claudeSessionId, claudeId);
+    await waitFor(() => copy.results().length === 4);
+    assert.equal((await session(id))?.claudeSessionId, claudeId);
+    assert.equal((await api("/api/sessions/abc123/fork", { method: "POST" })).status, 404);
+    await api(`/api/sessions/${forkId}`, { method: "DELETE" });
+    await api(`/api/sessions/${id}`, { method: "DELETE" });
   });
 
   it("ends every live session when the server closes", async () => {

@@ -10,7 +10,10 @@
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 
-const session_id = randomUUID();
+// --resume <id> continues that session; with --fork-session it gets a new id instead.
+const args = process.argv.slice(2);
+const resumed = args.includes("--resume") ? args[args.indexOf("--resume") + 1] : undefined;
+const session_id = resumed && !args.includes("--fork-session") ? resumed : randomUUID();
 let model = "claude-sonnet-5-5";
 let total = 0;
 let msgN = 0;

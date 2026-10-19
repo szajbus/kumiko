@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ClaudeDriver, exitHint, type AgentEvent, type AgentMessage } from "../src/index.js";
+import { CLAUDE_COMMAND, ClaudeDriver, claudeCommand, exitHint, type AgentEvent, type AgentMessage } from "../src/index.js";
 import { localExec } from "./helpers.js";
 
 /** Starts a driver on the fake claude and collects its events. */
@@ -86,5 +86,13 @@ describe("ClaudeDriver", () => {
   it("derives hints from exit codes", () => {
     assert.match(exitHint(255, ["ssh: connect to host"]) ?? "", /SSH/);
     assert.equal(exitHint(1, ["boom"]), undefined);
+  });
+
+  it("builds the resume command and refuses ids that aren't Claude's", () => {
+    const id = "0b1d2c3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e";
+    assert.equal(claudeCommand(), CLAUDE_COMMAND);
+    assert.equal(claudeCommand(id), `${CLAUDE_COMMAND} --resume ${id}`);
+    assert.equal(claudeCommand(id, true), `${CLAUDE_COMMAND} --resume ${id} --fork-session`);
+    assert.throws(() => claudeCommand("x; rm -rf ~"), /Not a Claude session id/);
   });
 });

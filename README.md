@@ -65,7 +65,7 @@ packages/web/          React + Vite UI
 packages/shared/       API and event types
 ```
 
-State: Lima owns the VMs (`~/.lima/bm-*`). Bentomo keeps one JSON file per sandbox in `~/.bentomo/sandboxes/<name>.json`, holding the spec with variable names only, never values. Operation logs and agent sessions live in server memory; Claude keeps its transcripts in the VM. `BENTOMO_HOME` and `LIMA_HOME` override the locations.
+State: Lima owns the VMs (`~/.lima/bm-*`). Bentomo keeps one JSON file per sandbox in `~/.bentomo/sandboxes/<name>.json`, holding the spec with variable names only, never values. Operation logs and live agent sessions live in server memory; Claude keeps its transcripts in the VM. Each session that has talked to Claude is also saved in `~/.bentomo/sessions/<id>.json` (its info and chat), so it can be resumed. `BENTOMO_HOME` and `LIMA_HOME` override the locations.
 
 ## Notes on the implementation
 
@@ -126,3 +126,12 @@ Beyond the spec:
 - **Stop asks first** when the sandbox has live sessions (it didn't ask at all before). Delete, Recreate and Save and recreate say how many sessions will end. Sessions also end when the list notices their sandbox stopped outside Bentomo.
 - **Subagent messages** (`parent_tool_use_id` set) are kept in the buffer but not shown; the subagent's own tool call shows as one line.
 - An unknown session's socket is accepted and closed with code `4404`, which a browser can see, rather than refused with an HTTP 404.
+
+### Resuming and forking
+
+- **Closing a tab closes the session** (there is no End session button). It stays on disk and can be resumed.
+- **The New session tab lists saved sessions**, most recent first (20 shown), under the opening-prompt form. Resume needs the session's sandbox to be running. It starts `claude … --resume <claude session id>` under the same Bentomo session id, and `GET /api/sessions/resumable` and `POST /api/sessions/:id/resume` back it.
+- **Only the chat is saved**: prompts, finished assistant messages, tool results, turn footers and Stop. Deltas, `system` messages, errors and the end marker are dropped, so a resumed tab shows the conversation and nothing else. The session is `idle` at once, since Claude sends `system/init` only with the next prompt.
+- **Cost footers** after a resume: the running `total_cost_usd` starts over, and the UI treats a drop as a new total.
+- **Fork** (top right of a session, `POST /api/sessions/:id/fork`) opens a new tab with a copy of the chat, continuing from the same Claude session with `--fork-session`. The original is untouched. It needs the first turn to have finished, and is disabled while a turn runs.
+- Claude session ids are checked against the UUID shape before they reach the shell command.

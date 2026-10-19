@@ -11,12 +11,12 @@ const MODELS = ["default", "opus", "sonnet", "haiku"];
 
 interface Props {
   session: SessionInfo;
-  /** Asks to end the session (with a confirm while it is live) and close its tab. */
-  onEnd(): void;
+  /** A fork was started; opens its tab. */
+  onForked(id: string): void;
 }
 
 /** One session: header, the chat streamed from its events, and the composer. */
-export function SessionView({ session, onEnd }: Props) {
+export function SessionView({ session, onForked }: Props) {
   const stream = useSessionEvents(session.id);
   const chat = useChat(stream.events);
   const [error, setError] = useState<string | undefined>();
@@ -63,8 +63,14 @@ export function SessionView({ session, onEnd }: Props) {
               }}
             />
           </div>
-          <button type="button" className="btn btn-secondary btn-compact" onClick={onEnd}>
-            {live ? "End session" : "Close"}
+          <button
+            type="button"
+            className="btn btn-secondary btn-compact"
+            disabled={!session.claudeSessionId || session.status === "running" || session.status === "starting"}
+            title="Continue from here in a new tab, leaving this session as it is"
+            onClick={() => void call(() => api.forkSession(session.id).then(({ id }) => onForked(id)))}
+          >
+            Fork
           </button>
         </div>
       </div>

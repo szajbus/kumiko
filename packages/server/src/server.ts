@@ -28,7 +28,8 @@ import { LimaProvider, type Log, type SandboxProvider } from "@bentomo/sandbox";
 import { ClaudeDriver, type AgentDriver } from "@bentomo/agent";
 import { isLocalRequest } from "./guard.js";
 import { BusyError, Operations } from "./operations.js";
-import { SessionEnded, SessionNotFound, Sessions } from "./sessions.js";
+import { SessionEnded, SessionNotFound, SessionNotResumable, Sessions } from "./sessions.js";
+import { SessionStore } from "./store.js";
 import { serveWeb } from "./static.js";
 
 export interface ServerOptions {
@@ -44,6 +45,8 @@ export interface ServerOptions {
   home?: string;
   /** Where forwarded variables are looked up for the form's "set on host" dots. */
   env?: () => NodeJS.ProcessEnv;
+  /** Where sessions are saved for resuming; defaults to `sessions` in Bentomo's home (`BENTOMO_HOME` or `~/.bentomo`). */
+  sessionsDir?: string;
   /** Makes the driver for each new agent session; defaults to Claude Code over the provider's exec. */
   driver?: () => AgentDriver;
 }
@@ -59,7 +62,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   const env = opts.env ?? (() => process.env);
   const host = opts.host ?? "127.0.0.1";
   const ops = new Operations();
-  const sessions = new Sessions(opts.driver ?? (() => new ClaudeDriver(provider.exec.bind(provider))));
+  const sessionStore = new SessionStore(opts.sessionsDir);
+  const sessions = new Sessions(opts.driver ?? (() => new ClaudeDriver(provider.exec.bind(provider))), sessionStore);
   const clients = new Set<WebSocket>();
 
   // ---- list state -------------------------------------------------------------------------
@@ -302,14 +306,38 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     const name = String(body?.sandbox ?? "");
     const prompt = typeof body?.prompt === "string" ? body.prompt.trim() : "";
     if (!prompt) return c.json(fail("The opening prompt is empty."), 400);
-    const info = await known(name);
-    if ("error" in info) return c.json(info, NAME_PATTERN.test(name) ? 404 : 400);
-    if (info.status !== "running") return c.json(fail(`${vmName(name)} is not running. Start it first.`), 409);
-    const cur = ops.get(name);
-    if (cur && !cur.endedAt) return c.json(fail(`${vmName(name)} is busy ${cur.op}.`), 409);
-    const spec = info.meta?.spec;
-    const session = sessions.start({ sandbox: name, workdir: spec?.workdir ?? WORKSPACE_DIR, env: spec?.env ?? [], prompt });
+    const ready = await readySandbox(name);
+    if (ready instanceof Response) return ready;
+    const session = sessions.start({ sandbox: name, workdir: ready.workdir, env: ready.env, prompt });
     return c.json({ id: session.id }, 201);
+  });
+
+  /** A sandbox a session can start in: running and not busy; otherwise the error response to send. */
+  const readySandbox = async (name: string): Promise<Response | { workdir: string; env: string[] }> => {
+    const info = await known(name);
+    if ("error" in info) return new Response(JSON.stringify(info), { status: NAME_PATTERN.test(name) ? 404 : 400, headers: { "content-type": "application/json" } });
+    const refuse = (message: string) => new Response(JSON.stringify(fail(message)), { status: 409, headers: { "content-type": "application/json" } });
+    if (info.status !== "running") return refuse(`${vmName(name)} is not running. Start it first.`);
+    const cur = ops.get(name);
+    if (cur && !cur.endedAt) return refuse(`${vmName(name)} is busy ${cur.op}.`);
+    const spec = info.meta?.spec;
+    return { workdir: spec?.workdir ?? WORKSPACE_DIR, env: spec?.env ?? [] };
+  };
+
+  /** Saved sessions that can be resumed, most recent first. */
+  app.get("/api/sessions/resumable", async (c) => c.json(await sessions.resumable()));
+
+  app.post("/api/sessions/:id/resume", async (c) => {
+    const stored = await sessionStore.read(c.req.param("id"));
+    if (!stored?.info.claudeSessionId) return c.json(fail(`No saved session ${c.req.param("id")}.`), 404);
+    const ready = await readySandbox(stored.info.sandbox);
+    if (ready instanceof Response) return ready;
+    try {
+      return c.json({ id: sessions.resume(stored, ready.env).id }, 201);
+    } catch (err) {
+      if (err instanceof SessionNotResumable) return c.json(fail("This session is already open."), 409);
+      throw err;
+    }
   });
 
   /** Runs `fn` on a session: 404 if it doesn't exist, 409 if it has ended. */
@@ -318,7 +346,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
       return await fn(c.req.param("id")!, c);
     } catch (err) {
       if (err instanceof SessionNotFound) return c.json(fail(err.message), 404);
-      if (err instanceof SessionEnded) return c.json(fail(err.message), 409);
+      if (err instanceof SessionEnded || err instanceof SessionNotResumable) return c.json(fail(err.message), 409);
       throw err;
     }
   };
@@ -329,6 +357,15 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     if (!text) return c.json(fail("The prompt is empty."), 400);
     sessions.prompt(id, text);
     return c.json({ ok: true }, 202);
+  }));
+
+  /** Starts a new session from a copy of this one's conversation. Returns the new session's id. */
+  app.post("/api/sessions/:id/fork", onSession(async (id, c) => {
+    const from = sessions.get(id);
+    if (!from) throw new SessionNotFound(`No session ${id}.`);
+    const ready = await readySandbox(from.sandbox);
+    if (ready instanceof Response) return ready;
+    return c.json({ id: sessions.fork(id, ready.env).id }, 201);
   }));
 
   app.post("/api/sessions/:id/interrupt", onSession((id, c) => {
@@ -392,6 +429,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     close: async () => {
       clearInterval(timer);
       await sessions.endAll("quit");
+      await sessions.flush();
       for (const ws of clients) ws.terminate();
       // Closed rather than terminated, so each tab still gets its session's last event.
       for (const ws of sessionSockets) ws.close(1001, "server closing");

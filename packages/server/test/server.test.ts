@@ -37,7 +37,7 @@ describe("server", () => {
       metadata: new MetadataStore(join(root, "sandboxes")),
       env,
     });
-    server = await startServer({ provider, port: 0, refreshMs: 200, env, home });
+    server = await startServer({ provider, port: 0, refreshMs: 200, env, home, sessionsDir: join(root, "sessions") });
     ws = new WebSocket(`${server.url.replace("http", "ws")}/api/events`);
     ws.on("message", (m) => events.push(JSON.parse(String(m))));
     await new Promise((r) => ws.once("open", r));

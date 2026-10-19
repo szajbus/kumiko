@@ -13,6 +13,16 @@ export const CLAUDE_COMMAND = [
   "--permission-mode bypassPermissions",
 ].join(" ");
 
+/** The shape of the ids Claude gives sessions; checked before one goes into a shell command. */
+const SESSION_ID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+
+/** The command that starts Claude, continuing session `resume` (as a copy, with `fork`) when given. */
+export function claudeCommand(resume?: string, fork?: boolean): string {
+  if (resume === undefined) return CLAUDE_COMMAND;
+  if (!SESSION_ID.test(resume)) throw new Error(`Not a Claude session id: ${resume}`);
+  return `${CLAUDE_COMMAND} --resume ${resume}${fork ? " --fork-session" : ""}`;
+}
+
 const STDERR_TAIL = 20;
 
 export interface ClaudeDriverOptions {
@@ -66,9 +76,9 @@ export class ClaudeDriver implements AgentDriver {
     if (this.stderr.length > STDERR_TAIL) this.stderr.shift();
   }
 
-  start({ sandbox, workdir, env, prompt }: StartOptions): void {
+  start({ sandbox, workdir, env, prompt, resume, fork }: StartOptions): void {
     if (this.child) throw new Error("This driver has already started.");
-    const child = this.exec(sandbox, CLAUDE_COMMAND, env, { cwd: workdir });
+    const child = this.exec(sandbox, claudeCommand(resume, fork), env, { cwd: workdir });
     this.child = child;
     // Writes after the process is gone fail with EPIPE; the exit event already says what happened.
     child.stdin!.on("error", () => {});
@@ -114,7 +124,7 @@ export class ClaudeDriver implements AgentDriver {
       });
     });
 
-    this.send(prompt);
+    if (prompt !== undefined) this.send(prompt);
   }
 
   send(text: string): void {

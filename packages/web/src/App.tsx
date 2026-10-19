@@ -135,18 +135,17 @@ export function App() {
         route={route}
         live={live}
         started={started.current}
-        onSessionStarted={(id) => {
+        onSessionStarted={(id, keepNewTab) => {
           started.current.add(id);
-          setNewSessionOpen(false);
+          if (!keepNewTab) setNewSessionOpen(false);
           go(`#/session/${id}`);
         }}
-        onEndSession={(s) => (isLive(s) ? setClosing(s) : endSession(s))}
       />
 
       {closing && (
         <ConfirmDialog
-          title="End this session?"
-          confirmLabel="End session"
+          title="Close this session?"
+          confirmLabel="Close session"
           danger
           onCancel={() => setClosing(undefined)}
           onConfirm={() => {
@@ -155,7 +154,7 @@ export function App() {
           }}
         >
           <p>
-            Claude stops working in {vmName(closing.sandbox)} and the tab closes. Its transcript stays in the sandbox.
+            Claude stops working in {vmName(closing.sandbox)} and the tab closes. You can pick the session up again from New session.
           </p>
         </ConfirmDialog>
       )}
@@ -167,11 +166,11 @@ interface BodyProps {
   route: Route;
   live: ReturnType<typeof useLiveState>;
   started: Set<string>;
-  onSessionStarted(id: string): void;
-  onEndSession(s: SessionInfo): void;
+  /** `keepNewTab` for a fork, which doesn't come from the New session tab. */
+  onSessionStarted(id: string, keepNewTab?: boolean): void;
 }
 
-function Body({ route, live, started, onSessionStarted, onEndSession }: BodyProps) {
+function Body({ route, live, started, onSessionStarted }: BodyProps) {
   switch (route.view) {
     case "new":
       return <CreateForm onCancel={() => go("#/")} onCreated={(name) => go(`#/sandbox/${name}`)} />;
@@ -193,7 +192,7 @@ function Body({ route, live, started, onSessionStarted, onEndSession }: BodyProp
       const s = live.sessions.find((x) => x.id === route.id);
       if (!live.loaded || (!s && started.has(route.id))) return null;
       if (!s) return <Redirect to="#/" />;
-      return <SessionView key={s.id} session={s} onEnd={() => onEndSession(s)} />;
+      return <SessionView key={s.id} session={s} onForked={(id) => onSessionStarted(id, true)} />;
     }
     default:
       return <SandboxList live={live} onOpen={(name) => go(`#/sandbox/${name}`)} onNew={() => go("#/new")} />;

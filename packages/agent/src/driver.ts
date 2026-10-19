@@ -9,8 +9,12 @@ export interface StartOptions {
   workdir: string;
   /** Names of host variables to forward, as for provisioning. */
   env: string[];
-  /** Sent as soon as the agent starts, so the session starts working without a second step. */
-  prompt: string;
+  /** Sent as soon as the agent starts, so the session starts working without a second step. Omit when resuming. */
+  prompt?: string;
+  /** The agent's own id of an earlier session to continue; its history is already in the sandbox. */
+  resume?: string;
+  /** With `resume`: continue under a new session id, leaving the original as it is. */
+  fork?: boolean;
 }
 
 /** One parsed protocol message; every one has a `type`. */
