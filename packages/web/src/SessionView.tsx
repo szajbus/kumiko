@@ -6,7 +6,7 @@ import { Composer } from "./Composer";
 import { Markdown } from "./Markdown";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { drafts } from "./drafts";
-import { endedText, formatBytes, formatCost, formatDuration } from "./format";
+import { endedText, formatCost, formatDuration } from "./format";
 import { Fork, Rewind } from "./icons";
 import { Select } from "./Select";
 import { COLORS, sessionStatus } from "./status";
@@ -70,17 +70,7 @@ export function SessionView({ session, onForked }: Props) {
           </span>
         </div>
         <div className="session-controls">
-          <UsageStrip sessionId={session.id} live={live} turnDone={idle} />
-          {totalCost > 0 && (
-            <span className="mono dim session-cost" title="Total cost of this session">
-              {formatCost(totalCost)}
-            </span>
-          )}
-          {session.bufferBytes !== undefined && (
-            <span className="mono dim session-cost" title="Memory this session's chat takes in Bentomo's server, as of the last finished turn. Tool output past 64 KB isn't kept.">
-              {formatBytes(session.bufferBytes)}
-            </span>
-          )}
+          <UsageStrip sessionId={session.id} live={live} turnDone={idle} cost={totalCost} bufferBytes={session.bufferBytes} />
           <button
             type="button"
             className="btn btn-secondary btn-compact"
