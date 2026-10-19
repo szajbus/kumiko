@@ -72,7 +72,7 @@ export function LoginDialog({ sessionId, project, onDone, onClose }: Props) {
       <h2 id="login-title">Log in to Claude</h2>
       <form className="dialog-body login-steps" onSubmit={submit}>
         <p>
-          For the project <strong>{project}</strong>: every session in it uses this login.
+          Claude in <strong>{project}</strong> needs a login. You only do this once per project.
         </p>
         {state.step === "starting" && (
           <p className="muted">
@@ -87,7 +87,7 @@ export function LoginDialog({ sessionId, project, onDone, onClose }: Props) {
                 <a className="btn btn-secondary btn-compact" href={url} target="_blank" rel="noreferrer">
                   Open the sign-in page
                 </a>
-                <p className="muted form-note">Sign in with the Claude account to use in this project. The page then shows a code.</p>
+                <p className="muted form-note">Opens in your browser. Sign in and copy the code.</p>
               </div>
             </div>
             <div className="login-step">
