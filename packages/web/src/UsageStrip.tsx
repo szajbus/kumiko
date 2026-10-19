@@ -93,14 +93,14 @@ function Window({ w, now }: { w: UsageWindow; now: number }) {
   const left = 100 - used;
   const level = used >= 90 ? " is-high" : used >= 70 ? " is-warn" : "";
   const reset = w.resetsAt ? resetText(Date.parse(w.resetsAt) - now) : undefined;
+  const when = w.resetsAt ? `${reset ?? "resets"} (${new Date(w.resetsAt).toLocaleString()})` : undefined;
   return (
-    <span className={`usage-window${level}`} title={`${w.label}: ${used}% used, ${left}% left${w.resetsAt ? `. Resets ${new Date(w.resetsAt).toLocaleString()}` : ""}`}>
+    <span className={`usage-window${level}`} title={`${w.label}: ${used}% used, ${left}% left${when ? `; ${when}` : ""}`}>
       <span>{w.label}</span>
       <span className="usage-bar" role="meter" aria-label={`${w.label} used`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={used}>
         <span style={{ width: `${used}%` }} />
       </span>
       <span className="mono usage-left">{used}% used</span>
-      {reset && <span className="dim">{reset}</span>}
     </span>
   );
 }

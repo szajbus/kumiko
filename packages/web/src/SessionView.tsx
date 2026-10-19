@@ -113,9 +113,6 @@ export function SessionView({ session, onForked }: Props) {
           <a className="badge mono" href={`#/project/${session.sandbox}`} title="Open the project">
             {session.sandbox}
           </a>
-          <span className="mono dim session-workdir" title={session.workdir}>
-            {session.workdir}
-          </span>
           <span className="row-status session-status" style={{ color: status.color }}>
             {busy ? <span className="spinner" aria-hidden="true" /> : <span className="dot dot-small" style={{ background: status.color }} aria-hidden="true" />}
             {status.text}

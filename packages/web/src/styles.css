@@ -389,7 +389,6 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
   padding: 10px 20px; border-bottom: 1px solid var(--border-soft);
 }
 .session-where { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.session-workdir { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-status { font-size: 13px; white-space: nowrap; }
 .session-status .spinner { width: 10px; height: 10px; }
 .session-controls { display: flex; align-items: center; gap: 10px; }
