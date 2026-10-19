@@ -86,6 +86,7 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
         <button type="submit" className="btn btn-primary btn-compact composer-btn" disabled={!canSend}>
           <Send />
           {submitLabel}
+          <kbd className="kbd">Enter</kbd>
         </button>
       )}
     </form>
