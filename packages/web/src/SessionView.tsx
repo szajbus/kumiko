@@ -133,24 +133,25 @@ export function SessionView({ session, onForked }: Props) {
           onStop={session.status === "running" ? () => void call(() => api.interrupt(session.id)) : undefined}
           onSubmit={(text) => call(() => api.prompt(session.id, text))}
           autoFocus
+          footer={
+            <>
+              <span className="badge badge-bypass" title="Claude runs tools without asking for permission. The sandbox is the boundary.">
+                Bypass permissions
+              </span>
+              <Select
+                compact
+                value={model || currentModel}
+                placeholder="Model"
+                disabled={!idle}
+                groups={[{ options: modelOptions }]}
+                onValueChange={(v) => {
+                  setModel(v);
+                  void call(() => api.prompt(session.id, `/model ${v}`));
+                }}
+              />
+            </>
+          }
         />
-        <div className="session-options">
-          <span className="badge badge-bypass" title="Claude runs tools without asking for permission. The sandbox is the boundary.">
-            Bypass permissions
-          </span>
-          <div className="session-picker">
-            <Select
-              value={model || currentModel}
-              placeholder="Model"
-              disabled={!idle}
-              groups={[{ options: modelOptions }]}
-              onValueChange={(v) => {
-                setModel(v);
-                void call(() => api.prompt(session.id, `/model ${v}`));
-              }}
-            />
-          </div>
-        </div>
       </div>
     </div>
   );

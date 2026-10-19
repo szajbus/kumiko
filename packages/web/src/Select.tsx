@@ -15,6 +15,8 @@ interface Props {
   placeholder?: string;
   disabled?: boolean;
   mono?: boolean;
+  /** Small, like a badge, sized to its text. */
+  compact?: boolean;
 }
 
 const Chevron = () => (
@@ -30,17 +32,17 @@ const Check = () => (
 );
 
 /** A styled dropdown; the list opens below the trigger at its width and scrolls when long. */
-export function Select({ id, value, onValueChange, groups, placeholder, disabled, mono }: Props) {
+export function Select({ id, value, onValueChange, groups, placeholder, disabled, mono, compact }: Props) {
   return (
     <RS.Root value={value} onValueChange={onValueChange} disabled={disabled}>
-      <RS.Trigger id={id} className={`select-trigger${mono ? " mono" : ""}`}>
+      <RS.Trigger id={id} className={`select-trigger${mono ? " mono" : ""}${compact ? " select-compact" : ""}`}>
         <RS.Value placeholder={placeholder} />
         <RS.Icon className="select-chevron">
           <Chevron />
         </RS.Icon>
       </RS.Trigger>
       <RS.Portal>
-        <RS.Content className={`select-content${mono ? " mono" : ""}`} position="popper" sideOffset={4}>
+        <RS.Content className={`select-content${mono ? " mono" : ""}${compact ? " select-content-compact" : ""}`} position="popper" sideOffset={4}>
           <RS.Viewport className="select-viewport">
             {groups.map((g, i) => (
               <RS.Group key={g.label ?? i}>

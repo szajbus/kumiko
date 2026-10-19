@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Send } from "./icons";
 
 interface Props {
@@ -18,6 +18,8 @@ interface Props {
   initialText?: string;
   /** Remembers the unsent text under this key while the composer is unmounted (switching tabs). */
   draftKey?: string;
+  /** Shown at the left of the line under the box, opposite the key hint. */
+  footer?: ReactNode;
 }
 
 const drafts = new Map<string, string>();
@@ -34,7 +36,7 @@ export function matchCommands(commands: string[], typed: string): string[] {
 }
 
 /** A prompt box: Enter sends, Shift+Enter adds a line. Used by the New session tab and the chat. */
-export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder, autoFocus, label, commands, initialText, draftKey }: Props) {
+export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder, autoFocus, label, commands, initialText, draftKey, footer }: Props) {
   const [text, setTextState] = useState(() => initialText || (draftKey && drafts.get(draftKey)) || "");
   const setText = (value: string) => {
     setTextState(value);
@@ -175,9 +177,12 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
           <kbd className="kbd">Enter</kbd>
         </button>
       </form>
-      <p className="composer-hint">
-        <kbd className="kbd">Shift</kbd> + <kbd className="kbd">Enter</kbd> for a new line
-      </p>
+      <div className="composer-hint">
+        {footer && <div className="composer-footer">{footer}</div>}
+        <span className="composer-keys">
+          <kbd className="kbd">Shift</kbd> + <kbd className="kbd">Enter</kbd> for a new line
+        </span>
+      </div>
     </>
   );
 }
