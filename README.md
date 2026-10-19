@@ -88,7 +88,7 @@ Beyond the spec:
 - **`SandboxProvider`** has more methods: `validate` and `validateEdit` (so the server can answer `400` before going async), `edit` and `templates`. There is no separate "re-run provisioning": a sandbox is provisioned once, and a changed or fixed script runs by recreating it.
 - **Claude Code is always installed**, as the first provisioning step before the user's script.
   - It uses the official native installer (`curl -fsSL https://claude.ai/install.sh | bash`), which puts it in `~/.local/bin` and needs no Node. curl is installed with apt if missing.
-  - It is linked to `/usr/local/bin/claude`, so every shell finds it: login, non-login and `limactl shell`. `exec` also puts `~/.local/bin` on `PATH`.
+  - It is linked to `/usr/local/bin/claude`, so every shell finds it: login, non-login and `limactl shell`. Every start also puts `~/.local/bin` on `PATH` for every shell, as Claude Code's own checks expect: `~/.config/bentomo/env.sh`, sourced from the top of `~/.bashrc` (so commands run over ssh get it too) and from `~/.profile`. `exec` sets it as well.
   - If the install fails, provisioning fails (`provision_failed`), as for the script.
   - Every later start checks for it and reinstalls only if it is missing. A failure there is a warning.
   - With `~/.claude` mounted (the default), it uses the host's login and settings.

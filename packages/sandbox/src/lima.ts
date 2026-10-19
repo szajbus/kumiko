@@ -228,7 +228,7 @@ export class LimaProvider implements SandboxProvider {
     log(`$ limactl start --tty=false ${vm}`, "cmd");
     await runOk(this.limactl, ["start", "--tty=false", vm], { log, lima: true });
     const meta = await this.metadata.read(name);
-    if (meta) await this.ensureWorkdir(name, meta.spec.workdir ?? WORKSPACE_DIR, log);
+    if (meta) await this.prepareShells(name, meta.spec.workdir ?? WORKSPACE_DIR, log);
     if (meta?.setup === "creating") await this.runProvisioning(name, log);
     else if (meta && (await this.ensureClaude(name, log)) !== 0) log("warning: couldn't reinstall Claude Code; it is missing in the VM.");
   }
@@ -254,21 +254,31 @@ export class LimaProvider implements SandboxProvider {
   }
 
   /**
-   * Creates the working directory if it's missing and hands it to the VM user if they can't write to it
-   * (Lima creates /workspace as root when mounting under it). Also points interactive shells at it: without
-   * --workdir, `limactl shell` tries the host's current directory and home, which rarely exist in the VM, and
-   * falls back to ~. A failure is only a warning.
+   * Prepares the VM's shells on every start, so changes to the working directory reach them. A failure is only a warning.
+   * - Creates the working directory if it's missing and hands it to the VM user if they can't write to it
+   *   (Lima creates /workspace as root when mounting under it).
+   * - Puts ~/.local/bin, where Claude Code installs, on PATH for every shell: ~/.config/bentomo/env.sh is
+   *   sourced from the top of ~/.bashrc (before Debian's early return, so `ssh host cmd` gets it too) and from ~/.profile.
+   * - Moves interactive shells that land in ~ to the working directory: without --workdir, `limactl shell` tries
+   *   the host's current directory and home, which rarely exist in the VM, and falls back to ~. That one is
+   *   ~/.config/bentomo/shell.sh, sourced from the end of ~/.bashrc, which only interactive shells reach.
    */
-  private async ensureWorkdir(name: string, workdir: string, log: Log): Promise<void> {
+  private async prepareShells(name: string, workdir: string, log: Log): Promise<void> {
+    const env = `# Written by Bentomo on every start: ~/.local/bin (Claude Code) on PATH.\n` +
+      `case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac\n`;
     const rc = `# Written by Bentomo on every start: interactive shells that land in ~ move to the working directory.\n` +
       `if [ "$PWD" = "$HOME" ]; then cd ${shellPath(workdir)} 2>/dev/null || true; fi\n`;
+    const source = (file: string) => `[ -f ~/.config/bentomo/${file} ] && . ~/.config/bentomo/${file}`;
     const script = [
       `set -e`,
       `d=${shellPath(workdir)}; sudo mkdir -p "$d"; [ -w "$d" ] || sudo chown "$(id -u):$(id -g)" "$d"`,
       `mkdir -p ~/.config/bentomo`,
+      `cat > ~/.config/bentomo/env.sh <<'BENTOMO_RC'\n${env}BENTOMO_RC`,
       `cat > ~/.config/bentomo/shell.sh <<'BENTOMO_RC'\n${rc}BENTOMO_RC`,
-      // Appended at the end of .bashrc, after Debian's early return for non-interactive shells.
-      `grep -qF .config/bentomo/shell.sh ~/.bashrc 2>/dev/null || printf '\\n# Added by Bentomo\\n[ -f ~/.config/bentomo/shell.sh ] && . ~/.config/bentomo/shell.sh\\n' >> ~/.bashrc`,
+      `touch ~/.bashrc ~/.profile`,
+      `if ! grep -qF .config/bentomo/env.sh ~/.bashrc; then { printf '# Added by Bentomo\\n%s\\n\\n' ${shellQuote(source("env.sh"))}; cat ~/.bashrc; } > ~/.bashrc.bentomo && mv ~/.bashrc.bentomo ~/.bashrc; fi`,
+      `grep -qF .config/bentomo/shell.sh ~/.bashrc || printf '\\n# Added by Bentomo\\n%s\\n' ${shellQuote(source("shell.sh"))} >> ~/.bashrc`,
+      `grep -qF .config/bentomo/env.sh ~/.profile || printf '\\n# Added by Bentomo\\n%s\\n' ${shellQuote(source("env.sh"))} >> ~/.profile`,
     ].join("\n");
     const child = this.exec(name, `bash -c ${shellQuote(script)}`, []);
     child.stdin!.end();
@@ -278,7 +288,7 @@ export class LimaProvider implements SandboxProvider {
     const code = await exitCode(child);
     if (code === 0) return;
     for (const l of out) log(l);
-    log(`warning: couldn't prepare the working directory ${workdir} (exit ${code}).`);
+    log(`warning: couldn't prepare the working directory ${workdir} or the shell setup (exit ${code}).`);
   }
 
   async stop(name: string, log: Log): Promise<void> {
@@ -312,7 +322,7 @@ export class LimaProvider implements SandboxProvider {
       await runOk(this.limactl, args, { log, lima: true });
     }
     await this.metadata.update(name, { spec: plan.spec });
-    if (plan.prepareWorkdir) await this.ensureWorkdir(name, plan.spec.workdir ?? WORKSPACE_DIR, log);
+    if (plan.prepareShells) await this.prepareShells(name, plan.spec.workdir ?? WORKSPACE_DIR, log);
     log(plan.limaArgs.length ? "Saved. Resource and mount changes apply on the next start." : "Saved.", "ok");
   }
 
@@ -321,7 +331,7 @@ export class LimaProvider implements SandboxProvider {
     name: string,
     patch: EditSpec,
     recreate = false,
-  ): Promise<Validation & { limaArgs: string[]; prepareWorkdir?: boolean }> {
+  ): Promise<Validation & { limaArgs: string[]; prepareShells?: boolean }> {
     const vm = vmName(name);
     const meta = await this.metadata.read(name);
     const inst = (await this.instances()).find((i) => i.name === vm);
@@ -353,8 +363,8 @@ export class LimaProvider implements SandboxProvider {
       errors.push(`Stop ${vm} to change its resources or mounts. Variables and the provisioning script can change while it runs.`);
     }
     // A stopped VM gets its new working directory on the next start; a running one right after saving.
-    const prepareWorkdir = spec.workdir !== (meta.spec.workdir ?? WORKSPACE_DIR) && toStatus(inst.status) === "running";
-    return { errors, warnings: v.warnings, spec, limaArgs, prepareWorkdir };
+    const prepareShells = spec.workdir !== (meta.spec.workdir ?? WORKSPACE_DIR) && toStatus(inst.status) === "running";
+    return { errors, warnings: v.warnings, spec, limaArgs, prepareShells };
   }
 
   private async runProvisioning(name: string, log: Log): Promise<void> {

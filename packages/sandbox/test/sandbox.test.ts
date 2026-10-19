@@ -179,6 +179,10 @@ describe("LimaProvider against a fake limactl", () => {
     const home = join(limaDir, "vm-home");
     const bashrc = await readFile(join(home, ".bashrc"), "utf8");
     assert.equal(bashrc.split(".config/bentomo/shell.sh ]").length - 1, 1, "sourced from .bashrc exactly once");
+    assert.ok(bashrc.startsWith("# Added by Bentomo\n[ -f ~/.config/bentomo/env.sh ]"), "PATH comes first in .bashrc");
+    assert.equal(bashrc.split(".config/bentomo/env.sh ]").length - 1, 1);
+    const profile = await readFile(join(home, ".profile"), "utf8");
+    assert.equal(profile.split(".config/bentomo/env.sh ]").length - 1, 1, "and from .profile once");
     const rc = await readFile(join(home, ".config/bentomo/shell.sh"), "utf8");
     assert.ok(rc.includes(`cd "$HOME"/'code dir'`), rc);
 
@@ -189,6 +193,13 @@ describe("LimaProvider against a fake limactl", () => {
     const pwd = (cwd: string) => execFileSync("bash", ["-ic", "pwd"], { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
     assert.equal(pwd(home), join(home, "code dir"));
     assert.equal(pwd(mountDir), mountDir);
+
+    // Every kind of shell has ~/.local/bin on PATH, once.
+    const bin = join(home, ".local/bin");
+    for (const flags of ["-ic", "-lc"]) {
+      const path = execFileSync("bash", [flags, "echo $PATH"], { cwd: home, env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+      assert.equal(path.split(":").filter((x) => x === bin).length, 1, `${flags}: ${path}`);
+    }
   });
 
   it("installs Claude Code before the script, links it onto PATH, and only once", async () => {
