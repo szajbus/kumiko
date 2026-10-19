@@ -104,7 +104,7 @@ export function SessionView({ session, onForked }: Props) {
           label="Message Claude"
           submitLabel="Send"
           placeholder={live ? "Message Claude…" : "This session has ended."}
-          disabled={!live || busy}
+          disabled={!live || session.status === "starting"}
           onStop={session.status === "running" ? () => void call(() => api.interrupt(session.id)) : undefined}
           onSubmit={(text) => call(() => api.prompt(session.id, text))}
           autoFocus
