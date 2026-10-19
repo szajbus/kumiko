@@ -40,12 +40,6 @@ export function NewSession({ live, onStarted }: Props) {
     };
   }, [open]);
 
-  // Claude doesn't say what its default is until a session runs, so go by the latest session in this sandbox.
-  const lastModel = [...live.sessions, ...saved]
-    .filter((s) => s.sandbox === sandbox && s.model)
-    .sort((a, b) => (b.updatedAt ?? b.startedAt).localeCompare(a.updatedAt ?? a.startedAt))[0]?.model?.toLowerCase();
-  const defaultModel = MODELS.find((m) => m !== "default" && lastModel?.includes(m));
-
   const resume = async (id: string) => {
     setError(undefined);
     setResuming(id);
@@ -129,7 +123,7 @@ export function NewSession({ live, onStarted }: Props) {
                 <span className="badge badge-bypass" title="Claude runs tools without asking for permission. The sandbox is the boundary.">
                   Bypass permissions
                 </span>
-                <Select compact value={model} labels={defaultModel ? { default: `default (${defaultModel})` } : undefined} placeholder="Model" groups={[{ options: MODELS }]} onValueChange={setModel} />
+                <Select compact value={model} placeholder="Model" groups={[{ options: MODELS }]} onValueChange={setModel} />
               </>
             }
           />

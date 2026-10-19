@@ -36,6 +36,7 @@ export function SessionView({ session, onForked }: Props) {
   const reported = session.model ?? "";
   const alias = MODELS.find((m) => m !== "default" && reported.toLowerCase().includes(m));
   const currentModel = alias ?? reported;
+  const defaultAlias = MODELS.find((m) => m !== "default" && session.defaultModel?.toLowerCase().includes(m));
   const modelOptions = currentModel && !MODELS.includes(currentModel) ? [...MODELS, currentModel] : MODELS;
   // Once Claude reports the model in use, that replaces what was picked.
   // A pick Claude didn't accept is dropped when the turn ends.
@@ -147,6 +148,7 @@ export function SessionView({ session, onForked }: Props) {
                 placeholder="Model"
                 disabled={!idle}
                 groups={[{ options: modelOptions }]}
+                labels={defaultAlias ? { default: `default (${defaultAlias})` } : undefined}
                 onValueChange={(v) => {
                   setModel(v);
                   void call(() => api.prompt(session.id, `/model ${v}`));

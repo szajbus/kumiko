@@ -247,6 +247,8 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
       this.setInfo(s, {
         claudeSessionId: typeof m.session_id === "string" ? m.session_id : s.info.claudeSessionId,
         model: typeof m.model === "string" ? m.model : s.info.model,
+        // Started without a model chosen: the first one reported is the default.
+        defaultModel: s.info.defaultModel ?? (!s.info.model && typeof m.model === "string" ? m.model : undefined),
         commands: Array.isArray(m.slash_commands) ? m.slash_commands.filter((c): c is string => typeof c === "string") : s.info.commands,
         status: "running",
       });
