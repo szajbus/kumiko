@@ -54,6 +54,7 @@ export function Header({ sessions, newSessionOpen, active, onSelect, onClose, on
           <Plus size={14} />
         </button>
       </div>
+      <span className="build-sha" title="Build commit">{__COMMIT_SHA__}</span>
     </header>
   );
 }

@@ -48,6 +48,8 @@ code, .mono { font-family: var(--mono); }
 [data-shell="electron-darwin"] .app-header { -webkit-app-region: drag; padding-left: 84px; }
 [data-shell="electron-darwin"] .app-header :is(a, button) { -webkit-app-region: no-drag; }
 
+.build-sha { flex: none; margin-left: 12px; font: 11px var(--mono, "IBM Plex Mono", monospace); color: var(--muted); user-select: text; }
+
 /* Buttons */
 .btn {
   display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 18px;
