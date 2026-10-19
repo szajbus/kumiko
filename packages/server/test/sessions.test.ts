@@ -146,8 +146,13 @@ describe("sessions", () => {
     const again = await listen(id, lastSeq);
     await waitFor(() => again.got.some((e) => e.kind === "claude" && e.payload.type === "result"));
     assert.equal(again.got[0].seq, lastSeq + 1);
+
+    // /rename shows up as the session's title.
+    await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: "/rename fix-composer" }) });
+    await waitFor(async () => (await session(id))?.title === "fix-composer");
+    await waitFor(() => s.results().length === 5);
     const full = await listen(id);
-    await waitFor(() => full.results().length === 4);
+    await waitFor(() => full.results().length === 5);
     // Only the message Stop cut short keeps its deltas; every finished one is replayed from its final form.
     const kept = new Set(full.got.flatMap((e) => (e.kind === "claude" && e.payload.type === "stream_event" ? [e.payload.api_message_id] : [])));
     assert.equal(kept.size, 1);

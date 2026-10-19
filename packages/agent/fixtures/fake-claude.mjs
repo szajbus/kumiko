@@ -4,6 +4,7 @@
 //   "env NAME"   replies with the value of $NAME, through a Bash tool call
 //   "slow"       streams a word every 50ms for ~10s, so it can be interrupted
 //   "/model X"   switches the model, with a synthetic reply and a 0-turn result
+//   "/rename X"  names the session, as a session_title_changed message
 //   "crash"      writes to stderr and exits 3
 //   "signed out" answers with an error result, as Claude does without a login
 //   anything else is echoed back as "You said: …"
@@ -55,6 +56,10 @@ async function turn(text) {
   if (text.startsWith("/model ")) {
     model = `claude-${text.slice(7).trim()}-5-5`;
     out({ type: "assistant", message: { model: "<synthetic>", id: randomUUID(), type: "message", role: "assistant", content: [{ type: "text", text: `Set model to ${model}` }] }, parent_tool_use_id: null, session_id, uuid: randomUUID() });
+    return result(start, { cost: 0, num_turns: 0 });
+  }
+  if (text.startsWith("/rename ")) {
+    out({ type: "system", subtype: "session_title_changed", title: text.slice(8).trim(), session_id });
     return result(start, { cost: 0, num_turns: 0 });
   }
   if (text === "crash") {

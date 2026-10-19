@@ -237,6 +237,9 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
       });
       // Saved as soon as it can be resumed, in case the app goes away before the first turn ends.
       if (isNew) this.save(s);
+    } else if (m.type === "system" && m.subtype === "session_title_changed") {
+      // /rename; saved with the turn's result that follows.
+      if (typeof m.title === "string" && m.title.trim()) this.setInfo(s, { title: m.title.trim() });
     } else if (m.type === "assistant" && isLive(s.info)) {
       // /model shows up here first, as the model of the next real reply.
       const model = (m.message as { model?: unknown } | undefined)?.model;

@@ -135,6 +135,8 @@ export interface SessionInfo {
   status: SessionStatus;
   /** The opening prompt, for the tab title. */
   prompt: string;
+  /** Set by /rename; replaces the prompt in the tab title. */
+  title?: string;
   startedAt: string;
   endedAt?: string;
   /** When the session was last saved to disk; orders the list of sessions that can be resumed. */

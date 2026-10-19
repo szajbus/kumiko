@@ -14,9 +14,9 @@ interface Props {
   onNewSession(): void;
 }
 
-/** A session's tab title: its sandbox and the first words of the opening prompt. */
+/** A session's tab title: its sandbox and its name from /rename, or else the first words of the opening prompt. */
 export function sessionTitle(s: SessionInfo): string {
-  const words = s.prompt.split(/\s+/).filter(Boolean);
+  const words = (s.title ?? s.prompt).split(/\s+/).filter(Boolean);
   let text = "";
   for (const w of words) {
     if ((text + " " + w).trim().length > 28) return `${s.sandbox} · ${text || w.slice(0, 28)}…`;
