@@ -105,8 +105,4 @@ export class UsageCache {
     pending.catch(() => this.entries.delete(sandbox));
     return pending;
   }
-
-  forget(sandbox: string) {
-    this.entries.delete(sandbox);
-  }
 }

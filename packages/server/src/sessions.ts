@@ -198,7 +198,13 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
       }
     });
 
-    driver.start(driverOpts);
+    try {
+      driver.start(driverOpts);
+    } catch (err) {
+      // Nothing started (e.g. a saved Claude id that isn't one), so there is no exit to wait for: forget it now.
+      this.sessions.delete(info.id);
+      throw err;
+    }
     this.emit("changed");
     return info;
   }

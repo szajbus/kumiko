@@ -17,6 +17,7 @@ describe("sessions", () => {
   let server: RunningServer;
   let limaDir: string;
   let workdir: string;
+  let sessionsDir: string;
   const events: ServerEvent[] = [];
   let ws: WebSocket;
 
@@ -81,7 +82,8 @@ describe("sessions", () => {
       metadata: new MetadataStore(join(root, "sandboxes")),
       env,
     });
-    server = await startServer({ provider, port: 0, refreshMs: 200, env, home: root, sessionsDir: join(root, "sessions") });
+    sessionsDir = join(root, "sessions");
+    server = await startServer({ provider, port: 0, refreshMs: 200, env, home: root, sessionsDir });
     ws = new WebSocket(`${server.url.replace("http", "ws")}/api/events`);
     ws.on("message", (m) => events.push(JSON.parse(String(m))));
     await new Promise((r) => ws.once("open", r));
@@ -227,6 +229,12 @@ describe("sessions", () => {
     assert.deepEqual(listed.map((x) => x.updatedAt), listed.map((x) => x.updatedAt).sort().reverse());
 
     assert.equal((await api("/api/sessions/abc123/resume", { method: "POST" })).status, 404);
+    // A saved session whose Claude id isn't one can't start, and leaves nothing behind.
+    await mkdir(sessionsDir, { recursive: true });
+    const info = { id: "badbad", sandbox: "one", workdir, status: "ended", prompt: "x", startedAt: new Date().toISOString(), claudeSessionId: "not-an-id" };
+    await writeFile(join(sessionsDir, "badbad.json"), JSON.stringify({ info, events: [] }));
+    assert.equal((await api("/api/sessions/badbad/resume", { method: "POST" })).status, 500);
+    assert.equal(await session("badbad"), undefined);
     const res = await api(`/api/sessions/${id}/resume`, { method: "POST" });
     assert.equal(res.status, 201);
     assert.equal((await json(res)).id, id);
