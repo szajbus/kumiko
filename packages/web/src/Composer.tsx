@@ -63,6 +63,11 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
         autoFocus={autoFocus}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
+          if (e.key === "Escape" && onStop && !e.nativeEvent.isComposing) {
+            e.preventDefault();
+            onStop();
+            return;
+          }
           if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
             void send();
