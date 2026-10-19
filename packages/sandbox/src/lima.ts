@@ -255,10 +255,21 @@ export class LimaProvider implements SandboxProvider {
 
   /**
    * Creates the working directory if it's missing and hands it to the VM user if they can't write to it
-   * (Lima creates /workspace as root when mounting under it). A failure is only a warning.
+   * (Lima creates /workspace as root when mounting under it). Also points interactive shells at it: without
+   * --workdir, `limactl shell` tries the host's current directory and home, which rarely exist in the VM, and
+   * falls back to ~. A failure is only a warning.
    */
   private async ensureWorkdir(name: string, workdir: string, log: Log): Promise<void> {
-    const script = `d=${shellPath(workdir)}; sudo mkdir -p "$d" && { [ -w "$d" ] || sudo chown "$(id -u):$(id -g)" "$d"; }`;
+    const rc = `# Written by Bentomo on every start: interactive shells that land in ~ move to the working directory.\n` +
+      `if [ "$PWD" = "$HOME" ]; then cd ${shellPath(workdir)} 2>/dev/null || true; fi\n`;
+    const script = [
+      `set -e`,
+      `d=${shellPath(workdir)}; sudo mkdir -p "$d"; [ -w "$d" ] || sudo chown "$(id -u):$(id -g)" "$d"`,
+      `mkdir -p ~/.config/bentomo`,
+      `cat > ~/.config/bentomo/shell.sh <<'BENTOMO_RC'\n${rc}BENTOMO_RC`,
+      // Appended at the end of .bashrc, after Debian's early return for non-interactive shells.
+      `grep -qF .config/bentomo/shell.sh ~/.bashrc 2>/dev/null || printf '\\n# Added by Bentomo\\n[ -f ~/.config/bentomo/shell.sh ] && . ~/.config/bentomo/shell.sh\\n' >> ~/.bashrc`,
+    ].join("\n");
     const child = this.exec(name, `bash -c ${shellQuote(script)}`, []);
     child.stdin!.end();
     const out: string[] = [];

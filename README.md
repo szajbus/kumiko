@@ -77,6 +77,7 @@ Beyond the spec:
 
 - **Working directory** (`workdir` in the spec, default `/workspace`, `~/…` allowed). Provisioning runs in it, and `exec` takes it as `cwd` for sessions.
   - Every start creates it if it's missing, and hands it to the VM user if they can't write to it; Lima creates `/workspace` as root when mounting under it. It can change in place, even while the VM runs.
+  - Interactive shells start there too. Without `--workdir`, `limactl shell` tries the host's current directory and home, which rarely exist in the VM, and falls back to `~`. Each start writes `~/.config/bentomo/shell.sh`, sourced at the end of `~/.bashrc`, which moves a shell that lands in `~` to the working directory. A shell sent anywhere else stays there.
 - **Mounts land in the working directory by default.** This replaces the spec's same-path rule.
   - A host folder `/a/b/c/d` is offered at `/workspace/d` in the VM (or `<working directory>/d`), with a `-2` suffix if that path is taken. The user can override it.
   - `~/…` in the VM path means the VM user's home; it becomes Lima's `{{.Home}}`.

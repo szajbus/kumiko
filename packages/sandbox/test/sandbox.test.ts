@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { defaultGuestPath } from "@bentomo/shared";
@@ -169,6 +169,26 @@ describe("LimaProvider against a fake limactl", () => {
     await provider.create(spec({ workdir: mountDir, provision: "pwd > here" }), log);
     assert.equal((await readFile(join(mountDir, "here"), "utf8")).trim(), mountDir);
     assert.ok(!lines.some((l) => l.includes("couldn't prepare")), "an existing, writable directory needs nothing");
+  });
+
+  it("points interactive shells that land in ~ at the working directory, once per .bashrc", async () => {
+    const { limaDir, mountDir, provider, log } = await fakeLima();
+    await provider.create(spec({ workdir: "~/code dir" }), log);
+    await provider.stop("web", log);
+    await provider.start("web", log);
+    const home = join(limaDir, "vm-home");
+    const bashrc = await readFile(join(home, ".bashrc"), "utf8");
+    assert.equal(bashrc.split(".config/bentomo/shell.sh ]").length - 1, 1, "sourced from .bashrc exactly once");
+    const rc = await readFile(join(home, ".config/bentomo/shell.sh"), "utf8");
+    assert.ok(rc.includes(`cd "$HOME"/'code dir'`), rc);
+
+    // An interactive shell starting in ~ ends up in the working directory; one started elsewhere stays put.
+    await mkdir(join(home, "code dir")); // the fake sudo doesn't really mkdir
+    const { execFileSync } = await import("node:child_process");
+    const env = { ...process.env, HOME: home };
+    const pwd = (cwd: string) => execFileSync("bash", ["-ic", "pwd"], { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    assert.equal(pwd(home), join(home, "code dir"));
+    assert.equal(pwd(mountDir), mountDir);
   });
 
   it("installs Claude Code before the script, links it onto PATH, and only once", async () => {
