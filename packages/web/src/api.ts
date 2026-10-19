@@ -2,19 +2,20 @@ import { useEffect, useRef, useState } from "react";
 import type {
   AccountUsage,
   ApiError,
+  CreateProjectRequest,
   CreateResponse,
   DefaultsResponse,
-  EditSpec,
   LogLine,
+  ProjectEdit,
+  ProjectView,
   ResumableSession,
   RewindRequest,
   RewindResponse,
-  SandboxSpec,
-  SandboxView,
   ServerEvent,
   SessionEvent,
   SessionInfo,
   TemplatesResponse,
+  WorktreesResponse,
 } from "@bentomo/shared";
 
 declare global {
@@ -48,15 +49,19 @@ export const api = {
   templates: () => request<TemplatesResponse>("GET", "/api/templates"),
   defaults: () => request<DefaultsResponse>("GET", "/api/defaults"),
   env: (names: string[]) => request<Record<string, boolean>>("GET", `/api/env?names=${encodeURIComponent(names.join(","))}`),
-  create: (spec: SandboxSpec) => request<CreateResponse>("POST", "/api/sandboxes", spec),
-  start: (name: string) => request("POST", `/api/sandboxes/${name}/start`),
-  stop: (name: string) => request("POST", `/api/sandboxes/${name}/stop`),
-  recreate: (name: string) => request("POST", `/api/sandboxes/${name}/recreate`),
-  remove: (name: string) => request("DELETE", `/api/sandboxes/${name}`),
+  create: (req: CreateProjectRequest) => request<CreateResponse>("POST", "/api/projects", req),
+  start: (id: string) => request("POST", `/api/projects/${id}/start`),
+  stop: (id: string) => request("POST", `/api/projects/${id}/stop`),
+  recreate: (id: string) => request("POST", `/api/projects/${id}/recreate`),
+  remove: (id: string) => request("DELETE", `/api/projects/${id}`),
   /** Saves in place, or with `recreate` deletes the VM and creates it again from the changed spec. */
-  edit: (name: string, patch: EditSpec, recreate = false) =>
-    request<{ warnings: string[] }>("PATCH", `/api/sandboxes/${name}${recreate ? "?recreate=1" : ""}`, patch),
-  startSession: (sandbox: string, prompt: string, model?: string) => request<{ id: string }>("POST", "/api/sessions", { sandbox, prompt, model }),
+  edit: (id: string, patch: ProjectEdit, recreate = false) =>
+    request<{ warnings: string[] }>("PATCH", `/api/projects/${id}${recreate ? "?recreate=1" : ""}`, patch),
+  /** The clone's worktrees, as git on the host sees them. */
+  worktrees: (id: string) => request<WorktreesResponse>("GET", `/api/projects/${id}/worktrees`),
+  startSession: (project: string, prompt: string, model?: string) => request<{ id: string }>("POST", "/api/sessions", { sandbox: project, prompt, model }),
+  /** The user has seen the session, so it no longer waits on them. */
+  seen: (id: string) => request("POST", `/api/sessions/${id}/seen`),
   prompt: (id: string, text: string) => request("POST", `/api/sessions/${id}/prompt`, { text }),
   /** The Claude account behind a session and how much of its subscription is used. */
   usage: (id: string) => request<AccountUsage>("GET", `/api/sessions/${id}/usage`),
@@ -79,20 +84,20 @@ export const api = {
 const wsUrl = (path: string) => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${path}`;
 
 export interface LiveState {
-  sandboxes: SandboxView[];
+  projects: ProjectView[];
   logs: Record<string, LogLine[]>;
   /** Agent sessions, live and ended, in the order they started. */
   sessions: SessionInfo[];
-  /** The server couldn't list sandboxes (e.g. limactl missing). */
+  /** The server couldn't list the VMs (e.g. limactl missing). */
   listError?: string;
   connected: boolean;
   /** True once the first snapshot has arrived. */
   loaded: boolean;
 }
 
-/** Keeps the sandbox list and operation logs in sync over /api/events, reconnecting when the server restarts. */
+/** Keeps the project list, sessions and operation logs in sync over /api/events, reconnecting when the server restarts. */
 export function useLiveState(): LiveState {
-  const [state, setState] = useState<LiveState>({ sandboxes: [], logs: {}, sessions: [], connected: false, loaded: false });
+  const [state, setState] = useState<LiveState>({ projects: [], logs: {}, sessions: [], connected: false, loaded: false });
   const retry = useRef(0);
 
   useEffect(() => {
@@ -130,9 +135,9 @@ export function useLiveState(): LiveState {
 function apply(s: LiveState, ev: ServerEvent): LiveState {
   switch (ev.type) {
     case "snapshot":
-      return { sandboxes: ev.sandboxes, logs: ev.logs, sessions: ev.sessions, listError: ev.error, connected: true, loaded: true };
+      return { projects: ev.projects, logs: ev.logs, sessions: ev.sessions, listError: ev.error, connected: true, loaded: true };
     case "list":
-      return { ...s, sandboxes: ev.sandboxes, listError: ev.error };
+      return { ...s, projects: ev.projects, listError: ev.error };
     case "sessions":
       return { ...s, sessions: ev.sessions };
     case "state":
@@ -194,4 +199,13 @@ export function useSessionEvents(id: string): SessionStream {
   }, [id]);
 
   return state;
+}
+
+/** The host user's home, for showing paths as ~/…; undefined until the server answers. */
+export function useHome(): string | undefined {
+  const [home, setHome] = useState<string | undefined>();
+  useEffect(() => {
+    api.defaults().then((d) => setHome(d.home), () => {});
+  }, []);
+  return home;
 }

@@ -1,4 +1,4 @@
-import type { LogLine, OpKind, SandboxView, SessionStatus } from "@bentomo/shared";
+import { isWaiting, type LogLine, type OpKind, type SandboxView, type SessionInfo, type SessionStatus } from "@bentomo/shared";
 
 export const COLORS = {
   running: "#4CC38A",
@@ -46,6 +46,8 @@ export function statusOf(sb: SandboxView, log: LogLine[] = []): { text: string; 
         : { text: "Stopped", color: COLORS.stopped };
     case "broken":
       return { text: "Broken", color: COLORS.failed };
+    case "absent":
+      return { text: "No VM", color: COLORS.warn };
     default:
       return { text: "Unknown", color: COLORS.warn };
   }
@@ -79,5 +81,9 @@ const SESSION_STATUS: Record<SessionStatus, { text: string; color: string }> = {
 };
 
 export const sessionStatus = (s: SessionStatus) => SESSION_STATUS[s];
+
+/** A session's state for its tab and lists: waiting on the user stands out from merely ready. */
+export const sessionState = (s: SessionInfo) =>
+  isWaiting(s) && s.status === "idle" ? { text: "Waiting on you", color: COLORS.warn } : SESSION_STATUS[s.status];
 
 export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;

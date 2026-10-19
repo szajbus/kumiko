@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { access, cp, lstat, mkdir, readdir, readFile, realpath, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
+import { access, cp, lstat, mkdir, readdir, readFile, realpath, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, normalize } from "node:path";
 import { CLAUDE_HOME_IN_VM, NAME_PATTERN, WORKTREES_SUFFIX, type Mount, type Project, type SandboxSpec } from "@bentomo/shared";
@@ -99,11 +99,12 @@ export class ProjectStore {
     return all.filter((p): p is Project => Boolean(p)).sort((a, b) => a.id.localeCompare(b.id));
   }
 
-  private async write(p: Project): Promise<void> {
+  /** Writes a new project's record, failing if the id is taken: two creates racing for one name can't both win. */
+  private async claim(p: Project): Promise<void> {
     await mkdir(this.dir, { recursive: true });
-    const tmp = `${this.file(p.id)}.${process.pid}.tmp`;
-    await writeFile(tmp, JSON.stringify(p, null, 2) + "\n");
-    await rename(tmp, this.file(p.id));
+    await writeFile(this.file(p.id), JSON.stringify(p, null, 2) + "\n", { flag: "wx" }).catch((err: NodeJS.ErrnoException) => {
+      throw err.code === "EEXIST" ? new Error(`There is already a project called ${p.id}.`) : err;
+    });
   }
 
   /**
@@ -151,10 +152,8 @@ export class ProjectStore {
    */
   async create(id: string, clonePath: string, worktreesPath: string): Promise<CreatedProject> {
     const project: Project = { id, clonePath, worktreesPath, createdAt: new Date().toISOString() };
-    const madeWorktrees = await mkdir(worktreesPath).then(() => true, (err: NodeJS.ErrnoException) => {
-      if (err.code === "EEXIST") return false;
-      throw err;
-    });
+    await this.claim(project);
+    let madeWorktrees = false;
     const rollback = async () => {
       await rm(this.file(id), { force: true });
       await rm(this.claudeHome(id), { recursive: true, force: true });
@@ -162,8 +161,11 @@ export class ProjectStore {
       if (madeWorktrees) await rmdir(worktreesPath).catch(() => {});
     };
     try {
+      madeWorktrees = await mkdir(worktreesPath).then(() => true, (err: NodeJS.ErrnoException) => {
+        if (err.code === "EEXIST") return false;
+        throw err;
+      });
       await this.seedClaudeHome(project);
-      await this.write(project);
     } catch (err) {
       await rollback();
       throw err;

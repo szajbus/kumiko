@@ -309,6 +309,19 @@ describe("server", () => {
     await remove("wt");
   });
 
+  it("lets only one of two creates racing for a name through", async () => {
+    const [a, b] = await Promise.all([makeClone(root, "race-a"), makeClone(root, "race-b")]);
+    const since = events.length;
+    const results = await Promise.all([a, b].map((clonePath) => post("/api/projects", spec({ name: "race", clonePath }))));
+    assert.ok(results.some((r) => r.status === 202) && results.some((r) => r.status === 400 || r.status === 409), results.map((r) => r.status).join());
+    await finished("race", "creating", since);
+    const winner = (await project("race"))!.project.clonePath;
+    const loser = winner === a ? b : a;
+    assert.equal(await exists(loser + "__worktrees"), false, "the loser left nothing behind");
+    assert.ok(await exists(join(dataDir, "claude", "race")), "and didn't take the winner's Claude home with it");
+    await remove("race");
+  });
+
   it("404s unknown projects and 400s bad ids", async () => {
     assert.equal((await api("/api/projects/nope/start", { method: "POST" })).status, 404);
     assert.equal((await api("/api/projects/nope/worktrees")).status, 404);

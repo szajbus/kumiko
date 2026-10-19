@@ -1,31 +1,37 @@
 import { useState } from "react";
 import * as Menu from "@radix-ui/react-dropdown-menu";
-import type { SandboxView } from "@bentomo/shared";
+import type { ProjectView } from "@bentomo/shared";
 import { api, errorMessage } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Dots, Play, Redo, Square, Trash } from "./icons";
 import { plural } from "./status";
 
-type Pending = { kind: "delete" | "recreate" | "stop"; sandbox: SandboxView };
+type Pending = { kind: "delete" | "recreate" | "stop"; sandbox: ProjectView };
 
-const TITLES = { delete: "Delete", recreate: "Recreate", stop: "Stop" } as const;
+/** What each dialog asks about: deleting takes the whole project, the others only its VM. */
+const TITLES = {
+  delete: (p: ProjectView) => `Delete project ${p.name}?`,
+  recreate: (p: ProjectView) => `Recreate ${p.vm}?`,
+  stop: (p: ProjectView) => `Stop ${p.vm}?`,
+} as const;
+const LABELS = { delete: "Delete project", recreate: "Recreate VM", stop: "Stop VM" } as const;
 
-/** The line a confirm dialog adds when the sandbox has live agent sessions. */
-export function sessionsNote(sb: SandboxView) {
+/** The line a confirm dialog adds when the project has live agent sessions. */
+export function sessionsNote(sb: ProjectView) {
   return sb.sessions > 0 ? <p className="dialog-note">{plural(sb.sessions, "live agent session")} in it will end first.</p> : null;
 }
 
 export interface Actions {
   start(name: string): void;
-  /** Stops at once, or asks first when the sandbox has live sessions. */
-  stop(sb: SandboxView): void;
-  askRecreate(sb: SandboxView): void;
-  askDelete(sb: SandboxView): void;
+  /** Stops at once, or asks first when the project has live sessions. */
+  stop(sb: ProjectView): void;
+  askRecreate(sb: ProjectView): void;
+  askDelete(sb: ProjectView): void;
   /** The confirm dialog and the error toast; render once per page. */
   overlay: React.ReactNode;
 }
 
-/** Sandbox actions with a confirm step for destructive ones and a toast when the server refuses. */
+/** Project and VM actions with a confirm step for destructive ones and a toast when the server refuses. */
 export function useActions({ onDeleted }: { onDeleted?(name: string): void } = {}): Actions {
   const [confirm, setConfirm] = useState<Pending | undefined>();
   const [error, setError] = useState<string | undefined>();
@@ -45,8 +51,8 @@ export function useActions({ onDeleted }: { onDeleted?(name: string): void } = {
     <>
       {confirm && (
         <ConfirmDialog
-          title={`${TITLES[confirm.kind]} ${confirm.sandbox.vm}?`}
-          confirmLabel={`${TITLES[confirm.kind]} ${confirm.sandbox.vm}`}
+          title={TITLES[confirm.kind](confirm.sandbox)}
+          confirmLabel={LABELS[confirm.kind]}
           danger={confirm.kind !== "stop"}
           onCancel={() => setConfirm(undefined)}
           onConfirm={() => {
@@ -57,9 +63,19 @@ export function useActions({ onDeleted }: { onDeleted?(name: string): void } = {
             else void run(sandbox.name, api.remove).then((ok) => ok && onDeleted?.(sandbox.name));
           }}
         >
-          {confirm.kind === "delete" && <p>The VM and its disk are removed for good. Mounted host folders are not touched.</p>}
-          {confirm.kind === "recreate" && <p>The VM and its disk are deleted, then created again from the same settings and provisioned from scratch.</p>}
-          {confirm.kind === "stop" && <p>The VM shuts down. Claude's transcripts stay in it.</p>}
+          {confirm.kind === "delete" && (
+            <p>
+              The VM and its disk, the project's Claude home (its login and Claude's history) and its saved sessions are deleted for good.{" "}
+              <span className="mono">{confirm.sandbox.project.clonePath}</span>, its worktrees and other mounted folders are not touched.
+            </p>
+          )}
+          {confirm.kind === "recreate" && (
+            <p>
+              The VM and its disk are deleted, then created again from the same settings and provisioned from scratch. Claude's login and history are
+              kept: they live in the project's Claude home, on this machine.
+            </p>
+          )}
+          {confirm.kind === "stop" && <p>The VM shuts down. Saved sessions can be resumed once it runs again.</p>}
           {sessionsNote(confirm.sandbox)}
         </ConfirmDialog>
       )}
@@ -86,12 +102,12 @@ export function useActions({ onDeleted }: { onDeleted?(name: string): void } = {
   };
 }
 
-/** Start or Stop, plus a menu with Recreate and Delete. `labeled` shows text on the main button. */
-export function SandboxActions({ sb, actions, labeled }: { sb: SandboxView; actions: Actions; labeled?: boolean }) {
+/** Start or Stop the VM, plus a menu with Recreate and Delete. `labeled` shows text on the main button. */
+export function SandboxActions({ sb, actions, labeled }: { sb: ProjectView; actions: Actions; labeled?: boolean }) {
   const running = sb.status === "running";
   const main = running
     ? { label: "Stop", icon: <Square />, disabled: sb.busy, onClick: () => actions.stop(sb) }
-    : { label: "Start", icon: <Play />, disabled: sb.busy || sb.status === "unknown", onClick: () => actions.start(sb.name) };
+    : { label: "Start", icon: <Play />, disabled: sb.busy || sb.status === "unknown" || sb.status === "absent" || Boolean(sb.problem), onClick: () => actions.start(sb.name) };
 
   return (
     <div className="row-actions" onClick={(e) => e.stopPropagation()}>
@@ -111,14 +127,14 @@ export function SandboxActions({ sb, actions, labeled }: { sb: SandboxView; acti
         </Menu.Trigger>
         <Menu.Portal>
           <Menu.Content className="menu" align="end" sideOffset={6} collisionPadding={8} aria-label={`Actions for ${sb.vm}`}>
-            <Menu.Item className="menu-item" disabled={!sb.meta} onSelect={() => actions.askRecreate(sb)}>
+            <Menu.Item className="menu-item" disabled={Boolean(sb.metaError || sb.problem)} onSelect={() => actions.askRecreate(sb)}>
               <Redo />
-              Recreate
+              Recreate VM
             </Menu.Item>
             <Menu.Separator className="menu-separator" />
             <Menu.Item className="menu-item danger" onSelect={() => actions.askDelete(sb)}>
               <Trash />
-              Delete
+              Delete project
             </Menu.Item>
           </Menu.Content>
         </Menu.Portal>

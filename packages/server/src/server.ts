@@ -276,13 +276,21 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     const errors = [...checked.errors, ...specErrors.filter((e) => !e.startsWith("Name must"))];
     if (errors.length || !checked.clonePath || !checked.worktreesPath) throw new HttpError(400, "Can't create this project.", errors);
 
-    const { project, rollback } = await projects.create(id, checked.clonePath, checked.worktreesPath);
+    const { project, rollback } = await projects.create(id, checked.clonePath, checked.worktreesPath).catch((err: unknown) => {
+      throw new HttpError(409, err instanceof Error ? err.message : String(err));
+    });
     const v = await provider.validate(projects.spec(project, { ...req, mounts: req.mounts ?? [], env: req.env ?? [] }));
     if (v.errors.length) {
       await rollback();
       throw new HttpError(400, "Can't create this project.", v.errors);
     }
-    ops.start(id, "creating", (log) => provider.create(v.spec, log));
+    try {
+      ops.start(id, "creating", (log) => provider.create(v.spec, log));
+    } catch (err) {
+      // The record is this request's own claim, so undoing it can't touch another project's.
+      await rollback();
+      throw err;
+    }
     void refresh();
     return c.json({ name: id, warnings: v.warnings } satisfies CreateResponse, 202);
   });

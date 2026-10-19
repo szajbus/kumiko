@@ -2,31 +2,33 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { SessionInfo } from "@bentomo/shared";
 import { api, RequestError, useLiveState } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { CreateForm } from "./CreateForm";
+import { ProjectForm } from "./ProjectForm";
 import { sessionTitle } from "./format";
 import { Header, type TabId } from "./Header";
 import { NewSession } from "./NewSession";
-import { SandboxList } from "./SandboxList";
-import { SandboxPage } from "./SandboxPage";
+import { ProjectList } from "./ProjectList";
+import { ProjectPage } from "./ProjectPage";
 import { SessionView } from "./SessionView";
 import { loadTabs, saveTabs } from "./tabs";
 
 type Route =
   | { view: "list" }
   | { view: "new" }
-  | { view: "sandbox"; name: string }
+  | { view: "project"; name: string }
   | { view: "edit"; name: string }
-  | { view: "new-session" }
+  /** `project`: opened from a project's page, which it starts in. */
+  | { view: "new-session"; project?: string }
   | { view: "session"; id: string };
 
 function parseHash(): Route {
   if (location.hash === "#/new") return { view: "new" };
-  if (location.hash === "#/session/new") return { view: "new-session" };
+  const n = /^#\/session\/new(?:\/([a-z0-9-]+))?$/.exec(location.hash);
+  if (n) return { view: "new-session", project: n[1] };
   const s = /^#\/session\/([0-9a-f]{1,64})$/.exec(location.hash);
   if (s) return { view: "session", id: s[1] };
-  const m = /^#\/sandbox\/([a-z0-9-]+)(\/edit)?$/.exec(location.hash);
+  const m = /^#\/project\/([a-z0-9-]+)(\/edit)?$/.exec(location.hash);
   if (!m) return { view: "list" };
-  return m[2] ? { view: "edit", name: m[1] } : { view: "sandbox", name: m[1] };
+  return m[2] ? { view: "edit", name: m[1] } : { view: "project", name: m[1] };
 }
 
 const go = (hash: string) => {
@@ -38,7 +40,7 @@ function Redirect({ to }: { to: string }) {
   return null;
 }
 
-const tabOf = (r: Route): TabId => (r.view === "new-session" ? "new-session" : r.view === "session" ? `session:${r.id}` : "sandboxes");
+const tabOf = (r: Route): TabId => (r.view === "new-session" ? "new-session" : r.view === "session" ? `session:${r.id}` : "projects");
 
 export function App() {
   const live = useLiveState();
@@ -50,10 +52,15 @@ export function App() {
   // The session whose Cmd+Shift+W is waiting for confirmation.
   const [deleting, setDeleting] = useState<SessionInfo | undefined>();
   const [newSessionOpen, setNewSessionOpen] = useState(() => parseHash().view === "new-session");
+  // The project the New session tab was last opened from, if any.
+  const [newSessionProject, setNewSessionProject] = useState(() => {
+    const r = parseHash();
+    return r.view === "new-session" ? r.project : undefined;
+  });
   // Sessions this window just started: their tab opens before the session list may have caught up.
   const started = useRef(new Set<string>());
-  // The Sandboxes tab remembers where it was, so switching back returns to the same page.
-  const sandboxesHash = useRef(tabOf(route) === "sandboxes" ? location.hash || "#/" : "#/");
+  // The Projects tab remembers where it was, so switching back returns to the same page.
+  const projectsHash = useRef(tabOf(route) === "projects" ? location.hash || "#/" : "#/");
 
   // The previous run's tabs come back once the server's session list has arrived; saving waits until they have.
   const restoring = useRef(false);
@@ -91,8 +98,11 @@ export function App() {
     const onHash = () => {
       const r = parseHash();
       setRoute(r);
-      if (tabOf(r) === "sandboxes") sandboxesHash.current = location.hash || "#/";
-      if (r.view === "new-session") setNewSessionOpen(true);
+      if (tabOf(r) === "projects") projectsHash.current = location.hash || "#/";
+      if (r.view === "new-session") {
+        setNewSessionOpen(true);
+        if (r.project) setNewSessionProject(r.project);
+      }
       scrollTo(0, 0);
     };
     addEventListener("hashchange", onHash);
@@ -100,14 +110,14 @@ export function App() {
   }, []);
 
   const select = (tab: TabId) => {
-    if (tab === "sandboxes") go(sandboxesHash.current);
+    if (tab === "projects") go(projectsHash.current);
     else if (tab === "new-session") go("#/session/new");
     else go(`#/session/${tab.slice("session:".length)}`);
   };
 
-  /** After closing the active tab, fall back to the Sandboxes tab. */
+  /** After closing the active tab, fall back to the Projects tab. */
   const leave = (tab: TabId) => {
-    if (tabOf(route) === tab) go(sandboxesHash.current);
+    if (tabOf(route) === tab) go(projectsHash.current);
   };
 
   /** Closes a session's tab at once and ends it on the server; the tab comes back if the server refuses. Resolves whether it ended. */
@@ -160,9 +170,9 @@ export function App() {
       const target = sessions[action - 1];
       return target ? select(`session:${target.id}`) : undefined;
     }
-    const tabs: TabId[] = ["sandboxes", ...sessions.map((s): TabId => `session:${s.id}`), ...(newSessionOpen ? ["new-session" as const] : [])];
+    const tabs: TabId[] = ["projects", ...sessions.map((s): TabId => `session:${s.id}`), ...(newSessionOpen ? ["new-session" as const] : [])];
     const current = tabOf(route);
-    if (action === "close") return current === "sandboxes" ? undefined : close(current);
+    if (action === "close") return current === "projects" ? undefined : close(current);
     const i = tabs.indexOf(current);
     const step = action === "next" ? 1 : -1;
     select(tabs[(Math.max(i, 0) + step + tabs.length) % tabs.length]);
@@ -208,7 +218,7 @@ export function App() {
       {/* Kept mounted while its tab is open, so a half-typed prompt survives switching tabs. */}
       {newSessionOpen && (
         <div hidden={route.view !== "new-session"}>
-          <NewSession live={live} onStarted={(id) => onSessionStarted(id)} />
+          <NewSession live={live} project={newSessionProject} onStarted={(id) => onSessionStarted(id)} />
         </div>
       )}
       {deleting && (
@@ -250,18 +260,25 @@ interface BodyProps {
 function Body({ route, live, started, onSessionStarted }: BodyProps) {
   switch (route.view) {
     case "new":
-      return <CreateForm onCancel={() => go("#/")} onCreated={(name) => go(`#/sandbox/${name}`)} />;
-    case "sandbox":
+      return <ProjectForm onCancel={() => go("#/")} onCreated={(name) => go(`#/project/${name}`)} />;
+    case "project":
       return (
-        <SandboxPage key={route.name} name={route.name} live={live} onBack={() => go("#/")} onEdit={() => go(`#/sandbox/${route.name}/edit`)} />
+        <ProjectPage
+          key={route.name}
+          id={route.name}
+          live={live}
+          onBack={() => go("#/")}
+          onEdit={() => go(`#/project/${route.name}/edit`)}
+          onNewSession={() => go(`#/session/new/${route.name}`)}
+        />
       );
     case "edit": {
-      const sb = live.sandboxes.find((s) => s.name === route.name);
-      const back = () => go(`#/sandbox/${route.name}`);
-      // Wait for the list before deciding; then edit only sandboxes Bentomo created.
+      const p = live.projects.find((s) => s.name === route.name);
+      const back = () => go(`#/project/${route.name}`);
+      // Wait for the list before deciding; a project whose VM record can't be read can't be edited.
       if (!live.loaded) return null;
-      if (!sb?.meta) return <Redirect to={`#/sandbox/${route.name}`} />;
-      return <CreateForm key={`edit-${route.name}`} editing={sb} onCancel={back} onCreated={back} />;
+      if (!p || p.metaError) return <Redirect to={`#/project/${route.name}`} />;
+      return <ProjectForm key={`edit-${route.name}`} editing={p} onCancel={back} onCreated={back} />;
     }
     case "new-session":
       return null; // rendered by App, which keeps it mounted
@@ -272,6 +289,6 @@ function Body({ route, live, started, onSessionStarted }: BodyProps) {
       return <SessionView key={s.id} session={s} onForked={(id) => onSessionStarted(id, true)} />;
     }
     default:
-      return <SandboxList live={live} onOpen={(name) => go(`#/sandbox/${name}`)} onNew={() => go("#/new")} />;
+      return <ProjectList live={live} onOpen={(name) => go(`#/project/${name}`)} onNew={() => go("#/new")} />;
   }
 }

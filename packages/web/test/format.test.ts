@@ -38,7 +38,7 @@ describe("format", () => {
 
   it("names plans and endings", () => {
     assert.equal(planName("max"), "Max");
-    assert.equal(endedText("sandbox"), "Session ended: its sandbox stopped.");
+    assert.equal(endedText("sandbox"), "Session ended: its VM stopped.");
     assert.equal(endedText("exit", 2), "Session ended: Claude exited with code 2.");
     assert.equal(endedText("exit", 0), "Session ended: Claude exited.");
   });

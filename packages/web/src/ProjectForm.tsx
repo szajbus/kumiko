@@ -1,50 +1,41 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import {
+  CLAUDE_HOME_IN_VM,
   DEFAULTS,
-  defaultGuestPath,
   ENV_NAME_PATTERN,
   MINIMUMS,
-  mountsExpression,
   NAME_PATTERN,
   sameMounts,
   vmName,
-  WORKSPACE_DIR,
-  type SandboxSpec,
-  type SandboxView,
+  WORKTREES_SUFFIX,
+  type CreateProjectRequest,
+  type Mount,
+  type ProjectView,
   type TemplatesResponse,
 } from "@bentomo/shared";
-import { api, errorMessage, RequestError } from "./api";
+import { api, errorMessage, RequestError, useHome } from "./api";
 import { sessionsNote } from "./actions";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Breadcrumbs } from "./Breadcrumbs";
+import { tilde } from "./format";
 import { Cross, Folder, Plus, Redo, Save, Close } from "./icons";
 import { Select, type SelectGroup } from "./Select";
 import { COLORS } from "./status";
 
 interface Props {
-  /** Edit this sandbox instead of creating one. Name and template are fixed; saving in place needs it stopped for resources and mounts. */
-  editing?: SandboxView;
+  /** Edit this project's VM instead of creating a project. The clone, name and template are fixed; saving in place needs the VM stopped for resources and mounts. */
+  editing?: ProjectView;
   onCancel(): void;
-  /** Called with the sandbox's name once it's created or the edit is saved. */
-  onCreated(name: string): void;
+  /** Called with the project's id once it's created or the edit is saved. */
+  onCreated(id: string): void;
 }
 
 interface MountRow {
   id: number;
   hostPath: string;
-  /** Where it lands in the VM; follows the host folder's name until the user edits it. */
+  /** Where it lands in the VM; empty means the same path as on the host. */
   guestPath: string;
-  guestEdited: boolean;
   writable: boolean;
-}
-
-/** <working directory>/<name>, with -2, -3… if another row already uses it. */
-function freeGuestPath(hostPath: string, rows: MountRow[], workdir: string, self?: number): string {
-  const base = defaultGuestPath(hostPath, workdir);
-  const taken = new Set(rows.filter((r) => r.id !== self).map((r) => r.guestPath.trim()));
-  let p = base;
-  for (let i = 2; taken.has(p); i++) p = `${base}-${i}`;
-  return p;
 }
 
 /** An absolute path or ~/…, but not / or ~ alone. */
@@ -52,9 +43,25 @@ const vmPathShape = (t: string) => (t.startsWith("/") && t !== "/") || (t.starts
 
 function guestPathOk(p: string, rows: MountRow[], self: number): boolean {
   const t = p.trim();
-  if (!t) return true; // falls back to the default
-  return vmPathShape(t) && !rows.some((r) => r.id !== self && r.guestPath.trim() === t);
+  if (!t) return true; // the same path as on the host
+  return vmPathShape(t) && !rows.some((r) => r.id !== self && (r.guestPath.trim() || r.hostPath.trim()) === t);
 }
+
+/** A project name from a folder name, as the server would suggest it. */
+export function suggestName(path: string): string {
+  const base = path.replace(/\/+$/, "").split("/").pop() ?? "";
+  return base.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 30).replace(/-+$/, "");
+}
+
+/** Whether a stored mount is one every project has: clone, worktrees or Claude home. The form only shows the others. */
+const isFixed = (p: ProjectView, m: Mount) => {
+  const guest = m.guestPath ?? m.hostPath;
+  return (
+    (m.hostPath === p.project.clonePath && guest === p.project.clonePath) ||
+    (m.hostPath === p.project.worktreesPath && guest === p.project.worktreesPath) ||
+    guest === CLAUDE_HOME_IN_VM
+  );
+};
 
 interface EnvRow {
   id: number;
@@ -64,9 +71,13 @@ interface EnvRow {
 let nextId = 1;
 const hasPicker = () => typeof window.bentomo?.pickFolder === "function";
 
-export function CreateForm({ editing, onCancel, onCreated }: Props) {
+export function ProjectForm({ editing, onCancel, onCreated }: Props) {
   const was = editing?.meta?.spec;
-  const [name, setName] = useState(editing?.name ?? "");
+  const home = useHome();
+  const [clonePath, setClonePath] = useState(editing?.project.clonePath ?? "");
+  const [name, setNameRaw] = useState(editing?.name ?? "");
+  // The name follows the clone's folder until the user types one.
+  const [nameEdited, setNameEdited] = useState(Boolean(editing));
   const [templates, setTemplates] = useState<TemplatesResponse | undefined>();
   const [templatesError, setTemplatesError] = useState<string | undefined>();
   const [template, setTemplate] = useState(was ? was.template || "template:default" : "");
@@ -74,37 +85,17 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
   const [cpus, setCpus] = useState(String(editing?.cpus ?? was?.cpus ?? DEFAULTS.cpus));
   const [memory, setMemory] = useState(String(editing?.memoryGiB ?? was?.memoryGiB ?? DEFAULTS.memoryGiB));
   const [disk, setDisk] = useState(String(editing?.diskGiB ?? was?.diskGiB ?? DEFAULTS.diskGiB));
+  const extraWas = useMemo(() => (editing && was ? was.mounts.filter((m) => !isFixed(editing, m)) : []), [editing, was]);
   const [mounts, setMounts] = useState<MountRow[]>(() =>
-    (was?.mounts ?? []).map((m) => ({ id: nextId++, hostPath: m.hostPath, guestPath: m.guestPath ?? m.hostPath, guestEdited: true, writable: m.writable })),
+    extraWas.map((m) => ({ id: nextId++, hostPath: m.hostPath, guestPath: m.guestPath && m.guestPath !== m.hostPath ? m.guestPath : "", writable: m.writable })),
   );
-  const [home, setHome] = useState<string | undefined>();
   const [envRows, setEnvRows] = useState<EnvRow[]>(() => (was?.env ?? []).map((n) => ({ id: nextId++, name: n })));
   const [envSet, setEnvSet] = useState<Record<string, boolean>>({});
   const [provision, setProvision] = useState(was?.provision ?? "");
-  const [workdir, setWorkdirRaw] = useState(was ? was.workdir ?? WORKSPACE_DIR : WORKSPACE_DIR);
-  const wd = workdir.trim() || WORKSPACE_DIR;
-  const workdirOk = vmPathShape(wd);
   const [submitting, setSubmitting] = useState(false);
   const [confirmRecreate, setConfirmRecreate] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const [touched, setTouched] = useState(false);
-
-  // Start from the server's default mounts (~/.claude when the host has one), unless the user already added rows.
-  useEffect(() => {
-    api.defaults().then(
-      (d) => {
-        setHome(d.home);
-        if (editing) return;
-        setMounts((cur) =>
-          cur.length
-            ? cur
-            : d.mounts.map((m) => ({ id: nextId++, hostPath: m.hostPath, guestPath: m.guestPath ?? m.hostPath, guestEdited: true, writable: m.writable })),
-        );
-      },
-      () => {},
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   useEffect(() => {
     if (editing) return; // the template is fixed
@@ -133,55 +124,52 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
   }, [envNames, envSet]);
 
   const nameOk = NAME_PATTERN.test(name);
+  const cloneOk = editing || clonePath.trim().startsWith("/") || clonePath.trim().startsWith("~/");
   const shownName = name || "<name>";
+  const clone = clonePath.trim().replace(/\/+$/, "");
 
-  const tilde = (p: string) => (home && (p === home || p.startsWith(home + "/")) ? `~${p.slice(home.length)}` : p);
+  const setClone = (path: string) => {
+    setClonePath(path);
+    if (!nameEdited) setNameRaw(suggestName(path));
+  };
+  const setName = (v: string) => {
+    setNameRaw(v.toLowerCase());
+    setNameEdited(v.trim() !== "");
+  };
+  const pickClone = async () => {
+    const path = await window.bentomo!.pickFolder();
+    if (path) setClone(path);
+  };
 
   const addFolder = async () => {
     if (hasPicker()) {
       const path = await window.bentomo!.pickFolder();
-      if (path) setMounts((all) => [...all, { id: nextId++, hostPath: path, guestPath: freeGuestPath(path, all, wd), guestEdited: false, writable: false }]);
+      if (path) setMounts((all) => [...all, { id: nextId++, hostPath: path, guestPath: "", writable: false }]);
     } else {
-      setMounts((all) => [...all, { id: nextId++, hostPath: "", guestPath: "", guestEdited: false, writable: false }]);
+      setMounts((all) => [...all, { id: nextId++, hostPath: "", guestPath: "", writable: false }]);
     }
   };
-  /** A new host folder also moves the VM path along, unless the user chose that path themselves. */
-  const setHost = (id: number, path: string) =>
-    setMounts((all) =>
-      all.map((r) =>
-        r.id !== id ? r : { ...r, hostPath: path, guestPath: r.guestEdited ? r.guestPath : path.trim() ? freeGuestPath(path, all, wd, id) : "" },
-      ),
-    );
   const changeFolder = async (id: number) => {
     const path = await window.bentomo!.pickFolder();
-    if (path) setHost(id, path);
-  };
-  /** Mounts still at their default path move along with the working directory. */
-  const setWorkdir = (value: string) => {
-    setWorkdirRaw(value);
-    const next = value.trim() || WORKSPACE_DIR;
-    if (!vmPathShape(next)) return;
-    setMounts((all) =>
-      all.reduce<MountRow[]>((done, r) => {
-        const moved = r.guestEdited || !r.hostPath.trim() ? r : { ...r, guestPath: freeGuestPath(r.hostPath, [...done, ...all.filter((x) => x.guestEdited)], next, r.id) };
-        return [...done, moved];
-      }, []),
-    );
+    if (path) patchMount(id, { hostPath: path });
   };
   const patchMount = (id: number, patch: Partial<MountRow>) => setMounts((all) => all.map((r) => (r.id === id ? { ...r, ...patch } : r)));
 
-  const spec = (): SandboxSpec => ({
+  const extraMounts = (): Mount[] =>
+    mounts
+      .filter((m) => m.hostPath.trim())
+      .map((m) => ({ hostPath: m.hostPath.trim(), writable: m.writable, guestPath: m.guestPath.trim() || m.hostPath.trim() }));
+
+  const request = (): CreateProjectRequest => ({
     name: name.trim(),
+    clonePath: clone,
     template: template || undefined,
     cpus: Number(cpus),
     memoryGiB: Number(memory),
     diskGiB: Number(disk),
-    mounts: mounts
-      .filter((m) => m.hostPath.trim())
-      .map((m) => ({ hostPath: m.hostPath.trim(), writable: m.writable, guestPath: m.guestPath.trim() || defaultGuestPath(m.hostPath.trim(), wd) })),
+    mounts: extraMounts(),
     env: envNames,
     provision: provision.trim() ? provision : undefined,
-    workdir: wd,
   });
 
   /**
@@ -190,13 +178,14 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
    */
   const inPlaceBlocked = (() => {
     if (!editing) return undefined;
-    const s = spec();
+    if (editing.status === "absent") return `${editing.vm} doesn't exist, so it can only be created again.`;
+    const s = request();
     const diskNow = Math.ceil(editing.diskGiB ?? was?.diskGiB ?? 0);
     const vmChanged =
       s.cpus !== (editing.cpus ?? was?.cpus) ||
       s.memoryGiB !== (editing.memoryGiB ?? was?.memoryGiB) ||
       s.diskGiB !== diskNow ||
-      !sameMounts(s.mounts, was?.mounts ?? []);
+      !sameMounts(s.mounts, extraWas);
     if (s.diskGiB < diskNow) return `Disk can only shrink by recreating; it is ${diskNow} GiB now.`;
     if (vmChanged && editing.status !== "stopped") return `Stop ${editing.vm} to save resource or mount changes without recreating it.`;
     return undefined;
@@ -205,6 +194,11 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     setTouched(true);
+    if (!cloneOk) {
+      setErrors([]);
+      document.getElementById("f-clone")?.focus();
+      return;
+    }
     if (!nameOk) {
       setErrors([]);
       document.getElementById("f-name")?.focus();
@@ -219,11 +213,11 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
     setErrors([]);
     try {
       if (editing) {
-        const { cpus, memoryGiB, diskGiB, mounts, env, provision, workdir } = spec();
-        await api.edit(editing.name, { cpus, memoryGiB, diskGiB, mounts, env, provision: provision ?? "", workdir }, recreate);
+        const { cpus, memoryGiB, diskGiB, mounts, env, provision } = request();
+        await api.edit(editing.name, { cpus, memoryGiB, diskGiB, mounts, env, provision: provision ?? "" }, recreate);
         onCreated(editing.name);
       } else {
-        const res = await api.create(spec());
+        const res = await api.create(request());
         onCreated(res.name);
       }
     } catch (err) {
@@ -233,30 +227,38 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
   };
 
   const preview = useMemo(() => {
-    const s = spec();
+    const s = request();
     const vm = vmName(s.name || "<name>");
-    const parts = [`limactl create --tty=false --name=${vm} --cpus=${s.cpus} --memory=${s.memoryGiB} --disk=${s.diskGiB}`];
-    parts.push(s.mounts.length === 0 ? "--mount-none" : `--set '${mountsExpression(s.mounts).replace(/'/g, `'\\''`)}'`);
-    parts.push(s.template || "template:default");
-    const lines = [parts.join(" \\\n  "), `limactl start --tty=false ${vm}`];
-    lines.push("# then Claude Code's installer over ssh, linked to /usr/local/bin/claude");
+    const repo = s.clonePath || "<clone>";
+    const fixed = [
+      `#   ${repo}  at the same path, writable`,
+      `#   ${repo}${WORKTREES_SUFFIX}  at the same path, writable (created if missing)`,
+      `#   the project's Claude home  at ${CLAUDE_HOME_IN_VM}, writable (CLAUDE_CONFIG_DIR)`,
+      ...s.mounts.map((m) => `#   ${m.hostPath}  at ${m.guestPath === m.hostPath ? "the same path" : m.guestPath}${m.writable ? ", writable" : ""}`),
+    ];
+    const lines = [
+      "# mounts:",
+      ...fixed,
+      `limactl create --tty=false --name=${vm} --cpus=${s.cpus} --memory=${s.memoryGiB} --disk=${s.diskGiB} --set '.mounts = […]' ${s.template || "template:default"}`,
+      `limactl start --tty=false ${vm}`,
+      "# then Claude Code's installer over ssh, linked to /usr/local/bin/claude",
+    ];
     if (s.provision) {
       const fwd = s.env.filter((n) => envSet[n]);
-      lines.push(`# then the provisioning script in ${s.workdir}${fwd.length ? `, with ${fwd.join(", ")} forwarded` : ""}`);
+      lines.push(`# then the provisioning script in ${repo}${fwd.length ? `, with ${fwd.join(", ")} forwarded` : ""}`);
     }
     return lines.join("\n");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [name, template, cpus, memory, disk, mounts, envNames, envSet, provision, workdir]);
+  }, [name, clonePath, template, cpus, memory, disk, mounts, envNames, envSet, provision]);
 
   return (
     <>
-
       <form className="form-main" onSubmit={submit} noValidate>
         <Breadcrumbs
           items={
             editing
-              ? [{ label: "Sandboxes", href: "#/" }, { label: editing.name, href: `#/sandbox/${editing.name}` }, { label: "Edit" }]
-              : [{ label: "Sandboxes", href: "#/" }, { label: "New sandbox" }]
+              ? [{ label: "Projects", href: "#/" }, { label: editing.name, href: `#/project/${editing.name}` }, { label: "Edit" }]
+              : [{ label: "Projects", href: "#/" }, { label: "New project" }]
           }
         />
         <div className="form-intro">
@@ -264,23 +266,61 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
             <>
               <h1 className="page-title page-title-lg">Edit {editing.name}</h1>
               <p className="muted">
-                <strong>Save and recreate</strong> deletes the VM and builds it again from these settings, provisioning included. <strong>Save</strong>{" "}
-                keeps the VM: resource and mount changes need it stopped and apply on its next start, and disk can only grow.
+                <strong>Save and recreate</strong> deletes the VM and builds it again from these settings, provisioning included; Claude's login and
+                history stay. <strong>Save</strong> keeps the VM: resource and mount changes need it stopped and apply on its next start, and disk can only
+                grow.
               </p>
             </>
           ) : (
             <>
-              <h1 className="page-title page-title-lg">New sandbox</h1>
-              <p className="muted">A VM that Bentomo creates, starts once and provisions. Name and template are fixed after creation.</p>
+              <h1 className="page-title page-title-lg">New project</h1>
+              <p className="muted">
+                A git clone on this machine, with a VM of its own. Claude works in the clone and in worktrees beside it, in{" "}
+                <code className="mono">{clone ? tilde(clone, home) : "<clone>"}{WORKTREES_SUFFIX}</code>. Nothing is written into the repository.
+              </p>
             </>
           )}
         </div>
 
-        <Section title="Basics" id="sec-basics">
+        <Section title="Project" id="sec-basics">
+          <Field
+            label="Clone"
+            htmlFor="f-clone"
+            invalid={touched && !cloneOk}
+            hint={
+              editing
+                ? "The clone can't change after creation."
+                : touched && !cloneOk
+                  ? "Pick the folder of a git clone."
+                  : "An existing clone with a working tree: its top folder, not a worktree. It is mounted at the same path in the VM."
+            }
+          >
+            {hasPicker() && !editing ? (
+              <div className="clone-pick">
+                <span className="mono path clone-path" title={clone}>
+                  {clone ? tilde(clone, home) : <span className="dim">No folder picked</span>}
+                </span>
+                <button type="button" id="f-clone" className="btn-small" onClick={pickClone} autoFocus>
+                  {clone ? "Change…" : "Choose…"}
+                </button>
+              </div>
+            ) : (
+              <input
+                id="f-clone"
+                className="input input-dark mono"
+                type="text"
+                value={clonePath}
+                disabled={Boolean(editing)}
+                autoFocus={!editing}
+                placeholder="/absolute/path/to/clone"
+                spellCheck={false}
+                autoComplete="off"
+                aria-invalid={touched && !cloneOk}
+                onChange={(e) => setClone(e.target.value)}
+              />
+            )}
+          </Field>
           <div className="grid grid-220">
-            <Field label="Adapter" htmlFor="f-adapter" hint="Where the sandbox runs. Lima is the only adapter for now.">
-              <Select id="f-adapter" value="Lima" onValueChange={() => {}} groups={[{ options: ["Lima"] }]} disabled={Boolean(editing)} />
-            </Field>
             <Field
               label="Name"
               htmlFor="f-name"
@@ -295,23 +335,19 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
                 )
               }
             >
-              <div className={`input-prefixed${touched && !nameOk ? " is-invalid" : ""}`}>
-                <span className="mono prefix">bm-</span>
-                <input
-                  id="f-name"
-                  className="mono"
-                  type="text"
-                  value={name}
-                  disabled={Boolean(editing)}
-                  autoFocus={!editing}
-                  autoComplete="off"
-                  spellCheck={false}
-                  placeholder="web"
-                  aria-invalid={touched && !nameOk}
-                  onChange={(e) => setName(e.target.value.toLowerCase())}
-                  onBlur={() => name && setTouched(true)}
-                />
-              </div>
+              <input
+                id="f-name"
+                className={`input input-dark mono${touched && !nameOk ? " is-invalid" : ""}`}
+                type="text"
+                value={name}
+                disabled={Boolean(editing)}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="web"
+                aria-invalid={touched && !nameOk}
+                onChange={(e) => setName(e.target.value)}
+                onBlur={() => name && setTouched(true)}
+              />
             </Field>
             <Field
               label="Template"
@@ -350,97 +386,79 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
         </Section>
 
         <Section
-          title="Workspace"
+          title="More folders"
           id="sec-mounts"
           description={
             <>
-              Host folders shared into the VM, each in the working directory unless you change its path. <code className="mono">~</code> in the VM is the
-              VM user's home.
+              The clone, its worktrees folder and the project's Claude home are always mounted. Add other host folders here; each appears at the same path
+              in the VM unless you give another. <code className="mono">~</code> in the VM is the VM user's home.
             </>
           }
         >
           <div className="fieldset-stack">
-          <Field
-            label="Working directory"
-            htmlFor="f-workdir"
-            invalid={!workdirOk}
-            hint={workdirOk ? "Provisioning and sessions start here. Created on every start if it's missing." : "Use an absolute path or ~/…, not / or ~."}
-          >
-            <input
-              id="f-workdir"
-              className="input input-dark mono"
-              type="text"
-              value={workdir}
-              placeholder={WORKSPACE_DIR}
-              spellCheck={false}
-              autoComplete="off"
-              aria-invalid={!workdirOk}
-              onChange={(e) => setWorkdir(e.target.value)}
-            />
-          </Field>
-          {mounts.map((m) => {
-            const guestOk = guestPathOk(m.guestPath, mounts, m.id);
-            return (
-              <div key={m.id} className="mount-row mount-grid">
-                <span className="mount-icon">
-                  <Folder />
-                </span>
-                {hasPicker() ? (
-                  <span className="mono path mount-host-text" title={m.hostPath}>
-                    {tilde(m.hostPath)}
+            {mounts.map((m) => {
+              const guestOk = guestPathOk(m.guestPath, mounts, m.id);
+              return (
+                <div key={m.id} className="mount-row mount-grid">
+                  <span className="mount-icon">
+                    <Folder />
                   </span>
-                ) : (
-                  <input
-                    className="input input-compact mono path"
-                    type="text"
-                    value={m.hostPath}
-                    placeholder="/absolute/path/on/host"
-                    aria-label="Host folder"
-                    autoFocus={!m.hostPath}
-                    spellCheck={false}
-                    onChange={(e) => setHost(m.id, e.target.value)}
-                  />
-                )}
-                <div className="mount-controls">
-                  <label className="check">
-                    <input type="checkbox" checked={m.writable} onChange={(e) => patchMount(m.id, { writable: e.target.checked })} />
-                    Writable
-                  </label>
-                  {hasPicker() && (
-                    <button type="button" className="btn-small" onClick={() => changeFolder(m.id)}>
-                      Change…
-                    </button>
+                  {hasPicker() ? (
+                    <span className="mono path mount-host-text" title={m.hostPath}>
+                      {tilde(m.hostPath, home)}
+                    </span>
+                  ) : (
+                    <input
+                      className="input input-compact mono path"
+                      type="text"
+                      value={m.hostPath}
+                      placeholder="/absolute/path/on/host"
+                      aria-label="Host folder"
+                      autoFocus={!m.hostPath}
+                      spellCheck={false}
+                      onChange={(e) => patchMount(m.id, { hostPath: e.target.value })}
+                    />
                   )}
-                  <button
-                    type="button"
-                    className="icon-btn icon-btn-small"
-                    aria-label={`Remove mount ${m.hostPath || "row"}`}
-                    onClick={() => setMounts((all) => all.filter((r) => r.id !== m.id))}
-                  >
-                    <Cross />
-                  </button>
+                  <div className="mount-controls">
+                    <label className="check">
+                      <input type="checkbox" checked={m.writable} onChange={(e) => patchMount(m.id, { writable: e.target.checked })} />
+                      Writable
+                    </label>
+                    {hasPicker() && (
+                      <button type="button" className="btn-small" onClick={() => changeFolder(m.id)}>
+                        Change…
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="icon-btn icon-btn-small"
+                      aria-label={`Remove mount ${m.hostPath || "row"}`}
+                      onClick={() => setMounts((all) => all.filter((r) => r.id !== m.id))}
+                    >
+                      <Cross />
+                    </button>
+                  </div>
+                  <label htmlFor={`guest-${m.id}`} className="mount-at">
+                    at
+                  </label>
+                  <input
+                    id={`guest-${m.id}`}
+                    className="input input-compact input-dark mono path"
+                    type="text"
+                    value={m.guestPath}
+                    placeholder={m.hostPath.trim() ? `${m.hostPath.trim()} (the same path)` : "the same path"}
+                    aria-invalid={!guestOk}
+                    title={guestOk ? "Where the folder appears in the VM" : "Use an absolute path or ~/…, not used by another mount"}
+                    spellCheck={false}
+                    onChange={(e) => patchMount(m.id, { guestPath: e.target.value })}
+                  />
                 </div>
-                <label htmlFor={`guest-${m.id}`} className="mount-at">
-                  at
-                </label>
-                <input
-                  id={`guest-${m.id}`}
-                  className="input input-compact input-dark mono path"
-                  type="text"
-                  value={m.guestPath}
-                  placeholder={m.hostPath.trim() ? defaultGuestPath(m.hostPath.trim(), wd) : `${wd}/…`}
-                  aria-invalid={!guestOk}
-                  title={guestOk ? "Where the folder appears in the VM" : "Use an absolute path or ~/…, not used by another mount"}
-                  spellCheck={false}
-                  onChange={(e) => patchMount(m.id, { guestPath: e.target.value, guestEdited: true })}
-                />
-              </div>
-            );
-          })}
-          <button type="button" className="btn-add" onClick={addFolder}>
-            <Plus size={14} color="#8FA6F0" />
-            {hasPicker() ? "Add folder…" : "Add folder"}
-          </button>
+              );
+            })}
+            <button type="button" className="btn-add" onClick={addFolder}>
+              <Plus size={14} color="#8FA6F0" />
+              {hasPicker() ? "Add folder…" : "Add folder"}
+            </button>
           </div>
         </Section>
 
@@ -470,8 +488,8 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
           description={
             <>
               Bentomo first installs Claude Code, on <code className="mono">PATH</code> as <code className="mono">claude</code>. Then your script runs
-              once, as the VM user, in the working directory, with the forwarded variables set. <code className="mono">sudo</code> is available. Stops at
-              the first failing command.
+              once, as the VM user, in the clone, with the forwarded variables set. <code className="mono">sudo</code> is available. Stops at the first
+              failing command.
               {editing && " A new script runs when you save and recreate."}
             </>
           }
@@ -530,7 +548,7 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
           )}
           <button type="submit" className="btn btn-primary" disabled={submitting}>
             {editing ? <Redo /> : <Plus />}
-            {editing ? (submitting ? "Saving…" : "Save and recreate") : submitting ? "Creating…" : "Create sandbox"}
+            {editing ? (submitting ? "Saving…" : "Save and recreate") : submitting ? "Creating…" : "Create project"}
           </button>
         </div>
 
@@ -545,7 +563,10 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
               void save(true);
             }}
           >
-            <p>The VM and its disk are deleted, then created again from these settings and provisioned from scratch. Mounted host folders are not touched.</p>
+            <p>
+              The VM and its disk are deleted, then created again from these settings and provisioned from scratch. The clone, its worktrees and the
+              project's Claude home are not touched.
+            </p>
             {sessionsNote(editing)}
           </ConfirmDialog>
         )}

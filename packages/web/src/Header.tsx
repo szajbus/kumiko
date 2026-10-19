@@ -2,9 +2,9 @@ import type { ReactNode } from "react";
 import type { SessionInfo } from "@bentomo/shared";
 import { Logo, Plus } from "./icons";
 import { sessionTitle } from "./format";
-import { sessionStatus } from "./status";
+import { sessionState } from "./status";
 
-export type TabId = "sandboxes" | "new-session" | `session:${string}`;
+export type TabId = "projects" | "new-session" | `session:${string}`;
 
 interface Props {
   sessions: SessionInfo[];
@@ -15,15 +15,15 @@ interface Props {
   onNewSession(): void;
 }
 
-/** The window's title bar: the Sandboxes tab, a tab per session, and + to start a new one. */
+/** The window's title bar: the Projects tab, a tab per session, and + to start a new one. */
 export function Header({ sessions, newSessionOpen, active, onSelect, onClose, onNewSession }: Props) {
   return (
     <header className="app-header">
       <div className="tabbar">
         <nav className="tabs" role="tablist" aria-label="Tabs">
-          <Tab id="sandboxes" active={active} onSelect={onSelect} label="Sandboxes" icon={<Logo size={14} />} home />
+          <Tab id="projects" active={active} onSelect={onSelect} label="Projects" icon={<Logo size={14} />} home />
           {sessions.map((s) => {
-            const st = sessionStatus(s.status);
+            const st = sessionState(s);
             return (
               <Tab
                 key={s.id}
@@ -57,7 +57,7 @@ interface TabProps {
   dot?: string;
   pulse?: boolean;
   icon?: ReactNode;
-  /** The Sandboxes tab: styled apart from sessions. */
+  /** The Projects tab: styled apart from sessions. */
   home?: boolean;
   onSelect(tab: TabId): void;
   onClose?(tab: TabId): void;

@@ -2,7 +2,7 @@ import type { EndReason, SessionInfo } from "@bentomo/shared";
 
 // Text the UI shows for numbers, times and sessions. Plain functions, so they can be tested without a browser.
 
-/** A session's tab title: its sandbox and its name from /rename, or else the first words of the opening prompt. */
+/** A session's tab title: its project and its name from /rename, or else the first words of the opening prompt. */
 export function sessionTitle(s: Pick<SessionInfo, "sandbox" | "prompt" | "title">): string {
   const words = (s.title ?? s.prompt).split(/\s+/).filter(Boolean);
   let text = "";
@@ -44,7 +44,7 @@ export function endedText(reason: EndReason, code?: number): string {
     case "user":
       return "Session ended.";
     case "sandbox":
-      return "Session ended: its sandbox stopped.";
+      return "Session ended: its VM stopped.";
     case "quit":
       return "Session ended: Bentomo quit.";
     default:
@@ -69,4 +69,9 @@ export function formatDuration(ms: number): string {
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
   const s = Math.round(ms / 1000);
   return `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
+/** A host path as ~/… when it is under the user's home. */
+export function tilde(path: string, home?: string): string {
+  return home && (path === home || path.startsWith(home + "/")) ? `~${path.slice(home.length)}` : path;
 }

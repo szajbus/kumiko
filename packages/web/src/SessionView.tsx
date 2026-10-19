@@ -1,5 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { LIVE_SESSION_STATUSES, vmName, type SessionInfo } from "@bentomo/shared";
+import { LIVE_SESSION_STATUSES, type SessionInfo } from "@bentomo/shared";
 import { api, errorMessage, useSessionEvents } from "./api";
 import { applyEvent, blocksOf, emptyChat, partialToolSummary, toolSummary, type Block, type ChatItem, type ChatState } from "./chat";
 import { Composer } from "./Composer";
@@ -20,9 +20,27 @@ interface Props {
   onForked(id: string): void;
 }
 
+/**
+ * Tells the server the user has seen the session whenever it has something unread while it is on screen: this view
+ * only renders for the active tab, so on screen means the window is visible.
+ */
+function useMarkSeen(session: SessionInfo) {
+  const { id, unread } = session;
+  useEffect(() => {
+    if (!unread) return;
+    const mark = () => {
+      if (document.visibilityState === "visible") api.seen(id).catch(() => {});
+    };
+    mark();
+    document.addEventListener("visibilitychange", mark);
+    return () => document.removeEventListener("visibilitychange", mark);
+  }, [id, unread]);
+}
+
 /** One session: header, the chat streamed from its events, and the composer. */
 export function SessionView({ session, onForked }: Props) {
   const stream = useSessionEvents(session.id);
+  useMarkSeen(session);
   const chat = useChat(stream.events);
   const totalCost = useMemo(() => chat.items.reduce((sum, i) => sum + (i.type === "turn" ? (i.costUsd ?? 0) : 0), 0), [chat.items]);
   const [error, setError] = useState<string | undefined>();
@@ -60,7 +78,9 @@ export function SessionView({ session, onForked }: Props) {
     <div className="session">
       <div className="session-head">
         <div className="session-where">
-          <span className="badge mono">{vmName(session.sandbox)}</span>
+          <a className="badge mono" href={`#/project/${session.sandbox}`} title="Open the project">
+            {session.sandbox}
+          </a>
           <span className="mono dim session-workdir" title={session.workdir}>
             {session.workdir}
           </span>

@@ -1,32 +1,38 @@
 import { useEffect, useState } from "react";
-import { WORKSPACE_DIR, type ResumableSession } from "@bentomo/shared";
-import { api, errorMessage, type LiveState } from "./api";
+import type { ResumableSession } from "@bentomo/shared";
+import { api, errorMessage, useHome, type LiveState } from "./api";
 import { Composer } from "./Composer";
-import { ago, sessionTitle } from "./format";
+import { ago, sessionTitle, tilde } from "./format";
 import { Resume, Trash } from "./icons";
 import { Select } from "./Select";
 
 interface Props {
   live: LiveState;
+  /** The project to start in, when the tab was opened from one. */
+  project?: string;
   onStarted(id: string): void;
 }
 
-/** Two choices start a session: a running sandbox and an opening prompt. */
-export function NewSession({ live, onStarted }: Props) {
-  const running = live.sandboxes.filter((s) => s.status === "running" && !s.busy);
-  const others = live.sandboxes.filter((s) => !running.includes(s));
-  const [picked, setPicked] = useState("");
+/** Two choices start a session: a project whose VM runs, and an opening prompt. */
+export function NewSession({ live, project: initial, onStarted }: Props) {
+  const running = live.projects.filter((s) => s.status === "running" && !s.busy);
+  const others = live.projects.filter((s) => !running.includes(s));
+  const [picked, setPicked] = useState(initial ?? "");
   const [model, setModel] = useState("default");
   const [error, setError] = useState<string | undefined>();
+  const home = useHome();
+  useEffect(() => {
+    if (initial) setPicked(initial);
+  }, [initial]);
 
-  // Preselect the first running sandbox, and move off one that stops.
+  // Preselect the first running project, and move off one that stops.
   const sandbox = running.some((s) => s.name === picked) ? picked : running[0]?.name ?? "";
   useEffect(() => {
     if (sandbox !== picked) setPicked(sandbox);
   }, [sandbox, picked]);
 
-  const sb = live.sandboxes.find((s) => s.name === sandbox);
-  const workdir = sb ? sb.meta?.spec.workdir ?? WORKSPACE_DIR : undefined;
+  const sb = live.projects.find((s) => s.name === sandbox);
+  const workdir = sb?.project.clonePath;
 
   // Saved sessions that aren't open; re-read when a session opens or closes.
   const [saved, setSaved] = useState<ResumableSession[]>([]);
@@ -78,38 +84,41 @@ export function NewSession({ live, onStarted }: Props) {
     <main className="form-main new-session">
       <div className="form-intro">
         <h1 className="page-title">New session</h1>
-        <p className="muted">Claude Code starts in the sandbox's working directory and gets to work on your prompt straight away.</p>
+        <p className="muted">
+          Claude Code starts in the project's clone and gets to work on your prompt straight away. It makes a worktree when the task changes code, or
+          when you ask for one.
+        </p>
       </div>
 
       <section className="card section">
         <div className="field">
-          <label htmlFor="ns-sandbox">Sandbox</label>
-          {live.loaded && live.sandboxes.length === 0 ? (
+          <label htmlFor="ns-sandbox">Project</label>
+          {live.loaded && live.projects.length === 0 ? (
             <p className="muted form-note">
-              No sandboxes yet. <a href="#/new">Create one</a> first.
+              No projects yet. <a href="#/new">Create one</a> first.
             </p>
           ) : (
             <Select
               id="ns-sandbox"
               mono
               value={sandbox}
-              placeholder={running.length ? "Pick a sandbox" : "No running sandboxes"}
+              placeholder={running.length ? "Pick a project" : "No project's VM is running"}
               disabled={running.length === 0}
               onValueChange={setPicked}
               groups={[
                 { options: running.map((s) => s.name) },
-                ...(others.length ? [{ label: "Not running: start them from Sandboxes", options: others.map((s) => s.name), disabled: true }] : []),
+                ...(others.length ? [{ label: "VM not running: start it from Projects", options: others.map((s) => s.name), disabled: true }] : []),
               ]}
             />
           )}
           <span className="hint">
             {workdir ? (
               <>
-                Starts in <span className="mono">{workdir}</span>
+                Starts in <span className="mono">{tilde(workdir, home)}</span>
               </>
-            ) : live.sandboxes.length > 0 ? (
+            ) : live.projects.length > 0 ? (
               <>
-                Start a sandbox from <a href="#/">Sandboxes</a> to begin.
+                Start a project's VM from <a href="#/">Projects</a> to begin.
               </>
             ) : null}
           </span>
@@ -139,14 +148,14 @@ export function NewSession({ live, onStarted }: Props) {
           </div>
           <ul className="resume-list">
             {saved.slice(0, RESUME_LIMIT).map((r) => {
-              const runs = live.sandboxes.some((x) => x.name === r.sandbox && x.status === "running" && !x.busy);
+              const runs = live.projects.some((x) => x.name === r.sandbox && x.status === "running" && !x.busy);
               return (
                 <li key={r.id} className="resume-item">
                   <div className="resume-what">
                     <span className="resume-title" title={r.prompt}>
                       {sessionTitle(r)}
                     </span>
-                    <span className="dim resume-when">{runs ? ago(r.updatedAt ?? r.startedAt) : `${ago(r.updatedAt ?? r.startedAt)} · sandbox not running`}</span>
+                    <span className="dim resume-when">{runs ? ago(r.updatedAt ?? r.startedAt) : `${ago(r.updatedAt ?? r.startedAt)} · VM not running`}</span>
                   </div>
                   <div className="resume-actions">
                     <button type="button" className="btn btn-secondary btn-compact" disabled={!runs || resuming !== undefined} onClick={() => void resume(r.id)}>

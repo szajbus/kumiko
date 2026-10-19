@@ -20,6 +20,7 @@
     "desktop": "npm run build && npm start -w @bentomo/desktop",
     "dist:app": "npm run build && npm run dist:mac-arm64-app -w @bentomo/desktop",
     "roundtrip": "npm run build && node packages/sandbox/dist/scripts/roundtrip.js",
+    "projects-check": "npm run build && node packages/server/dist/scripts/projects-check.js",
     "drive": "npm run build && node packages/agent/dist/scripts/drive.js"
   },
   "devDependencies": {
