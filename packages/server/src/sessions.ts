@@ -95,7 +95,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     const { info: saved } = stored;
     if (this.sessions.has(saved.id)) throw new SessionNotResumable("This session is already open.");
     if (!saved.claudeSessionId) throw new SessionNotResumable("This session has nothing of Claude's to resume.");
-    const { endedAt: _endedAt, updatedAt: _updatedAt, ...rest } = saved;
+    const { endedAt: _endedAt, updatedAt: _updatedAt, unread: _unread, ...rest } = saved;
     const info: SessionInfo = { ...rest, status: "idle" };
     return this.launch(info, stored.events, { sandbox: info.sandbox, workdir: info.workdir, env, resume: saved.claudeSessionId });
   }
@@ -160,7 +160,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     return true;
   }
 
-  /** Deletes every saved session of a sandbox that is going away: Claude's transcripts went with its disk. */
+  /** Deletes every saved session of a project that is going away: Claude's transcripts go with its Claude home. */
   async deleteSavedFor(sandbox: string): Promise<void> {
     if (!this.store) return;
     await this.flush();
@@ -195,7 +195,9 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
         case "exit": {
           const reason = s.ending ?? "exit";
           const failed = !s.ending && (ev.code !== 0 || s.info.status === "starting");
-          this.setInfo(s, { status: failed ? "failed" : "ended", endedAt: new Date().toISOString(), bufferBytes: s.bytes });
+          // A session that stopped by itself needs the user to look; one they ended doesn't.
+          const unread = s.ending ? s.info.unread : true;
+          this.setInfo(s, { status: failed ? "failed" : "ended", endedAt: new Date().toISOString(), bufferBytes: s.bytes, unread });
           this.push(s, { kind: "ended", payload: { reason, code: ev.code } });
           this.save(s);
           resolveExit();
@@ -269,7 +271,8 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
       s.bytes = s.events.reduce((n, e) => n + sizeOf(e), 0);
       s.blocks.clear();
       const switched = s.pendingModel && typeof m.result === "string" && m.result.startsWith("Set model to");
-      this.setInfo(s, { status: "idle", bufferBytes: s.bytes, ...(switched ? { model: s.pendingModel } : {}) });
+      // Claude is done and waits for the user, until they look.
+      this.setInfo(s, { status: "idle", bufferBytes: s.bytes, unread: true, ...(switched ? { model: s.pendingModel } : {}) });
       this.save(s);
     }
   }
@@ -305,6 +308,13 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     s.pendingModel = /^\/model\s+(\S+)/.exec(text)?.[1];
     s.driver.send(text, promptId);
     if (s.info.status === "idle") this.setInfo(s, { status: "running" });
+  }
+
+  /** The user has looked at the session: it no longer waits on them. */
+  markSeen(id: string): void {
+    const s = this.sessions.get(id);
+    if (!s) throw new SessionNotFound(`No session ${id}.`);
+    if (s.info.unread) this.setInfo(s, { unread: false });
   }
 
   interrupt(id: string): void {

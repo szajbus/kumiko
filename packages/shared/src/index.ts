@@ -17,20 +17,23 @@ export const DEFAULTS = { cpus: 4, memoryGiB: 4, diskGiB: 100 } as const;
 /** The smallest resources a sandbox can have. */
 export const MINIMUMS = { cpus: 1, memoryGiB: 1, diskGiB: 10 } as const;
 
-/** The default working directory in the VM. Mounts land under the working directory unless the user picks another path. */
+/** The working directory in the VM of a sandbox whose spec names none. A project's VM works in its clone instead. */
 export const WORKSPACE_DIR = "/workspace";
+
+/**
+ * Where a project's Claude home is mounted in its VM, and what CLAUDE_CONFIG_DIR points at there. Set on every
+ * command Bentomo runs in a VM and in every shell, so Claude keeps `.claude.json` inside the mount too.
+ */
+export const CLAUDE_HOME_IN_VM = "~/.claude";
+
+/** The folder beside a clone that holds its worktrees: `<clone>__worktrees`. */
+export const WORKTREES_SUFFIX = "__worktrees";
 
 export interface Mount {
   hostPath: string;
   writable: boolean;
   /** Where the folder appears in the VM; "~/…" is the VM user's home. Omitted: the same path as on the host. */
   guestPath?: string;
-}
-
-/** The default place in the VM for a host folder: <working directory>/<folder name>. */
-export function defaultGuestPath(hostPath: string, workdir: string = WORKSPACE_DIR): string {
-  const base = hostPath.replace(/\/+$/, "").split("/").pop() || "folder";
-  return `${workdir.replace(/\/+$/, "")}/${base}`;
 }
 
 /**
@@ -55,11 +58,10 @@ export function sameMounts(a: Mount[], b: Mount[]): boolean {
   return key(a) === key(b);
 }
 
-/** Defaults the create form starts from. */
+/** What the UI needs from the host. */
 export interface DefaultsResponse {
   /** The host user's home, so the UI can show paths as ~/…. */
   home: string;
-  mounts: Mount[];
 }
 
 export interface SandboxSpec {
@@ -82,7 +84,8 @@ export interface SandboxSpec {
  */
 export type EditSpec = Partial<Pick<SandboxSpec, "cpus" | "memoryGiB" | "diskGiB" | "mounts" | "env" | "provision" | "workdir">>;
 
-export type SandboxStatus = "running" | "stopped" | "broken" | "unknown";
+/** `absent`: a project whose VM doesn't exist (its creation failed, or it was deleted outside Bentomo). */
+export type SandboxStatus = "running" | "stopped" | "broken" | "unknown" | "absent";
 
 export type SetupState = "creating" | "ready" | "provision_failed";
 
@@ -135,6 +138,70 @@ export interface SandboxView extends SandboxInfo {
   sessions: number;
 }
 
+// ---- projects -------------------------------------------------------------------------------
+
+/**
+ * A local git clone with one VM and one Claude home. Its id is also its sandbox's name, so the VM is `bm-<id>`.
+ * Saved in Bentomo's home as `projects/<id>.json`; nothing is written into the repo.
+ */
+export interface Project {
+  id: string;
+  /** The clone's real path on the host, mounted at the same path in the VM. */
+  clonePath: string;
+  /** `<clone>__worktrees`, beside the clone, mounted at the same path in the VM. */
+  worktreesPath: string;
+  createdAt: string;
+}
+
+/** A project as the UI sees it: its VM's view, plus the project itself and what needs the user. */
+export interface ProjectView extends SandboxView {
+  project: Project;
+  /** Set when the clone or the worktrees folder is gone from the host; the VM can't start without them. */
+  problem?: string;
+  /** Sessions in this project that are waiting on the user. */
+  waiting: number;
+}
+
+/** Creates a project from a clone. Everything but `clonePath` and `name` is the VM's spec. */
+export type CreateProjectRequest = Omit<SandboxSpec, "workdir"> & {
+  clonePath: string;
+};
+
+/**
+ * What can change on a project: its VM's spec, as for a sandbox. `mounts` are the extra ones only; the clone,
+ * worktrees and Claude home mounts are always there and can't change. The working directory is the clone.
+ */
+export type ProjectEdit = Omit<EditSpec, "workdir">;
+
+/** One worktree of a project's clone, as git on the host sees it. */
+export interface WorktreeStatus {
+  path: string;
+  /** The branch checked out, without refs/heads/; missing when HEAD is detached. */
+  branch?: string;
+  head?: string;
+  /** The clone itself, which git lists first. */
+  main: boolean;
+  /** Uncommitted changes, untracked files included. */
+  dirty: boolean;
+  /** Commits not on the branch's upstream, or on no remote at all when it has none. */
+  unpushed: number;
+  /** The upstream, e.g. "origin/fix-x"; missing when the branch has none. */
+  upstream?: string;
+  /** HEAD is contained in the remote's default branch (as of the last fetch), so the worktree can go. */
+  merged: boolean;
+  /** git's own flags: locked by the user, or prunable because its folder is gone. */
+  locked?: boolean;
+  prunable?: boolean;
+  /** Set when git couldn't read this worktree's state. */
+  error?: string;
+}
+
+export interface WorktreesResponse {
+  worktrees: WorktreeStatus[];
+  /** The remote branch "merged" is measured against, e.g. "origin/main"; missing when there is none. */
+  defaultBranch?: string;
+}
+
 // ---- agent sessions -------------------------------------------------------------------------
 
 /** `starting` until Claude answers, `running` during a turn, `idle` between turns; `ended` and `failed` are final. */
@@ -144,7 +211,8 @@ export const LIVE_SESSION_STATUSES: readonly SessionStatus[] = ["starting", "idl
 
 export interface SessionInfo {
   id: string;
-  sandbox: string;          // short name, without "bm-"
+  /** The project's id, which is also its sandbox's short name (without "bm-"). */
+  sandbox: string;
   workdir: string;          // where Claude was started in the VM
   status: SessionStatus;
   /** The opening prompt, for the tab title. */
@@ -164,6 +232,16 @@ export interface SessionInfo {
   commands?: string[];
   /** How much memory the session's event buffer takes on the server, in bytes; updated when a turn ends. */
   bufferBytes?: number;
+  /** Claude finished a turn, or the session ended by itself, since the user last looked at it. */
+  unread?: boolean;
+}
+
+/**
+ * Whether a session is waiting on the user: Claude finished (or the session stopped by itself) and nobody has looked
+ * since. Claude runs with permissions bypassed, so a finished turn is the only way it waits for an answer.
+ */
+export function isWaiting(s: SessionInfo): boolean {
+  return s.unread === true && s.status !== "running" && s.status !== "starting";
 }
 
 /** Why a session ended: its tab closing, its sandbox stopping, the app quitting, or the process exiting by itself. */
@@ -215,6 +293,7 @@ export interface AccountUsage {
 }
 
 export interface StartSessionRequest {
+  /** The project's id. */
   sandbox: string;
   prompt: string;
   /** A model alias to start with; Claude's default when omitted. */
@@ -230,6 +309,7 @@ export interface TemplatesResponse {
 }
 
 export interface CreateResponse {
+  /** The project's id. */
   name: string;
   warnings: string[];
 }
@@ -241,8 +321,8 @@ export interface ApiError {
 
 /** Messages on the /api/events WebSocket. */
 export type ServerEvent =
-  | { type: "snapshot"; sandboxes: SandboxView[]; logs: Record<string, LogLine[]>; sessions: SessionInfo[]; error?: string }
-  | { type: "list"; sandboxes: SandboxView[]; error?: string }
+  | { type: "snapshot"; projects: ProjectView[]; logs: Record<string, LogLine[]>; sessions: SessionInfo[]; error?: string }
+  | { type: "list"; projects: ProjectView[]; error?: string }
   /** Sent whenever a session starts, changes status or ends. */
   | { type: "sessions"; sessions: SessionInfo[] }
   | { sandbox: string; op: OpKind; type: "state"; data: Operation }

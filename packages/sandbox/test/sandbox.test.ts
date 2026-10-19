@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { defaultGuestPath } from "@bentomo/shared";
 import { execScript, exitCode, mountsExpression, parseLimaList, provisionCommand, tidyLimaLine, validateSpec } from "../src/index.js";
 import { fakeLima } from "./helpers.js";
 
@@ -24,11 +23,11 @@ describe("parsing", () => {
 
   it("quotes forwarded values and skips unset ones", () => {
     const s = execScript("cat", ["A", "B"], { A: "it's $x" });
-    assert.equal(s, `case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac\nexport A='it'\\''s $x'\nexec cat\n`);
+    assert.equal(s, `case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac\nexport CLAUDE_CONFIG_DIR="$HOME"/.claude\nexport A='it'\\''s $x'\nexec cat\n`);
   });
 
   it("changes into the working directory, leaving ~ to the VM's shell", () => {
-    const path = `case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac\n`;
+    const path = `case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac\nexport CLAUDE_CONFIG_DIR="$HOME"/.claude\n`;
     assert.equal(execScript("cat", [], {}, "/workspace"), `${path}cd '/workspace' 2>/dev/null || true\nexec cat\n`);
     assert.equal(execScript("cat", [], {}, "~/my dir"), `${path}cd "$HOME"/'my dir' 2>/dev/null || true\nexec cat\n`);
   });
@@ -44,8 +43,6 @@ describe("parsing", () => {
         '{"location":"/Users/me/.claude","mountPoint":"{{.Home}}/.claude","writable":false},' +
         '{"location":"/same","mountPoint":"/same","writable":false}]',
     );
-    assert.equal(defaultGuestPath("/a/b/c/d/"), "/workspace/d");
-    assert.equal(defaultGuestPath("/a/b", "~/src/"), "~/src/b");
   });
 
   it("wraps a provisioning script so it can't be read from stdin", () => {
@@ -214,6 +211,9 @@ describe("LimaProvider against a fake limactl", () => {
     for (const flags of ["-ic", "-lc"]) {
       const path = execFileSync("bash", [flags, "echo $PATH"], { cwd: home, env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
       assert.equal(path.split(":").filter((x) => x === bin).length, 1, `${flags}: ${path}`);
+      // And Claude reads its config from the project's Claude home, so a login in a shell is the one sessions use.
+      const config = execFileSync("bash", [flags, "echo $CLAUDE_CONFIG_DIR"], { cwd: home, env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+      assert.equal(config, join(home, ".claude"), flags);
     }
   });
 
@@ -273,7 +273,7 @@ describe("LimaProvider against a fake limactl", () => {
     assert.equal(info.meta?.provisionExitCode, undefined);
   });
 
-  it("refuses a name that is taken and removes metadata when limactl create fails", async () => {
+  it("refuses a name that is taken, and keeps the record to recreate from when limactl create fails", async () => {
     const { provider, log } = await fakeLima();
     await provider.create(spec(), log);
     const v = await provider.validate(spec());
@@ -285,6 +285,10 @@ describe("LimaProvider against a fake limactl", () => {
     } finally {
       delete process.env.FAKE_LIMA_FAIL_CREATE;
     }
+    assert.equal((await provider.metadata.read("other"))?.setup, "creating");
+    assert.equal((await provider.list()).find((i) => i.name === "other")?.status, "absent", "listed as absent, to recreate");
+    // Deleting a VM that never came to be only drops the record.
+    await provider.delete("other", log);
     assert.equal(await provider.metadata.read("other"), undefined);
   });
 

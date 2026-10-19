@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  CLAUDE_HOME_IN_VM,
   mountsExpression,
   sameMounts,
   vmName,
@@ -77,17 +78,23 @@ function commandLine(cmd: string, args: string[]): string {
 /** Adds ~/.local/bin (where Claude Code installs) to PATH unless the shell's startup files already did. */
 const LOCAL_BIN_ON_PATH = `case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac`;
 
+/**
+ * Points Claude at the project's Claude home, mounted at ~/.claude. Without it Claude writes `.claude.json` beside
+ * ~/.claude, on the VM's disk, and the login and settings in it are lost when the VM is recreated.
+ */
+export const CLAUDE_CONFIG_EXPORT = `export CLAUDE_CONFIG_DIR="$HOME"/${CLAUDE_HOME_IN_VM.slice(2)}`;
+
 /** A path in the VM for bash: quoted, with a leading "~/" left to the shell's $HOME. */
 export function shellPath(p: string): string {
   return p.startsWith("~/") ? `"$HOME"/${shellQuote(p.slice(2))}` : shellQuote(p);
 }
 
 /**
- * Builds the `bash -s` preamble: ~/.local/bin (where Claude Code installs) on PATH, one export per forwarded
- * variable that is set, a `cd` into `cwd` (skipped if it's missing), then `exec <cmd>`.
+ * Builds the `bash -s` preamble: ~/.local/bin (where Claude Code installs) on PATH, CLAUDE_CONFIG_DIR, one export
+ * per forwarded variable that is set, a `cd` into `cwd` (skipped if it's missing), then `exec <cmd>`.
  */
 export function execScript(cmd: string, names: string[], env: NodeJS.ProcessEnv, cwd?: string): string {
-  const lines = [LOCAL_BIN_ON_PATH];
+  const lines = [LOCAL_BIN_ON_PATH, CLAUDE_CONFIG_EXPORT];
   lines.push(...names.filter((n) => env[n] !== undefined).map((n) => `export ${n}=${shellQuote(env[n]!)}`));
   if (cwd) lines.push(`cd ${shellPath(cwd)} 2>/dev/null || true`);
   lines.push(`exec ${cmd}`);
@@ -158,10 +165,17 @@ export class LimaProvider implements SandboxProvider {
     return parseLimaList(res.stdout).filter((i) => i.name.startsWith(VM_PREFIX));
   }
 
+  /**
+   * Bentomo's VMs, plus `absent` entries for records whose VM doesn't exist: a create that failed, or a VM deleted
+   * outside Bentomo. Those can be recreated from the record.
+   */
   async list(): Promise<SandboxInfo[]> {
     const [instances, { metas, errors }] = await Promise.all([this.instances(), this.metadata.readAll()]);
+    const absent: SandboxInfo[] = [...metas]
+      .filter(([name]) => !instances.some((i) => i.name === vmName(name)))
+      .map(([name, meta]) => ({ name, status: "absent", meta }));
     return instances
-      .map((i) => {
+      .map((i): SandboxInfo => {
         const name = i.name.slice(VM_PREFIX.length);
         return {
           name,
@@ -173,6 +187,7 @@ export class LimaProvider implements SandboxProvider {
           ...(errors.has(name) ? { metaError: errors.get(name) } : {}),
         };
       })
+      .concat(absent)
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
@@ -227,13 +242,8 @@ export class LimaProvider implements SandboxProvider {
     args.push(spec.template || "template:default");
 
     log(`$ ${commandLine("limactl", args)}`, "cmd");
-    try {
-      await this.limactlRun(args, { log });
-    } catch (err) {
-      // Nothing was created, so there is nothing to keep metadata for.
-      if (!(await this.instances()).some((i) => i.name === vm)) await this.metadata.remove(spec.name);
-      throw err;
-    }
+    // A failed create keeps the record: it is the spec a recreate builds the VM from.
+    await this.limactlRun(args, { log });
     await this.start(spec.name, log);
   }
 
@@ -287,8 +297,8 @@ export class LimaProvider implements SandboxProvider {
    *   ~/.config/bentomo/shell.sh, sourced from the end of ~/.bashrc, which only interactive shells reach.
    */
   private async prepareShells(name: string, workdir: string, log: Log): Promise<void> {
-    const env = `# Written by Bentomo on every start: ~/.local/bin (Claude Code) on PATH.\n` +
-      `${LOCAL_BIN_ON_PATH}\n`;
+    const env = `# Written by Bentomo on every start: ~/.local/bin (Claude Code) on PATH, and Claude's config in the project's Claude home.\n` +
+      `${LOCAL_BIN_ON_PATH}\n${CLAUDE_CONFIG_EXPORT}\n`;
     const rc = `# Written by Bentomo on every start: interactive shells that land in ~ move to the working directory.\n` +
       `if [ "$PWD" = "$HOME" ]; then cd ${shellPath(workdir)} 2>/dev/null || true; fi\n`;
     const source = (file: string) => `[ -f ~/.config/bentomo/${file} ] && . ~/.config/bentomo/${file}`;
@@ -321,8 +331,14 @@ export class LimaProvider implements SandboxProvider {
     log("Stopped.", "ok");
   }
 
+  /** Deletes the VM and Bentomo's record of it. A VM that is already gone only has its record removed. */
   async delete(name: string, log: Log): Promise<void> {
     const vm = vmName(name);
+    if (!(await this.instances()).some((i) => i.name === vm)) {
+      await this.metadata.remove(name);
+      log(`${vm} doesn't exist; nothing to delete.`, "note");
+      return;
+    }
     log(`$ limactl delete --force ${vm}`, "cmd");
     await this.limactlRun(["delete", "--force", vm], { log });
     await this.metadata.remove(name);

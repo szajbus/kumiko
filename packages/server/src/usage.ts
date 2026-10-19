@@ -7,14 +7,14 @@ const USAGE = "---usage---";
 
 /**
  * Runs in the sandbox: who Claude is signed in as, then the subscription's usage from the endpoint Claude Code's
- * own /usage reads. The token comes from CLAUDE_CODE_OAUTH_TOKEN or ~/.claude/.credentials.json and is handed to
+ * own /usage reads. The token comes from CLAUDE_CODE_OAUTH_TOKEN or the Claude home's .credentials.json and is handed to
  * curl on stdin, so it never shows up in a process list.
  */
 const PROBE = `
 echo ${ACCOUNT}
 claude auth status 2>/dev/null
 echo ${USAGE}
-t="\${CLAUDE_CODE_OAUTH_TOKEN:-$(grep -o '"claudeAiOauth":{[^}]*' "$HOME/.claude/.credentials.json" 2>/dev/null | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)}"
+t="\${CLAUDE_CODE_OAUTH_TOKEN:-$(grep -o '"claudeAiOauth":{[^}]*' "\${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json" 2>/dev/null | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)}"
 [ -n "$t" ] || exit 0
 printf 'Authorization: Bearer %s\\n' "$t" | curl -fsS -m 15 -H @- -H 'anthropic-beta: oauth-2025-04-20' https://api.anthropic.com/api/oauth/usage
 `;

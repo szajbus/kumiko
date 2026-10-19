@@ -1,0 +1,233 @@
+import { constants } from "node:fs";
+import { access, cp, lstat, mkdir, readdir, readFile, realpath, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, join, normalize } from "node:path";
+import { CLAUDE_HOME_IN_VM, NAME_PATTERN, WORKTREES_SUFFIX, type Mount, type Project, type SandboxSpec } from "@bentomo/shared";
+import { cloneProblem } from "./git.js";
+
+export function defaultBentomoHome(): string {
+  return process.env.BENTOMO_HOME ?? join(homedir(), ".bentomo");
+}
+
+/** The file Bentomo owns in each Claude home, imported by CLAUDE.md. Rewritten whenever the project's VM starts. */
+export const MANAGED_FILE = "bentomo.md";
+
+/** What a new app-level template's CLAUDE.md says. The import is what brings in Bentomo's instructions. */
+const TEMPLATE_CLAUDE_MD = `@${MANAGED_FILE}
+
+<!--
+  Your instructions for Claude in this project's VM go here. Bentomo seeded this file once and won't touch it again;
+  its own instructions are in ${MANAGED_FILE}, which it rewrites, so keep the import above.
+-->
+`;
+
+/** Bentomo's instructions for a project: the worktree convention, with the project's real paths. */
+export function managedInstructions(p: Project): string {
+  return `<!-- Written by Bentomo, and rewritten whenever the VM starts: edit CLAUDE.md instead. -->
+
+# Working in this project
+
+The git clone is \`${p.clonePath}\`. Sessions start there.
+
+## Worktrees
+
+- When a task changes code, make a worktree for it first and work there:
+  \`git worktree add "${p.worktreesPath}/<branch>" -b <branch>\`, then \`cd\` into it. Pick a short branch name that says what the work is.
+- Worktrees go in \`${p.worktreesPath}/\` and nowhere else: not inside the clone, not in /tmp.
+- Questions and read-only exploration don't need a worktree; look around in the clone and leave it as it is.
+- If the user asks for a worktree, or names an existing one, use that.
+- Other sessions may be working in other worktrees at the same time. Leave worktrees you didn't create alone.
+`;
+}
+
+/** A project id taken from a folder name: lowercase letters, digits and dashes, short enough for a sandbox name. */
+export function suggestId(clonePath: string): string {
+  const slug = basename(clonePath).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 30).replace(/-+$/, "");
+  return slug || "project";
+}
+
+export interface CreatedProject {
+  project: Project;
+  /** Undoes what creating the project did on the host, for a create that fails before its VM is started. */
+  rollback(): Promise<void>;
+}
+
+/**
+ * Projects, one JSON file each, and their Claude homes. A project's VM (its sandbox) is the provider's business;
+ * this only knows the paths it is built from.
+ */
+export class ProjectStore {
+  readonly dir: string;
+  readonly claudeRoot: string;
+  readonly templateDir: string;
+
+  constructor(home: string = defaultBentomoHome()) {
+    this.dir = join(home, "projects");
+    this.claudeRoot = join(home, "claude");
+    this.templateDir = join(home, "claude-template");
+  }
+
+  /** Ids name files and folders; only the sandbox name shape may. */
+  private file(id: string): string {
+    if (!NAME_PATTERN.test(id)) throw new Error(`Not a project id: ${id}`);
+    return join(this.dir, `${id}.json`);
+  }
+
+  claudeHome(id: string): string {
+    if (!NAME_PATTERN.test(id)) throw new Error(`Not a project id: ${id}`);
+    return join(this.claudeRoot, id);
+  }
+
+  async get(id: string): Promise<Project | undefined> {
+    if (!NAME_PATTERN.test(id)) return undefined;
+    try {
+      const p = JSON.parse(await readFile(this.file(id), "utf8")) as Project;
+      return p?.id === id && typeof p.clonePath === "string" && typeof p.worktreesPath === "string" ? p : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async list(): Promise<Project[]> {
+    let files: string[];
+    try {
+      files = await readdir(this.dir);
+    } catch {
+      return [];
+    }
+    const all = await Promise.all(files.filter((f) => f.endsWith(".json")).map((f) => this.get(f.slice(0, -".json".length))));
+    return all.filter((p): p is Project => Boolean(p)).sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  private async write(p: Project): Promise<void> {
+    await mkdir(this.dir, { recursive: true });
+    const tmp = `${this.file(p.id)}.${process.pid}.tmp`;
+    await writeFile(tmp, JSON.stringify(p, null, 2) + "\n");
+    await rename(tmp, this.file(p.id));
+  }
+
+  /**
+   * Checks a clone and works out its paths, without changing anything. Returns the real path of the clone, since a
+   * worktree's `.git` file stores real paths and the VM must see the same ones.
+   */
+  async check(id: string, rawClonePath: string): Promise<{ errors: string[]; clonePath?: string; worktreesPath?: string }> {
+    const errors: string[] = [];
+    if (!NAME_PATTERN.test(id)) errors.push("Name must be 1–30 lowercase letters, digits or dashes, not starting or ending with a dash.");
+    else if (await this.get(id)) errors.push(`There is already a project called ${id}.`);
+
+    const raw = rawClonePath.trim().replace(/^~(?=\/|$)/, homedir());
+    if (!raw) return { errors: [...errors, "Pick the clone to work in."] };
+    if (!isAbsolute(raw)) return { errors: [...errors, `${raw} must be an absolute path.`] };
+    let clonePath: string;
+    try {
+      clonePath = await realpath(normalize(raw));
+      if (!(await stat(clonePath)).isDirectory()) return { errors: [...errors, `${raw} is not a folder.`] };
+    } catch {
+      return { errors: [...errors, `${raw} does not exist.`] };
+    }
+    if (clonePath === "/") return { errors: [...errors, "The root folder can't be a project."] };
+
+    const problem = await cloneProblem(clonePath);
+    if (problem) errors.push(problem);
+    const taken = (await this.list()).find((p) => p.clonePath === clonePath);
+    if (taken) errors.push(`${clonePath} is already the project ${taken.id}.`);
+
+    const worktreesPath = clonePath + WORKTREES_SUFFIX;
+    const existing = await lstat(worktreesPath).catch(() => undefined);
+    if (existing && !existing.isDirectory()) {
+      errors.push(`${worktreesPath} exists but isn't a folder, so worktrees can't go there. Move it aside first.`);
+    } else if (!existing) {
+      const parent = dirname(clonePath);
+      if (!(await access(parent, constants.W_OK).then(() => true, () => false))) {
+        errors.push(`Can't create ${worktreesPath}: ${parent} isn't writable.`);
+      }
+    }
+    return { errors, clonePath, worktreesPath };
+  }
+
+  /**
+   * Creates what a project needs on the host: the worktrees folder (if missing), the Claude home seeded from the
+   * app-level template, and the project's record. `check` must have passed. The VM is the caller's to create.
+   */
+  async create(id: string, clonePath: string, worktreesPath: string): Promise<CreatedProject> {
+    const project: Project = { id, clonePath, worktreesPath, createdAt: new Date().toISOString() };
+    const madeWorktrees = await mkdir(worktreesPath).then(() => true, (err: NodeJS.ErrnoException) => {
+      if (err.code === "EEXIST") return false;
+      throw err;
+    });
+    const rollback = async () => {
+      await rm(this.file(id), { force: true });
+      await rm(this.claudeHome(id), { recursive: true, force: true });
+      // Only a folder Bentomo made, and only while it is still empty.
+      if (madeWorktrees) await rmdir(worktreesPath).catch(() => {});
+    };
+    try {
+      await this.seedClaudeHome(project);
+      await this.write(project);
+    } catch (err) {
+      await rollback();
+      throw err;
+    }
+    return { project, rollback };
+  }
+
+  /** Makes the app-level template the first time it is needed, so the user can find and change it. */
+  private async ensureTemplate(): Promise<void> {
+    if (await stat(this.templateDir).then(() => true, () => false)) return;
+    await mkdir(this.templateDir, { recursive: true });
+    await writeFile(join(this.templateDir, "CLAUDE.md"), TEMPLATE_CLAUDE_MD, { flag: "wx" }).catch(() => {});
+  }
+
+  /** Copies the template into a new Claude home, once; from then on the two are independent. */
+  private async seedClaudeHome(p: Project): Promise<void> {
+    await this.ensureTemplate();
+    const home = this.claudeHome(p.id);
+    await mkdir(this.claudeRoot, { recursive: true });
+    await cp(this.templateDir, home, { recursive: true, errorOnExist: false, force: false });
+    await this.writeManaged(p);
+  }
+
+  /** Rewrites Bentomo's own instructions in the project's Claude home; CLAUDE.md is the user's. */
+  async writeManaged(p: Project): Promise<void> {
+    const home = this.claudeHome(p.id);
+    await mkdir(home, { recursive: true });
+    await writeFile(join(home, MANAGED_FILE), managedInstructions(p));
+  }
+
+  /** Deletes the project's record and its Claude home, which holds its login and Claude's session history. */
+  async remove(id: string): Promise<void> {
+    await rm(this.file(id), { force: true });
+    await rm(this.claudeHome(id), { recursive: true, force: true });
+  }
+
+  /** What is wrong with the project's folders on the host, if anything. The VM can't start without them. */
+  async problem(p: Project): Promise<string | undefined> {
+    const isDir = (path: string) => stat(path).then((s) => s.isDirectory(), () => false);
+    if (!(await isDir(p.clonePath))) return `The clone ${p.clonePath} is gone. Put it back to use this project.`;
+    if (!(await isDir(p.worktreesPath))) return `The worktrees folder ${p.worktreesPath} is gone. Create it again, empty, to use this project.`;
+    return undefined;
+  }
+
+  /**
+   * The mounts every project's VM has: the clone and its worktrees at the same paths as on the host, which git needs
+   * (a worktree's `.git` file holds the main repo's absolute path), and the Claude home as the VM user's ~/.claude.
+   */
+  fixedMounts(p: Project): Mount[] {
+    return [
+      { hostPath: p.clonePath, guestPath: p.clonePath, writable: true },
+      { hostPath: p.worktreesPath, guestPath: p.worktreesPath, writable: true },
+      { hostPath: this.claudeHome(p.id), guestPath: CLAUDE_HOME_IN_VM, writable: true },
+    ];
+  }
+
+  /** Whether a mount is one of the project's fixed ones, which the user can't change. */
+  isFixed(p: Project, m: Mount): boolean {
+    return this.fixedMounts(p).some((f) => f.hostPath === m.hostPath && (m.guestPath ?? m.hostPath) === f.guestPath);
+  }
+
+  /** The VM's spec: the user's resources, extra mounts, variables and script, plus what every project has. */
+  spec(p: Project, base: Omit<SandboxSpec, "name" | "workdir">): SandboxSpec {
+    const extra = base.mounts.filter((m) => !this.isFixed(p, m));
+    return { ...base, name: p.id, mounts: [...this.fixedMounts(p), ...extra], workdir: p.clonePath };
+  }
+}

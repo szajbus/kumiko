@@ -1,28 +1,32 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 import WebSocket from "ws";
-import type { SandboxView, ServerEvent } from "@bentomo/shared";
+import type { ProjectView, ServerEvent, WorktreesResponse } from "@bentomo/shared";
 import { LimaProvider, MetadataStore } from "@bentomo/sandbox";
 import { startServer, type RunningServer } from "../src/index.js";
+import { makeClone, sh } from "./repo.js";
 
 const fixtures = resolve(dirname(fileURLToPath(import.meta.url)), "../../../sandbox/fixtures");
 
 describe("server", () => {
   let server: RunningServer;
+  let root: string;
   let limaDir: string;
+  let dataDir: string;
   let mountDir: string;
   let home: string;
   const events: ServerEvent[] = [];
   let ws: WebSocket;
 
   before(async () => {
-    const root = await mkdtemp(join(tmpdir(), "bentomo-server-test-"));
+    root = await realpath(await mkdtemp(join(tmpdir(), "bentomo-server-test-")));
     limaDir = join(root, "lima");
     mountDir = join(root, "mount");
+    dataDir = join(root, "data");
     await mkdir(limaDir);
     await mkdir(mountDir);
     home = join(root, "home");
@@ -34,10 +38,10 @@ describe("server", () => {
     const provider = new LimaProvider({
       limactl: join(fixtures, "fake-limactl.mjs"),
       ssh: join(fixtures, "fake-ssh.sh"),
-      metadata: new MetadataStore(join(root, "sandboxes")),
+      metadata: new MetadataStore(join(dataDir, "sandboxes")),
       env,
     });
-    server = await startServer({ provider, port: 0, refreshMs: 200, env, home, sessionsDir: join(root, "sessions") });
+    server = await startServer({ provider, port: 0, refreshMs: 200, env, home, dataDir, sessionsDir: join(dataDir, "sessions") });
     ws = new WebSocket(`${server.url.replace("http", "ws")}/api/events`);
     ws.on("message", (m) => events.push(JSON.parse(String(m))));
     await new Promise((r) => ws.once("open", r));
@@ -63,166 +67,270 @@ describe("server", () => {
   };
   const finished = (name: string, op: string, since: number) =>
     waitFor(() => events.slice(since).find((e) => "sandbox" in e && e.sandbox === name && e.op === op && (e.type === "done" || e.type === "error")));
+  const projects = async (): Promise<ProjectView[]> => json(await api("/api/projects"));
+  const project = async (id: string) => (await projects()).find((p) => p.name === id);
+  const exists = (p: string) => stat(p).then(() => true, () => false);
+  const post = (path: string, body: object) => api(path, { method: "POST", body: JSON.stringify(body) });
+  const spec = (over: object = {}) => ({ cpus: 1, memoryGiB: 1, diskGiB: 10, mounts: [], env: [], ...over });
 
-  it("sends a snapshot first and never lists foreign instances", async () => {
+  /** Creates a project from a fresh clone and waits for its VM. */
+  const create = async (id: string, over: object = {}) => {
+    const clone = await makeClone(root, `repo-${id}`);
+    const since = events.length;
+    const res = await post("/api/projects", spec({ name: id, clonePath: clone, ...over }));
+    assert.equal(res.status, 202, JSON.stringify(await res.clone().json()));
+    const done = await finished(id, "creating", since);
+    return { clone, done };
+  };
+
+  const remove = async (id: string) => {
+    const since = events.length;
+    assert.equal((await api(`/api/projects/${id}`, { method: "DELETE" })).status, 202);
+    assert.equal((await finished(id, "deleting", since)).type, "done");
+  };
+
+  it("sends a snapshot first and lists only projects", async () => {
     await waitFor(() => events[0]);
     assert.equal(events[0].type, "snapshot");
-    const res = await api("/api/sandboxes");
-    assert.deepEqual(await json(res), []);
+    assert.deepEqual(await projects(), []);
   });
 
-  it("serves templates and env presence without values", async () => {
+  it("serves templates, env presence without values, and the host's home", async () => {
     const t = await json(await api("/api/templates"));
     assert.equal(t.preferred, "template:debian-12");
     const env = await json(await api("/api/env?names=TOKEN,NOPE,bad-name"));
     assert.deepEqual(env, { TOKEN: true, NOPE: false });
+    assert.deepEqual(await json(await api("/api/defaults")), { home });
   });
 
-  it("offers ~/.claude as a default mount only when the host has one", async () => {
-    let d = await json(await api("/api/defaults"));
-    assert.equal(d.home, home);
-    assert.deepEqual(d.mounts, []);
-    await mkdir(join(home, ".claude"));
-    d = await json(await api("/api/defaults"));
-    assert.deepEqual(d.mounts, [{ hostPath: join(home, ".claude"), guestPath: "~/.claude", writable: true }]);
+  it("refuses what can't be a project's clone, leaving nothing behind", async () => {
+    const clone = await makeClone(root, "refused");
+    const refuse = async (body: object, why: RegExp) => {
+      const res = await post("/api/projects", spec(body));
+      assert.equal(res.status, 400);
+      assert.match((await json(res)).details.join("\n"), why);
+    };
+    await refuse({ name: "-x", clonePath: clone }, /Name/);
+    await refuse({ name: "x", clonePath: mountDir }, /not a git repository/);
+    await refuse({ name: "x", clonePath: join(root, "nope") }, /does not exist/);
+    await refuse({ name: "x", clonePath: "relative/path" }, /absolute/);
+    await refuse({ name: "x", clonePath: join(clone, "sub") }, /does not exist/);
+    await mkdir(join(clone, "sub"));
+    await refuse({ name: "x", clonePath: join(clone, "sub") }, /pick its top folder/);
+    sh(clone, "worktree", "add", "--quiet", join(root, "linked"), "-b", "linked");
+    await refuse({ name: "x", clonePath: join(root, "linked") }, /worktree of another clone/);
+    await refuse({ name: "x", clonePath: clone, cpus: 0 }, /CPUs/);
+    await writeFile(clone + "__worktrees", "in the way");
+    await refuse({ name: "x", clonePath: clone }, /isn't a folder/);
+    await rm(clone + "__worktrees");
+    // An extra mount that can't be checked until the project's own mounts exist: everything made is undone.
+    await refuse({ name: "x", clonePath: clone, mounts: [{ hostPath: mountDir, guestPath: "~/.claude", writable: false }] }, /overlap/);
+    assert.equal(await exists(clone + "__worktrees"), false, "the worktrees folder Bentomo made is gone again");
+    assert.equal(await exists(join(dataDir, "claude", "x")), false);
+    assert.deepEqual(await projects(), []);
   });
 
-  it("rejects invalid specs with 400", async () => {
-    const res = await api("/api/sandboxes", { method: "POST", body: JSON.stringify({ name: "-x", cpus: 1, memoryGiB: 1, diskGiB: 10, mounts: [], env: [] }) });
-    assert.equal(res.status, 400);
-    const body = await json(res);
-    assert.match(body.details.join(), /Name/);
-  });
-
-  it("runs a full lifecycle with streamed logs and 409 while busy", async () => {
+  it("creates a project: worktrees folder, seeded Claude home, same-path mounts, work in the clone", async () => {
     const since = events.length;
-    const res = await api("/api/sandboxes", {
-      method: "POST",
-      body: JSON.stringify({
-        name: "web", cpus: 2, memoryGiB: 2, diskGiB: 20,
-        mounts: [{ hostPath: mountDir, writable: true }],
-        env: ["TOKEN", "MISSING"],
-        provision: `echo "token=$TOKEN" > ${mountDir}/out`,
-      }),
+    const { clone, done } = await create("web", {
+      mounts: [{ hostPath: mountDir, writable: true }],
+      env: ["TOKEN", "MISSING"],
+      provision: `pwd > ${mountDir}/where; echo "token=$TOKEN" > ${mountDir}/out`,
     });
-    assert.equal(res.status, 202);
-    assert.deepEqual((await json(res)).warnings.length, 1);
-
-    // A creating sandbox shows up before Lima knows it, marked busy.
-    const listed = await waitFor(() =>
-      events.slice(since).find((e): e is Extract<ServerEvent, { type: "list" }> => e.type === "list" && e.sandboxes.some((s) => s.name === "web" && s.busy)));
-    assert.equal(listed.sandboxes.find((s) => s.name === "web")!.operation?.op, "creating");
-
-    const busy = await api("/api/sandboxes/web/stop", { method: "POST" });
-    assert.equal(busy.status, 409);
-
-    const done = await finished("web", "creating", since);
     assert.equal(done.type, "done");
-    const logs = events.slice(since).filter((e) => e.type === "log").map((e) => (e as { data: { text: string } }).data.text);
-    assert.ok(logs.some((l) => l.startsWith("$ limactl create --tty=false --name=bm-web")));
-    assert.ok(logs.includes("Provisioning finished."));
 
-    let [sb] = (await json(await api("/api/sandboxes"))) as SandboxView[];
-    assert.equal(sb.status, "running");
-    assert.equal(sb.meta?.setup, "ready");
-    assert.equal(sb.vm, "bm-web");
+    // A creating project shows up before Lima knows its VM, marked busy.
+    const listed = events.slice(since).find((e): e is Extract<ServerEvent, { type: "list" }> => e.type === "list" && e.projects.some((s) => s.name === "web" && s.busy));
+    assert.equal(listed?.projects.find((s) => s.name === "web")!.operation?.op, "creating");
 
+    const p = (await project("web"))!;
+    assert.deepEqual([p.status, p.meta?.setup, p.vm, p.project.clonePath, p.project.worktreesPath], ["running", "ready", "bm-web", clone, clone + "__worktrees"]);
+    assert.ok((await stat(clone + "__worktrees")).isDirectory());
+
+    // The clone and its worktrees at the same paths in the VM, the Claude home at ~/.claude, then the extra mount.
+    const claudeHome = join(dataDir, "claude", "web");
+    const createCall = (await readFile(join(limaDir, "calls.log"), "utf8")).split("\n").filter(Boolean).map((l) => JSON.parse(l) as string[]).find((a) => a[0] === "create" && a.includes("--name=bm-web"))!;
+    const mounts = JSON.parse(createCall.find((a) => a.startsWith("--set=.mounts = "))!.slice("--set=.mounts = ".length));
+    assert.deepEqual(mounts, [
+      { location: clone, mountPoint: clone, writable: true },
+      { location: clone + "__worktrees", mountPoint: clone + "__worktrees", writable: true },
+      { location: claudeHome, mountPoint: "{{.Home}}/.claude", writable: true },
+      { location: mountDir, mountPoint: mountDir, writable: true },
+    ]);
+    assert.equal(p.meta?.spec.workdir, clone, "provisioning and sessions start in the clone");
+    assert.equal((await readFile(join(mountDir, "where"), "utf8")).trim(), clone);
+    assert.equal((await readFile(join(mountDir, "out"), "utf8")).trim(), "token=abc");
+
+    // The Claude home: the user's CLAUDE.md from the app-level template, importing Bentomo's own file.
+    assert.match(await readFile(join(claudeHome, "CLAUDE.md"), "utf8"), /^@bentomo\.md\n/);
+    assert.match(await readFile(join(dataDir, "claude-template", "CLAUDE.md"), "utf8"), /^@bentomo\.md\n/);
+    const managed = await readFile(join(claudeHome, "bentomo.md"), "utf8");
+    assert.ok(managed.includes(`git worktree add "${clone}__worktrees/<branch>" -b <branch>`), managed);
+
+    // The same clone can't be a second project, nor the same name.
+    const again = await post("/api/projects", spec({ name: "other", clonePath: clone }));
+    assert.match((await json(again)).details.join(), /already the project web/);
+    const taken = await post("/api/projects", spec({ name: "web", clonePath: await makeClone(root, "another") }));
+    assert.match((await json(taken)).details.join(), /already a project called web/);
+
+    // Stopped, a new client gets the last operation's log in its snapshot.
     let s2 = events.length;
-    assert.equal((await api("/api/sandboxes/web/stop", { method: "POST" })).status, 202);
+    assert.equal((await api("/api/projects/web/stop", { method: "POST" })).status, 202);
     assert.equal((await finished("web", "stopping", s2)).type, "done");
-    [sb] = await json(await api("/api/sandboxes"));
-    assert.equal(sb.status, "stopped");
-
-    // A new client gets the last operation's log in its snapshot.
+    assert.equal((await project("web"))?.status, "stopped");
     const ws2 = new WebSocket(`${server.url.replace("http", "ws")}/api/events`);
     const snap = await new Promise<ServerEvent>((r) => ws2.once("message", (m) => r(JSON.parse(String(m)))));
     ws2.close();
-    assert.equal(snap.type, "snapshot");
-    if (snap.type === "snapshot") assert.ok(snap.logs.web.some((l) => l.text === "Stopped."));
+    assert.ok(snap.type === "snapshot" && snap.logs.web.some((l) => l.text === "Stopped."));
 
+    // Bentomo's file is rewritten on start; the user's CLAUDE.md is theirs.
+    await writeFile(join(claudeHome, "CLAUDE.md"), "mine\n");
+    await writeFile(join(claudeHome, "bentomo.md"), "stale\n");
     s2 = events.length;
-    assert.equal((await api("/api/sandboxes/web", { method: "DELETE" })).status, 202);
-    assert.equal((await finished("web", "deleting", s2)).type, "done");
-    assert.deepEqual(await json(await api("/api/sandboxes")), []);
+    assert.equal((await api("/api/projects/web/start", { method: "POST" })).status, 202);
+    assert.equal((await finished("web", "starting", s2)).type, "done");
+    assert.equal(await readFile(join(claudeHome, "bentomo.md"), "utf8"), managed);
+    assert.equal(await readFile(join(claudeHome, "CLAUDE.md"), "utf8"), "mine\n");
+
+    // Deleting removes the VM and the Claude home; the clone and its worktrees stay.
+    await remove("web");
+    assert.deepEqual(await projects(), []);
+    assert.equal(await exists(claudeHome), false);
+    assert.ok(await exists(join(clone, "README")));
+    assert.ok(await exists(clone + "__worktrees"));
   });
 
   it("reports provisioning failures and recreates with a fixed script", async () => {
     const marker = join(mountDir, "ok");
-    let since = events.length;
-    await api("/api/sandboxes", {
-      method: "POST",
-      body: JSON.stringify({ name: "bad", cpus: 1, memoryGiB: 1, diskGiB: 10, mounts: [], env: [], provision: `test -f ${marker} || exit 3` }),
-    });
-    const err = await finished("bad", "creating", since);
-    assert.equal(err.type, "error");
-    let [sb] = (await json(await api("/api/sandboxes"))) as SandboxView[];
-    assert.equal(sb.meta?.setup, "provision_failed");
-    assert.equal(sb.meta?.provisionExitCode, 3);
-    assert.equal(sb.operation?.result, "error");
+    const { done } = await create("bad", { provision: `test -f ${marker} || exit 3` });
+    assert.equal(done.type, "error");
+    let p = (await project("bad"))!;
+    assert.deepEqual([p.meta?.setup, p.meta?.provisionExitCode, p.operation?.result], ["provision_failed", 3, "error"]);
 
     // A running VM can't take new resources in place, but a recreate can.
     const patch = JSON.stringify({ cpus: 2, provision: "echo fixed" });
-    assert.equal((await api("/api/sandboxes/bad", { method: "PATCH", body: patch })).status, 400);
-    since = events.length;
-    assert.equal((await api("/api/sandboxes/bad?recreate=1", { method: "PATCH", body: patch })).status, 202);
+    assert.equal((await api("/api/projects/bad", { method: "PATCH", body: patch })).status, 400);
+    let since = events.length;
+    assert.equal((await api("/api/projects/bad?recreate=1", { method: "PATCH", body: patch })).status, 202);
     assert.equal((await finished("bad", "recreating", since)).type, "done");
-    [sb] = await json(await api("/api/sandboxes"));
-    assert.deepEqual([sb.meta?.setup, sb.cpus, sb.meta?.spec.provision], ["ready", 2, "echo fixed"]);
+    p = (await project("bad"))!;
+    assert.deepEqual([p.meta?.setup, p.cpus, p.meta?.spec.provision, p.meta?.spec.mounts.length], ["ready", 2, "echo fixed", 3]);
 
     since = events.length;
-    assert.equal((await api("/api/sandboxes/bad/recreate", { method: "POST" })).status, 202);
+    assert.equal((await api("/api/projects/bad/recreate", { method: "POST" })).status, 202);
     assert.equal((await finished("bad", "recreating", since)).type, "done");
-    since = events.length;
-    await api("/api/sandboxes/bad", { method: "DELETE" });
-    await finished("bad", "deleting", since);
+    await remove("bad");
   });
 
-  it("edits a sandbox: variables while running, resources once stopped", async () => {
-    let since = events.length;
-    await api("/api/sandboxes", { method: "POST", body: JSON.stringify({ name: "ed", cpus: 1, memoryGiB: 1, diskGiB: 10, mounts: [], env: [] }) });
-    await finished("ed", "creating", since);
-
-    const running = await api("/api/sandboxes/ed", { method: "PATCH", body: JSON.stringify({ cpus: 2 }) });
+  it("edits a project's VM: variables while running, resources and extra mounts once stopped", async () => {
+    const { clone } = await create("ed");
+    const running = await api("/api/projects/ed", { method: "PATCH", body: JSON.stringify({ cpus: 2 }) });
     assert.equal(running.status, 400);
     assert.match((await json(running)).details.join(), /Stop bm-ed/);
 
-    since = events.length;
-    assert.equal((await api("/api/sandboxes/ed", { method: "PATCH", body: JSON.stringify({ env: ["TOKEN"] }) })).status, 202);
+    let since = events.length;
+    assert.equal((await api("/api/projects/ed", { method: "PATCH", body: JSON.stringify({ env: ["TOKEN"], workdir: "/elsewhere" }) })).status, 202);
     assert.equal((await finished("ed", "editing", since)).type, "done");
+    assert.equal((await project("ed"))?.meta?.spec.workdir, clone, "the working directory stays the clone");
 
     since = events.length;
-    await api("/api/sandboxes/ed/stop", { method: "POST" });
+    await api("/api/projects/ed/stop", { method: "POST" });
     await finished("ed", "stopping", since);
     since = events.length;
-    assert.equal((await api("/api/sandboxes/ed", { method: "PATCH", body: JSON.stringify({ cpus: 3, diskGiB: 12 }) })).status, 202);
+    const extra = { hostPath: mountDir, guestPath: "/data", writable: false };
+    assert.equal((await api("/api/projects/ed", { method: "PATCH", body: JSON.stringify({ cpus: 3, diskGiB: 12, mounts: [extra] }) })).status, 202);
     assert.equal((await finished("ed", "editing", since)).type, "done");
-    const sb = ((await json(await api("/api/sandboxes"))) as SandboxView[]).find((s) => s.name === "ed")!;
-    assert.deepEqual([sb.cpus, sb.diskGiB, sb.meta?.spec.env], [3, 12, ["TOKEN"]]);
+    const p = (await project("ed"))!;
+    assert.deepEqual([p.cpus, p.diskGiB, p.meta?.spec.env], [3, 12, ["TOKEN"]]);
+    // Only extra mounts are the user's: the project's own come back whatever is sent.
+    assert.deepEqual(p.meta?.spec.mounts.map((m) => m.guestPath), [clone, clone + "__worktrees", "~/.claude", "/data"]);
 
-    assert.equal((await api("/api/sandboxes/nope", { method: "PATCH", body: "{}" })).status, 404);
-    since = events.length;
-    await api("/api/sandboxes/ed", { method: "DELETE" });
-    await finished("ed", "deleting", since);
+    assert.equal((await api("/api/projects/nope", { method: "PATCH", body: "{}" })).status, 404);
+    await remove("ed");
   });
 
-  it("404s unknown sandboxes and ignores foreign ones", async () => {
-    assert.equal((await api("/api/sandboxes/nope/start", { method: "POST" })).status, 404);
-    // "foreign" would be bm-foreign; wm-foreign can't be addressed at all.
-    assert.equal((await api("/api/sandboxes/foreign", { method: "DELETE" })).status, 404);
-    assert.equal((await api("/api/sandboxes/Bad!/start", { method: "POST" })).status, 400);
+  it("shows a project whose VM is missing, and recreates it", async () => {
+    process.env.FAKE_LIMA_FAIL_CREATE = "1";
+    let created;
+    try {
+      created = await create("gone");
+    } finally {
+      delete process.env.FAKE_LIMA_FAIL_CREATE;
+    }
+    assert.equal(created.done.type, "error");
+    assert.equal((await project("gone"))?.status, "absent");
+    assert.equal((await api("/api/projects/gone/start", { method: "POST" })).status, 409);
+    const since = events.length;
+    assert.equal((await api("/api/projects/gone/recreate", { method: "POST" })).status, 202);
+    assert.equal((await finished("gone", "recreating", since)).type, "done");
+    assert.equal((await project("gone"))?.status, "running");
+
+    // A clone that went away is reported, and the VM won't start without it.
+    await api("/api/projects/gone/stop", { method: "POST" });
+    await waitFor(() => events.find((e) => "sandbox" in e && e.sandbox === "gone" && e.op === "stopping" && e.type === "done"));
+    await rename(created.clone, created.clone + "-moved");
+    assert.match((await project("gone"))?.problem ?? "", /is gone/);
+    assert.equal((await api("/api/projects/gone/start", { method: "POST" })).status, 409);
+    await rename(created.clone + "-moved", created.clone);
+    await remove("gone");
+  });
+
+  it("lists worktrees with what needs attention, from git on the host", async () => {
+    const { clone } = await create("wt");
+    const wt = (b: string) => join(clone + "__worktrees", b);
+    // Dirty: an untracked file. Unpushed: a commit on a branch with no upstream. Merged: pushed into origin/main.
+    sh(clone, "worktree", "add", "--quiet", wt("dirty"), "-b", "dirty");
+    await writeFile(join(wt("dirty"), "new.txt"), "x");
+    sh(clone, "worktree", "add", "--quiet", wt("ahead"), "-b", "ahead");
+    await writeFile(join(wt("ahead"), "a.txt"), "a");
+    sh(wt("ahead"), "add", "a.txt");
+    sh(wt("ahead"), "commit", "--quiet", "-m", "ahead");
+    sh(clone, "worktree", "add", "--quiet", wt("feature/done"), "-b", "feature/done");
+    await writeFile(join(wt("feature/done"), "d.txt"), "d");
+    sh(wt("feature/done"), "add", "d.txt");
+    sh(wt("feature/done"), "commit", "--quiet", "-m", "done");
+    sh(wt("feature/done"), "push", "--quiet", "origin", "feature/done:main");
+    sh(clone, "fetch", "--quiet");
+
+    const res = (await json(await api("/api/projects/wt/worktrees"))) as WorktreesResponse;
+    assert.equal(res.defaultBranch, "origin/main");
+    const by = new Map(res.worktrees.map((w) => [w.branch, w]));
+    assert.equal(res.worktrees[0].path, clone);
+    assert.equal(res.worktrees[0].main, true);
+    assert.deepEqual([by.get("dirty")?.dirty, by.get("dirty")?.unpushed, by.get("dirty")?.merged], [true, 0, false], "just made, so not merged");
+    assert.deepEqual([by.get("ahead")?.dirty, by.get("ahead")?.unpushed, by.get("ahead")?.merged], [false, 1, false]);
+    assert.deepEqual([by.get("feature/done")?.unpushed, by.get("feature/done")?.merged, by.get("feature/done")?.path], [0, true, wt("feature/done")]);
+    assert.equal(by.get("main")?.merged, false, "the default branch isn't merged into itself");
+
+    // A worktree whose folder went away is listed as git sees it: prunable.
+    await rm(wt("ahead"), { recursive: true });
+    const after = (await json(await api("/api/projects/wt/worktrees"))) as WorktreesResponse;
+    assert.equal(after.worktrees.find((w) => w.branch === "ahead")?.prunable, true);
+    await remove("wt");
+  });
+
+  it("404s unknown projects and 400s bad ids", async () => {
+    assert.equal((await api("/api/projects/nope/start", { method: "POST" })).status, 404);
+    assert.equal((await api("/api/projects/nope/worktrees")).status, 404);
+    assert.equal((await api("/api/projects/foreign", { method: "DELETE" })).status, 404);
+    assert.equal((await api("/api/projects/Bad!/start", { method: "POST" })).status, 400);
   });
 
   it("refuses requests from other origins", async () => {
-    const res = await api("/api/sandboxes", { headers: { origin: "https://evil.example" } });
+    const res = await api("/api/projects", { headers: { origin: "https://evil.example" } });
     assert.equal(res.status, 403);
     const bad = new WebSocket(`${server.url.replace("http", "ws")}/api/events`, { origin: "https://evil.example" });
     await new Promise<void>((r) => bad.once("error", () => r()));
   });
 
-  it("notices VMs changed outside Bentomo", async () => {
+  it("notices a project's VM changing outside Bentomo, and ignores VMs that aren't projects'", async () => {
+    await create("outside");
+    await writeFile(join(limaDir, "bm-stray.json"), JSON.stringify({ name: "bm-stray", status: "Running" }));
     const since = events.length;
-    await writeFile(join(limaDir, "bm-outside.json"), JSON.stringify({ name: "bm-outside", status: "Running" }));
-    await waitFor(() => events.slice(since).find((e) => e.type === "list" && e.sandboxes.some((s) => s.name === "outside")));
+    await writeFile(join(limaDir, "bm-outside.json"), JSON.stringify({ name: "bm-outside", status: "Stopped" }));
+    await waitFor(() => events.slice(since).find((e) => e.type === "list" && e.projects.some((s) => s.name === "outside" && s.status === "stopped")));
+    assert.ok(!(await projects()).some((p) => p.name === "stray"));
+    await remove("outside");
   });
 });
 
@@ -237,15 +345,15 @@ describe("server errors", () => {
     };
     process.env.FAKE_LIMA_DIR = join(root, "lima");
     await mkdir(process.env.FAKE_LIMA_DIR);
-    const server = await startServer({ provider, port: 0, sessionsDir: join(root, "sessions") });
+    const server = await startServer({ provider, port: 0, dataDir: root, sessionsDir: join(root, "sessions") });
     try {
       const templates = await fetch(`${server.url}/api/templates`);
       assert.equal(templates.status, 500);
       assert.deepEqual(await json(templates), { error: "limactl exploded" });
 
-      const bad = await fetch(`${server.url}/api/sandboxes`, { method: "POST", body: "{nope" });
+      const bad = await fetch(`${server.url}/api/projects`, { method: "POST", body: "{nope" });
       assert.equal(bad.status, 400);
-      assert.match((await json(bad)).error, /JSON SandboxSpec/);
+      assert.match((await json(bad)).error, /Body must be JSON/);
     } finally {
       await server.close();
     }
@@ -262,7 +370,7 @@ describe("web UI", () => {
     process.env.FAKE_LIMA_DIR = join(root, "lima");
     await mkdir(process.env.FAKE_LIMA_DIR);
     const provider = new LimaProvider({ limactl: join(fixtures, "fake-limactl.mjs"), metadata: new MetadataStore(join(root, "sandboxes")) });
-    const server = await startServer({ provider, port: 0, webDir: web, sessionsDir: join(root, "sessions") });
+    const server = await startServer({ provider, port: 0, webDir: web, dataDir: root, sessionsDir: join(root, "sessions") });
     try {
       const asset = await fetch(`${server.url}/assets/a.js`);
       assert.equal(asset.headers.get("cache-control"), "public, max-age=31536000, immutable");

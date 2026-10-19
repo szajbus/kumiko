@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 import WebSocket from "ws";
-import type { SandboxView, ServerEvent, SessionEvent, SessionInfo } from "@bentomo/shared";
+import type { ProjectView, ServerEvent, SessionEvent, SessionInfo } from "@bentomo/shared";
 import { LimaProvider, MetadataStore, shellQuote } from "@bentomo/sandbox";
 import { startServer, type RunningServer } from "../src/index.js";
+import { makeClone } from "./repo.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtures = resolve(here, "../../../sandbox/fixtures");
@@ -15,7 +16,9 @@ const fakeClaude = resolve(here, "../../../agent/fixtures/fake-claude.mjs");
 
 describe("sessions", () => {
   let server: RunningServer;
+  let root: string;
   let limaDir: string;
+  /** The clone of project "one", where its sessions start. */
   let workdir: string;
   let sessionsDir: string;
   const events: ServerEvent[] = [];
@@ -37,7 +40,7 @@ describe("sessions", () => {
   const finished = (name: string, op: string, since: number) =>
     waitFor(() => events.slice(since).find((e) => "sandbox" in e && e.sandbox === name && e.op === op && (e.type === "done" || e.type === "error")));
   const session = async (id: string): Promise<SessionInfo | undefined> => ((await json(await api("/api/sessions"))) as SessionInfo[]).find((s) => s.id === id);
-  const sandbox = async (name: string): Promise<SandboxView> => ((await json(await api("/api/sandboxes"))) as SandboxView[]).find((s) => s.name === name)!;
+  const sandbox = async (name: string): Promise<ProjectView> => ((await json(await api("/api/projects"))) as ProjectView[]).find((s) => s.name === name)!;
 
   /** A socket on a session's events, collecting them. */
   const listen = async (id: string, afterSeq = 0) => {
@@ -50,10 +53,14 @@ describe("sessions", () => {
     return { got, sock, closed, results };
   };
 
+  /** Creates a project from a fresh clone; returns the clone. */
   const create = async (name: string, spec: object = {}) => {
+    const clonePath = await makeClone(root, name);
     const since = events.length;
-    await api("/api/sandboxes", { method: "POST", body: JSON.stringify({ name, cpus: 1, memoryGiB: 1, diskGiB: 10, mounts: [], env: ["TOKEN"], workdir, ...spec }) });
+    const res = await api("/api/projects", { method: "POST", body: JSON.stringify({ name, clonePath, cpus: 1, memoryGiB: 1, diskGiB: 10, mounts: [], env: ["TOKEN"], ...spec }) });
+    assert.equal(res.status, 202);
     assert.equal((await finished(name, "creating", since)).type, "done");
+    return clonePath;
   };
 
   const startSession = async (sandboxName: string, prompt: string): Promise<string> => {
@@ -63,11 +70,9 @@ describe("sessions", () => {
   };
 
   before(async () => {
-    const root = await mkdtemp(join(tmpdir(), "bentomo-sessions-test-"));
+    root = await realpath(await mkdtemp(join(tmpdir(), "bentomo-sessions-test-")));
     limaDir = join(root, "lima");
-    workdir = join(root, "work");
     await mkdir(limaDir);
-    await mkdir(workdir); // The fake sudo doesn't create it on start.
     process.env.FAKE_LIMA_DIR = limaDir;
     // The fake ssh's VM home is $FAKE_LIMA_DIR/vm-home; a claude there is found first and the installer skips it.
     const bin = join(limaDir, "vm-home", ".local", "bin");
@@ -83,11 +88,11 @@ describe("sessions", () => {
       env,
     });
     sessionsDir = join(root, "sessions");
-    server = await startServer({ provider, port: 0, refreshMs: 200, env, home: root, sessionsDir });
+    server = await startServer({ provider, port: 0, refreshMs: 200, env, home: root, dataDir: join(root, "data"), sessionsDir });
     ws = new WebSocket(`${server.url.replace("http", "ws")}/api/events`);
     ws.on("message", (m) => events.push(JSON.parse(String(m))));
     await new Promise((r) => ws.once("open", r));
-    await create("one");
+    workdir = await create("one");
   });
 
   after(async () => {
@@ -100,6 +105,10 @@ describe("sessions", () => {
     assert.equal((await post({ sandbox: "one", prompt: "  " })).status, 400);
     assert.equal((await post({ sandbox: "nope", prompt: "hi" })).status, 404);
     assert.equal((await post({ sandbox: "Bad!", prompt: "hi" })).status, 400);
+    // A VM that isn't a project's can't host a session; a project's stopped VM can't either, until it starts.
+    await writeFile(join(limaDir, "bm-stray.json"), JSON.stringify({ name: "bm-stray", status: "Running" }));
+    assert.equal((await post({ sandbox: "stray", prompt: "hi" })).status, 404);
+    await create("cold");
     await writeFile(join(limaDir, "bm-cold.json"), JSON.stringify({ name: "bm-cold", status: "Stopped" }));
     assert.equal((await post({ sandbox: "cold", prompt: "hi" })).status, 409);
     assert.equal((await api("/api/sessions/abc123/prompt", { method: "POST", body: '{"text":"x"}' })).status, 404);
@@ -112,7 +121,7 @@ describe("sessions", () => {
     assert.deepEqual(s.got[0], { seq: 1, kind: "user_prompt", payload: { text: "hello there", id: (s.got[0] as { payload: { id?: string } }).payload.id } });
     assert.match((s.got[0] as { payload: { id?: string } }).payload.id ?? "", /^[0-9a-f-]{36}$/, "the prompt is tagged with an id");
     const init = s.got.find((e) => e.kind === "claude" && e.payload.subtype === "init");
-    assert.equal(init?.kind === "claude" && init.payload.cwd, workdir, "Claude starts in the sandbox's working directory");
+    assert.equal(init?.kind === "claude" && init.payload.cwd, workdir, "Claude starts in the project's clone");
     assert.ok(s.got.some((e) => e.kind === "claude" && e.payload.type === "stream_event"), "deltas stream live");
 
     const info = await waitFor(async () => {
@@ -127,17 +136,30 @@ describe("sessions", () => {
     assert.equal((await sandbox("one")).sessions, 1);
     assert.ok(events.some((e) => e.type === "sessions" && e.sessions.some((x) => x.id === id)));
 
+    // A finished turn waits on the user until they look.
+    assert.equal(info?.unread, true);
+    assert.equal((await sandbox("one")).waiting, 1);
+    assert.equal((await api(`/api/sessions/${id}/seen`, { method: "POST" })).status, 200);
+    assert.equal((await session(id))?.unread, false);
+    assert.equal((await sandbox("one")).waiting, 0);
+    assert.equal((await api("/api/sessions/abc123/seen", { method: "POST" })).status, 404);
+
     // A forwarded variable reaches Claude's tools.
     assert.equal((await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: "env TOKEN" }) })).status, 202);
     await waitFor(() => s.results().length === 2);
     assert.ok(s.got.some((e) => e.kind === "claude" && e.payload.type === "user" && JSON.stringify(e.payload).includes("forwarded-value")));
 
+    // Claude's config is the project's Claude home, mounted at ~/.claude in the VM.
+    await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: "env CLAUDE_CONFIG_DIR" }) });
+    await waitFor(() => s.results().length === 3);
+    assert.ok(s.got.some((e) => e.kind === "claude" && e.payload.type === "user" && JSON.stringify(e.payload).includes(join(limaDir, "vm-home", ".claude"))));
+
     // Stop ends the turn, not the session.
     await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: "slow" }) });
     await waitFor(() => s.got.some((e) => e.kind === "claude" && JSON.stringify(e.payload).includes('"text":"3 "')));
     assert.equal((await api(`/api/sessions/${id}/interrupt`, { method: "POST" })).status, 202);
-    await waitFor(() => s.results().length === 3);
-    const interrupted = s.results()[2];
+    await waitFor(() => s.results().length === 4);
+    const interrupted = s.results()[3];
     assert.equal(interrupted.kind === "claude" && interrupted.payload.subtype, "error_during_execution");
     assert.ok(s.got.some((e) => e.kind === "interrupt"));
     assert.equal((await session(id))?.status, "idle");
@@ -145,7 +167,7 @@ describe("sessions", () => {
     // A reconnecting tab replays from its last seq; finished turns no longer carry their deltas.
     const lastSeq = s.got.at(-1)!.seq;
     await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: "/model haiku" }) });
-    await waitFor(() => s.results().length === 4);
+    await waitFor(() => s.results().length === 5);
     // The picker follows /model at once, without waiting for the next reply to name the model.
     assert.equal((await session(id))?.model, "haiku");
     const again = await listen(id, lastSeq);
@@ -155,9 +177,9 @@ describe("sessions", () => {
     // /rename shows up as the session's title.
     await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: "/rename fix-composer" }) });
     await waitFor(async () => (await session(id))?.title === "fix-composer");
-    await waitFor(() => s.results().length === 5);
+    await waitFor(() => s.results().length === 6);
     const full = await listen(id);
-    await waitFor(() => full.results().length === 5);
+    await waitFor(() => full.results().length === 6);
     // Only the message Stop cut short keeps its deltas; every finished one is replayed from its final form.
     const kept = new Set(full.got.flatMap((e) => (e.kind === "claude" && e.payload.type === "stream_event" ? [e.payload.api_message_id] : [])));
     assert.equal(kept.size, 1);
@@ -195,7 +217,7 @@ describe("sessions", () => {
     assert.equal((await sandbox("two")).sessions, 2);
 
     const since = events.length;
-    assert.equal((await api("/api/sandboxes/two/stop", { method: "POST" })).status, 202);
+    assert.equal((await api("/api/projects/two/stop", { method: "POST" })).status, 202);
     assert.equal((await finished("two", "stopping", since)).type, "done");
     const logs = events.slice(since).filter((e) => e.type === "log").map((e) => (e as { data: { text: string } }).data.text);
     assert.ok(logs.includes("Ending 2 agent sessions…"));
@@ -205,7 +227,7 @@ describe("sessions", () => {
   });
 
   it("ends sessions whose sandbox stops outside Bentomo", async () => {
-    await api("/api/sandboxes/two/start", { method: "POST" });
+    await api("/api/projects/two/start", { method: "POST" });
     await waitFor(async () => { const sb = await sandbox("two"); return (sb.status === "running" && !sb.busy) || undefined; });
     const id = await startSession("two", "hello");
     await waitFor(async () => (await session(id))?.status === "idle" || undefined);
@@ -338,13 +360,19 @@ describe("sessions", () => {
     const kept = await startSession("one", "stays");
     await idle(kept);
     await api(`/api/sessions/${kept}`, { method: "DELETE" });
-    const since = events.length;
-    await api("/api/sandboxes/doomed", { method: "DELETE" });
-    assert.equal((await finished("doomed", "deleting", since)).type, "done");
+    // Recreating keeps them: Claude's history is in the project's Claude home, on the host.
+    let since = events.length;
+    await api("/api/projects/doomed/recreate", { method: "POST" });
+    assert.equal((await finished("doomed", "recreating", since)).type, "done");
+    assert.equal((await session(doomed))?.status, "ended");
     await api(`/api/sessions/${doomed}`, { method: "DELETE" });
+    assert.ok((await saved()).includes(doomed), "a recreated project keeps its saved sessions");
+    since = events.length;
+    await api("/api/projects/doomed", { method: "DELETE" });
+    assert.equal((await finished("doomed", "deleting", since)).type, "done");
     const left = await saved();
-    assert.ok(!left.includes(doomed), "a deleted sandbox takes its saved sessions with it");
-    assert.ok(left.includes(kept), "other sandboxes keep theirs");
+    assert.ok(!left.includes(doomed), "a deleted project takes its saved sessions with it");
+    assert.ok(left.includes(kept), "other projects keep theirs");
     await api(`/api/sessions/saved/${kept}`, { method: "DELETE" });
   });
 
