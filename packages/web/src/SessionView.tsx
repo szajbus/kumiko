@@ -9,6 +9,7 @@ import { drafts } from "./drafts";
 import { Fork, Rewind } from "./icons";
 import { Select } from "./Select";
 import { COLORS, sessionStatus } from "./status";
+import { UsageStrip } from "./UsageStrip";
 
 const MODELS = ["default", "opus", "sonnet", "haiku"];
 
@@ -99,6 +100,7 @@ export function SessionView({ session, onForked }: Props) {
             Fork
           </button>
         </div>
+        <UsageStrip sessionId={session.id} live={live} turnDone={session.status === "idle"} />
       </div>
 
       <Chat chat={chat} running={busy} onRewind={session.status === "idle" && session.claudeSessionId ? setRewinding : undefined} />

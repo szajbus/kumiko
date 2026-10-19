@@ -173,6 +173,27 @@ export interface RewindResponse {
   text: string;
 }
 
+/** One of the subscription's usage limits: the current 5-hour session, the week, a model's share of the week. */
+export interface UsageWindow {
+  id: string;
+  label: string;
+  /** Share of the limit used so far, 0–100. */
+  usedPercent: number;
+  /** When the window resets, ISO 8601. */
+  resetsAt?: string;
+}
+
+/** The Claude account a sandbox is signed in to, with how much of its subscription is used. Either half can be missing. */
+export interface AccountUsage {
+  email?: string;
+  /** The subscription plan, e.g. "max" or "pro". */
+  plan?: string;
+  windows: UsageWindow[];
+  /** Set when usage couldn't be read; the account may still be known. */
+  error?: string;
+  fetchedAt: string;
+}
+
 export interface StartSessionRequest {
   sandbox: string;
   prompt: string;

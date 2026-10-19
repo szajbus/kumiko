@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type {
+  AccountUsage,
   ApiError,
   CreateResponse,
   DefaultsResponse,
@@ -54,6 +55,8 @@ export const api = {
     request<{ warnings: string[] }>("PATCH", `/api/sandboxes/${name}${recreate ? "?recreate=1" : ""}`, patch),
   startSession: (sandbox: string, prompt: string) => request<{ id: string }>("POST", "/api/sessions", { sandbox, prompt }),
   prompt: (id: string, text: string) => request("POST", `/api/sessions/${id}/prompt`, { text }),
+  /** The Claude account behind a session and how much of its subscription is used. */
+  usage: (id: string) => request<AccountUsage>("GET", `/api/sessions/${id}/usage`),
   interrupt: (id: string) => request("POST", `/api/sessions/${id}/interrupt`),
   /** Saved sessions that aren't open, most recent first. */
   resumable: () => request<ResumableSession[]>("GET", "/api/sessions/resumable"),

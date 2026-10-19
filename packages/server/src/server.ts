@@ -11,6 +11,7 @@ import {
   NAME_PATTERN,
   vmName,
   WORKSPACE_DIR,
+  type AccountUsage,
   type ApiError,
   type CreateResponse,
   type DefaultsResponse,
@@ -32,6 +33,7 @@ import { BusyError, Operations } from "./operations.js";
 import { RewindRefused, SessionEnded, SessionNotFound, SessionNotResumable, Sessions } from "./sessions.js";
 import { SessionStore } from "./store.js";
 import { serveWeb } from "./static.js";
+import { fetchAccountUsage, UsageCache } from "./usage.js";
 
 export interface ServerOptions {
   provider?: SandboxProvider;
@@ -50,6 +52,8 @@ export interface ServerOptions {
   sessionsDir?: string;
   /** Makes the driver for each new agent session; defaults to Claude Code over the provider's exec. */
   driver?: () => AgentDriver;
+  /** Reads the account and usage of the Claude in a sandbox; defaults to asking Claude inside it. Cached for 30s per sandbox. */
+  usage?: (sandbox: string, env: string[]) => Promise<AccountUsage>;
 }
 
 export interface RunningServer {
@@ -66,6 +70,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   const sessionStore = new SessionStore(opts.sessionsDir);
   const sessions = new Sessions(opts.driver ?? (() => new ClaudeDriver(provider.exec.bind(provider))), sessionStore);
   const clients = new Set<WebSocket>();
+  const readUsage = opts.usage ?? ((sandbox: string, forwarded: string[]) => fetchAccountUsage(provider.exec.bind(provider), sandbox, forwarded));
+  const usageEnv = new Map<string, string[]>();
+  const usage = new UsageCache((sandbox) => readUsage(sandbox, usageEnv.get(sandbox) ?? []));
 
   // ---- list state -------------------------------------------------------------------------
 
@@ -317,6 +324,17 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     if (ready instanceof Response) return ready;
     const session = sessions.start({ sandbox: name, workdir: ready.workdir, env: ready.env, prompt });
     return c.json({ id: session.id }, 201);
+  });
+
+  /** The Claude account of a session's sandbox and how much of its subscription is used. */
+  app.get("/api/sessions/:id/usage", async (c) => {
+    const session = sessions.get(c.req.param("id"));
+    if (!session) return c.json(fail(`No session ${c.req.param("id")}.`), 404);
+    const info = await known(session.sandbox);
+    if ("error" in info) return c.json(info, 404);
+    if (info.status !== "running") return c.json(fail(`${vmName(session.sandbox)} is not running.`), 409);
+    usageEnv.set(session.sandbox, info.meta?.spec.env ?? []);
+    return c.json(await usage.get(session.sandbox));
   });
 
   /** A sandbox a session can start in: running and not busy; otherwise the error response to send. */
