@@ -24,11 +24,11 @@ describe("parsing", () => {
 
   it("quotes forwarded values and skips unset ones", () => {
     const s = execScript("cat", ["A", "B"], { A: "it's $x" });
-    assert.equal(s, `export PATH="$HOME/.local/bin:$PATH"\nexport A='it'\\''s $x'\nexec cat\n`);
+    assert.equal(s, `case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac\nexport A='it'\\''s $x'\nexec cat\n`);
   });
 
   it("changes into the working directory, leaving ~ to the VM's shell", () => {
-    const path = `export PATH="$HOME/.local/bin:$PATH"\n`;
+    const path = `case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac\n`;
     assert.equal(execScript("cat", [], {}, "/workspace"), `${path}cd '/workspace' 2>/dev/null || true\nexec cat\n`);
     assert.equal(execScript("cat", [], {}, "~/my dir"), `${path}cd "$HOME"/'my dir' 2>/dev/null || true\nexec cat\n`);
   });

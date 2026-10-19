@@ -68,6 +68,9 @@ export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
+/** Adds ~/.local/bin (where Claude Code installs) to PATH unless the shell's startup files already did. */
+const LOCAL_BIN_ON_PATH = `case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac`;
+
 /** A path in the VM for bash: quoted, with a leading "~/" left to the shell's $HOME. */
 export function shellPath(p: string): string {
   return p.startsWith("~/") ? `"$HOME"/${shellQuote(p.slice(2))}` : shellQuote(p);
@@ -78,7 +81,7 @@ export function shellPath(p: string): string {
  * variable that is set, a `cd` into `cwd` (skipped if it's missing), then `exec <cmd>`.
  */
 export function execScript(cmd: string, names: string[], env: NodeJS.ProcessEnv, cwd?: string): string {
-  const lines = [`export PATH="$HOME/.local/bin:$PATH"`];
+  const lines = [LOCAL_BIN_ON_PATH];
   lines.push(...names.filter((n) => env[n] !== undefined).map((n) => `export ${n}=${shellQuote(env[n]!)}`));
   if (cwd) lines.push(`cd ${shellPath(cwd)} 2>/dev/null || true`);
   lines.push(`exec ${cmd}`);
@@ -265,7 +268,7 @@ export class LimaProvider implements SandboxProvider {
    */
   private async prepareShells(name: string, workdir: string, log: Log): Promise<void> {
     const env = `# Written by Bentomo on every start: ~/.local/bin (Claude Code) on PATH.\n` +
-      `case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac\n`;
+      `${LOCAL_BIN_ON_PATH}\n`;
     const rc = `# Written by Bentomo on every start: interactive shells that land in ~ move to the working directory.\n` +
       `if [ "$PWD" = "$HOME" ]; then cd ${shellPath(workdir)} 2>/dev/null || true; fi\n`;
     const source = (file: string) => `[ -f ~/.config/bentomo/${file} ] && . ~/.config/bentomo/${file}`;
