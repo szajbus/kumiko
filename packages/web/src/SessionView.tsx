@@ -52,6 +52,9 @@ export function SessionView({ session, onForked }: Props) {
           </span>
         </div>
         <div className="session-controls">
+          <span className="badge badge-bypass" title="Claude runs tools without asking for permission. The sandbox is the boundary.">
+            Bypass permissions
+          </span>
           {totalCost > 0 && (
             <span className="mono dim session-cost" title="Total cost of this session">
               {formatCost(totalCost)}
