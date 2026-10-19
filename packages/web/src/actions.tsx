@@ -64,10 +64,12 @@ export function useActions({ onDeleted }: { onDeleted?(name: string): void } = {
           }}
         >
           {confirm.kind === "delete" && (
-            <p>
-              The sandbox and its disk, the project's Claude home (its login and Claude's history) and its saved sessions are deleted for good.{" "}
-              <span className="mono">{confirm.sandbox.project.clonePath}</span>, its worktrees and other mounted folders are not touched.
-            </p>
+            <>
+              <p>This deletes the sandbox and its disk, the project's Claude home (its login and Claude's history) and its saved sessions. You can't undo this.</p>
+              <p>
+                <span className="mono">{confirm.sandbox.project.clonePath}</span>, its worktrees and other mounted folders stay as they are.
+              </p>
+            </>
           )}
           {confirm.kind === "recreate" && (
             <p>

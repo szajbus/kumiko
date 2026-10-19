@@ -29,13 +29,15 @@ export function resetText(ms: number): string | undefined {
   return `resets in ${m}m`;
 }
 
-/** "just now", "5 min ago", "3 h ago", "2 d ago". */
+/** "just now", "5 min ago", "3 hours ago", "1 day ago". */
 export function ago(iso: string, now = Date.now()): string {
   const min = Math.max(0, Math.round((now - new Date(iso).getTime()) / 60_000));
   if (min < 1) return "just now";
   if (min < 60) return `${min} min ago`;
-  if (min < 60 * 24) return `${Math.round(min / 60)} h ago`;
-  return `${Math.round(min / (60 * 24))} d ago`;
+  const h = Math.round(min / 60);
+  if (min < 60 * 24) return `${h} ${h === 1 ? "hour" : "hours"} ago`;
+  const d = Math.round(min / (60 * 24));
+  return `${d} ${d === 1 ? "day" : "days"} ago`;
 }
 
 /** The line that closes an ended session's chat. */

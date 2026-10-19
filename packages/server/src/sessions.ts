@@ -333,7 +333,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
   private live(id: string): Session {
     const s = this.sessions.get(id);
     if (!s) throw new SessionNotFound(`No session ${id}.`);
-    if (!isLive(s.info)) throw new SessionEnded(`Session ${id} has ended.`);
+    if (!isLive(s.info)) throw new SessionEnded("This session has ended. Close its tab, then resume it from a New session tab.");
     return s;
   }
 

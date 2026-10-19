@@ -64,7 +64,7 @@ export async function validateSpec(input: SandboxSpec, env: NodeJS.ProcessEnv = 
   });
   for (const m of mounts) {
     if (!m.hostPath || m.hostPath === ".") {
-      errors.push("A mount has no folder selected.");
+      errors.push("An extra mount has no folder. Pick one, or remove the row.");
       continue;
     }
     if (!isAbsolute(m.hostPath)) {

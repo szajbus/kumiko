@@ -11,7 +11,7 @@ interface Entry {
 
 export class BusyError extends Error {
   constructor(readonly sandbox: string, readonly op: OpKind) {
-    super(`${vmName(sandbox)} is busy ${op}.`);
+    super(`${vmName(sandbox)} is busy ${op}. Try again once it's done.`);
   }
 }
 

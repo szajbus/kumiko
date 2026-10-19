@@ -125,7 +125,7 @@ function SessionsCard({ sessions }: { sessions: SessionInfo[] }) {
         <h2 id="p-sessions">Sessions</h2>
         {waiting > 0 && <span className="badge badge-warn">{waiting} waiting on you</span>}
       </div>
-      {sorted.length === 0 && <p className="muted">No open sessions. Saved ones can be resumed from a New session tab.</p>}
+      {sorted.length === 0 && <p className="muted">No open sessions. Resume saved ones from a New session tab.</p>}
       <ul className="item-list">
         {sorted.map((s) => {
           const st = sessionState(s);
@@ -330,7 +330,7 @@ function Details({ p, home }: { p: ProjectView; home?: string }) {
         <details className="card details">
           <summary>Provisioning script{spec.provision ? ` · ${plural(spec.provision.split("\n").length, "line")}` : ": none"}</summary>
           <p className="muted details-empty">Claude Code is installed first, and reinstalled on start if it goes missing.</p>
-          {spec.provision ? <pre className="mono preview">{spec.provision}</pre> : <p className="muted details-empty">No provisioning command.</p>}
+          {spec.provision ? <pre className="mono preview">{spec.provision}</pre> : <p className="muted details-empty">No provisioning script.</p>}
         </details>
       )}
     </>

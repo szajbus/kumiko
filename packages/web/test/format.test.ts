@@ -25,8 +25,8 @@ describe("format", () => {
     const now = Date.parse("2026-10-19T12:00:00Z");
     assert.equal(ago("2026-10-19T11:59:50Z", now), "just now");
     assert.equal(ago("2026-10-19T11:55:00Z", now), "5 min ago");
-    assert.equal(ago("2026-10-19T09:00:00Z", now), "3 h ago");
-    assert.equal(ago("2026-10-17T12:00:00Z", now), "2 d ago");
+    assert.equal(ago("2026-10-19T09:00:00Z", now), "3 hours ago");
+    assert.equal(ago("2026-10-17T12:00:00Z", now), "2 days ago");
     assert.equal(ago("2026-10-19T12:05:00Z", now), "just now", "a clock ahead of ours isn't negative");
   });
 
@@ -83,9 +83,9 @@ describe("status", () => {
     assert.equal(opPill(sb()), undefined);
     assert.equal(opPill(sb({ operation: op }))?.text, "Creating");
     const failed = { ...op, endedAt: "2026-10-19T12:01:00Z", result: "error" as const };
-    assert.equal(opPill(sb({ operation: failed, meta: meta("provision_failed", 3) }))?.text, "Failed · exit 3");
-    assert.equal(opPill(sb({ operation: failed }))?.text, "Failed: create");
-    assert.equal(opPill(sb({ operation: { ...op, endedAt: "x", result: "ok" } }))?.text, "Last: create");
+    assert.equal(opPill(sb({ operation: failed, meta: meta("provision_failed", 3) }))?.text, "Provisioning failed · exit 3");
+    assert.equal(opPill(sb({ operation: failed }))?.text, "Create failed");
+    assert.equal(opPill(sb({ operation: { ...op, endedAt: "x", result: "ok" } }))?.text, "Created");
   });
 
   it("shows Lima's resources, else the stored spec's", () => {

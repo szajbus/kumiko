@@ -448,7 +448,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   app.get("/api/sessions/:id/usage", async (c) => {
     const { sandbox } = sessionOf(c);
     const { info } = await known(sandbox);
-    if (info.status !== "running") throw new HttpError(409, `${vmName(sandbox)} is not running.`);
+    if (info.status !== "running") throw new HttpError(409, `${vmName(sandbox)} is not running. Start it first.`);
     return c.json(await usage.get(sandbox));
   });
 

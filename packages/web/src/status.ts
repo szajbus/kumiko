@@ -17,13 +17,22 @@ const OP_LABEL: Record<OpKind, string> = {
   editing: "Saving changes",
 };
 
-const OP_NOUN: Record<OpKind, string> = {
-  creating: "create",
-  starting: "start",
-  stopping: "stop",
-  deleting: "delete",
-  recreating: "recreate",
-  editing: "edit",
+const OP_DONE: Record<OpKind, string> = {
+  creating: "Created",
+  starting: "Started",
+  stopping: "Stopped",
+  deleting: "Deleted",
+  recreating: "Recreated",
+  editing: "Saved",
+};
+
+const OP_FAILED: Record<OpKind, string> = {
+  creating: "Create failed",
+  starting: "Start failed",
+  stopping: "Stop failed",
+  deleting: "Delete failed",
+  recreating: "Recreate failed",
+  editing: "Save failed",
 };
 
 /** The status cell: what the sandbox is doing or how it is. */
@@ -59,9 +68,9 @@ export function opPill(sb: SandboxView | undefined, op = sb?.operation): { text:
   if (!op.endedAt) return { text: OP_LABEL[op.op], color: COLORS.busy };
   if (op.result === "error") {
     const code = sb?.meta?.setup === "provision_failed" ? sb.meta.provisionExitCode : undefined;
-    return { text: code !== undefined ? `Failed · exit ${code}` : `Failed: ${OP_NOUN[op.op]}`, color: COLORS.failed };
+    return { text: code !== undefined ? `Provisioning failed · exit ${code}` : OP_FAILED[op.op], color: COLORS.failed };
   }
-  return { text: `Last: ${OP_NOUN[op.op]}`, color: COLORS.stopped };
+  return { text: OP_DONE[op.op], color: COLORS.stopped };
 }
 
 export function resources(sb: SandboxView): string {

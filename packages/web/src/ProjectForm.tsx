@@ -43,10 +43,13 @@ interface MountRow {
 /** An absolute path or ~/…, but not / or ~ alone. */
 const vmPathShape = (t: string) => (t.startsWith("/") && t !== "/") || (t.startsWith("~/") && t.length > 2);
 
-function guestPathOk(p: string, rows: MountRow[], self: number): boolean {
+/** Why a mount's path in the sandbox won't do, or undefined when it's fine. */
+function guestPathProblem(p: string, rows: MountRow[], self: number): string | undefined {
   const t = p.trim();
-  if (!t) return true; // the same path as on the host
-  return vmPathShape(t) && !rows.some((r) => r.id !== self && (r.guestPath.trim() || r.hostPath.trim()) === t);
+  if (!t) return undefined; // the same path as on the host
+  if (!vmPathShape(t)) return "Use an absolute path or ~/…, not / or ~ alone.";
+  if (rows.some((r) => r.id !== self && (r.guestPath.trim() || r.hostPath.trim()) === t)) return "Another mount already uses this path.";
+  return undefined;
 }
 
 interface EnvRow {
@@ -413,7 +416,7 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
         >
           <div className="fieldset-stack">
             {mounts.map((m) => {
-              const guestOk = guestPathOk(m.guestPath, mounts, m.id);
+              const guestProblem = guestPathProblem(m.guestPath, mounts, m.id);
               return (
                 <div key={m.id} className="mount-row mount-grid">
                   <span className="mount-icon">
@@ -463,11 +466,17 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
                     type="text"
                     value={m.guestPath}
                     placeholder={m.hostPath.trim() ? `${m.hostPath.trim()} (the same path)` : "the same path"}
-                    aria-invalid={!guestOk}
-                    title={guestOk ? "Where the folder appears in the sandbox" : "Use an absolute path or ~/…, not used by another mount"}
+                    aria-invalid={Boolean(guestProblem)}
+                    aria-describedby={guestProblem ? `guest-${m.id}-problem` : undefined}
+                    title="Where the folder appears in the sandbox"
                     spellCheck={false}
                     onChange={(e) => patchMount(m.id, { guestPath: e.target.value })}
                   />
+                  {guestProblem && (
+                    <span id={`guest-${m.id}-problem`} className="hint is-invalid mount-problem">
+                      {guestProblem}
+                    </span>
+                  )}
                 </div>
               );
             })}

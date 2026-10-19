@@ -393,7 +393,7 @@ const Item = memo(function Item({ item, open, onRewind, actions }: { item: ChatI
     case "retry":
       return (
         <div className="chat-quiet">
-          Retrying…{item.attempt !== undefined ? ` attempt ${item.attempt}${item.max ? ` of ${item.max}` : ""}` : ""}
+          Retrying{item.attempt !== undefined ? ` (attempt ${item.attempt}${item.max ? ` of ${item.max}` : ""})` : ""}…
         </div>
       );
     case "notice":

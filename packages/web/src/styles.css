@@ -293,6 +293,8 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 .mount-grid .path { min-width: 0; overflow-wrap: anywhere; }
 .mount-icon { display: flex; justify-content: center; }
 .mount-at { justify-self: center; font-size: 13px; color: var(--muted); }
+/* Under the path in the sandbox, lined up with it. */
+.mount-problem { grid-column: 2 / -1; min-height: 0; }
 .mount-controls { display: flex; align-items: center; gap: 12px; }
 .mount-row { padding: 8px 12px 12px; border: 1px solid var(--border-soft); border-radius: 8px; }
 /* Text, not a field, in the desktop app: indent it like the field below so both paths start together. */

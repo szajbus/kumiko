@@ -427,7 +427,7 @@ export class LimaProvider implements SandboxProvider {
     const script = meta.spec.provision;
     if (!script) {
       await this.metadata.update(name, { setup: "ready", provisionExitCode: undefined });
-      log("READY. No provisioning command.", "ok");
+      log("Ready. No provisioning script.", "ok");
       return;
     }
     const forwarded = meta.spec.env.filter((n) => this.env()[n] !== undefined);

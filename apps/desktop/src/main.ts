@@ -94,7 +94,7 @@ if (!app.requestSingleInstanceLock()) {
 
   ipcMain.handle("bentomo:pick-folder", async (e) => {
     const owner = BrowserWindow.fromWebContents(e.sender) ?? undefined;
-    const opts: Electron.OpenDialogOptions = { title: "Choose a folder to mount", properties: ["openDirectory", "createDirectory"] };
+    const opts: Electron.OpenDialogOptions = { title: "Choose a folder", properties: ["openDirectory", "createDirectory"] };
     const res = owner ? await dialog.showOpenDialog(owner, opts) : await dialog.showOpenDialog(opts);
     return res.canceled ? null : res.filePaths[0] ?? null;
   });

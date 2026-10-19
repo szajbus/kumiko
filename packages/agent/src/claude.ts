@@ -175,7 +175,7 @@ export class ClaudeDriver implements AgentDriver {
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(request_id);
-        reject(new Error("Claude didn't answer."));
+        reject(new Error("Claude didn't answer in time. Try again."));
       }, REQUEST_TIMEOUT_MS);
       this.pending.set(request_id, {
         resolve: () => (clearTimeout(timer), resolve()),

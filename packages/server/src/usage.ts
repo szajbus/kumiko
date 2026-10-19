@@ -33,7 +33,7 @@ export async function fetchAccountUsage(exec: Exec, sandbox: string, env: string
     const timer = setTimeout(() => child.kill("SIGKILL"), 30_000);
     const code = await exitCode(child).finally(() => clearTimeout(timer));
     const usage = parseProbe(lines.join("\n"), new Date());
-    if (code !== 0 && !usage.email && !usage.windows.length) usage.error = errs.at(-1) || `The check exited with code ${code}.`;
+    if (code !== 0 && !usage.email && !usage.windows.length) usage.error = errs.at(-1) || `The usage check exited with code ${code}.`;
     return usage;
   } catch (err) {
     return { windows: [], error: err instanceof Error ? err.message : String(err), fetchedAt: new Date().toISOString() };
