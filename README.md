@@ -82,7 +82,7 @@ Beyond the spec:
   - VM paths can't be `/` or `~` and can't overlap.
   - Mounts saved without a VM path keep the host path.
 
-- **`SandboxProvider`** has three more methods: `provision` (re-run), `validate` (so the server can answer `400` before going async) and `templates`.
+- **`SandboxProvider`** has more methods: `validate` and `validateEdit` (so the server can answer `400` before going async), `edit` and `templates`. There is no separate "re-run provisioning": a sandbox is provisioned once, and a changed or fixed script runs by recreating it.
 - **Provisioning output:**
   - The script runs with `set -e`.
   - Each command is echoed before it runs via a `DEBUG` trap, not `set -x`, so `$GITHUB_TOKEN` shows in the log as written, never its value.
@@ -90,10 +90,9 @@ Beyond the spec:
   - The script reaches `bash -c` through a quoted heredoc, so commands that read stdin (`apt`, `curl | sh`) can't consume the rest of the script.
 - **If the first start fails** during create, provisioning runs on the next successful start. A sandbox counts as set up only once provisioning has run.
 - **Sandbox page** (`#/sandbox/<name>`) in place of the spec's log drawer. Clicking a row opens it, and so does creating a sandbox. It shows status and actions, resources, template, setup state, creation time, mounts, forwarded variables, the provisioning script, and the log at full width.
-- **Editing after creation** (`PATCH /api/sandboxes/:name`, **Edit** on the sandbox page). This replaces the spec's "delete and recreate".
-  - CPUs, memory, disk and mounts go through `limactl edit`. They need the VM stopped and apply on its next start. Disk can only grow.
-  - Forwarded variables and the provisioning script live only in Bentomo's metadata, so they can change while the VM runs. A new script runs only when provisioning is re-run.
-  - Name and template are fixed.
+- **Editing after creation** (`PATCH /api/sandboxes/:name`, **Edit** on the sandbox page). Name and template are fixed. The form has two ways to save:
+  - **Save and recreate** (the default, `?recreate=1`) deletes the VM and creates it again from the changed spec, provisioning included. It works whether the VM runs or not, and the disk can shrink.
+  - **Save** keeps the VM. CPUs, memory, disk and mounts go through `limactl edit`; they need the VM stopped, apply on its next start, and the disk can only grow. Forwarded variables and the provisioning script live only in Bentomo's metadata, so they can change while the VM runs, but a new script only runs on a recreate.
 - **Recreate** (in the design's row menu) deletes a sandbox and creates it again from its stored spec: `POST /api/sandboxes/:name/recreate`.
 - **`GET /api/env?names=A,B`** backs the form's "set on host" dots. It answers `true`/`false`, never values.
 - **Request guard:** the server listens on `127.0.0.1` only. It also refuses requests whose `Host` or `Origin` isn't local, so a web page open in your browser can't drive it (DNS rebinding, CSRF).

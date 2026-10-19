@@ -44,12 +44,6 @@ export const Redo = () => (
   </svg>
 );
 
-export const Wrench = () => (
-  <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
-    <path d="M3 11l4.2-4.2M8.6 2.2a2.8 2.8 0 0 0 3.2 3.2l-1.3 1.3a2.8 2.8 0 0 1-3.6-3.6z" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
-
 export const Trash = () => (
   <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
     <path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />

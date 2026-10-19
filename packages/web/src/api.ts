@@ -32,10 +32,11 @@ export const api = {
   create: (spec: SandboxSpec) => request<CreateResponse>("POST", "/api/sandboxes", spec),
   start: (name: string) => request("POST", `/api/sandboxes/${name}/start`),
   stop: (name: string) => request("POST", `/api/sandboxes/${name}/stop`),
-  provision: (name: string) => request("POST", `/api/sandboxes/${name}/provision`),
   recreate: (name: string) => request("POST", `/api/sandboxes/${name}/recreate`),
   remove: (name: string) => request("DELETE", `/api/sandboxes/${name}`),
-  edit: (name: string, patch: EditSpec) => request<{ warnings: string[] }>("PATCH", `/api/sandboxes/${name}`, patch),
+  /** Saves in place, or with `recreate` deletes the VM and creates it again from the changed spec. */
+  edit: (name: string, patch: EditSpec, recreate = false) =>
+    request<{ warnings: string[] }>("PATCH", `/api/sandboxes/${name}${recreate ? "?recreate=1" : ""}`, patch),
 };
 
 export interface LiveState {

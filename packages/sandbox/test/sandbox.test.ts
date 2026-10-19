@@ -159,7 +159,7 @@ describe("LimaProvider against a fake limactl", () => {
     assert.ok(create.includes('"template:debian-12"'));
   });
 
-  it("keeps a sandbox whose provisioning failed, and re-runs it", async () => {
+  it("keeps a sandbox whose provisioning failed, and recreates it with a fixed script", async () => {
     const { mountDir, provider, log, lines } = await fakeLima();
     const marker = join(mountDir, "fixed");
     await assert.rejects(
@@ -171,9 +171,12 @@ describe("LimaProvider against a fake limactl", () => {
     assert.equal(info.meta?.provisionExitCode, 6);
     assert.ok(lines.includes("Provisioning failed with exit code 6."));
 
-    await writeFile(marker, "");
-    await provider.provision("web", log);
+    const v = await provider.validateEdit("web", { cpus: 1, provision: "echo fixed" }, { recreate: true });
+    assert.deepEqual(v.errors, []); // running, yet resources may change because the VM is rebuilt
+    await provider.delete("web", log);
+    await provider.create(v.spec, log);
     [info] = await provider.list();
+    assert.equal(info.meta?.spec.provision, "echo fixed");
     assert.equal(info.meta?.setup, "ready");
     assert.equal(info.meta?.provisionExitCode, undefined);
   });

@@ -62,8 +62,9 @@ export interface SandboxSpec {
 }
 
 /**
- * What can change after creation. Resources and mounts need the VM stopped (disk can only grow);
- * forwarded variables and the provisioning script can change anytime. Name and template are fixed.
+ * What can change after creation. Saved in place, resources and mounts need the VM stopped (disk can only grow)
+ * and forwarded variables and the provisioning script can change anytime. Saved with a recreate, anything but
+ * name and template can change. Name and template are fixed.
  */
 export type EditSpec = Partial<Pick<SandboxSpec, "cpus" | "memoryGiB" | "diskGiB" | "mounts" | "env" | "provision">>;
 
@@ -88,7 +89,7 @@ export interface SandboxInfo {
   meta?: SandboxMeta;
 }
 
-export type OpKind = "creating" | "starting" | "stopping" | "deleting" | "provisioning" | "recreating" | "editing";
+export type OpKind = "creating" | "starting" | "stopping" | "deleting" | "recreating" | "editing";
 
 /** How a log line is shown: a command being run, a note from Bentomo, success, or an error. */
 export type LineKind = "cmd" | "note" | "ok" | "err";

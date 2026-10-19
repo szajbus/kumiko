@@ -11,13 +11,14 @@ import {
   type TemplatesResponse,
 } from "@bentomo/shared";
 import { api, RequestError } from "./api";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { Header } from "./Header";
 import { Cross, Folder, Plus } from "./icons";
 import { Select, type SelectGroup } from "./Select";
 import { COLORS } from "./status";
 
 interface Props {
-  /** Edit this sandbox instead of creating one: name and template are fixed, resources and mounts need it stopped. */
+  /** Edit this sandbox instead of creating one. Name and template are fixed; saving in place needs it stopped for resources and mounts. */
   editing?: SandboxView;
   onCancel(): void;
   /** Called with the sandbox's name once it's created or the edit is saved. */
@@ -74,10 +75,8 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
   const [envRows, setEnvRows] = useState<EnvRow[]>(() => (was?.env ?? []).map((n) => ({ id: nextId++, name: n })));
   const [envSet, setEnvSet] = useState<Record<string, boolean>>({});
   const [provision, setProvision] = useState(was?.provision ?? "");
-  /** Resources and mounts go through `limactl edit`, which needs the VM stopped. */
-  const locked = Boolean(editing && editing.status !== "stopped");
-  const minDisk = editing ? Math.ceil(editing.diskGiB ?? was?.diskGiB ?? 10) : 10;
   const [submitting, setSubmitting] = useState(false);
+  const [confirmRecreate, setConfirmRecreate] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const [touched, setTouched] = useState(false);
 
@@ -163,7 +162,26 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
     provision: provision.trim() ? provision : undefined,
   });
 
-  const submit = async (e: React.FormEvent) => {
+  /**
+   * Why saving in place won't work, if it won't. Resources and mounts go through `limactl edit`,
+   * which needs the VM stopped and can't shrink the disk; recreating has neither limit.
+   */
+  const inPlaceBlocked = (() => {
+    if (!editing) return undefined;
+    const s = spec();
+    const key = (ms: SandboxSpec["mounts"]) => JSON.stringify(ms.map((m) => [m.hostPath, m.guestPath ?? m.hostPath, m.writable]));
+    const diskNow = Math.ceil(editing.diskGiB ?? was?.diskGiB ?? 0);
+    const vmChanged =
+      s.cpus !== (editing.cpus ?? was?.cpus) ||
+      s.memoryGiB !== (editing.memoryGiB ?? was?.memoryGiB) ||
+      s.diskGiB !== diskNow ||
+      key(s.mounts) !== key(was?.mounts ?? []);
+    if (s.diskGiB < diskNow) return `Disk can only shrink by recreating; it is ${diskNow} GiB now.`;
+    if (vmChanged && editing.status !== "stopped") return `Stop ${editing.vm} to save resource or mount changes without recreating it.`;
+    return undefined;
+  })();
+
+  const submit = (e: React.FormEvent) => {
     e.preventDefault();
     setTouched(true);
     if (!nameOk) {
@@ -171,12 +189,17 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
       document.getElementById("f-name")?.focus();
       return;
     }
+    if (editing) setConfirmRecreate(true);
+    else void save();
+  };
+
+  const save = async (recreate = false) => {
     setSubmitting(true);
     setErrors([]);
     try {
       if (editing) {
         const { cpus, memoryGiB, diskGiB, mounts, env, provision } = spec();
-        await api.edit(editing.name, { cpus, memoryGiB, diskGiB, mounts, env, provision: provision ?? "" });
+        await api.edit(editing.name, { cpus, memoryGiB, diskGiB, mounts, env, provision: provision ?? "" }, recreate);
         onCreated(editing.name);
       } else {
         const res = await api.create(spec());
@@ -225,8 +248,8 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
             <>
               <h1 className="page-title page-title-lg">Edit {editing.name}</h1>
               <p className="muted">
-                Resources and mounts change while the VM is stopped and apply on its next start; disk can only grow. Variables and the provisioning script can
-                change anytime.
+                <strong>Save and recreate</strong> deletes the VM and builds it again from these settings, provisioning included. <strong>Save</strong>{" "}
+                keeps the VM: resource and mount changes need it stopped and apply on its next start, and disk can only grow.
               </p>
             </>
           ) : (
@@ -236,12 +259,6 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
             </>
           )}
         </div>
-
-        {locked && (
-          <div className="banner banner-warn">
-            {editing!.vm} is {editing!.status}. Stop it to change resources or mounts; variables and the provisioning script can change now.
-          </div>
-        )}
 
         <Section title="Basics" id="sec-basics">
           <div className="grid grid-220">
@@ -309,13 +326,11 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
         </Section>
 
         <Section title="Resources" id="sec-res">
-          <fieldset className="fieldset" disabled={locked}>
-            <div className="grid grid-160">
-              <NumberField id="f-cpu" label="CPUs" min={1} value={cpus} onChange={setCpus} />
-              <NumberField id="f-mem" label="Memory (GiB)" min={1} value={memory} onChange={setMemory} />
-              <NumberField id="f-disk" label="Disk (GiB)" min={minDisk} value={disk} onChange={setDisk} />
-            </div>
-          </fieldset>
+          <div className="grid grid-160">
+            <NumberField id="f-cpu" label="CPUs" min={1} value={cpus} onChange={setCpus} />
+            <NumberField id="f-mem" label="Memory (GiB)" min={1} value={memory} onChange={setMemory} />
+            <NumberField id="f-disk" label="Disk (GiB)" min={1} value={disk} onChange={setDisk} />
+          </div>
         </Section>
 
         <Section
@@ -328,7 +343,7 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
             </>
           }
         >
-          <fieldset className="fieldset fieldset-stack" disabled={locked}>
+          <div className="fieldset-stack">
           {mounts.map((m) => {
             const guestOk = guestPathOk(m.guestPath, mounts, m.id);
             return (
@@ -392,7 +407,7 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
             <Plus size={14} color="#8FA6F0" />
             {hasPicker() ? "Add folder…" : "Add folder"}
           </button>
-          </fieldset>
+          </div>
         </Section>
 
         <Section
@@ -422,7 +437,7 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
             <>
               Runs once after the first start, as the VM user, with the forwarded variables set. <code className="mono">sudo</code> is available. Stops at
               the first failing command.
-              {editing && " Saving a new script doesn't run it; re-run provisioning from the sandbox's menu."}
+              {editing && " A new script runs when you save and recreate."}
             </>
           }
         >
@@ -447,7 +462,7 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
         {/* Errors sit beside the buttons, growing downward, so the buttons never move. */}
         <div className="form-actions">
           <div className="form-errors" role="alert">
-            {errors.length > 0 && (
+            {errors.length > 0 ? (
               <div className="banner banner-error">
                 <ul>
                   {errors.map((e) => (
@@ -455,15 +470,46 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
                   ))}
                 </ul>
               </div>
+            ) : (
+              inPlaceBlocked && <p className="muted form-note">{inPlaceBlocked}</p>
             )}
           </div>
           <button type="button" className="btn btn-secondary" onClick={onCancel}>
             Cancel
           </button>
+          {editing && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={submitting || Boolean(inPlaceBlocked)}
+              title={inPlaceBlocked}
+              onClick={() => {
+                setTouched(true);
+                void save();
+              }}
+            >
+              Save
+            </button>
+          )}
           <button type="submit" className="btn btn-primary" disabled={submitting}>
-            {editing ? (submitting ? "Saving…" : "Save changes") : submitting ? "Creating…" : "Create sandbox"}
+            {editing ? (submitting ? "Saving…" : "Save and recreate") : submitting ? "Creating…" : "Create sandbox"}
           </button>
         </div>
+
+        {confirmRecreate && editing && (
+          <ConfirmDialog
+            title={`Recreate ${editing.vm}?`}
+            confirmLabel={`Save and recreate`}
+            danger
+            onCancel={() => setConfirmRecreate(false)}
+            onConfirm={() => {
+              setConfirmRecreate(false);
+              void save(true);
+            }}
+          >
+            <p>The VM and its disk are deleted, then created again from these settings and provisioned from scratch. Mounted host folders are not touched.</p>
+          </ConfirmDialog>
+        )}
       </form>
     </div>
   );

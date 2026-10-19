@@ -3,14 +3,13 @@ import * as Menu from "@radix-ui/react-dropdown-menu";
 import type { SandboxView } from "@bentomo/shared";
 import { api, RequestError } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { Dots, Play, Redo, Square, Trash, Wrench } from "./icons";
+import { Dots, Play, Redo, Square, Trash } from "./icons";
 
 type Pending = { kind: "delete" | "recreate"; sandbox: SandboxView };
 
 export interface Actions {
   start(name: string): void;
   stop(name: string): void;
-  provision(name: string): void;
   askRecreate(sb: SandboxView): void;
   askDelete(sb: SandboxView): void;
   /** The confirm dialog and the error toast; render once per page. */
@@ -72,17 +71,15 @@ export function useActions({ onDeleted }: { onDeleted?(name: string): void } = {
   return {
     start: (n) => void run(n, api.start),
     stop: (n) => void run(n, api.stop),
-    provision: (n) => void run(n, api.provision),
     askRecreate: (sandbox) => setConfirm({ kind: "recreate", sandbox }),
     askDelete: (sandbox) => setConfirm({ kind: "delete", sandbox }),
     overlay,
   };
 }
 
-/** Start or Stop, plus a menu with Re-run provisioning, Recreate and Delete. `labeled` shows text on the main button. */
+/** Start or Stop, plus a menu with Recreate and Delete. `labeled` shows text on the main button. */
 export function SandboxActions({ sb, actions, labeled }: { sb: SandboxView; actions: Actions; labeled?: boolean }) {
   const running = sb.status === "running";
-  const failed = sb.meta?.setup === "provision_failed";
   const main = running
     ? { label: "Stop", icon: <Square />, disabled: sb.busy, onClick: () => actions.stop(sb.name) }
     : { label: "Start", icon: <Play />, disabled: sb.busy || sb.status === "unknown", onClick: () => actions.start(sb.name) };
@@ -105,10 +102,6 @@ export function SandboxActions({ sb, actions, labeled }: { sb: SandboxView; acti
         </Menu.Trigger>
         <Menu.Portal>
           <Menu.Content className="menu" align="end" sideOffset={6} collisionPadding={8} aria-label={`Actions for ${sb.vm}`}>
-            <Menu.Item className="menu-item" disabled={!failed} onSelect={() => actions.provision(sb.name)}>
-              <Wrench />
-              Re-run provisioning
-            </Menu.Item>
             <Menu.Item className="menu-item" disabled={!sb.meta} onSelect={() => actions.askRecreate(sb)}>
               <Redo />
               Recreate

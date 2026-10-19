@@ -13,7 +13,6 @@ const OP_LABEL: Record<OpKind, string> = {
   starting: "Starting",
   stopping: "Stopping",
   deleting: "Deleting",
-  provisioning: "Provisioning",
   recreating: "Recreating",
   editing: "Saving changes",
 };
@@ -23,7 +22,6 @@ const OP_NOUN: Record<OpKind, string> = {
   starting: "start",
   stopping: "stop",
   deleting: "delete",
-  provisioning: "provisioning",
   recreating: "recreate",
   editing: "edit",
 };
@@ -32,8 +30,8 @@ const OP_NOUN: Record<OpKind, string> = {
 export function statusOf(sb: SandboxView, log: LogLine[] = []): { text: string; color: string } {
   if (sb.busy && sb.operation) {
     // Once a create or start reaches the provisioning step, say so.
-    const provisioning = sb.operation.op !== "provisioning" && log.some((l) => l.kind === "note" && l.text.startsWith("— provisioning"));
-    return { text: `${OP_LABEL[provisioning ? "provisioning" : sb.operation.op]}…`, color: COLORS.busy };
+    const provisioning = log.some((l) => l.kind === "note" && l.text.startsWith("— provisioning"));
+    return { text: `${provisioning ? "Provisioning" : OP_LABEL[sb.operation.op]}…`, color: COLORS.busy };
   }
   if (sb.meta?.setup === "provision_failed") return { text: "Provisioning failed", color: COLORS.failed };
   switch (sb.status) {

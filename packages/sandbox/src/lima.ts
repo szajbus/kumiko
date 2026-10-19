@@ -217,8 +217,8 @@ export class LimaProvider implements SandboxProvider {
     log("Deleted.", "ok");
   }
 
-  async validateEdit(name: string, patch: EditSpec): Promise<Validation> {
-    const { errors, warnings, spec } = await this.planEdit(name, patch);
+  async validateEdit(name: string, patch: EditSpec, opts: { recreate?: boolean } = {}): Promise<Validation> {
+    const { errors, warnings, spec } = await this.planEdit(name, patch, opts.recreate);
     return { errors, warnings, spec };
   }
 
@@ -237,7 +237,7 @@ export class LimaProvider implements SandboxProvider {
   }
 
   /** Works out what an edit changes and which `limactl edit` flags that needs. */
-  private async planEdit(name: string, patch: EditSpec): Promise<Validation & { limaArgs: string[] }> {
+  private async planEdit(name: string, patch: EditSpec, recreate = false): Promise<Validation & { limaArgs: string[] }> {
     const vm = vmName(name);
     const meta = await this.metadata.read(name);
     const inst = (await this.instances()).find((i) => i.name === vm);
@@ -253,6 +253,7 @@ export class LimaProvider implements SandboxProvider {
     const v = await validateSpec(merged, this.env());
     const { spec } = v;
     const errors = [...v.errors];
+    if (recreate) return { errors, warnings: v.warnings, spec, limaArgs: [] };
 
     // Compare against what Lima has now, so edits made outside Bentomo are respected.
     const limaArgs: string[] = [];
@@ -268,19 +269,6 @@ export class LimaProvider implements SandboxProvider {
       errors.push(`Stop ${vm} to change its resources or mounts. Variables and the provisioning script can change while it runs.`);
     }
     return { errors, warnings: v.warnings, spec, limaArgs };
-  }
-
-  async provision(name: string, log: Log): Promise<void> {
-    const meta = await this.metadata.read(name);
-    if (!meta) throw new ProviderError(`${vmName(name)} was not created by Bentomo, so it has no provisioning command.`);
-    const inst = (await this.instances()).find((i) => i.name === vmName(name));
-    if (!inst) throw new ProviderError(`${vmName(name)} does not exist.`);
-    if (toStatus(inst.status) !== "running") {
-      const vm = vmName(name);
-      log(`$ limactl start --tty=false ${vm}`, "cmd");
-      await runOk(this.limactl, ["start", "--tty=false", vm], { log, lima: true });
-    }
-    await this.runProvisioning(name, log);
   }
 
   private async runProvisioning(name: string, log: Log): Promise<void> {
@@ -309,7 +297,7 @@ export class LimaProvider implements SandboxProvider {
     }
     await this.metadata.update(name, { setup: "provision_failed", provisionExitCode: code });
     log(`Provisioning failed with exit code ${code}.`, "err");
-    log("The sandbox is kept: inspect it, re-run provisioning, or delete it.", "note");
+    log("The sandbox is kept: inspect it, fix the script and recreate it, or delete it.", "note");
     throw new ProviderError(`Provisioning failed with exit code ${code}.`, code);
   }
 

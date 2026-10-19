@@ -207,13 +207,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   app.post("/api/sandboxes/:name/stop", action("stopping", (i, log) => provider.stop(i.name, log)));
   app.delete("/api/sandboxes/:name", action("deleting", (i, log) => provider.delete(i.name, log)));
 
-  app.post("/api/sandboxes/:name/provision", async (c, next) => {
-    const info = await known(c.req.param("name") ?? "");
-    if (!("error" in info) && !info.meta) return c.json(fail(`${vmName(info.name)} has no Bentomo metadata.`), 400);
-    return next();
-  }, action("provisioning", (i, log) => provider.provision(i.name, log)));
-
-  /** Change resources, mounts (VM stopped), forwarded variables or the provisioning script. */
+  /**
+   * Change resources, mounts (VM stopped), forwarded variables or the provisioning script.
+   * With `?recreate=1`, delete the VM and create it again from the changed spec instead, running or not.
+   */
   app.patch("/api/sandboxes/:name", async (c) => {
     const name = c.req.param("name");
     const cur = ops.get(name);
@@ -226,15 +223,21 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     } catch {
       return c.json(fail("Body must be a JSON object of fields to change."), 400);
     }
-    const v = await provider.validateEdit(name, patch);
+    const recreate = c.req.query("recreate") === "1";
+    const v = await provider.validateEdit(name, patch, { recreate });
     if (v.errors.length) return c.json(fail("Can't apply these changes.", v.errors), 400);
+    const op: OpKind = recreate ? "recreating" : "editing";
     try {
-      begin(name, "editing", (log) => provider.edit(name, patch, log));
+      begin(name, op, async (log) => {
+        if (!recreate) return provider.edit(name, patch, log);
+        await provider.delete(name, log);
+        await provider.create(v.spec, log);
+      });
     } catch (err) {
       if (err instanceof BusyError) return c.json(fail(err.message), 409);
       throw err;
     }
-    return c.json({ name, op: "editing", warnings: v.warnings }, 202);
+    return c.json({ name, op, warnings: v.warnings }, 202);
   });
 
   /** Delete, then create again from the stored spec. */

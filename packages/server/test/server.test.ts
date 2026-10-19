@@ -146,7 +146,7 @@ describe("server", () => {
     assert.deepEqual(await json(await api("/api/sandboxes")), []);
   });
 
-  it("reports provisioning failures and re-runs them", async () => {
+  it("reports provisioning failures and recreates with a fixed script", async () => {
     const marker = join(mountDir, "ok");
     let since = events.length;
     await api("/api/sandboxes", {
@@ -160,12 +160,14 @@ describe("server", () => {
     assert.equal(sb.meta?.provisionExitCode, 3);
     assert.equal(sb.operation?.result, "error");
 
-    await writeFile(marker, "");
+    // A running VM can't take new resources in place, but a recreate can.
+    const patch = JSON.stringify({ cpus: 2, provision: "echo fixed" });
+    assert.equal((await api("/api/sandboxes/bad", { method: "PATCH", body: patch })).status, 400);
     since = events.length;
-    assert.equal((await api("/api/sandboxes/bad/provision", { method: "POST" })).status, 202);
-    assert.equal((await finished("bad", "provisioning", since)).type, "done");
+    assert.equal((await api("/api/sandboxes/bad?recreate=1", { method: "PATCH", body: patch })).status, 202);
+    assert.equal((await finished("bad", "recreating", since)).type, "done");
     [sb] = await json(await api("/api/sandboxes"));
-    assert.equal(sb.meta?.setup, "ready");
+    assert.deepEqual([sb.meta?.setup, sb.cpus, sb.meta?.spec.provision], ["ready", 2, "echo fixed"]);
 
     since = events.length;
     assert.equal((await api("/api/sandboxes/bad/recreate", { method: "POST" })).status, 202);
