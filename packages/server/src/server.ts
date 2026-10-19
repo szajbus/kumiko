@@ -13,6 +13,7 @@ import {
   type ApiError,
   type CreateResponse,
   type DefaultsResponse,
+  type EditSpec,
   type OpKind,
   type SandboxInfo,
   type SandboxSpec,
@@ -211,6 +212,30 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     if (!("error" in info) && !info.meta) return c.json(fail(`${vmName(info.name)} has no Bentomo metadata.`), 400);
     return next();
   }, action("provisioning", (i, log) => provider.provision(i.name, log)));
+
+  /** Change resources, mounts (VM stopped), forwarded variables or the provisioning script. */
+  app.patch("/api/sandboxes/:name", async (c) => {
+    const name = c.req.param("name");
+    const cur = ops.get(name);
+    if (cur && !cur.endedAt) return c.json(fail(`${vmName(name)} is busy ${cur.op}.`), 409);
+    const info = await known(name);
+    if ("error" in info) return c.json(info, NAME_PATTERN.test(name) ? 404 : 400);
+    let patch: EditSpec;
+    try {
+      patch = await c.req.json<EditSpec>();
+    } catch {
+      return c.json(fail("Body must be a JSON object of fields to change."), 400);
+    }
+    const v = await provider.validateEdit(name, patch);
+    if (v.errors.length) return c.json(fail("Can't apply these changes.", v.errors), 400);
+    try {
+      begin(name, "editing", (log) => provider.edit(name, patch, log));
+    } catch (err) {
+      if (err instanceof BusyError) return c.json(fail(err.message), 409);
+      throw err;
+    }
+    return c.json({ name, op: "editing", warnings: v.warnings }, 202);
+  });
 
   /** Delete, then create again from the stored spec. */
   app.post("/api/sandboxes/:name/recreate", async (c, next) => {

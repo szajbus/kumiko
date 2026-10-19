@@ -77,3 +77,9 @@ export const EmptyBento = () => (
     <circle cx="7.5" cy="14" r="2.5" fill="#8FA6F0" />
   </svg>
 );
+
+export const Pencil = () => (
+  <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+    <path d="M9.5 2.5l2 2L5 11H3v-2z" fill="none" stroke="#C3C8D1" strokeWidth="1.4" strokeLinejoin="round" />
+  </svg>
+);

@@ -7,6 +7,7 @@ import {
   NAME_PATTERN,
   vmName,
   type SandboxSpec,
+  type SandboxView,
   type TemplatesResponse,
 } from "@bentomo/shared";
 import { api, RequestError } from "./api";
@@ -16,7 +17,10 @@ import { Select, type SelectGroup } from "./Select";
 import { COLORS } from "./status";
 
 interface Props {
+  /** Edit this sandbox instead of creating one: name and template are fixed, resources and mounts need it stopped. */
+  editing?: SandboxView;
   onCancel(): void;
+  /** Called with the sandbox's name once it's created or the edit is saved. */
   onCreated(name: string): void;
 }
 
@@ -53,19 +57,26 @@ interface EnvRow {
 let nextId = 1;
 const hasPicker = () => typeof window.bentomo?.pickFolder === "function";
 
-export function CreateForm({ onCancel, onCreated }: Props) {
-  const [name, setName] = useState("");
+export function CreateForm({ editing, onCancel, onCreated }: Props) {
+  const was = editing?.meta?.spec;
+  const [name, setName] = useState(editing?.name ?? "");
   const [templates, setTemplates] = useState<TemplatesResponse | undefined>();
   const [templatesError, setTemplatesError] = useState<string | undefined>();
-  const [template, setTemplate] = useState("");
-  const [cpus, setCpus] = useState(String(DEFAULTS.cpus));
-  const [memory, setMemory] = useState(String(DEFAULTS.memoryGiB));
-  const [disk, setDisk] = useState(String(DEFAULTS.diskGiB));
-  const [mounts, setMounts] = useState<MountRow[]>([]);
+  const [template, setTemplate] = useState(was ? was.template || "template:default" : "");
+  // Lima's current values win over the stored spec, in case the VM was edited outside Bentomo.
+  const [cpus, setCpus] = useState(String(editing?.cpus ?? was?.cpus ?? DEFAULTS.cpus));
+  const [memory, setMemory] = useState(String(editing?.memoryGiB ?? was?.memoryGiB ?? DEFAULTS.memoryGiB));
+  const [disk, setDisk] = useState(String(editing?.diskGiB ?? was?.diskGiB ?? DEFAULTS.diskGiB));
+  const [mounts, setMounts] = useState<MountRow[]>(() =>
+    (was?.mounts ?? []).map((m) => ({ id: nextId++, hostPath: m.hostPath, guestPath: m.guestPath ?? m.hostPath, guestEdited: true, writable: m.writable })),
+  );
   const [home, setHome] = useState<string | undefined>();
-  const [envRows, setEnvRows] = useState<EnvRow[]>([]);
+  const [envRows, setEnvRows] = useState<EnvRow[]>(() => (was?.env ?? []).map((n) => ({ id: nextId++, name: n })));
   const [envSet, setEnvSet] = useState<Record<string, boolean>>({});
-  const [provision, setProvision] = useState("");
+  const [provision, setProvision] = useState(was?.provision ?? "");
+  /** Resources and mounts go through `limactl edit`, which needs the VM stopped. */
+  const locked = Boolean(editing && editing.status !== "stopped");
+  const minDisk = editing ? Math.ceil(editing.diskGiB ?? was?.diskGiB ?? 10) : 10;
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const [touched, setTouched] = useState(false);
@@ -75,6 +86,7 @@ export function CreateForm({ onCancel, onCreated }: Props) {
     api.defaults().then(
       (d) => {
         setHome(d.home);
+        if (editing) return;
         setMounts((cur) =>
           cur.length
             ? cur
@@ -83,9 +95,11 @@ export function CreateForm({ onCancel, onCreated }: Props) {
       },
       () => {},
     );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
+    if (editing) return; // the template is fixed
     api.templates().then(
       (t) => {
         setTemplates(t);
@@ -96,6 +110,7 @@ export function CreateForm({ onCancel, onCreated }: Props) {
         setTemplate((cur) => cur || "template:default");
       },
     );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Ask the server which forwarded variables it can see; it answers yes/no, never values.
@@ -159,8 +174,14 @@ export function CreateForm({ onCancel, onCreated }: Props) {
     setSubmitting(true);
     setErrors([]);
     try {
-      const res = await api.create(spec());
-      onCreated(res.name);
+      if (editing) {
+        const { cpus, memoryGiB, diskGiB, mounts, env, provision } = spec();
+        await api.edit(editing.name, { cpus, memoryGiB, diskGiB, mounts, env, provision: provision ?? "" });
+        onCreated(editing.name);
+      } else {
+        const res = await api.create(spec());
+        onCreated(res.name);
+      }
     } catch (err) {
       if (err instanceof RequestError) setErrors(err.details.length ? err.details : [err.message]);
       else setErrors([String(err)]);
@@ -194,29 +215,51 @@ export function CreateForm({ onCancel, onCreated }: Props) {
             onCancel();
           }}
         >
-          ← Back to sandboxes
+          {editing ? `← Back to ${editing.name}` : "← Back to sandboxes"}
         </a>
       </Header>
 
       <form className="form-main" onSubmit={submit} noValidate>
         <div className="form-intro">
-          <h1 className="page-title page-title-lg">New sandbox</h1>
-          <p className="muted">A VM that Bentomo creates, starts once and provisions. Settings are fixed after creation: delete and recreate to change them.</p>
+          {editing ? (
+            <>
+              <h1 className="page-title page-title-lg">Edit {editing.name}</h1>
+              <p className="muted">
+                Resources and mounts change while the VM is stopped and apply on its next start; disk can only grow. Variables and the provisioning script can
+                change anytime.
+              </p>
+            </>
+          ) : (
+            <>
+              <h1 className="page-title page-title-lg">New sandbox</h1>
+              <p className="muted">A VM that Bentomo creates, starts once and provisions. Name and template are fixed after creation.</p>
+            </>
+          )}
         </div>
+
+        {locked && (
+          <div className="banner banner-warn">
+            {editing!.vm} is {editing!.status}. Stop it to change resources or mounts; variables and the provisioning script can change now.
+          </div>
+        )}
 
         <Section title="Basics" id="sec-basics">
           <div className="grid grid-220">
             <Field label="Adapter" htmlFor="f-adapter" hint="Where the sandbox runs. Lima is the only adapter for now.">
-              <Select id="f-adapter" value="Lima" onValueChange={() => {}} groups={[{ options: ["Lima"] }]} />
+              <Select id="f-adapter" value="Lima" onValueChange={() => {}} groups={[{ options: ["Lima"] }]} disabled={Boolean(editing)} />
             </Field>
             <Field
               label="Name"
               htmlFor="f-name"
               invalid={touched && !nameOk}
               hint={
-                <>
-                  Lowercase letters, digits and dashes. The VM will be <code className="mono">{vmName(shownName)}</code>.
-                </>
+                editing ? (
+                  "The name can't change after creation."
+                ) : (
+                  <>
+                    Lowercase letters, digits and dashes. The VM will be <code className="mono">{vmName(shownName)}</code>.
+                  </>
+                )
               }
             >
               <div className={`input-prefixed${touched && !nameOk ? " is-invalid" : ""}`}>
@@ -226,7 +269,8 @@ export function CreateForm({ onCancel, onCreated }: Props) {
                   className="mono"
                   type="text"
                   value={name}
-                  autoFocus
+                  disabled={Boolean(editing)}
+                  autoFocus={!editing}
                   autoComplete="off"
                   spellCheck={false}
                   placeholder="web"
@@ -240,7 +284,9 @@ export function CreateForm({ onCancel, onCreated }: Props) {
               label="Template"
               htmlFor="f-template"
               hint={
-                templatesError ? (
+                editing ? (
+                  "The template can't change after creation."
+                ) : templatesError ? (
                   <span style={{ color: COLORS.warn }}>Couldn't list templates: {templatesError}</span>
                 ) : (
                   <>
@@ -254,20 +300,22 @@ export function CreateForm({ onCancel, onCreated }: Props) {
                 mono
                 value={template}
                 onValueChange={setTemplate}
-                groups={templateGroups(templates, templatesError)}
+                groups={editing ? [{ options: [template] }] : templateGroups(templates, templatesError)}
                 placeholder="Loading…"
-                disabled={!templates && !templatesError}
+                disabled={Boolean(editing) || (!templates && !templatesError)}
               />
             </Field>
           </div>
         </Section>
 
         <Section title="Resources" id="sec-res">
-          <div className="grid grid-160">
-            <NumberField id="f-cpu" label="CPUs" min={1} value={cpus} onChange={setCpus} />
-            <NumberField id="f-mem" label="Memory (GiB)" min={1} value={memory} onChange={setMemory} />
-            <NumberField id="f-disk" label="Disk (GiB)" min={10} value={disk} onChange={setDisk} />
-          </div>
+          <fieldset className="fieldset" disabled={locked}>
+            <div className="grid grid-160">
+              <NumberField id="f-cpu" label="CPUs" min={1} value={cpus} onChange={setCpus} />
+              <NumberField id="f-mem" label="Memory (GiB)" min={1} value={memory} onChange={setMemory} />
+              <NumberField id="f-disk" label="Disk (GiB)" min={minDisk} value={disk} onChange={setDisk} />
+            </div>
+          </fieldset>
         </Section>
 
         <Section
@@ -280,6 +328,7 @@ export function CreateForm({ onCancel, onCreated }: Props) {
             </>
           }
         >
+          <fieldset className="fieldset fieldset-stack" disabled={locked}>
           {mounts.map((m) => {
             const guestOk = guestPathOk(m.guestPath, mounts, m.id);
             return (
@@ -343,6 +392,7 @@ export function CreateForm({ onCancel, onCreated }: Props) {
             <Plus size={14} color="#8FA6F0" />
             {hasPicker() ? "Add folder…" : "Add folder"}
           </button>
+          </fieldset>
         </Section>
 
         <Section
@@ -372,6 +422,7 @@ export function CreateForm({ onCancel, onCreated }: Props) {
             <>
               Runs once after the first start, as the VM user, with the forwarded variables set. <code className="mono">sudo</code> is available. Stops at
               the first failing command.
+              {editing && " Saving a new script doesn't run it; re-run provisioning from the sandbox's menu."}
             </>
           }
         >
@@ -386,10 +437,12 @@ export function CreateForm({ onCancel, onCreated }: Props) {
           />
         </Section>
 
-        <details className="card details">
-          <summary>Command preview</summary>
-          <pre className="mono preview">{preview}</pre>
-        </details>
+        {!editing && (
+          <details className="card details">
+            <summary>Command preview</summary>
+            <pre className="mono preview">{preview}</pre>
+          </details>
+        )}
 
         {/* Errors sit beside the buttons, growing downward, so the buttons never move. */}
         <div className="form-actions">
@@ -408,7 +461,7 @@ export function CreateForm({ onCancel, onCreated }: Props) {
             Cancel
           </button>
           <button type="submit" className="btn btn-primary" disabled={submitting}>
-            {submitting ? "Creating…" : "Create sandbox"}
+            {editing ? (submitting ? "Saving…" : "Save changes") : submitting ? "Creating…" : "Create sandbox"}
           </button>
         </div>
       </form>

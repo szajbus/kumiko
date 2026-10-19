@@ -61,6 +61,12 @@ export interface SandboxSpec {
   provision?: string;      // shell script, run once after first start
 }
 
+/**
+ * What can change after creation. Resources and mounts need the VM stopped (disk can only grow);
+ * forwarded variables and the provisioning script can change anytime. Name and template are fixed.
+ */
+export type EditSpec = Partial<Pick<SandboxSpec, "cpus" | "memoryGiB" | "diskGiB" | "mounts" | "env" | "provision">>;
+
 export type SandboxStatus = "running" | "stopped" | "broken" | "unknown";
 
 export type SetupState = "creating" | "ready" | "provision_failed";
@@ -82,7 +88,7 @@ export interface SandboxInfo {
   meta?: SandboxMeta;
 }
 
-export type OpKind = "creating" | "starting" | "stopping" | "deleting" | "provisioning" | "recreating";
+export type OpKind = "creating" | "starting" | "stopping" | "deleting" | "provisioning" | "recreating" | "editing";
 
 /** How a log line is shown: a command being run, a note from Bentomo, success, or an error. */
 export type LineKind = "cmd" | "note" | "ok" | "err";

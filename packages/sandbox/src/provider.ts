@@ -1,5 +1,5 @@
 import type { ChildProcess } from "node:child_process";
-import type { LineKind, SandboxInfo, SandboxSpec } from "@bentomo/shared";
+import type { EditSpec, LineKind, SandboxInfo, SandboxSpec } from "@bentomo/shared";
 import type { Validation } from "./validate.js";
 
 /** Receives progress, one line at a time. */
@@ -12,6 +12,10 @@ export interface SandboxProvider {
   start(name: string, log: Log): Promise<void>;
   stop(name: string, log: Log): Promise<void>;
   delete(name: string, log: Log): Promise<void>;
+  /** Checks an edit before `edit`: errors block it (e.g. resources changed while running), warnings don't. */
+  validateEdit(name: string, patch: EditSpec): Promise<Validation>;
+  /** Applies an edit: `limactl edit` for resources and mounts, then the stored spec. */
+  edit(name: string, patch: EditSpec, log: Log): Promise<void>;
   /** Re-run the stored provisioning command and update the setup state. */
   provision(name: string, log: Log): Promise<void>;
   exec(name: string, cmd: string, env: string[]): ChildProcess; // stdio piped; the PoC's ACP pipe

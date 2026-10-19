@@ -81,6 +81,21 @@ switch (args[0]) {
     info("Stopped");
     break;
   }
+  case "edit": {
+    const inst = read(positional[0]) ?? fatal(`instance "${positional[0]}" does not exist`);
+    if (inst.status === "Running") fatal(`cannot edit a running instance "${inst.name}"`);
+    const set = flag("set");
+    if (flag("disk") && Number(flag("disk")) * GiB < inst.disk) fatal("field `disk`: shrinking the disk is not supported");
+    write({
+      ...inst,
+      cpus: flag("cpus") ? Number(flag("cpus")) : inst.cpus,
+      memory: flag("memory") ? Number(flag("memory")) * GiB : inst.memory,
+      disk: flag("disk") ? Number(flag("disk")) * GiB : inst.disk,
+      mounts: set?.startsWith(".mounts = ") ? JSON.parse(set.slice(".mounts = ".length)) : args.includes("--mount-none") ? [] : inst.mounts,
+    });
+    info(`Instance \`${inst.name}\` configuration edited`);
+    break;
+  }
   case "delete": {
     if (!read(positional[0])) fatal(`instance "${positional[0]}" does not exist`);
     rmSync(file(positional[0]));

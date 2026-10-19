@@ -193,6 +193,53 @@ describe("LimaProvider against a fake limactl", () => {
     assert.equal(await provider.metadata.read("other"), undefined);
   });
 
+  it("edits resources and mounts only while stopped, and variables anytime", async () => {
+    const { limaDir, mountDir, provider, log, lines } = await fakeLima({ A: "1" });
+    await provider.create(spec({ cpus: 2, memoryGiB: 2, diskGiB: 20 }), log);
+
+    // Running: variables and the script are fine, resources and mounts are not.
+    let v = await provider.validateEdit("web", { env: ["A"], provision: "echo hi" });
+    assert.deepEqual(v.errors, []);
+    await provider.edit("web", { env: ["A"], provision: "echo hi" }, log);
+    let [info] = await provider.list();
+    assert.deepEqual(info.meta?.spec.env, ["A"]);
+    assert.equal(info.meta?.spec.provision, "echo hi");
+    assert.equal(info.meta?.setup, "ready", "editing doesn't change the setup state");
+    v = await provider.validateEdit("web", { cpus: 4 });
+    assert.match(v.errors.join(), /Stop bm-web to change its resources or mounts/);
+
+    await provider.stop("web", log);
+    v = await provider.validateEdit("web", { diskGiB: 10 });
+    assert.match(v.errors.join(), /Disk can only grow; it is 20 GiB now/);
+
+    lines.length = 0;
+    await provider.edit("web", { cpus: 4, memoryGiB: 6, diskGiB: 40, mounts: [{ hostPath: mountDir, writable: true, guestPath: "/workspace/m" }] }, log);
+    const edit = (await readFile(join(limaDir, "calls.log"), "utf8")).trim().split("\n").map((l) => JSON.parse(l)).filter((c) => c[0] === "edit").pop();
+    assert.deepEqual(edit, [
+      "edit", "--tty=false", "bm-web", "--cpus=4", "--memory=6", "--disk=40",
+      `--set=.mounts = [{"location":"${mountDir}","mountPoint":"/workspace/m","writable":true}]`,
+    ]);
+    [info] = await provider.list();
+    assert.deepEqual([info.cpus, info.memoryGiB, info.diskGiB], [4, 6, 40]);
+    assert.equal(info.meta?.spec.mounts[0].guestPath, "/workspace/m");
+    assert.equal(info.meta?.spec.provision, "echo hi", "fields left out of the patch are kept");
+
+    // Nothing Lima-related changed: no limactl edit at all, and clearing the script works.
+    const before = (await readFile(join(limaDir, "calls.log"), "utf8")).split("\n").length;
+    await provider.edit("web", { provision: "" }, log);
+    assert.equal((await readFile(join(limaDir, "calls.log"), "utf8")).split("\n").filter((l) => l.includes('"edit"')).length, 1);
+    assert.ok(before > 0);
+    [info] = await provider.list();
+    assert.equal(info.meta?.spec.provision, undefined);
+  });
+
+  it("refuses to edit VMs Bentomo didn't create", async () => {
+    const { limaDir, provider } = await fakeLima();
+    await writeFile(join(limaDir, "bm-alien.json"), JSON.stringify({ name: "bm-alien", status: "Stopped" }));
+    const v = await provider.validateEdit("alien", { cpus: 2 });
+    assert.match(v.errors.join(), /was not created by Bentomo/);
+  });
+
   it("offers templates with a Debian one preferred", async () => {
     const { provider } = await fakeLima();
     const t = await provider.templates();

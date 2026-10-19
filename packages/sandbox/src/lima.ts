@@ -2,7 +2,16 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { mountsExpression, vmName, VM_PREFIX, type SandboxInfo, type SandboxSpec, type SandboxStatus } from "@bentomo/shared";
+import {
+  mountsExpression,
+  vmName,
+  VM_PREFIX,
+  type EditSpec,
+  type Mount,
+  type SandboxInfo,
+  type SandboxSpec,
+  type SandboxStatus,
+} from "@bentomo/shared";
 import { MetadataStore } from "./metadata.js";
 import { eachLine, exitCode, run, runOk } from "./proc.js";
 import { ProviderError, type Log, type SandboxProvider } from "./provider.js";
@@ -206,6 +215,59 @@ export class LimaProvider implements SandboxProvider {
     await runOk(this.limactl, ["delete", "--force", vm], { log, lima: true });
     await this.metadata.remove(name);
     log("Deleted.", "ok");
+  }
+
+  async validateEdit(name: string, patch: EditSpec): Promise<Validation> {
+    const { errors, warnings, spec } = await this.planEdit(name, patch);
+    return { errors, warnings, spec };
+  }
+
+  async edit(name: string, patch: EditSpec, log: Log): Promise<void> {
+    const plan = await this.planEdit(name, patch);
+    if (plan.errors.length) throw new ProviderError(plan.errors.join("\n"));
+    for (const w of plan.warnings) log(`warning: ${w}`);
+    const vm = vmName(name);
+    if (plan.limaArgs.length) {
+      const args = ["edit", "--tty=false", vm, ...plan.limaArgs];
+      log(`$ limactl ${args.map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a))).join(" ")}`, "cmd");
+      await runOk(this.limactl, args, { log, lima: true });
+    }
+    await this.metadata.update(name, { spec: plan.spec });
+    log(plan.limaArgs.length ? "Saved. Resource and mount changes apply on the next start." : "Saved.", "ok");
+  }
+
+  /** Works out what an edit changes and which `limactl edit` flags that needs. */
+  private async planEdit(name: string, patch: EditSpec): Promise<Validation & { limaArgs: string[] }> {
+    const vm = vmName(name);
+    const meta = await this.metadata.read(name);
+    const inst = (await this.instances()).find((i) => i.name === vm);
+    if (!meta || !inst) {
+      const why = !inst ? `${vm} does not exist.` : `${vm} was not created by Bentomo, so it can't be edited.`;
+      return { errors: [why], warnings: [], spec: meta?.spec ?? ({} as SandboxSpec), limaArgs: [] };
+    }
+
+    // Only these fields can change; an empty provision string clears the script.
+    const { cpus, memoryGiB, diskGiB, mounts, env, provision } = patch;
+    const defined = Object.fromEntries(Object.entries({ cpus, memoryGiB, diskGiB, mounts, env, provision }).filter(([, v]) => v !== undefined));
+    const merged: SandboxSpec = { ...meta.spec, ...defined, name: meta.spec.name, template: meta.spec.template };
+    const v = await validateSpec(merged, this.env());
+    const { spec } = v;
+    const errors = [...v.errors];
+
+    // Compare against what Lima has now, so edits made outside Bentomo are respected.
+    const limaArgs: string[] = [];
+    if (spec.cpus !== (inst.cpus ?? meta.spec.cpus)) limaArgs.push(`--cpus=${spec.cpus}`);
+    if (spec.memoryGiB * GiB !== (inst.memory ?? meta.spec.memoryGiB * GiB)) limaArgs.push(`--memory=${spec.memoryGiB}`);
+    const diskNow = inst.disk ?? meta.spec.diskGiB * GiB;
+    if (spec.diskGiB * GiB < diskNow) errors.push(`Disk can only grow; it is ${gib(diskNow)} GiB now.`);
+    else if (spec.diskGiB * GiB > diskNow) limaArgs.push(`--disk=${spec.diskGiB}`);
+    const key = (ms: Mount[]) => JSON.stringify(ms.map((m) => [m.hostPath, m.guestPath ?? m.hostPath, m.writable]));
+    if (key(spec.mounts) !== key(meta.spec.mounts)) limaArgs.push(spec.mounts.length ? `--set=${mountsExpression(spec.mounts)}` : "--mount-none");
+
+    if (limaArgs.length && toStatus(inst.status) !== "stopped") {
+      errors.push(`Stop ${vm} to change its resources or mounts. Variables and the provisioning script can change while it runs.`);
+    }
+    return { errors, warnings: v.warnings, spec, limaArgs };
   }
 
   async provision(name: string, log: Log): Promise<void> {

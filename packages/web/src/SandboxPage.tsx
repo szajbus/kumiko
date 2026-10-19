@@ -3,7 +3,7 @@ import { vmName, type LogLine, type SandboxView } from "@bentomo/shared";
 import { SandboxActions, useActions } from "./actions";
 import { api, type LiveState } from "./api";
 import { Header } from "./Header";
-import { Folder } from "./icons";
+import { Folder, Pencil } from "./icons";
 import { LogPanel } from "./LogPanel";
 import { COLORS, statusOf } from "./status";
 
@@ -11,10 +11,11 @@ interface Props {
   name: string;
   live: LiveState;
   onBack(): void;
+  onEdit(): void;
 }
 
 /** One sandbox: what it is, what it's doing, and its log at full width. */
-export function SandboxPage({ name, live, onBack }: Props) {
+export function SandboxPage({ name, live, onBack, onEdit }: Props) {
   const sb = live.sandboxes.find((s) => s.name === name);
   const lines = live.logs[name] ?? [];
   const actions = useActions({ onDeleted: onBack });
@@ -45,6 +46,12 @@ export function SandboxPage({ name, live, onBack }: Props) {
           </div>
         ) : (
           <DetailHead sb={sb} lines={lines}>
+            {sb.meta && (
+              <button type="button" className="btn btn-secondary btn-compact" disabled={sb.busy} onClick={onEdit}>
+                <Pencil />
+                Edit
+              </button>
+            )}
             <SandboxActions sb={sb} actions={actions} labeled />
           </DetailHead>
         )}

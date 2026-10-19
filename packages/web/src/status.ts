@@ -15,6 +15,7 @@ const OP_LABEL: Record<OpKind, string> = {
   deleting: "Deleting",
   provisioning: "Provisioning",
   recreating: "Recreating",
+  editing: "Saving changes",
 };
 
 const OP_NOUN: Record<OpKind, string> = {
@@ -24,6 +25,7 @@ const OP_NOUN: Record<OpKind, string> = {
   deleting: "delete",
   provisioning: "provisioning",
   recreating: "recreate",
+  editing: "edit",
 };
 
 /** The status cell: what the sandbox is doing or how it is. */

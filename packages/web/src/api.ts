@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { ApiError, CreateResponse, DefaultsResponse, LogLine, SandboxSpec, SandboxView, ServerEvent, TemplatesResponse } from "@bentomo/shared";
+import type { ApiError, CreateResponse, DefaultsResponse, EditSpec, LogLine, SandboxSpec, SandboxView, ServerEvent, TemplatesResponse } from "@bentomo/shared";
 
 declare global {
   interface Window {
@@ -35,6 +35,7 @@ export const api = {
   provision: (name: string) => request("POST", `/api/sandboxes/${name}/provision`),
   recreate: (name: string) => request("POST", `/api/sandboxes/${name}/recreate`),
   remove: (name: string) => request("DELETE", `/api/sandboxes/${name}`),
+  edit: (name: string, patch: EditSpec) => request<{ warnings: string[] }>("PATCH", `/api/sandboxes/${name}`, patch),
 };
 
 export interface LiveState {

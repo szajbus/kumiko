@@ -175,6 +175,34 @@ describe("server", () => {
     await finished("bad", "deleting", since);
   });
 
+  it("edits a sandbox: variables while running, resources once stopped", async () => {
+    let since = events.length;
+    await api("/api/sandboxes", { method: "POST", body: JSON.stringify({ name: "ed", cpus: 1, memoryGiB: 1, diskGiB: 10, mounts: [], env: [] }) });
+    await finished("ed", "creating", since);
+
+    const running = await api("/api/sandboxes/ed", { method: "PATCH", body: JSON.stringify({ cpus: 2 }) });
+    assert.equal(running.status, 400);
+    assert.match((await json(running)).details.join(), /Stop bm-ed/);
+
+    since = events.length;
+    assert.equal((await api("/api/sandboxes/ed", { method: "PATCH", body: JSON.stringify({ env: ["TOKEN"] }) })).status, 202);
+    assert.equal((await finished("ed", "editing", since)).type, "done");
+
+    since = events.length;
+    await api("/api/sandboxes/ed/stop", { method: "POST" });
+    await finished("ed", "stopping", since);
+    since = events.length;
+    assert.equal((await api("/api/sandboxes/ed", { method: "PATCH", body: JSON.stringify({ cpus: 3, diskGiB: 12 }) })).status, 202);
+    assert.equal((await finished("ed", "editing", since)).type, "done");
+    const sb = ((await json(await api("/api/sandboxes"))) as SandboxView[]).find((s) => s.name === "ed")!;
+    assert.deepEqual([sb.cpus, sb.diskGiB, sb.meta?.spec.env], [3, 12, ["TOKEN"]]);
+
+    assert.equal((await api("/api/sandboxes/nope", { method: "PATCH", body: "{}" })).status, 404);
+    since = events.length;
+    await api("/api/sandboxes/ed", { method: "DELETE" });
+    await finished("ed", "deleting", since);
+  });
+
   it("404s unknown sandboxes and ignores foreign ones", async () => {
     assert.equal((await api("/api/sandboxes/nope/start", { method: "POST" })).status, 404);
     // "foreign" would be bm-foreign; wm-foreign can't be addressed at all.
