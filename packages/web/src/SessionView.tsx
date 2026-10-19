@@ -1,6 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { vmName, type SessionInfo } from "@bentomo/shared";
-import { api, RequestError, useSessionEvents } from "./api";
+import { LIVE_SESSION_STATUSES, vmName, type SessionInfo } from "@bentomo/shared";
+import { api, errorMessage, useSessionEvents } from "./api";
 import { applyEvent, blocksOf, emptyChat, partialToolSummary, toolSummary, type Block, type ChatItem, type ChatState } from "./chat";
 import { Composer } from "./Composer";
 import { Markdown } from "./Markdown";
@@ -40,8 +40,8 @@ export function SessionView({ session, onForked }: Props) {
   // A pick Claude didn't accept is dropped when the turn ends.
   useEffect(() => setModel(""), [reported, idle]);
   const status = sessionStatus(session.status);
-  const live = session.status === "starting" || session.status === "idle" || session.status === "running";
-  const busy = session.status === "starting" || session.status === "running";
+  const live = LIVE_SESSION_STATUSES.includes(session.status);
+  const busy = live && !idle;
 
   const call = async (fn: () => Promise<unknown>): Promise<boolean> => {
     setError(undefined);
@@ -49,7 +49,7 @@ export function SessionView({ session, onForked }: Props) {
       await fn();
       return true;
     } catch (err) {
-      setError(err instanceof RequestError ? err.message : String(err));
+      setError(errorMessage(err));
       return false;
     }
   };
@@ -68,7 +68,7 @@ export function SessionView({ session, onForked }: Props) {
           </span>
         </div>
         <div className="session-controls">
-          <UsageStrip sessionId={session.id} live={live} turnDone={session.status === "idle"} />
+          <UsageStrip sessionId={session.id} live={live} turnDone={idle} />
           {totalCost > 0 && (
             <span className="mono dim session-cost" title="Total cost of this session">
               {formatCost(totalCost)}
@@ -77,7 +77,7 @@ export function SessionView({ session, onForked }: Props) {
           <button
             type="button"
             className="btn btn-secondary btn-compact"
-            disabled={!session.claudeSessionId || session.status === "running" || session.status === "starting"}
+            disabled={!session.claudeSessionId || busy}
             title="Continue from here in a new tab, leaving this session as it is"
             onClick={() => void call(() => api.forkSession(session.id).then(({ id }) => onForked(id)))}
           >
@@ -87,7 +87,7 @@ export function SessionView({ session, onForked }: Props) {
         </div>
       </div>
 
-      <Chat chat={chat} running={busy} onRewind={session.status === "idle" && session.claudeSessionId ? setRewinding : undefined} />
+      <Chat chat={chat} running={busy} onRewind={idle && session.claudeSessionId ? setRewinding : undefined} />
 
       {rewinding && (
         <ConfirmDialog

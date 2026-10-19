@@ -30,6 +30,9 @@ export class RequestError extends Error {
   }
 }
 
+/** What to show for a failed call: the server's message for a refused request, or the error's own (e.g. "Failed to fetch"). */
+export const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method,

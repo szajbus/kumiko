@@ -13,7 +13,7 @@ import {
   type SandboxView,
   type TemplatesResponse,
 } from "@bentomo/shared";
-import { api, RequestError } from "./api";
+import { api, errorMessage, RequestError } from "./api";
 import { sessionsNote } from "./actions";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Breadcrumbs } from "./Breadcrumbs";
@@ -227,8 +227,7 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
         onCreated(res.name);
       }
     } catch (err) {
-      if (err instanceof RequestError) setErrors(err.details.length ? err.details : [err.message]);
-      else setErrors([String(err)]);
+      setErrors(err instanceof RequestError && err.details.length ? err.details : [errorMessage(err)]);
       setSubmitting(false);
     }
   };

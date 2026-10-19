@@ -64,7 +64,8 @@ export function App() {
     if (!saved) return setRestored(true);
     const open = new Set(live.sessions.map((s) => s.id));
     void (async () => {
-      // Sessions that are gone or can't be resumed just don't get a tab.
+      // Sessions that are gone or can't be resumed just don't get a tab. One at a time: the server lists sessions in the
+      // order they started, which is the tab order.
       const back = new Set<string>();
       for (const id of saved.sessions) {
         if (open.has(id) || (await api.resumeSession(id).then(() => true, () => false))) back.add(id);
@@ -108,31 +109,26 @@ export function App() {
     if (tabOf(route) === tab) go(sandboxesHash.current);
   };
 
-  const endSession = (s: SessionInfo) => {
-    leave(`session:${s.id}`);
-    setEnding((all) => new Set(all).add(s.id));
-    api.endSession(s.id).catch(() =>
-      setEnding((all) => {
-        const rest = new Set(all);
-        rest.delete(s.id);
-        return rest;
-      }),
-    );
-  };
-
-  /** Closes a session's tab, then forgets its saved copy too, so it can't be resumed. */
-  const deleteSession = async (s: SessionInfo) => {
+  /** Closes a session's tab at once and ends it on the server; the tab comes back if the server refuses. Resolves whether it ended. */
+  const endSession = async (s: SessionInfo): Promise<boolean> => {
     leave(`session:${s.id}`);
     setEnding((all) => new Set(all).add(s.id));
     try {
       await api.endSession(s.id);
+      return true;
     } catch {
-      return setEnding((all) => {
+      setEnding((all) => {
         const rest = new Set(all);
         rest.delete(s.id);
         return rest;
       });
+      return false;
     }
+  };
+
+  /** Closes a session's tab, then forgets its saved copy too, so it can't be resumed. */
+  const deleteSession = async (s: SessionInfo) => {
+    if (!(await endSession(s))) return;
     // 404: Claude never answered, so nothing was saved.
     await api.deleteSavedSession(s.id).catch((err) => {
       if (!(err instanceof RequestError && err.status === 404)) console.error(err);
@@ -146,7 +142,7 @@ export function App() {
     }
     const s = sessions.find((x) => `session:${x.id}` === tab);
     if (!s) return leave(tab);
-    endSession(s);
+    void endSession(s);
   };
 
   // Keyboard shortcuts act on the latest render's state, so the listeners below are installed once.

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import type { SandboxView } from "@bentomo/shared";
-import { api, RequestError } from "./api";
+import { api, errorMessage } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Dots, Play, Redo, Square, Trash } from "./icons";
 import { plural } from "./status";
@@ -36,7 +36,7 @@ export function useActions({ onDeleted }: { onDeleted?(name: string): void } = {
       await fn(name);
       return true;
     } catch (err) {
-      setError(err instanceof RequestError ? err.message : String(err));
+      setError(errorMessage(err));
       return false;
     }
   };

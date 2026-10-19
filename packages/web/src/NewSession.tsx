@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { WORKSPACE_DIR, type ResumableSession } from "@bentomo/shared";
-import { api, RequestError, type LiveState } from "./api";
+import { api, errorMessage, type LiveState } from "./api";
 import { Composer } from "./Composer";
 import { sessionTitle } from "./Header";
 import { Resume, Trash } from "./icons";
@@ -45,7 +45,7 @@ export function NewSession({ live, onStarted }: Props) {
     try {
       onStarted((await api.resumeSession(id)).id);
     } catch (err) {
-      setError(err instanceof RequestError ? err.message : String(err));
+      setError(errorMessage(err));
     } finally {
       setResuming(undefined);
     }
@@ -57,7 +57,7 @@ export function NewSession({ live, onStarted }: Props) {
       await api.deleteSavedSession(id);
       setSaved((list) => list.filter((r) => r.id !== id));
     } catch (err) {
-      setError(err instanceof RequestError ? err.message : String(err));
+      setError(errorMessage(err));
     }
   };
 
@@ -68,7 +68,7 @@ export function NewSession({ live, onStarted }: Props) {
       onStarted(id);
       return true;
     } catch (err) {
-      setError(err instanceof RequestError ? err.message : String(err));
+      setError(errorMessage(err));
       return false;
     }
   };

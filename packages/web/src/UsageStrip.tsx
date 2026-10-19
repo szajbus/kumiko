@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { AccountUsage, UsageWindow } from "@bentomo/shared";
-import { api, RequestError } from "./api";
+import { api, errorMessage } from "./api";
 
 /** How often the numbers are re-read while the session is open. */
 const REFRESH_MS = 60_000;
@@ -26,7 +26,7 @@ export function UsageStrip({ sessionId, live, turnDone }: Props) {
       api
         .usage(sessionId)
         .then((u) => !stopped && (setUsage(u), setError(undefined)))
-        .catch((err) => !stopped && setError(err instanceof RequestError ? err.message : String(err)));
+        .catch((err) => !stopped && setError(errorMessage(err)));
     void load();
     const timer = setInterval(() => void load(), REFRESH_MS);
     return () => {
