@@ -92,7 +92,7 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
         )}
       </form>
       <p className="composer-hint">
-        <kbd className="kbd">Enter</kbd> to send <span aria-hidden="true">·</span> <kbd className="kbd">Shift</kbd> + <kbd className="kbd">Enter</kbd> for a new line
+        <kbd className="kbd">Shift</kbd> + <kbd className="kbd">Enter</kbd> for a new line
       </p>
     </>
   );
