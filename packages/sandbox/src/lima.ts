@@ -10,10 +10,11 @@ import {
   WORKSPACE_DIR,
   type EditSpec,
   type SandboxInfo,
+  type SandboxMeta,
   type SandboxSpec,
   type SandboxStatus,
 } from "@bentomo/shared";
-import { MetadataStore } from "./metadata.js";
+import { MetadataError, MetadataStore } from "./metadata.js";
 import { eachLine, exitCode, runOk, type RunOptions } from "./proc.js";
 import { ProviderError, type Log, type SandboxProvider } from "./provider.js";
 import { validateSpec, type Validation } from "./validate.js";
@@ -158,7 +159,7 @@ export class LimaProvider implements SandboxProvider {
   }
 
   async list(): Promise<SandboxInfo[]> {
-    const [instances, metas] = await Promise.all([this.instances(), this.metadata.readAll()]);
+    const [instances, { metas, errors }] = await Promise.all([this.instances(), this.metadata.readAll()]);
     return instances
       .map((i) => {
         const name = i.name.slice(VM_PREFIX.length);
@@ -169,6 +170,7 @@ export class LimaProvider implements SandboxProvider {
           memoryGiB: gib(i.memory),
           diskGiB: gib(i.disk),
           meta: metas.get(name),
+          ...(errors.has(name) ? { metaError: errors.get(name) } : {}),
         };
       })
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -243,7 +245,12 @@ export class LimaProvider implements SandboxProvider {
     const vm = vmName(name);
     log(`$ limactl start --tty=false ${vm}`, "cmd");
     await this.limactlRun(["start", "--tty=false", vm], { log });
-    const meta = await this.metadata.read(name);
+    // An unreadable record doesn't stop the VM from starting; it is only set up as one Bentomo didn't create.
+    const meta = await this.metadata.read(name).catch((err: unknown) => {
+      if (!(err instanceof MetadataError)) throw err;
+      log(`warning: ${err.message}`);
+      return undefined;
+    });
     if (meta) await this.prepareShells(name, meta.spec.workdir ?? WORKSPACE_DIR, log);
     if (meta?.setup === "creating") await this.runProvisioning(name, log);
     else if (meta && (await this.ensureClaude(name, log)) !== 0) log("warning: couldn't reinstall Claude Code; it is missing in the VM.");
@@ -349,7 +356,13 @@ export class LimaProvider implements SandboxProvider {
     recreate = false,
   ): Promise<Validation & { limaArgs: string[]; prepareShells?: boolean }> {
     const vm = vmName(name);
-    const meta = await this.metadata.read(name);
+    let meta: SandboxMeta | undefined;
+    try {
+      meta = await this.metadata.read(name);
+    } catch (err) {
+      if (!(err instanceof MetadataError)) throw err;
+      return { errors: [err.message], warnings: [], spec: {} as SandboxSpec, limaArgs: [] };
+    }
     const inst = (await this.instances()).find((i) => i.name === vm);
     if (!meta || !inst) {
       const why = !inst ? `${vm} does not exist.` : `${vm} was not created by Bentomo, so it can't be edited.`;

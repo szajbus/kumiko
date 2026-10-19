@@ -128,6 +128,21 @@ describe("LimaProvider against a fake limactl", () => {
     ]);
   });
 
+  it("reports a record it can't read instead of treating the VM as foreign", async () => {
+    const { root, limaDir, provider, log, lines } = await fakeLima();
+    await writeFile(join(limaDir, "bm-mine.json"), JSON.stringify({ name: "bm-mine", status: "Stopped" }));
+    await mkdir(join(root, "sandboxes"), { recursive: true });
+    await writeFile(join(root, "sandboxes", "mine.json"), "{ not json");
+
+    const [info] = await provider.list();
+    assert.equal(info.meta, undefined);
+    assert.match(info.metaError!, /mine\.json, can't be read/);
+    assert.match((await provider.validateEdit("mine", { cpus: 2 })).errors.join(), /can't be read/);
+    // It still starts, set up as a VM Bentomo didn't create.
+    await provider.start("mine", log);
+    assert.ok(lines.some((l) => l.startsWith("warning: Bentomo's record")));
+  });
+
   it("creates, provisions once with forwarded variables, stops, starts and deletes", async () => {
     const { limaDir, mountDir, provider, log, lines } = await fakeLima({ TOKEN: "s3cr3t 'quoted'" });
     await provider.create(

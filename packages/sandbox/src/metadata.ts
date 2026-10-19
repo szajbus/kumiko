@@ -9,6 +9,14 @@ export function defaultMetadataDir(): string {
     : join(homedir(), ".bentomo", "sandboxes");
 }
 
+/** Bentomo's record of a sandbox is there but can't be used: not JSON, edited by hand, or unreadable. */
+export class MetadataError extends Error {
+  constructor(readonly file: string, why: string) {
+    super(`Bentomo's record of this sandbox, ${file}, can't be read (${why}). Fix the file, or delete it to treat the VM as one Bentomo didn't create.`);
+    this.name = "MetadataError";
+  }
+}
+
 /** One JSON file per sandbox Bentomo created. Holds variable names only, never values. */
 export class MetadataStore {
   constructor(readonly dir: string = defaultMetadataDir()) {}
@@ -17,32 +25,54 @@ export class MetadataStore {
     return join(this.dir, `${name}.json`);
   }
 
+  /** The sandbox's record; undefined when there is none, MetadataError when there is one that can't be used. */
   async read(name: string): Promise<SandboxMeta | undefined> {
+    const file = this.file(name);
+    let text: string;
     try {
-      return JSON.parse(await readFile(this.file(name), "utf8")) as SandboxMeta;
-    } catch {
-      return undefined;
+      text = await readFile(file, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw new MetadataError(file, err instanceof Error ? err.message : String(err));
     }
+    let meta: Partial<SandboxMeta> | null;
+    try {
+      meta = JSON.parse(text) as Partial<SandboxMeta> | null;
+    } catch (err) {
+      throw new MetadataError(file, err instanceof Error ? err.message : String(err));
+    }
+    const spec = meta?.spec;
+    if (!spec || typeof spec.name !== "string" || !Array.isArray(spec.mounts) || !Array.isArray(spec.env)) {
+      throw new MetadataError(file, "it has no valid spec");
+    }
+    return meta as SandboxMeta;
   }
 
-  async readAll(): Promise<Map<string, SandboxMeta>> {
-    const out = new Map<string, SandboxMeta>();
+  /** Every record, by sandbox name, plus the message for each one that can't be used. */
+  async readAll(): Promise<{ metas: Map<string, SandboxMeta>; errors: Map<string, string> }> {
+    const metas = new Map<string, SandboxMeta>();
+    const errors = new Map<string, string>();
     let files: string[];
     try {
       files = await readdir(this.dir);
     } catch {
-      return out;
+      return { metas, errors };
     }
     await Promise.all(
       files
         .filter((f) => f.endsWith(".json"))
         .map(async (f) => {
           const name = f.slice(0, -".json".length);
-          const meta = await this.read(name);
-          if (meta) out.set(name, meta);
+          try {
+            const meta = await this.read(name);
+            if (meta) metas.set(name, meta);
+          } catch (err) {
+            if (!(err instanceof MetadataError)) throw err;
+            errors.set(name, err.message);
+          }
         }),
     );
-    return out;
+    return { metas, errors };
   }
 
   async write(name: string, meta: SandboxMeta): Promise<void> {

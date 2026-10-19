@@ -101,6 +101,8 @@ export interface SandboxInfo {
   cpus?: number; memoryGiB?: number; diskGiB?: number;
   /** Bentomo's metadata, when this sandbox was created by Bentomo. */
   meta?: SandboxMeta;
+  /** Set when Bentomo has a record of this sandbox that it can't read; `meta` is then missing. */
+  metaError?: string;
 }
 
 export type OpKind = "creating" | "starting" | "stopping" | "deleting" | "recreating" | "editing";

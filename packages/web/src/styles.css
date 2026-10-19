@@ -119,6 +119,7 @@ code, .mono { font-family: var(--mono); }
 .row-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .row-sub .mono { font-size: 12px; }
 .badge { padding: 1px 6px; border: 1px solid var(--border-strong); border-radius: 4px; font-size: 11px; font-weight: 500; color: var(--text-2); letter-spacing: 0.02em; }
+.badge.badge-warn { border-color: #5c4a2b; color: #f0cf96; }
 .badge.badge-bypass { border-color: #6b4a2a; color: #e0a96d; white-space: nowrap; }
 .row-status { display: flex; align-items: center; gap: 8px; font-weight: 500; }
 .row-res { font-size: 13px; color: var(--text-2); }

@@ -83,6 +83,11 @@ function Row({ sb, log, actions, onOpen }: { sb: SandboxView; log?: LogLine[]; a
           <span className="mono dim">{sb.vm}</span>
           <span className="badge">Lima</span>
           {sb.sessions > 0 && <span className="badge badge-sessions">{plural(sb.sessions, "session")}</span>}
+          {sb.metaError && (
+            <span className="badge badge-warn" title={sb.metaError}>
+              Record unreadable
+            </span>
+          )}
         </span>
       </button>
 

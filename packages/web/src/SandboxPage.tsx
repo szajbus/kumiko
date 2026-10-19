@@ -51,6 +51,13 @@ export function SandboxPage({ name, live, onBack, onEdit }: Props) {
           </div>
         )}
 
+        {sb?.metaError && (
+          <div className="banner banner-error">
+            <strong>Bentomo's record of this sandbox is unreadable.</strong>
+            <span className="mono">{sb.metaError}</span>
+          </div>
+        )}
+
         {sb && <Details sb={sb} home={home} />}
 
         {(sb || lines.length > 0) && <LogPanel sandbox={sb} lines={lines} />}
@@ -108,7 +115,7 @@ function Details({ sb, home }: { sb: SandboxView; home?: string }) {
         <Fact label="Created">{sb.meta ? new Date(sb.meta.createdAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "—"}</Fact>
       </section>
 
-      {!sb.meta && (
+      {!sb.meta && !sb.metaError && (
         <p className="muted">This VM wasn't created by Bentomo, so there are no mounts, variables or provisioning on record.</p>
       )}
 

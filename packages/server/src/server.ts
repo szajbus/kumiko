@@ -300,7 +300,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   /** Delete, then create again from the stored spec. */
   app.post("/api/sandboxes/:name/recreate", async (c, next) => {
     const info = await known(c.req.param("name") ?? "");
-    if (!info.meta) throw new HttpError(400, `${vmName(info.name)} has no stored spec to recreate from.`);
+    if (!info.meta) throw new HttpError(400, info.metaError ?? `${vmName(info.name)} has no stored spec to recreate from.`);
     return next();
   }, action("recreating", (i, log) => recreate(i.name, i.meta!.spec, log)));
 
