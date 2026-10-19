@@ -266,11 +266,6 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
           {editing ? (
             <>
               <h1 className="page-title page-title-lg">Edit {editing.name}</h1>
-              <p className="muted">
-                <strong>Save and recreate sandbox</strong> deletes the sandbox and builds it again from these settings, provisioning included; Claude's
-                login and history stay. <strong>Save</strong> keeps the sandbox: resource and mount changes need it stopped and apply on its next start,
-                and disk can only grow.
-              </p>
             </>
           ) : (
             <>
@@ -525,7 +520,7 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
               Bentomo first installs Claude Code, on <code className="mono">PATH</code> as <code className="mono">claude</code>. Then your script runs
               once, as the sandbox user, in the clone, with the forwarded variables set. <code className="mono">sudo</code> is available. Stops at the first
               failing command.
-              {editing && " A new script runs when you save and recreate."}
+              {editing && " A new script runs when you save and recreate the sandbox."}
             </>
           }
         >
@@ -559,7 +554,17 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
                 </ul>
               </div>
             ) : (
-              inPlaceBlocked && <p className="muted form-note">{inPlaceBlocked}</p>
+              <>
+                {/* What the two save buttons do, beside them. */}
+                {editing && (
+                  <p className="muted form-note">
+                    <strong>Save</strong> keeps the sandbox: resource and mount changes need it stopped and apply on its next start, and disk can only
+                    grow. <strong>Save and recreate sandbox</strong> deletes the sandbox and builds it again from these settings, provisioning included;
+                    Claude's login and history stay.
+                  </p>
+                )}
+                {inPlaceBlocked && <p className="muted form-note">{inPlaceBlocked}</p>}
+              </>
             )}
           </div>
           <button type="button" className="btn btn-secondary" onClick={onCancel}>
