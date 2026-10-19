@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { matchCommands } from "./commands";
 import { drafts } from "./drafts";
-import { Send } from "./icons";
+import { Return, Stop } from "./icons";
 
 interface Props {
   /** Resolves true when the text was taken, so the box clears; false keeps it for another try. */
@@ -9,7 +9,7 @@ interface Props {
   submitLabel: string;
   /** Sending is blocked (a turn is running, or the session has ended); typing isn't. */
   disabled?: boolean;
-  /** Shows Stop beside the submit button, which then queues the message for after the turn. */
+  /** Swaps the send icon for Stop; Enter then queues the message for after the turn. */
   onStop?: () => void;
   placeholder?: string;
   autoFocus?: boolean;
@@ -169,20 +169,15 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
             }
           }}
         />
-        {onStop && (
-          <button type="button" className="btn btn-secondary btn-compact composer-btn" onClick={onStop}>
-            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
-              <rect x="2" y="2" width="8" height="8" rx="1.5" fill="currentColor" />
-            </svg>
-            Stop
-            <kbd className="kbd">Esc</kbd>
+        {onStop ? (
+          <button type="button" className="composer-icon" onClick={onStop} aria-label="Stop" title="Stop (Esc)">
+            <Stop />
+          </button>
+        ) : (
+          <button type="submit" className="composer-icon" disabled={!canSend} aria-label={submitLabel} title={`${submitLabel} (Enter)`}>
+            <Return />
           </button>
         )}
-        <button type="submit" className="btn btn-primary btn-compact composer-btn" disabled={!canSend}>
-          <Send />
-          {onStop ? "Queue" : submitLabel}
-          <kbd className="kbd">Enter</kbd>
-        </button>
       </form>
       <div className="composer-hint">
         {footer && <div className="composer-footer">{footer}</div>}
