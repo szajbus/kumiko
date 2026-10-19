@@ -16,7 +16,7 @@ import type {
 declare global {
   interface Window {
     /** Exposed by the Electron preload; absent in a plain browser. */
-    bentomo?: { pickFolder(): Promise<string | null>; platform: string };
+    bentomo?: { pickFolder(): Promise<string | null>; platform: string; onCloseTab?(cb: () => void): () => void };
   }
 }
 

@@ -46,6 +46,13 @@ function createWindow(url: string) {
       void shell.openExternal(target);
     }
   });
+  // Cmd/Ctrl+W closes the current tab, not the window; intercept it before the default menu accelerator does.
+  win.webContents.on("before-input-event", (e, input) => {
+    if (input.type === "keyDown" && (input.meta || input.control) && !input.shift && !input.alt && input.code === "KeyW") {
+      e.preventDefault();
+      win?.webContents.send("bentomo:close-tab");
+    }
+  });
   win.on("closed", () => (win = undefined));
   void win.loadURL(url);
 }

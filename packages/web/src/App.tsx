@@ -89,6 +89,38 @@ export function App() {
     else endSession(s);
   };
 
+  // Keyboard shortcuts act on the latest render's state, so the listeners below are installed once.
+  const shortcut = useRef<(action: "new" | "next" | "prev" | "close") => void>(() => {});
+  shortcut.current = (action) => {
+    if (action === "new") return go("#/session/new");
+    const tabs: TabId[] = ["sandboxes", ...live.sessions.map((s): TabId => `session:${s.id}`), ...(newSessionOpen ? ["new-session" as const] : [])];
+    const current = tabOf(route);
+    if (action === "close") return current === "sandboxes" ? undefined : close(current);
+    const i = tabs.indexOf(current);
+    const step = action === "next" ? 1 : -1;
+    select(tabs[(Math.max(i, 0) + step + tabs.length) % tabs.length]);
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+      // e.code, because Shift turns "[" into "{" and layouts differ.
+      const action = e.shiftKey
+        ? e.code === "BracketRight" ? "next" : e.code === "BracketLeft" ? "prev" : undefined
+        : e.code === "KeyT" ? "new" : e.code === "KeyW" ? "close" : undefined;
+      if (!action) return;
+      e.preventDefault();
+      shortcut.current(action);
+    };
+    addEventListener("keydown", onKey);
+    // Electron's menu claims Cmd+W for closing the window, so the shell forwards it instead.
+    const offClose = window.bentomo?.onCloseTab?.(() => shortcut.current("close"));
+    return () => {
+      removeEventListener("keydown", onKey);
+      offClose?.();
+    };
+  }, []);
+
   return (
     <div className="app">
       <Header
