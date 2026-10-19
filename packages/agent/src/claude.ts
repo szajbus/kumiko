@@ -10,7 +10,7 @@ export const CLAUDE_COMMAND = [
   // Checkpoints are what lets a prompt's file changes be undone; --replay-user-messages is how Claude says a prompt has one.
   "env CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=1 claude -p",
   "--input-format stream-json --output-format stream-json",
-  "--verbose --include-partial-messages --replay-user-messages",
+  "--verbose --include-partial-messages --replay-user-messages --prompt-suggestions",
   "--permission-mode bypassPermissions",
 ].join(" ");
 

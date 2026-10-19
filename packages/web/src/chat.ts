@@ -33,6 +33,8 @@ export interface ChatState {
   /** Claude reports cost per session; a turn's cost is the difference. */
   totalCost: number;
   interruptPending: boolean;
+  /** Claude's guess at the next prompt, sent after a turn; gone once any prompt is sent. */
+  suggestion?: string;
 }
 
 export const emptyChat = (): ChatState => ({ items: [], messages: {}, tools: {}, totalCost: 0, interruptPending: false });
@@ -81,7 +83,7 @@ export function applyEvent(s: ChatState, ev: SessionEvent): ChatState {
 
   switch (ev.kind) {
     case "user_prompt":
-      return push({ type: "user", key, text: ev.payload.text, id: ev.payload.id });
+      return { ...push({ type: "user", key, text: ev.payload.text, id: ev.payload.id }), suggestion: undefined };
     case "interrupt":
       return { ...s, interruptPending: true };
     case "error":
@@ -114,6 +116,9 @@ function applyClaude(s: ChatState, m: Json & { type: string }, key: string): Cha
   };
 
   switch (m.type) {
+    case "prompt_suggestion":
+      return { ...s, suggestion: str(m.suggestion) || undefined };
+
     case "system":
       if (m.subtype === "api_retry") return { ...s, items: [...s.items, { type: "retry", key, attempt: num(m.attempt), max: num(m.max_retries) }] };
       return s;

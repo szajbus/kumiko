@@ -125,6 +125,7 @@ export function SessionView({ session, onForked }: Props) {
         <Composer
           label="Message Claude"
           commands={session.commands}
+          suggestion={chat.suggestion}
           initialText={draft}
           draftKey={session.id}
           submitLabel="Send"

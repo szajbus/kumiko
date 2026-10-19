@@ -14,6 +14,8 @@ interface Props {
   label: string;
   /** Slash commands Claude accepts, without the slash. Typing "/" offers them. */
   commands?: string[];
+  /** A guess at the next message, shown dimmed while the box is empty: Tab takes it into the box, Backspace drops it. */
+  suggestion?: string;
   /** The box starts with this text, and the cursor at its end. */
   initialText?: string;
   /** Remembers the unsent text under this key while the composer is unmounted (switching tabs). */
@@ -36,7 +38,7 @@ export function matchCommands(commands: string[], typed: string): string[] {
 }
 
 /** A prompt box: Enter sends, Shift+Enter adds a line. Used by the New session tab and the chat. */
-export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder, autoFocus, label, commands, initialText, draftKey, footer }: Props) {
+export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder, autoFocus, label, commands, suggestion, initialText, draftKey, footer }: Props) {
   const [text, setTextState] = useState(() => initialText || (draftKey && drafts.get(draftKey)) || "");
   const setText = (value: string) => {
     setTextState(value);
@@ -47,6 +49,9 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
   const [picked, setPicked] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [sending, setSending] = useState(false);
+  // The suggestion Backspace dropped; a new one is a different text, so it shows again.
+  const [dropped, setDropped] = useState<string>();
+  const ghost = !text && suggestion && suggestion !== dropped ? suggestion : undefined;
   const box = useRef<HTMLTextAreaElement>(null);
 
   // A starting text is meant to be edited, so the cursor goes after it.
@@ -123,7 +128,7 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
           className="composer-input"
           rows={1}
           value={text}
-          placeholder={placeholder}
+          placeholder={ghost ?? placeholder}
           aria-label={label}
           autoFocus={autoFocus}
           onChange={(e) => {
@@ -132,6 +137,18 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
             setDismissed(false);
           }}
           onKeyDown={(e) => {
+            if (ghost && !e.nativeEvent.isComposing) {
+              if (e.key === "Tab" && !e.shiftKey) {
+                e.preventDefault();
+                setText(ghost);
+                return;
+              }
+              if (e.key === "Backspace") {
+                e.preventDefault();
+                setDropped(ghost);
+                return;
+              }
+            }
             if (choice && !e.nativeEvent.isComposing) {
               if (e.key === "ArrowDown" || e.key === "ArrowUp") {
                 e.preventDefault();
