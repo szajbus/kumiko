@@ -57,6 +57,8 @@ export const api = {
   resumable: () => request<ResumableSession[]>("GET", "/api/sessions/resumable"),
   /** Reopens a saved session with its chat; returns the same id. */
   resumeSession: (id: string) => request<{ id: string }>("POST", `/api/sessions/${id}/resume`),
+  /** Deletes a saved session for good. */
+  deleteSavedSession: (id: string) => request("DELETE", `/api/sessions/saved/${id}`),
   /** Starts a new session from a copy of this one's conversation. */
   forkSession: (id: string) => request<{ id: string }>("POST", `/api/sessions/${id}/fork`),
   /** Ends the session if it is live and forgets it; a session Claude has talked to stays resumable. */

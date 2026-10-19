@@ -103,6 +103,22 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
       .sort((a, b) => (b.updatedAt ?? b.startedAt).localeCompare(a.updatedAt ?? a.startedAt));
   }
 
+  /** Deletes a saved session for good. An open one can't be: close its tab first. */
+  async deleteSaved(id: string): Promise<boolean> {
+    if (this.sessions.has(id)) throw new SessionNotResumable(`Session ${id} is open.`);
+    if (!(await this.store?.read(id))) return false;
+    await this.store!.remove(id);
+    return true;
+  }
+
+  /** Deletes every saved session of a sandbox that is going away: Claude's transcripts went with its disk. */
+  async deleteSavedFor(sandbox: string): Promise<void> {
+    if (!this.store) return;
+    await this.flush();
+    const saved = await this.store.readAll();
+    await Promise.all(saved.filter((x) => x.info.sandbox === sandbox).map((x) => this.store!.remove(x.info.id)));
+  }
+
   private newId(): string {
     let id: string;
     do id = randomBytes(6).toString("hex");

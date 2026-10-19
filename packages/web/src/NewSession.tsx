@@ -3,6 +3,7 @@ import { WORKSPACE_DIR, type ResumableSession } from "@bentomo/shared";
 import { api, RequestError, type LiveState } from "./api";
 import { Composer } from "./Composer";
 import { sessionTitle } from "./Header";
+import { Trash } from "./icons";
 import { Select } from "./Select";
 
 interface Props {
@@ -47,6 +48,16 @@ export function NewSession({ live, onStarted }: Props) {
       setError(err instanceof RequestError ? err.message : String(err));
     } finally {
       setResuming(undefined);
+    }
+  };
+
+  const remove = async (id: string) => {
+    setError(undefined);
+    try {
+      await api.deleteSavedSession(id);
+      setSaved((list) => list.filter((r) => r.id !== id));
+    } catch (err) {
+      setError(err instanceof RequestError ? err.message : String(err));
     }
   };
 
@@ -127,9 +138,14 @@ export function NewSession({ live, onStarted }: Props) {
                     </span>
                     <span className="dim resume-when">{runs ? ago(r.updatedAt ?? r.startedAt) : `${ago(r.updatedAt ?? r.startedAt)} · sandbox not running`}</span>
                   </div>
-                  <button type="button" className="btn btn-secondary btn-compact" disabled={!runs || resuming !== undefined} onClick={() => void resume(r.id)}>
-                    Resume
-                  </button>
+                  <div className="resume-actions">
+                    <button type="button" className="btn btn-secondary btn-compact" disabled={!runs || resuming !== undefined} onClick={() => void resume(r.id)}>
+                      Resume
+                    </button>
+                    <button type="button" className="icon-btn" title="Delete session" aria-label="Delete session" disabled={resuming !== undefined} onClick={() => void remove(r.id)}>
+                      <Trash />
+                    </button>
+                  </div>
                 </li>
               );
             })}

@@ -250,6 +250,35 @@ describe("sessions", () => {
     await api(`/api/sessions/${id}`, { method: "DELETE" });
   });
 
+  it("deletes saved sessions by hand, and with their sandbox", async () => {
+    const idle = (x: string) => waitFor(async () => { const i = await session(x); return i?.status === "idle" && i.claudeSessionId ? i : undefined; });
+    const saved = async () => ((await json(await api("/api/sessions/resumable"))) as SessionInfo[]).map((x) => x.id);
+
+    const id = await startSession("one", "delete me");
+    await idle(id);
+    assert.equal((await api(`/api/sessions/saved/${id}`, { method: "DELETE" })).status, 409, "an open session can't be deleted");
+    await api(`/api/sessions/${id}`, { method: "DELETE" });
+    assert.ok((await saved()).includes(id));
+    assert.equal((await api(`/api/sessions/saved/${id}`, { method: "DELETE" })).status, 200);
+    assert.ok(!(await saved()).includes(id));
+    assert.equal((await api(`/api/sessions/saved/${id}`, { method: "DELETE" })).status, 404);
+
+    await create("doomed");
+    const doomed = await startSession("doomed", "going away");
+    await idle(doomed);
+    const kept = await startSession("one", "stays");
+    await idle(kept);
+    await api(`/api/sessions/${kept}`, { method: "DELETE" });
+    const since = events.length;
+    await api("/api/sandboxes/doomed", { method: "DELETE" });
+    assert.equal((await finished("doomed", "deleting", since)).type, "done");
+    await api(`/api/sessions/${doomed}`, { method: "DELETE" });
+    const left = await saved();
+    assert.ok(!left.includes(doomed), "a deleted sandbox takes its saved sessions with it");
+    assert.ok(left.includes(kept), "other sandboxes keep theirs");
+    await api(`/api/sessions/saved/${kept}`, { method: "DELETE" });
+  });
+
   it("ends every live session when the server closes", async () => {
     const live = ((await json(await api("/api/sessions"))) as SessionInfo[]).filter((s) => s.status === "idle");
     assert.ok(live.length > 0);

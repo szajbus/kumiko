@@ -137,6 +137,12 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     await sessions.endSandbox(name, "sandbox");
   };
 
+  /** Ends the sandbox's sessions and drops the saved ones, for when its VM is deleted. */
+  const dropSessions = async (name: string, log: Log) => {
+    await endSessions(name, log);
+    await sessions.deleteSavedFor(name);
+  };
+
   const timer = setInterval(() => void refresh(), opts.refreshMs ?? 5000);
   await refresh();
 
@@ -242,7 +248,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     await provider.stop(i.name, log);
   }));
   app.delete("/api/sandboxes/:name", action("deleting", async (i, log) => {
-    await endSessions(i.name, log);
+    await dropSessions(i.name, log);
     await provider.delete(i.name, log);
   }));
 
@@ -269,7 +275,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     try {
       begin(name, op, async (log) => {
         if (!recreate) return provider.edit(name, patch, log);
-        await endSessions(name, log);
+        await dropSessions(name, log);
         await provider.delete(name, log);
         await provider.create(v.spec, log);
       });
@@ -287,7 +293,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     return next();
   }, action("recreating", async (i, log) => {
     const spec = i.meta!.spec;
-    await endSessions(i.name, log);
+    await dropSessions(i.name, log);
     await provider.delete(i.name, log);
     await provider.create(spec, log);
   }));
@@ -326,6 +332,17 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
 
   /** Saved sessions that can be resumed, most recent first. */
   app.get("/api/sessions/resumable", async (c) => c.json(await sessions.resumable()));
+
+  /** Deletes a saved session that isn't open. */
+  app.delete("/api/sessions/saved/:id", async (c) => {
+    try {
+      if (!(await sessions.deleteSaved(c.req.param("id")))) return c.json(fail(`No saved session ${c.req.param("id")}.`), 404);
+    } catch (err) {
+      if (err instanceof SessionNotResumable) return c.json(fail("This session is open; close its tab first."), 409);
+      throw err;
+    }
+    return c.json({ ok: true });
+  });
 
   app.post("/api/sessions/:id/resume", async (c) => {
     const stored = await sessionStore.read(c.req.param("id"));
