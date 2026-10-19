@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { SessionInfo } from "@bentomo/shared";
 import { api, useLiveState } from "./api";
 import { CreateForm } from "./CreateForm";
@@ -41,6 +41,9 @@ export function App() {
   const live = useLiveState();
   const [route, setRoute] = useState<Route>(parseHash);
   // The New session tab is the window's own; it opens on demand and stays until started or closed.
+  // Sessions being closed leave the tabs at once, without waiting for the server to confirm.
+  const [ending, setEnding] = useState<ReadonlySet<string>>(new Set());
+  const sessions = useMemo(() => live.sessions.filter((s) => !ending.has(s.id)), [live.sessions, ending]);
   const [newSessionOpen, setNewSessionOpen] = useState(() => parseHash().view === "new-session");
   // Sessions this window just started: their tab opens before the session list may have caught up.
   const started = useRef(new Set<string>());
@@ -72,7 +75,14 @@ export function App() {
 
   const endSession = (s: SessionInfo) => {
     leave(`session:${s.id}`);
-    void api.endSession(s.id).catch(() => {});
+    setEnding((all) => new Set(all).add(s.id));
+    api.endSession(s.id).catch(() =>
+      setEnding((all) => {
+        const rest = new Set(all);
+        rest.delete(s.id);
+        return rest;
+      }),
+    );
   };
 
   const close = (tab: TabId) => {
@@ -80,7 +90,7 @@ export function App() {
       setNewSessionOpen(false);
       return leave(tab);
     }
-    const s = live.sessions.find((x) => `session:${x.id}` === tab);
+    const s = sessions.find((x) => `session:${x.id}` === tab);
     if (!s) return leave(tab);
     endSession(s);
   };
@@ -91,10 +101,10 @@ export function App() {
     if (action === "new") return go("#/session/new");
     // Cmd+1..9 jump to the nth session tab.
     if (typeof action === "number") {
-      const target = live.sessions[action - 1];
+      const target = sessions[action - 1];
       return target ? select(`session:${target.id}`) : undefined;
     }
-    const tabs: TabId[] = ["sandboxes", ...live.sessions.map((s): TabId => `session:${s.id}`), ...(newSessionOpen ? ["new-session" as const] : [])];
+    const tabs: TabId[] = ["sandboxes", ...sessions.map((s): TabId => `session:${s.id}`), ...(newSessionOpen ? ["new-session" as const] : [])];
     const current = tabOf(route);
     if (action === "close") return current === "sandboxes" ? undefined : close(current);
     const i = tabs.indexOf(current);
@@ -126,7 +136,7 @@ export function App() {
   return (
     <div className="app">
       <Header
-        sessions={live.sessions}
+        sessions={sessions}
         newSessionOpen={newSessionOpen}
         active={tabOf(route)}
         onSelect={select}
