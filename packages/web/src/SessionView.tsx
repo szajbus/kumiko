@@ -103,7 +103,7 @@ export function SessionView({ session, onForked }: Props) {
         <Composer
           label="Message Claude"
           submitLabel="Send"
-          placeholder={live ? "Message Claude… (Enter to send, Shift+Enter for a new line)" : "This session has ended."}
+          placeholder={live ? "Message Claude…" : "This session has ended."}
           disabled={!live || busy}
           onStop={session.status === "running" ? () => void call(() => api.interrupt(session.id)) : undefined}
           onSubmit={(text) => call(() => api.prompt(session.id, text))}
