@@ -32,6 +32,7 @@ import {
   type SandboxSpec,
   type ServerEvent,
   type SessionEvent,
+  type SessionInfo,
   type StartSessionRequest,
   type TemplatesResponse,
   type WorktreesResponse,
@@ -75,6 +76,8 @@ export interface ServerOptions {
 export interface RunningServer {
   url: string;
   port: number;
+  /** Sessions Claude is working in right now, which closing the server would cut short. */
+  working(): SessionInfo[];
   close(): Promise<void>;
 }
 
@@ -620,6 +623,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   return {
     url: `http://${host}:${port}`,
     port,
+    working: () => sessions.list().filter((s) => s.status === "running" || s.status === "starting"),
     close: async () => {
       clearInterval(timer);
       logins.cancelAll();

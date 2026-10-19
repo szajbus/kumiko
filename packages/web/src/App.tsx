@@ -40,6 +40,9 @@ function Redirect({ to }: { to: string }) {
   return null;
 }
 
+/** Claude is working in the session, so ending it cuts a turn short. */
+const isWorking = (s: SessionInfo) => s.status === "running" || s.status === "starting";
+
 const tabOf = (r: Route): TabId => (r.view === "new-session" ? "new-session" : r.view === "session" ? `session:${r.id}` : "projects");
 
 export function App() {
@@ -51,6 +54,8 @@ export function App() {
   const sessions = useMemo(() => live.sessions.filter((s) => !ending.has(s.id)), [live.sessions, ending]);
   // The session whose Cmd+Shift+W is waiting for confirmation.
   const [deleting, setDeleting] = useState<SessionInfo | undefined>();
+  // The session Claude is working in whose closing is waiting for confirmation.
+  const [stopping, setStopping] = useState<SessionInfo | undefined>();
   const [newSessionOpen, setNewSessionOpen] = useState(() => parseHash().view === "new-session");
   // The project the New session tab was last opened from, if any.
   const [newSessionProject, setNewSessionProject] = useState(() => {
@@ -153,13 +158,14 @@ export function App() {
     }
     const s = sessions.find((x) => `session:${x.id}` === tab);
     if (!s) return leave(tab);
+    if (isWorking(s)) return setStopping(s);
     void endSession(s);
   };
 
   // Keyboard shortcuts act on the latest render's state, so the listeners below are installed once.
   const shortcut = useRef<(action: "new" | "next" | "prev" | "close" | "delete" | number) => void>(() => {});
   shortcut.current = (action) => {
-    if (deleting) return;
+    if (deleting || stopping) return;
     if (action === "delete") {
       const current = tabOf(route);
       return setDeleting(sessions.find((x) => `session:${x.id}` === current));
@@ -236,6 +242,25 @@ export function App() {
         >
           <p>
             <strong>{sessionTitle(deleting)}</strong> closes and its saved chat is deleted, so it can't be resumed.
+            {isWorking(deleting) && " Claude is still working in it, and stops."}
+          </p>
+        </ConfirmDialog>
+      )}
+      {stopping && (
+        <ConfirmDialog
+          title="Stop Claude and close?"
+          confirmLabel="Stop and close"
+          danger
+          onCancel={() => setStopping(undefined)}
+          onConfirm={() => {
+            const s = stopping;
+            setStopping(undefined);
+            void endSession(s);
+          }}
+        >
+          <p>
+            Claude is still working in <strong>{sessionTitle(stopping)}</strong>. Closing the tab stops it, and the reply
+            it is writing is lost. You can resume the session later.
           </p>
         </ConfirmDialog>
       )}

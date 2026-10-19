@@ -117,11 +117,31 @@ if (!app.requestSingleInstanceLock()) {
     if (process.platform !== "darwin") app.quit();
   });
 
+  // Quitting ends every session, so a turn Claude is still working on stops: ask first.
   let closing = false;
+  let asking = false;
   app.on("before-quit", (e) => {
     if (!server || closing) return;
-    closing = true;
     e.preventDefault();
-    void server.close().finally(() => app.exit(0));
+    if (asking) return;
+    const working = server.working().length;
+    const quit = () => {
+      closing = true;
+      void server!.close().finally(() => app.exit(0));
+    };
+    if (!working) return quit();
+    asking = true;
+    const opts: Electron.MessageBoxOptions = {
+      type: "warning",
+      message: working === 1 ? "Claude is still working in a session." : `Claude is still working in ${working} sessions.`,
+      detail: "Quitting stops it, and the reply it is writing is lost. You can resume the session later.",
+      buttons: ["Quit", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+    };
+    void (win ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts)).then(({ response }) => {
+      asking = false;
+      if (response === 0) quit();
+    });
   });
 }

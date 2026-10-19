@@ -363,7 +363,10 @@ describe("sessions", () => {
     const slow = await listen(id);
     const slowPrompt = slow.got.find((e) => e.kind === "user_prompt");
     assert.equal((await rewind({ prompt: slowPrompt?.kind === "user_prompt" ? slowPrompt.payload.id : "" })).status, 409);
+    assert.deepEqual(server.working().map((x) => x.id), [id], "what quitting would cut short");
     await api(`/api/sessions/${id}/interrupt`, { method: "POST" });
+    await waitFor(async () => (await session(id))?.status === "idle" || undefined);
+    assert.deepEqual(server.working(), []);
     await api(`/api/sessions/${id}`, { method: "DELETE" });
   });
 
