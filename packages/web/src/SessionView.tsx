@@ -1,7 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { LIVE_SESSION_STATUSES, type LoginAccount, type SessionInfo } from "@bentomo/shared";
 import { api, errorMessage, useSessionEvents } from "./api";
-import { applyEvent, blocksOf, emptyChat, partialToolSummary, toolSummary, type Block, type ChatItem, type ChatState } from "./chat";
+import { applyEvent, blocksOf, emptyChat, loginCards, partialToolSummary, toolSummary, type Block, type ChatItem, type ChatState, type LoginAnswer } from "./chat";
 import { Composer } from "./Composer";
 import { Markdown } from "./Markdown";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -51,8 +51,8 @@ export function SessionView({ session, onForked }: Props) {
   const [restoreFiles, setRestoreFiles] = useState(false);
   useEffect(() => setRestoreFiles(false), [rewinding]);
   const [loggingIn, setLoggingIn] = useState(false);
-  // The logged-out card that a login from this tab answered, and who it logged in as; it turns green and offers Retry.
-  const [loggedIn, setLoggedIn] = useState<{ key?: string; account: LoginAccount; retried?: boolean } | undefined>();
+  // What is known about the login behind the last logged-out card; `loginCards` decides what that shows.
+  const [answer, setAnswer] = useState<LoginAnswer | undefined>();
   const idle = session.status === "idle";
   // Claude reports a full model id; the dropdown lists aliases, so show the alias it belongs to.
   const reported = session.model ?? "";
@@ -67,49 +67,33 @@ export function SessionView({ session, onForked }: Props) {
   const live = LIVE_SESSION_STATUSES.includes(session.status);
   const busy = live && !idle;
 
-  // The last time Claude said it isn't logged in (`last`), and the same if no turn has worked since (`signedOut`).
-  const { last, signedOut, notLoggedInKeys } = useMemo(() => {
-    const keys = chat.items.filter((i) => i.type === "error" && i.signedOut === true).map((i) => i.key);
-    const at = chat.items.findLastIndex((i) => i.type === "error" && i.signedOut === true);
-    const resolved = at < 0 || chat.items.slice(at).some((i) => i.type === "turn" && i.status === "ok");
-    return { last: keys.at(-1), signedOut: resolved ? undefined : keys.at(-1), notLoggedInKeys: keys };
-  }, [chat.items]);
+  const login = useMemo(() => loginCards(chat.items, answer), [chat.items, answer]);
+  const open = login.open;
 
   // A logged-out card that is still the last word may be out of date (logged in from another session, or before a
-  // reload): ask whether the project is logged in now, and show nothing until the answer is in.
-  const [checked, setChecked] = useState<{ key: string; loggedOut: boolean } | undefined>();
+  // reload): ask whether the project is logged in now. Nothing shows until the answer is in.
   useEffect(() => {
-    if (!signedOut || loggedIn?.key === signedOut) return;
+    if (!open || answer?.key === open) return;
     let current = true;
     api.loginStatus(session.id).then(
-      (res) => {
-        if (!current) return;
-        if (res.loggedIn) setLoggedIn({ key: signedOut, account: res.loggedIn });
-        else setChecked({ key: signedOut, loggedOut: true });
-      },
-      () => current && setChecked({ key: signedOut, loggedOut: true }),
+      (res) => current && setAnswer({ key: open, account: res.loggedIn }),
+      () => current && setAnswer({ key: open }),
     );
     return () => {
       current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signedOut, session.id]);
-
-  // Only the last of these cards shows, and only while it says something: logged out still (red), or logged in
-  // from this tab (green). The rest are history and stay hidden.
-  const red = signedOut && signedOut === last && checked?.key === signedOut && checked.loggedOut && loggedIn?.key !== signedOut ? signedOut : undefined;
-  const green = loggedIn?.key && loggedIn.key === last ? loggedIn.key : undefined;
-  const hidden = useMemo(() => new Set(notLoggedInKeys.filter((k) => k !== red && k !== green)), [notLoggedInKeys, red, green]);
+  }, [open, session.id]);
 
   // When a prompt sent while this tab is open fails for want of a login, the login opens straight away. Replaying an
   // old session's chat doesn't: Claude has to have been working since the tab opened.
   const sawWork = useRef(false);
   if (session.status === "running" || session.status === "starting") sawWork.current = true;
   useEffect(() => {
-    if (!signedOut || !sawWork.current) return;
+    if (!open || !sawWork.current) return;
     sawWork.current = false;
     setLoggingIn(true);
-  }, [signedOut]);
+  }, [open]);
 
   const call = async (fn: () => Promise<unknown>): Promise<boolean> => {
     setError(undefined);
@@ -156,52 +140,25 @@ export function SessionView({ session, onForked }: Props) {
         chat={chat}
         running={busy}
         onRewind={idle && session.claudeSessionId ? setRewinding : undefined}
-        hidden={hidden}
+        hidden={login.hidden}
         actions={
-          green && loggedIn
-            ? {
-                key: green,
-                node: (
-                  <div className="chat-ok" role="status">
-                    <strong>
-                      Logged in as {loggedIn.account.email ?? "your Claude account"}
-                      {loggedIn.account.plan ? ` (${planName(loggedIn.account.plan)})` : ""}.
-                    </strong>
-                    {!loggedIn.retried && (
-                      <div className="chat-error-actions">
-                        <span>Send your last message again, logged in.</span>
-                        <button
-                          type="button"
-                          className="btn btn-primary btn-compact"
-                          disabled={busy}
-                          onClick={() => {
-                            setLoggedIn({ ...loggedIn, retried: true });
-                            void call(() => api.retry(session.id)).then((ok) => ok || setLoggedIn({ ...loggedIn, retried: false }));
-                          }}
-                        >
-                          Retry
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                ),
-              }
-            : red
-              ? {
-                  key: red,
-                  node: (
-                    <div className="chat-error" role="alert">
-                      <strong>Claude isn't logged in.</strong>
-                      <div className="chat-error-actions">
-                        <span>Log in once for the project {session.sandbox}; all its sessions use it.</span>
-                        <button type="button" className="btn btn-primary btn-compact" onClick={() => setLoggingIn(true)}>
-                          Log in
-                        </button>
-                      </div>
-                    </div>
-                  ),
-                }
-              : undefined
+          login.card && {
+            key: login.card.key,
+            node: login.card.account ? (
+              <LoggedInCard
+                account={login.card.account}
+                retried={login.card.retried}
+                busy={busy}
+                onRetry={() => {
+                  const was = answer!;
+                  setAnswer({ ...was, retried: true });
+                  void call(() => api.retry(session.id)).then((ok) => ok || setAnswer(was));
+                }}
+              />
+            ) : (
+              <LoggedOutCard project={session.sandbox} onLogIn={() => setLoggingIn(true)} />
+            ),
+          }
         }
       />
 
@@ -212,7 +169,7 @@ export function SessionView({ session, onForked }: Props) {
           onClose={() => setLoggingIn(false)}
           onDone={(account) => {
             setLoggingIn(false);
-            setLoggedIn({ key: signedOut, account });
+            if (open) setAnswer({ key: open, account });
           }}
         />
       )}
@@ -297,6 +254,41 @@ function useChat(events: ReturnType<typeof useSessionEvents>["events"]): ChatSta
 }
 
 type UserItem = Extract<ChatItem, { type: "user" }>;
+
+/** In place of the last logged-out card, while the project still isn't logged in. */
+function LoggedOutCard({ project, onLogIn }: { project: string; onLogIn(): void }) {
+  return (
+    <div className="chat-error" role="alert">
+      <strong>Claude isn't logged in.</strong>
+      <div className="chat-error-actions">
+        <span>Log in once for the project {project}; all its sessions use it.</span>
+        <button type="button" className="btn btn-primary btn-compact" onClick={onLogIn}>
+          Log in
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** In place of the last logged-out card once the project is logged in, offering to send the failed prompt again. */
+function LoggedInCard({ account, retried, busy, onRetry }: { account: LoginAccount; retried?: boolean; busy: boolean; onRetry(): void }) {
+  return (
+    <div className="chat-ok" role="status">
+      <strong>
+        Logged in as {account.email ?? "your Claude account"}
+        {account.plan ? ` (${planName(account.plan)})` : ""}.
+      </strong>
+      {!retried && (
+        <div className="chat-error-actions">
+          <span>Send your last message again, logged in.</span>
+          <button type="button" className="btn btn-primary btn-compact" disabled={busy} onClick={onRetry}>
+            Retry
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface ChatProps {
   chat: ChatState;

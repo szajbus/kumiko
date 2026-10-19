@@ -1,4 +1,4 @@
-import type { EndReason, SessionEvent } from "@bentomo/shared";
+import type { EndReason, LoginAccount, SessionEvent } from "@bentomo/shared";
 
 // Turns a session's events into what the chat shows. Claude's stream-json is read loosely: only the fields the
 // chat needs, and anything unexpected is skipped rather than breaking the view.
@@ -269,4 +269,38 @@ export function partialToolSummary(json: string): string {
     }
   }
   return "";
+}
+
+/**
+ * What is known about the login behind one logged-out card: `account` when the project is logged in now (from this
+ * tab, or found so on asking), none when it was asked and isn't. `retried` once Retry was pressed after logging in.
+ */
+export interface LoginAnswer {
+  key: string;
+  account?: LoginAccount;
+  retried?: boolean;
+}
+
+export interface LoginCards {
+  /** The logged-out card no turn has worked since, if any: the one a login answers and the one to ask about. */
+  open?: string;
+  /** The one card shown: red with Log in while logged out, green with who it is once logged in. */
+  card?: { key: string; account?: LoginAccount; retried?: boolean };
+  /** Every other logged-out card: history, with nothing left to say. */
+  hidden: ReadonlySet<string>;
+}
+
+/**
+ * Which logged-out cards show. Only the last can, and only while it says something: green once `answer` says the
+ * project is logged in, red while it isn't and no turn has worked since. Until `answer` covers the open card the
+ * project may have logged in elsewhere, so nothing shows.
+ */
+export function loginCards(items: readonly ChatItem[], answer?: LoginAnswer): LoginCards {
+  const at = items.findLastIndex((i) => i.type === "error" && i.signedOut === true);
+  const keys = items.filter((i) => i.type === "error" && i.signedOut === true).map((i) => i.key);
+  const last = at < 0 ? undefined : items[at].key;
+  const open = last && !items.slice(at).some((i) => i.type === "turn" && i.status === "ok") ? last : undefined;
+  const mine = answer && answer.key === last ? answer : undefined;
+  const card = mine?.account ? { key: mine.key, account: mine.account, retried: mine.retried } : open && mine ? { key: open } : undefined;
+  return { open, card, hidden: new Set(keys.filter((k) => k !== card?.key)) };
 }

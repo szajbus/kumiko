@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { SessionEvent } from "@bentomo/shared";
-import { applyEvent, blocksOf, emptyChat, partialToolSummary, toolSummary, type ChatItem, type ChatState } from "../src/chat.ts";
+import { applyEvent, blocksOf, emptyChat, loginCards, partialToolSummary, toolSummary, type ChatItem, type ChatState } from "../src/chat.ts";
 
 type NewEvent = SessionEvent extends infer E ? (E extends unknown ? Omit<E, "seq"> : never) : never;
 
@@ -36,6 +36,27 @@ describe("chat", () => {
       signedOut,
     ]);
     assert.deepEqual(worked.items.map((i) => i.type), ["user", "assistant", "turn", "error"]);
+  });
+
+  it("shows only the last logged-out card, and only while it has something to say", () => {
+    const out = (key: string): ChatItem => ({ type: "error", key, message: "Claude isn't logged in.", signedOut: true });
+    const user = (key: string): ChatItem => ({ type: "user", key, text: "hi" });
+    const ok: ChatItem = { type: "turn", key: "t", status: "ok" };
+    const account = { email: "you@example.com", plan: "max" };
+    const items = [user("u1"), out("e1"), user("u2"), out("e2")];
+
+    // Not asked yet: it may have logged in elsewhere, so nothing shows, and e2 is the card to ask about.
+    assert.deepEqual(loginCards(items), { open: "e2", card: undefined, hidden: new Set(["e1", "e2"]) });
+    // Still logged out: red. An answer about an older card says nothing about this one.
+    assert.deepEqual(loginCards(items, { key: "e2" }).card, { key: "e2" });
+    assert.equal(loginCards(items, { key: "e1", account }).card, undefined);
+    // Logged in: green, and it stays after a turn works, with Retry gone once pressed.
+    assert.deepEqual(loginCards(items, { key: "e2", account }).card, { key: "e2", account, retried: undefined });
+    const worked = loginCards([...items, user("u3"), ok], { key: "e2", account, retried: true });
+    assert.deepEqual([worked.open, worked.card, [...worked.hidden]], [undefined, { key: "e2", account, retried: true }, ["e1"]]);
+    // A turn worked without a login from here: nothing left to say.
+    assert.deepEqual(loginCards([...items, user("u3"), ok], { key: "e2" }), { open: undefined, card: undefined, hidden: new Set(["e1", "e2"]) });
+    assert.deepEqual(loginCards([user("u1"), ok]), { open: undefined, card: undefined, hidden: new Set() });
   });
 
   it("shows streamed text as it arrives, then the finished message in its place", () => {
