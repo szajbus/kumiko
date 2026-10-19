@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { LIVE_SESSION_STATUSES, vmName, type SessionInfo } from "@bentomo/shared";
+import type { SessionInfo } from "@bentomo/shared";
 import { api, useLiveState } from "./api";
-import { ConfirmDialog } from "./ConfirmDialog";
 import { CreateForm } from "./CreateForm";
 import { Header, type TabId } from "./Header";
 import { NewSession } from "./NewSession";
@@ -37,14 +36,12 @@ function Redirect({ to }: { to: string }) {
 }
 
 const tabOf = (r: Route): TabId => (r.view === "new-session" ? "new-session" : r.view === "session" ? `session:${r.id}` : "sandboxes");
-const isLive = (s: SessionInfo) => LIVE_SESSION_STATUSES.includes(s.status);
 
 export function App() {
   const live = useLiveState();
   const [route, setRoute] = useState<Route>(parseHash);
   // The New session tab is the window's own; it opens on demand and stays until started or closed.
   const [newSessionOpen, setNewSessionOpen] = useState(() => parseHash().view === "new-session");
-  const [closing, setClosing] = useState<SessionInfo | undefined>();
   // Sessions this window just started: their tab opens before the session list may have caught up.
   const started = useRef(new Set<string>());
   // The Sandboxes tab remembers where it was, so switching back returns to the same page.
@@ -85,8 +82,7 @@ export function App() {
     }
     const s = live.sessions.find((x) => `session:${x.id}` === tab);
     if (!s) return leave(tab);
-    if (isLive(s)) setClosing(s);
-    else endSession(s);
+    endSession(s);
   };
 
   // Keyboard shortcuts act on the latest render's state, so the listeners below are installed once.
@@ -141,23 +137,6 @@ export function App() {
           go(`#/session/${id}`);
         }}
       />
-
-      {closing && (
-        <ConfirmDialog
-          title="Close this session?"
-          confirmLabel="Close session"
-          danger
-          onCancel={() => setClosing(undefined)}
-          onConfirm={() => {
-            endSession(closing);
-            setClosing(undefined);
-          }}
-        >
-          <p>
-            Claude stops working in {vmName(closing.sandbox)} and the tab closes. You can pick the session up again from New session.
-          </p>
-        </ConfirmDialog>
-      )}
     </div>
   );
 }
