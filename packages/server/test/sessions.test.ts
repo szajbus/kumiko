@@ -143,6 +143,8 @@ describe("sessions", () => {
     const lastSeq = s.got.at(-1)!.seq;
     await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: "/model haiku" }) });
     await waitFor(() => s.results().length === 4);
+    // The picker follows /model at once, without waiting for the next reply to name the model.
+    assert.equal((await session(id))?.model, "haiku");
     const again = await listen(id, lastSeq);
     await waitFor(() => again.got.some((e) => e.kind === "claude" && e.payload.type === "result"));
     assert.equal(again.got[0].seq, lastSeq + 1);

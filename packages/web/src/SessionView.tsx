@@ -33,13 +33,15 @@ export function SessionView({ session, onForked }: Props) {
   const [rewinding, setRewinding] = useState<Extract<ChatItem, { type: "user" }> | undefined>();
   const [restoreFiles, setRestoreFiles] = useState(false);
   useEffect(() => setRestoreFiles(false), [rewinding]);
+  const idle = session.status === "idle";
   // Claude reports a full model id; the dropdown lists aliases, so show the alias it belongs to.
   const reported = session.model ?? "";
   const alias = MODELS.find((m) => m !== "default" && reported.toLowerCase().includes(m));
   const currentModel = alias ?? reported;
   const modelOptions = currentModel && !MODELS.includes(currentModel) ? [...MODELS, currentModel] : MODELS;
   // Once Claude reports the model in use, that replaces what was picked.
-  useEffect(() => setModel(""), [reported]);
+  // A pick Claude didn't accept is dropped when the turn ends.
+  useEffect(() => setModel(""), [reported, idle]);
   const status = sessionStatus(session.status);
   const live = session.status === "starting" || session.status === "idle" || session.status === "running";
   const busy = session.status === "starting" || session.status === "running";
@@ -69,26 +71,11 @@ export function SessionView({ session, onForked }: Props) {
           </span>
         </div>
         <div className="session-controls">
-          <span className="badge badge-bypass" title="Claude runs tools without asking for permission. The sandbox is the boundary.">
-            Bypass permissions
-          </span>
           {totalCost > 0 && (
             <span className="mono dim session-cost" title="Total cost of this session">
               {formatCost(totalCost)}
             </span>
           )}
-          <div className="session-picker">
-            <Select
-              value={model || currentModel}
-              placeholder="Model"
-              disabled={session.status !== "idle"}
-              groups={[{ options: modelOptions }]}
-              onValueChange={(v) => {
-                setModel(v);
-                void call(() => api.prompt(session.id, `/model ${v}`));
-              }}
-            />
-          </div>
           <button
             type="button"
             className="btn btn-secondary btn-compact"
@@ -147,6 +134,23 @@ export function SessionView({ session, onForked }: Props) {
           onSubmit={(text) => call(() => api.prompt(session.id, text))}
           autoFocus
         />
+        <div className="session-options">
+          <span className="badge badge-bypass" title="Claude runs tools without asking for permission. The sandbox is the boundary.">
+            Bypass permissions
+          </span>
+          <div className="session-picker">
+            <Select
+              value={model || currentModel}
+              placeholder="Model"
+              disabled={!idle}
+              groups={[{ options: modelOptions }]}
+              onValueChange={(v) => {
+                setModel(v);
+                void call(() => api.prompt(session.id, `/model ${v}`));
+              }}
+            />
+          </div>
+        </div>
       </div>
     </div>
   );

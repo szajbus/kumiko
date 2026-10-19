@@ -56,7 +56,7 @@ async function turn(text) {
   if (text.startsWith("/model ")) {
     model = `claude-${text.slice(7).trim()}-5-5`;
     out({ type: "assistant", message: { model: "<synthetic>", id: randomUUID(), type: "message", role: "assistant", content: [{ type: "text", text: `Set model to ${model}` }] }, parent_tool_use_id: null, session_id, uuid: randomUUID() });
-    return result(start, { cost: 0, num_turns: 0 });
+    return result(start, { cost: 0, num_turns: 0, text: "Set model to `" + text.slice(7).trim() + "` for this session only" });
   }
   if (text.startsWith("/rename ")) {
     out({ type: "system", subtype: "session_title_changed", title: text.slice(8).trim(), session_id });

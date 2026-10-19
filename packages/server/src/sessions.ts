@@ -24,6 +24,8 @@ interface Session {
   blocks: Map<string, { started: number; finished: number }>;
   /** Set by `end`, so the exit that follows is recorded with the right reason. */
   ending?: EndReason;
+  /** The model named by the latest /model sent; Claude confirms it in words only, not with an id. */
+  pendingModel?: string;
   exited: Promise<void>;
   /** Saves to the store run one after another, so an older state never lands over a newer one. */
   saving: Promise<void>;
@@ -245,7 +247,8 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
       const model = (m.message as { model?: unknown } | undefined)?.model;
       if (typeof model === "string" && !model.startsWith("<")) this.setInfo(s, { model });
     } else if (m.type === "result") {
-      this.setInfo(s, { status: "idle" });
+      const switched = s.pendingModel && typeof m.result === "string" && m.result.startsWith("Set model to");
+      this.setInfo(s, { status: "idle", ...(switched ? { model: s.pendingModel } : {}) });
       // A finished message carries everything its deltas did, so drop them to keep long sessions small. Deltas of
       // a message cut short by Stop are all there is of it, so those stay.
       const done = new Set([...s.blocks].filter(([, c]) => c.finished >= c.started).map(([id]) => id));
@@ -280,6 +283,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     const s = this.live(id);
     const promptId = randomUUID();
     this.push(s, { kind: "user_prompt", payload: { text, id: promptId } });
+    s.pendingModel = /^\/model\s+(\S+)/.exec(text)?.[1];
     s.driver.send(text, promptId);
     if (s.info.status === "idle") this.setInfo(s, { status: "running" });
   }

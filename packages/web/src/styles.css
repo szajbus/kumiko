@@ -358,6 +358,7 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 .usage-window.is-warn .usage-bar > span { background: #e0a96d; }
 .usage-window.is-high .usage-bar > span { background: #e5645a; }
 .usage-window.is-high .usage-left { color: #e5645a; }
+.session-options { display: flex; align-items: center; gap: 10px; }
 .session-picker { width: 130px; }
 .session-picker .select-trigger { min-height: 36px; font-size: 13px; }
 /* A stable gutter on both edges keeps the messages centred on the same axis as the composer below. */
