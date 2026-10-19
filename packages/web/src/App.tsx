@@ -8,6 +8,7 @@ import { NewSession } from "./NewSession";
 import { SandboxList } from "./SandboxList";
 import { SandboxPage } from "./SandboxPage";
 import { SessionView } from "./SessionView";
+import { loadTabs, saveTabs } from "./tabs";
 
 type Route =
   | { view: "list" }
@@ -52,6 +53,37 @@ export function App() {
   const started = useRef(new Set<string>());
   // The Sandboxes tab remembers where it was, so switching back returns to the same page.
   const sandboxesHash = useRef(tabOf(route) === "sandboxes" ? location.hash || "#/" : "#/");
+
+  // The previous run's tabs come back once the server's session list has arrived; saving waits until they have.
+  const restoring = useRef(false);
+  const [restored, setRestored] = useState(false);
+  useEffect(() => {
+    if (!live.loaded || restoring.current) return;
+    restoring.current = true;
+    const saved = loadTabs();
+    if (!saved) return setRestored(true);
+    const open = new Set(live.sessions.map((s) => s.id));
+    void (async () => {
+      // Sessions that are gone or can't be resumed just don't get a tab.
+      const back = new Set<string>();
+      for (const id of saved.sessions) {
+        if (open.has(id) || (await api.resumeSession(id).then(() => true, () => false))) back.add(id);
+        // Its tab may open before the session list has caught up with the resume.
+        started.current.add(id);
+      }
+      if (saved.newSession) setNewSessionOpen(true);
+      // A link that already points somewhere wins over the saved active tab.
+      if (!location.hash || location.hash === "#/") {
+        if (saved.active === "new-session" && saved.newSession) go("#/session/new");
+        else if (saved.active.startsWith("session:") && back.has(saved.active.slice(8))) go(`#/session/${saved.active.slice(8)}`);
+      }
+      setRestored(true);
+    })();
+  }, [live.loaded, live.sessions]);
+
+  useEffect(() => {
+    if (restored) saveTabs({ sessions: sessions.map((s) => s.id), newSession: newSessionOpen, active: tabOf(route) });
+  }, [restored, sessions, newSessionOpen, route]);
 
   useEffect(() => {
     const onHash = () => {
