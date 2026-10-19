@@ -360,8 +360,9 @@ export interface ApiError {
 
 /** Messages on the /api/events WebSocket. */
 export type ServerEvent =
-  | { type: "snapshot"; projects: ProjectView[]; logs: Record<string, LogLine[]>; sessions: SessionInfo[]; error?: string }
-  | { type: "list"; projects: ProjectView[]; error?: string }
+  /** `error`: the VMs couldn't be listed. `unreadable`: why each project record that can't be used can't be. */
+  | { type: "snapshot"; projects: ProjectView[]; unreadable: string[]; logs: Record<string, LogLine[]>; sessions: SessionInfo[]; error?: string }
+  | { type: "list"; projects: ProjectView[]; unreadable: string[]; error?: string }
   /** Sent whenever a session starts, changes status or ends. */
   | { type: "sessions"; sessions: SessionInfo[] }
   | { sandbox: string; op: OpKind; type: "state"; data: Operation }

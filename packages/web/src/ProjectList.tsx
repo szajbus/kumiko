@@ -14,7 +14,7 @@ interface Props {
 export function ProjectList({ live, onOpen, onNew }: Props) {
   const actions = useActions();
   const home = useHome();
-  const empty = live.loaded && live.projects.length === 0;
+  const empty = live.loaded && live.projects.length === 0 && live.unreadable.length === 0;
 
   return (
     <>
@@ -34,6 +34,17 @@ export function ProjectList({ live, onOpen, onNew }: Props) {
           <div className="banner banner-error">
             <strong>Can't read Lima's instances.</strong>
             <span className="mono">{live.listError}</span>
+          </div>
+        )}
+
+        {live.unreadable.length > 0 && (
+          <div className="banner banner-error">
+            <strong>{live.unreadable.length === 1 ? "A project's record is unreadable, so it isn't listed." : "Some projects' records are unreadable, so they aren't listed."}</strong>
+            {live.unreadable.map((why) => (
+              <span key={why} className="mono">
+                {why}
+              </span>
+            ))}
           </div>
         )}
 

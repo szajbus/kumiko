@@ -47,6 +47,13 @@ export class ProjectExists extends Error {
   }
 }
 
+/** A project's record is there but can't be used: not JSON, edited by hand, or unreadable. */
+export class ProjectRecordError extends Error {
+  constructor(readonly file: string, why: string) {
+    super(`Bentomo's record of a project, ${file}, can't be read (${why}). Fix the file, or delete it to drop the project.`);
+  }
+}
+
 /** Ids name files and folders; only the sandbox name shape may. */
 function assertId(id: string): void {
   if (!NAME_PATTERN.test(id)) throw new Error(`Not a project id: ${id}`);
@@ -83,25 +90,54 @@ export class ProjectStore {
     return join(this.claudeRoot, id);
   }
 
+  /** The project's record; undefined when there is none, ProjectRecordError when there is one that can't be used. */
   async get(id: string): Promise<Project | undefined> {
     if (!NAME_PATTERN.test(id)) return undefined;
+    const file = this.file(id);
+    let text: string;
     try {
-      const p = JSON.parse(await readFile(this.file(id), "utf8")) as Project;
-      return p?.id === id && typeof p.clonePath === "string" && typeof p.worktreesPath === "string" ? p : undefined;
-    } catch {
-      return undefined;
+      text = await readFile(file, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw new ProjectRecordError(file, err instanceof Error ? err.message : String(err));
     }
+    let p: Partial<Project> | null;
+    try {
+      p = JSON.parse(text) as Partial<Project> | null;
+    } catch {
+      throw new ProjectRecordError(file, "not valid JSON");
+    }
+    if (p?.id !== id) throw new ProjectRecordError(file, `its id isn't ${id}`);
+    if (typeof p.clonePath !== "string" || typeof p.worktreesPath !== "string") throw new ProjectRecordError(file, "it has no clone or worktrees path");
+    return p as Project;
   }
 
-  async list(): Promise<Project[]> {
+  /** Every project, by id, and why each record that can't be used can't be. */
+  async list(): Promise<{ projects: Project[]; errors: string[] }> {
     let files: string[];
     try {
       files = await readdir(this.dir);
     } catch {
-      return [];
+      return { projects: [], errors: [] };
     }
-    const all = await Promise.all(files.filter((f) => f.endsWith(".json")).map((f) => this.get(f.slice(0, -".json".length))));
-    return all.filter((p): p is Project => Boolean(p)).sort((a, b) => a.id.localeCompare(b.id));
+    const projects: Project[] = [];
+    const errors: string[] = [];
+    await Promise.all(
+      files
+        .filter((f) => f.endsWith(".json"))
+        .map(async (f) => {
+          const id = f.slice(0, -".json".length);
+          if (!NAME_PATTERN.test(id)) return void errors.push(new ProjectRecordError(join(this.dir, f), "its name isn't a project id").message);
+          try {
+            const p = await this.get(id);
+            if (p) projects.push(p);
+          } catch (err) {
+            if (!(err instanceof ProjectRecordError)) throw err;
+            errors.push(err.message);
+          }
+        }),
+    );
+    return { projects: projects.sort((a, b) => a.id.localeCompare(b.id)), errors: errors.sort() };
   }
 
   /** Writes a new project's record, failing if the id is taken: two creates racing for one name can't both win. */
@@ -136,7 +172,7 @@ export class ProjectStore {
 
     const problem = await cloneProblem(clonePath);
     if (problem) errors.push(problem);
-    const taken = (await this.list()).find((p) => p.clonePath === clonePath);
+    const taken = (await this.list()).projects.find((p) => p.clonePath === clonePath);
     if (taken) errors.push(`${clonePath} is already the project ${taken.id}.`);
 
     const worktreesPath = clonePath + WORKTREES_SUFFIX;

@@ -327,6 +327,26 @@ describe("server", () => {
     await remove("race");
   });
 
+  it("reports a project record it can't read instead of hiding it", async () => {
+    const file = join(dataDir, "projects", "broken.json");
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(file, "{ not json");
+    const since = events.length;
+    const listed = await waitFor(() => events.slice(since).find((e) => e.type === "list" && e.unreadable.length > 0));
+    assert.ok(listed.type === "list");
+    assert.match(listed.unreadable.join("\n"), /broken\.json, can't be read \(not valid JSON\)/);
+    assert.ok(!(await projects()).some((p) => p.name === "broken"));
+    // It still holds the name, and asking for it says why it can't be used.
+    const res = await api("/api/projects/broken/worktrees");
+    assert.equal(res.status, 409);
+    assert.match((await json(res)).error, /not valid JSON/);
+    const clone = await makeClone(root, "broken");
+    const taken = await post("/api/projects", spec({ name: "broken", clonePath: clone }));
+    assert.match((await json(taken)).details.join(), /already a project called broken/);
+    await rm(file);
+    await waitFor(() => events.slice(since).find((e) => e.type === "list" && e.unreadable.length === 0));
+  });
+
   it("404s unknown projects and 400s bad ids", async () => {
     assert.equal((await api("/api/projects/nope/start", { method: "POST" })).status, 404);
     assert.equal((await api("/api/projects/nope/worktrees")).status, 404);

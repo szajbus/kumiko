@@ -40,7 +40,7 @@ import { GitError, worktreeStatuses } from "./git.js";
 import { isLocalRequest } from "./guard.js";
 import { LoginFailed, Logins } from "./logins.js";
 import { BusyError, Operations } from "./operations.js";
-import { ProjectExists, ProjectStore } from "./projects.js";
+import { ProjectExists, ProjectRecordError, ProjectStore } from "./projects.js";
 import { RewindRefused, SessionEnded, SessionNotFound, SessionNotResumable, Sessions } from "./sessions.js";
 import { SessionStore } from "./store.js";
 import { serveWeb } from "./static.js";
@@ -93,6 +93,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
 
   let infos: SandboxInfo[] = [];
   let projectList: Project[] = [];
+  /** Why each project record that can't be used can't be; those projects are left out of the list. */
+  let unreadable: string[] = [];
   /** What is wrong with each project's folders on the host, by id. */
   let problems = new Map<string, string>();
   let listError: string | undefined;
@@ -122,10 +124,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
 
   const pushListIfChanged = () => {
     const list = views();
-    const json = JSON.stringify({ list, listError });
+    const json = JSON.stringify({ list, unreadable, listError });
     if (json === lastListJson) return;
     lastListJson = json;
-    broadcast({ type: "list", projects: list, error: listError });
+    broadcast({ type: "list", projects: list, unreadable, error: listError });
   };
 
   /** Re-reads the provider's list; concurrent calls coalesce into one extra run. */
@@ -137,7 +139,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     refreshing = (async () => {
       do {
         refreshAgain = false;
-        projectList = await projects.list();
+        ({ projects: projectList, errors: unreadable } = await projects.list());
         problems = new Map((await Promise.all(projectList.map(async (p) => [p.id, await projects.problem(p)] as const))).filter((e): e is [string, string] => Boolean(e[1])));
         try {
           infos = await provider.list();
@@ -196,7 +198,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   app.onError((err, c) => {
     if (err instanceof HttpError) return c.json(fail(err.message, err.details), err.status);
     if (err instanceof LoginFailed) return c.json(fail(err.message, err.output), 422);
-    if (err instanceof BusyError || err instanceof ProjectExists) return c.json(fail(err.message), 409);
+    if (err instanceof BusyError || err instanceof ProjectExists || err instanceof ProjectRecordError) return c.json(fail(err.message), 409);
     if (err instanceof SessionNotFound) return c.json(fail(err.message), 404);
     if (err instanceof SessionEnded || err instanceof SessionNotResumable || err instanceof RewindRefused) return c.json(fail(err.message), 409);
     // Anything else is a bug or a tool failing; the UI still gets JSON it can show.
@@ -580,7 +582,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
       clients.add(ws);
       ws.on("close", () => clients.delete(ws));
       ws.on("error", () => clients.delete(ws));
-      ws.send(JSON.stringify({ type: "snapshot", projects: views(), logs: ops.logs(), sessions: sessions.list(), error: listError } satisfies ServerEvent));
+      ws.send(JSON.stringify({ type: "snapshot", projects: views(), unreadable, logs: ops.logs(), sessions: sessions.list(), error: listError } satisfies ServerEvent));
     });
   });
 
