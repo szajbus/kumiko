@@ -24,8 +24,8 @@ function createWindow(url: string) {
     minHeight: 520,
     title: "Bentomo",
     backgroundColor: "#0F1115",
-    // On macOS the app header doubles as the title bar: 36px tall, traffic lights centred in it.
-    ...(process.platform === "darwin" ? { titleBarStyle: "hidden" as const, trafficLightPosition: { x: 14, y: 12 } } : {}),
+    // On macOS the app header doubles as the title bar: 40px tall, the traffic lights (12px) centred in it.
+    ...(process.platform === "darwin" ? { titleBarStyle: "hidden" as const, trafficLightPosition: { x: 14, y: 14 } } : {}),
     show: false,
     webPreferences: {
       preload: join(here, "preload.cjs"),

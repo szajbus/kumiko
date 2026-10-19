@@ -1,13 +1,27 @@
-import { useEffect, useState } from "react";
-import { useLiveState } from "./api";
+import { useEffect, useRef, useState } from "react";
+import { LIVE_SESSION_STATUSES, vmName, type SessionInfo } from "@bentomo/shared";
+import { api, useLiveState } from "./api";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { CreateForm } from "./CreateForm";
+import { Header, type TabId } from "./Header";
+import { NewSession } from "./NewSession";
 import { SandboxList } from "./SandboxList";
 import { SandboxPage } from "./SandboxPage";
+import { SessionView } from "./SessionView";
 
-type Route = { view: "list" } | { view: "new" } | { view: "sandbox"; name: string } | { view: "edit"; name: string };
+type Route =
+  | { view: "list" }
+  | { view: "new" }
+  | { view: "sandbox"; name: string }
+  | { view: "edit"; name: string }
+  | { view: "new-session" }
+  | { view: "session"; id: string };
 
 function parseHash(): Route {
   if (location.hash === "#/new") return { view: "new" };
+  if (location.hash === "#/session/new") return { view: "new-session" };
+  const s = /^#\/session\/([0-9a-f]+)$/.exec(location.hash);
+  if (s) return { view: "session", id: s[1] };
   const m = /^#\/sandbox\/([a-z0-9-]+)(\/edit)?$/.exec(location.hash);
   if (!m) return { view: "list" };
   return m[2] ? { view: "edit", name: m[1] } : { view: "sandbox", name: m[1] };
@@ -22,19 +36,110 @@ function Redirect({ to }: { to: string }) {
   return null;
 }
 
+const tabOf = (r: Route): TabId => (r.view === "new-session" ? "new-session" : r.view === "session" ? `session:${r.id}` : "sandboxes");
+const isLive = (s: SessionInfo) => LIVE_SESSION_STATUSES.includes(s.status);
+
 export function App() {
   const live = useLiveState();
   const [route, setRoute] = useState<Route>(parseHash);
+  // The New session tab is the window's own; it opens on demand and stays until started or closed.
+  const [newSessionOpen, setNewSessionOpen] = useState(() => parseHash().view === "new-session");
+  const [closing, setClosing] = useState<SessionInfo | undefined>();
+  // Sessions this window just started: their tab opens before the session list may have caught up.
+  const started = useRef(new Set<string>());
+  // The Sandboxes tab remembers where it was, so switching back returns to the same page.
+  const sandboxesHash = useRef(tabOf(route) === "sandboxes" ? location.hash || "#/" : "#/");
 
   useEffect(() => {
     const onHash = () => {
-      setRoute(parseHash());
+      const r = parseHash();
+      setRoute(r);
+      if (tabOf(r) === "sandboxes") sandboxesHash.current = location.hash || "#/";
+      if (r.view === "new-session") setNewSessionOpen(true);
       scrollTo(0, 0);
     };
     addEventListener("hashchange", onHash);
     return () => removeEventListener("hashchange", onHash);
   }, []);
 
+  const select = (tab: TabId) => {
+    if (tab === "sandboxes") go(sandboxesHash.current);
+    else if (tab === "new-session") go("#/session/new");
+    else go(`#/session/${tab.slice("session:".length)}`);
+  };
+
+  /** After closing the active tab, fall back to the Sandboxes tab. */
+  const leave = (tab: TabId) => {
+    if (tabOf(route) === tab) go(sandboxesHash.current);
+  };
+
+  const endSession = (s: SessionInfo) => {
+    leave(`session:${s.id}`);
+    void api.endSession(s.id).catch(() => {});
+  };
+
+  const close = (tab: TabId) => {
+    if (tab === "new-session") {
+      setNewSessionOpen(false);
+      return leave(tab);
+    }
+    const s = live.sessions.find((x) => `session:${x.id}` === tab);
+    if (!s) return leave(tab);
+    if (isLive(s)) setClosing(s);
+    else endSession(s);
+  };
+
+  return (
+    <div className="app">
+      <Header
+        sessions={live.sessions}
+        newSessionOpen={newSessionOpen}
+        active={tabOf(route)}
+        onSelect={select}
+        onClose={close}
+        onNewSession={() => go("#/session/new")}
+      />
+      <Body
+        route={route}
+        live={live}
+        started={started.current}
+        onSessionStarted={(id) => {
+          started.current.add(id);
+          setNewSessionOpen(false);
+          go(`#/session/${id}`);
+        }}
+        onEndSession={(s) => (isLive(s) ? setClosing(s) : endSession(s))}
+      />
+
+      {closing && (
+        <ConfirmDialog
+          title="End this session?"
+          confirmLabel="End session"
+          danger
+          onCancel={() => setClosing(undefined)}
+          onConfirm={() => {
+            endSession(closing);
+            setClosing(undefined);
+          }}
+        >
+          <p>
+            Claude stops working in {vmName(closing.sandbox)} and the tab closes. Its transcript stays in the sandbox.
+          </p>
+        </ConfirmDialog>
+      )}
+    </div>
+  );
+}
+
+interface BodyProps {
+  route: Route;
+  live: ReturnType<typeof useLiveState>;
+  started: Set<string>;
+  onSessionStarted(id: string): void;
+  onEndSession(s: SessionInfo): void;
+}
+
+function Body({ route, live, started, onSessionStarted, onEndSession }: BodyProps) {
   switch (route.view) {
     case "new":
       return <CreateForm onCancel={() => go("#/")} onCreated={(name) => go(`#/sandbox/${name}`)} />;
@@ -49,6 +154,14 @@ export function App() {
       if (!live.loaded) return null;
       if (!sb?.meta) return <Redirect to={`#/sandbox/${route.name}`} />;
       return <CreateForm key={`edit-${route.name}`} editing={sb} onCancel={back} onCreated={back} />;
+    }
+    case "new-session":
+      return <NewSession live={live} onStarted={onSessionStarted} />;
+    case "session": {
+      const s = live.sessions.find((x) => x.id === route.id);
+      if (!live.loaded || (!s && started.has(route.id))) return null;
+      if (!s) return <Redirect to="#/" />;
+      return <SessionView key={s.id} session={s} onEnd={() => onEndSession(s)} />;
     }
     default:
       return <SandboxList live={live} onOpen={(name) => go(`#/sandbox/${name}`)} onNew={() => go("#/new")} />;

@@ -78,17 +78,20 @@ export class Operations extends EventEmitter<{ event: [ServerEvent]; settled: [s
     return entry.operation;
   }
 
-  /** Merges the provider's list with operations. Sandboxes being created show before Lima knows them. */
-  views(infos: SandboxInfo[]): SandboxView[] {
-    const views: SandboxView[] = infos.map((i) => this.view(i));
+  /**
+   * Merges the provider's list with operations and live session counts.
+   * Sandboxes being created show before Lima knows them.
+   */
+  views(infos: SandboxInfo[], sessions: Map<string, number> = new Map()): SandboxView[] {
+    const views: SandboxView[] = infos.map((i) => this.view(i, sessions));
     for (const name of this.active()) {
-      if (!infos.some((i) => i.name === name)) views.push(this.view({ name, status: "unknown" }));
+      if (!infos.some((i) => i.name === name)) views.push(this.view({ name, status: "unknown" }, sessions));
     }
     return views.sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  private view(info: SandboxInfo): SandboxView {
+  private view(info: SandboxInfo, sessions: Map<string, number>): SandboxView {
     const operation = this.get(info.name);
-    return { ...info, vm: vmName(info.name), provider: "lima", operation, busy: Boolean(operation && !operation.endedAt) };
+    return { ...info, vm: vmName(info.name), provider: "lima", operation, busy: Boolean(operation && !operation.endedAt), sessions: sessions.get(info.name) ?? 0 };
   }
 }

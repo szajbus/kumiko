@@ -1,9 +1,8 @@
 import type { LogLine, SandboxView } from "@bentomo/shared";
 import { SandboxActions, useActions, type Actions } from "./actions";
 import type { LiveState } from "./api";
-import { Header } from "./Header";
 import { EmptyBento, Plus } from "./icons";
-import { resources, statusOf } from "./status";
+import { plural, resources, statusOf } from "./status";
 
 interface Props {
   live: LiveState;
@@ -16,8 +15,7 @@ export function SandboxList({ live, onOpen, onNew }: Props) {
   const empty = live.loaded && live.sandboxes.length === 0;
 
   return (
-    <div className="app">
-      <Header />
+    <>
 
       <main className="page">
         <div className="page-head">
@@ -70,7 +68,7 @@ export function SandboxList({ live, onOpen, onNew }: Props) {
       </main>
 
       {actions.overlay}
-    </div>
+    </>
   );
 }
 
@@ -84,6 +82,7 @@ function Row({ sb, log, actions, onOpen }: { sb: SandboxView; log?: LogLine[]; a
         <span className="row-sub">
           <span className="mono dim">{sb.vm}</span>
           <span className="badge">Lima</span>
+          {sb.sessions > 0 && <span className="badge badge-sessions">{plural(sb.sessions, "session")}</span>}
         </span>
       </button>
 

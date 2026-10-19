@@ -10,6 +10,7 @@ import {
   ENV_NAME_PATTERN,
   NAME_PATTERN,
   vmName,
+  WORKSPACE_DIR,
   type ApiError,
   type CreateResponse,
   type DefaultsResponse,
@@ -19,11 +20,15 @@ import {
   type SandboxSpec,
   type SandboxView,
   type ServerEvent,
+  type SessionEvent,
+  type StartSessionRequest,
   type TemplatesResponse,
 } from "@bentomo/shared";
 import { LimaProvider, type Log, type SandboxProvider } from "@bentomo/sandbox";
+import { ClaudeDriver, type AgentDriver } from "@bentomo/agent";
 import { isLocalRequest } from "./guard.js";
 import { BusyError, Operations } from "./operations.js";
+import { SessionEnded, SessionNotFound, Sessions } from "./sessions.js";
 import { serveWeb } from "./static.js";
 
 export interface ServerOptions {
@@ -39,6 +44,8 @@ export interface ServerOptions {
   home?: string;
   /** Where forwarded variables are looked up for the form's "set on host" dots. */
   env?: () => NodeJS.ProcessEnv;
+  /** Makes the driver for each new agent session; defaults to Claude Code over the provider's exec. */
+  driver?: () => AgentDriver;
 }
 
 export interface RunningServer {
@@ -52,6 +59,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   const env = opts.env ?? (() => process.env);
   const host = opts.host ?? "127.0.0.1";
   const ops = new Operations();
+  const sessions = new Sessions(opts.driver ?? (() => new ClaudeDriver(provider.exec.bind(provider))));
   const clients = new Set<WebSocket>();
 
   // ---- list state -------------------------------------------------------------------------
@@ -67,7 +75,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     for (const ws of clients) if (ws.readyState === ws.OPEN) ws.send(msg);
   };
 
-  const views = (): SandboxView[] => ops.views(infos);
+  const views = (): SandboxView[] => ops.views(infos, sessions.liveCounts());
 
   const pushListIfChanged = () => {
     const sandboxes = views();
@@ -89,6 +97,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
         try {
           infos = await provider.list();
           listError = undefined;
+          endOrphanedSessions();
         } catch (err) {
           listError = err instanceof Error ? err.message : String(err);
         }
@@ -103,6 +112,26 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     if (ev.type !== "log") pushListIfChanged();
   });
   ops.on("settled", () => void refresh());
+
+  sessions.on("changed", () => {
+    broadcast({ type: "sessions", sessions: sessions.list() });
+    pushListIfChanged();
+  });
+
+  /** Sessions whose sandbox stopped or vanished outside Bentomo end too. */
+  const endOrphanedSessions = () => {
+    for (const [name] of sessions.liveCounts()) {
+      if (infos.find((i) => i.name === name)?.status !== "running") void sessions.endSandbox(name, "sandbox");
+    }
+  };
+
+  /** Ends a sandbox's sessions before an operation takes it down, noting it in the operation's log. */
+  const endSessions = async (name: string, log: Log) => {
+    const n = sessions.liveCounts().get(name) ?? 0;
+    if (!n) return;
+    log(`Ending ${n} agent session${n === 1 ? "" : "s"}…`, "note");
+    await sessions.endSandbox(name, "sandbox");
+  };
 
   const timer = setInterval(() => void refresh(), opts.refreshMs ?? 5000);
   await refresh();
@@ -204,8 +233,14 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   };
 
   app.post("/api/sandboxes/:name/start", action("starting", (i, log) => provider.start(i.name, log)));
-  app.post("/api/sandboxes/:name/stop", action("stopping", (i, log) => provider.stop(i.name, log)));
-  app.delete("/api/sandboxes/:name", action("deleting", (i, log) => provider.delete(i.name, log)));
+  app.post("/api/sandboxes/:name/stop", action("stopping", async (i, log) => {
+    await endSessions(i.name, log);
+    await provider.stop(i.name, log);
+  }));
+  app.delete("/api/sandboxes/:name", action("deleting", async (i, log) => {
+    await endSessions(i.name, log);
+    await provider.delete(i.name, log);
+  }));
 
   /**
    * Change resources, mounts (VM stopped), forwarded variables or the provisioning script.
@@ -230,6 +265,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     try {
       begin(name, op, async (log) => {
         if (!recreate) return provider.edit(name, patch, log);
+        await endSessions(name, log);
         await provider.delete(name, log);
         await provider.create(v.spec, log);
       });
@@ -247,8 +283,63 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     return next();
   }, action("recreating", async (i, log) => {
     const spec = i.meta!.spec;
+    await endSessions(i.name, log);
     await provider.delete(i.name, log);
     await provider.create(spec, log);
+  }));
+
+  // ---- agent sessions --------------------------------------------------------------------
+
+  app.get("/api/sessions", (c) => c.json(sessions.list()));
+
+  app.post("/api/sessions", async (c) => {
+    let body: StartSessionRequest;
+    try {
+      body = await c.req.json<StartSessionRequest>();
+    } catch {
+      return c.json(fail("Body must be JSON: { sandbox, prompt }."), 400);
+    }
+    const name = String(body?.sandbox ?? "");
+    const prompt = typeof body?.prompt === "string" ? body.prompt.trim() : "";
+    if (!prompt) return c.json(fail("The opening prompt is empty."), 400);
+    const info = await known(name);
+    if ("error" in info) return c.json(info, NAME_PATTERN.test(name) ? 404 : 400);
+    if (info.status !== "running") return c.json(fail(`${vmName(name)} is not running. Start it first.`), 409);
+    const cur = ops.get(name);
+    if (cur && !cur.endedAt) return c.json(fail(`${vmName(name)} is busy ${cur.op}.`), 409);
+    const spec = info.meta?.spec;
+    const session = sessions.start({ sandbox: name, workdir: spec?.workdir ?? WORKSPACE_DIR, env: spec?.env ?? [], prompt });
+    return c.json({ id: session.id }, 201);
+  });
+
+  /** Runs `fn` on a session: 404 if it doesn't exist, 409 if it has ended. */
+  const onSession = (fn: (id: string, c: Context) => Promise<Response> | Response) => async (c: Context) => {
+    try {
+      return await fn(c.req.param("id")!, c);
+    } catch (err) {
+      if (err instanceof SessionNotFound) return c.json(fail(err.message), 404);
+      if (err instanceof SessionEnded) return c.json(fail(err.message), 409);
+      throw err;
+    }
+  };
+
+  app.post("/api/sessions/:id/prompt", onSession(async (id, c) => {
+    const body = await c.req.json<{ text?: unknown }>().catch(() => ({}) as { text?: unknown });
+    const text = typeof body.text === "string" ? body.text.trim() : "";
+    if (!text) return c.json(fail("The prompt is empty."), 400);
+    sessions.prompt(id, text);
+    return c.json({ ok: true }, 202);
+  }));
+
+  app.post("/api/sessions/:id/interrupt", onSession((id, c) => {
+    sessions.interrupt(id);
+    return c.json({ ok: true }, 202);
+  }));
+
+  app.delete("/api/sessions/:id", onSession(async (id, c) => {
+    if (!sessions.get(id)) throw new SessionNotFound(`No session ${id}.`);
+    await sessions.remove(id);
+    return c.json({ ok: true });
   }));
 
   app.all("/api/*", (c) => c.json(fail("Not found."), 404));
@@ -261,20 +352,38 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   });
 
   const wss = new WebSocketServer({ noServer: true });
+  const sessionSockets = new Set<WebSocket>();
   server.on("upgrade", (req, socket, head) => {
-    const path = new URL(req.url ?? "/", "http://localhost").pathname;
-    if (path !== "/api/events" || !isLocalRequest(req.headers)) {
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const sessionId = /^\/api\/sessions\/([0-9a-f]+)\/events$/.exec(url.pathname)?.[1];
+    // An unknown session is accepted and closed with 4404, which a browser can see; an HTTP 404 would look like a network error.
+    if ((url.pathname !== "/api/events" && !sessionId) || !isLocalRequest(req.headers)) {
       socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
       socket.destroy();
       return;
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
+      if (sessionId) return streamSession(ws, sessionId, Number(url.searchParams.get("after") ?? 0) || 0);
       clients.add(ws);
       ws.on("close", () => clients.delete(ws));
       ws.on("error", () => clients.delete(ws));
-      ws.send(JSON.stringify({ type: "snapshot", sandboxes: views(), logs: ops.logs(), error: listError } satisfies ServerEvent));
+      ws.send(JSON.stringify({ type: "snapshot", sandboxes: views(), logs: ops.logs(), sessions: sessions.list(), error: listError } satisfies ServerEvent));
     });
   });
+
+  /** Replays a session's events after `after`, then streams new ones; closes when the session is removed. */
+  const streamSession = (ws: WebSocket, id: string, after: number) => {
+    sessionSockets.add(ws);
+    const send = (ev: SessionEvent) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(ev));
+    const unsubscribe = sessions.subscribe(id, after, { event: send, gone: () => ws.close(4404, "session removed") });
+    const done = () => {
+      unsubscribe?.();
+      sessionSockets.delete(ws);
+    };
+    ws.on("close", done);
+    ws.on("error", done);
+    if (!unsubscribe) ws.close(4404, "no such session");
+  };
 
   const port = (server.address() as AddressInfo).port;
   return {
@@ -282,7 +391,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     port,
     close: async () => {
       clearInterval(timer);
+      await sessions.endAll("quit");
       for (const ws of clients) ws.terminate();
+      // Closed rather than terminated, so each tab still gets its session's last event.
+      for (const ws of sessionSockets) ws.close(1001, "server closing");
       wss.close();
       await new Promise<void>((r) => server.close(() => r()));
     },

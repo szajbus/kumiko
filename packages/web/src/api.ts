@@ -1,5 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import type { ApiError, CreateResponse, DefaultsResponse, EditSpec, LogLine, SandboxSpec, SandboxView, ServerEvent, TemplatesResponse } from "@bentomo/shared";
+import type {
+  ApiError,
+  CreateResponse,
+  DefaultsResponse,
+  EditSpec,
+  LogLine,
+  SandboxSpec,
+  SandboxView,
+  ServerEvent,
+  SessionEvent,
+  SessionInfo,
+  TemplatesResponse,
+} from "@bentomo/shared";
 
 declare global {
   interface Window {
@@ -37,11 +49,20 @@ export const api = {
   /** Saves in place, or with `recreate` deletes the VM and creates it again from the changed spec. */
   edit: (name: string, patch: EditSpec, recreate = false) =>
     request<{ warnings: string[] }>("PATCH", `/api/sandboxes/${name}${recreate ? "?recreate=1" : ""}`, patch),
+  startSession: (sandbox: string, prompt: string) => request<{ id: string }>("POST", "/api/sessions", { sandbox, prompt }),
+  prompt: (id: string, text: string) => request("POST", `/api/sessions/${id}/prompt`, { text }),
+  interrupt: (id: string) => request("POST", `/api/sessions/${id}/interrupt`),
+  /** Ends the session if it is live and forgets it. */
+  endSession: (id: string) => request("DELETE", `/api/sessions/${id}`),
 };
+
+const wsUrl = (path: string) => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${path}`;
 
 export interface LiveState {
   sandboxes: SandboxView[];
   logs: Record<string, LogLine[]>;
+  /** Agent sessions, live and ended, in the order they started. */
+  sessions: SessionInfo[];
   /** The server couldn't list sandboxes (e.g. limactl missing). */
   listError?: string;
   connected: boolean;
@@ -51,7 +72,7 @@ export interface LiveState {
 
 /** Keeps the sandbox list and operation logs in sync over /api/events, reconnecting when the server restarts. */
 export function useLiveState(): LiveState {
-  const [state, setState] = useState<LiveState>({ sandboxes: [], logs: {}, connected: false, loaded: false });
+  const [state, setState] = useState<LiveState>({ sandboxes: [], logs: {}, sessions: [], connected: false, loaded: false });
   const retry = useRef(0);
 
   useEffect(() => {
@@ -60,8 +81,7 @@ export function useLiveState(): LiveState {
     let closed = false;
 
     const connect = () => {
-      const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/events`;
-      ws = new WebSocket(url);
+      ws = new WebSocket(wsUrl("/api/events"));
       ws.onopen = () => {
         retry.current = 0;
       };
@@ -90,9 +110,11 @@ export function useLiveState(): LiveState {
 function apply(s: LiveState, ev: ServerEvent): LiveState {
   switch (ev.type) {
     case "snapshot":
-      return { sandboxes: ev.sandboxes, logs: ev.logs, listError: ev.error, connected: true, loaded: true };
+      return { sandboxes: ev.sandboxes, logs: ev.logs, sessions: ev.sessions, listError: ev.error, connected: true, loaded: true };
     case "list":
       return { ...s, sandboxes: ev.sandboxes, listError: ev.error };
+    case "sessions":
+      return { ...s, sessions: ev.sessions };
     case "state":
       // A new operation starts a fresh log.
       return { ...s, logs: { ...s.logs, [ev.sandbox]: [] } };
@@ -101,4 +123,55 @@ function apply(s: LiveState, ev: ServerEvent): LiveState {
     default:
       return s;
   }
+}
+
+export interface SessionStream {
+  events: SessionEvent[];
+  connected: boolean;
+  /** The server doesn't know this session (it was removed, or the server restarted). */
+  gone: boolean;
+}
+
+/**
+ * Streams one session's events: the whole buffer first, then new ones. After a dropped connection it resumes from
+ * the last `seq` it has, so nothing is lost or repeated.
+ */
+export function useSessionEvents(id: string): SessionStream {
+  const [state, setState] = useState<SessionStream>({ events: [], connected: false, gone: false });
+
+  useEffect(() => {
+    let ws: WebSocket | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let closed = false;
+    let lastSeq = 0;
+    let retry = 0;
+    setState({ events: [], connected: false, gone: false });
+
+    const connect = () => {
+      ws = new WebSocket(wsUrl(`/api/sessions/${id}/events?after=${lastSeq}`));
+      ws.onopen = () => {
+        retry = 0;
+        setState((s) => ({ ...s, connected: true }));
+      };
+      ws.onmessage = (msg) => {
+        const ev = JSON.parse(String(msg.data)) as SessionEvent;
+        if (ev.seq <= lastSeq) return;
+        lastSeq = ev.seq;
+        setState((s) => ({ ...s, events: [...s.events, ev] }));
+      };
+      ws.onclose = (e) => {
+        setState((s) => ({ ...s, connected: false, gone: s.gone || e.code === 4404 }));
+        if (closed || e.code === 4404) return;
+        timer = setTimeout(connect, Math.min(5000, 300 * 2 ** retry++));
+      };
+    };
+    connect();
+    return () => {
+      closed = true;
+      clearTimeout(timer);
+      ws?.close();
+    };
+  }, [id]);
+
+  return state;
 }

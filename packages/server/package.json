@@ -13,6 +13,7 @@
     "bentomo-server": "./dist/src/main.js"
   },
   "dependencies": {
+    "@bentomo/agent": "*",
     "@bentomo/sandbox": "*",
     "@bentomo/shared": "*",
     "@hono/node-server": "^1.19.0",

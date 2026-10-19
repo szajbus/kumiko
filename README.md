@@ -1,6 +1,6 @@
 # Bentomo
 
-A desktop app that creates, starts, stops and deletes Lima VMs ("sandboxes"), the same shape as workmux's Lima sandboxes.
+A desktop app that creates, starts, stops and deletes Lima VMs ("sandboxes"), the same shape as workmux's Lima sandboxes, and runs Claude Code sessions inside them.
 
 Bentomo only touches Lima instances named `bm-…`. Every other instance, workmux's `wm-…` VMs included, is never listed, started, stopped or deleted.
 
@@ -50,6 +50,7 @@ npm run dev:server
 | `npm run build` | Type-checks and builds every package, including the web UI. |
 | `npm test` | Builds, then runs the adapter and server tests against the fake `limactl`. |
 | `npm run roundtrip` | Build step 1's check against **real Lima**: creates `bm-roundtrip` (Debian 12, writable mount), provisions it with a forwarded variable, then checks exec stdin, stop, start (no re-provisioning) and delete. |
+| `npm run drive -- --sandbox <name>` | Sessions step 1's check against a **running sandbox**: starts Claude, sends two prompts (one reads a forwarded variable), interrupts a third mid-tool-call and sends a fourth, printing every event. `--local` runs `claude` on this machine instead, for trying it from inside a VM. |
 | `npm run server` | Runs the server alone and serves the built UI. |
 | `npm run desktop` | Builds and launches the Electron app. |
 
@@ -57,13 +58,14 @@ npm run dev:server
 
 ```
 apps/desktop/          Electron main + preload (bundled with the server by esbuild)
-packages/server/       HTTP + WS (Hono, ws), operations, list refresh
+packages/server/       HTTP + WS (Hono, ws), operations, list refresh, agent sessions
+packages/agent/        AgentDriver interface, Claude Code stream-json driver, a fake claude for tests
 packages/sandbox/      SandboxProvider interface, Lima adapter, metadata files
 packages/web/          React + Vite UI
 packages/shared/       API and event types
 ```
 
-State: Lima owns the VMs (`~/.lima/bm-*`). Bentomo keeps one JSON file per sandbox in `~/.bentomo/sandboxes/<name>.json`, holding the spec with variable names only, never values. Operation logs live in server memory. `BENTOMO_HOME` and `LIMA_HOME` override the locations.
+State: Lima owns the VMs (`~/.lima/bm-*`). Bentomo keeps one JSON file per sandbox in `~/.bentomo/sandboxes/<name>.json`, holding the spec with variable names only, never values. Operation logs and agent sessions live in server memory; Claude keeps its transcripts in the VM. `BENTOMO_HOME` and `LIMA_HOME` override the locations.
 
 ## Notes on the implementation
 
@@ -105,3 +107,22 @@ Beyond the spec:
 - **Recreate** (in the design's row menu) deletes a sandbox and creates it again from its stored spec: `POST /api/sandboxes/:name/recreate`.
 - **`GET /api/env?names=A,B`** backs the form's "set on host" dots. It answers `true`/`false`, never values.
 - **Request guard:** the server listens on `127.0.0.1` only. It also refuses requests whose `Host` or `Origin` isn't local, so a web page open in your browser can't drive it (DNS rebinding, CSRF).
+
+## Notes on agent sessions
+
+Checked against Claude Code 2.1.303 (the sessions spec's open question):
+
+- The stdin message shape and the interrupt control request work as written. An interrupt answers with a `control_response`, ends the turn with a `result` of subtype `error_during_execution`, and leaves the process ready for the next prompt, so there is no kill fallback.
+- `--include-partial-messages` streams `text_delta`, `thinking_delta` and `input_json_delta` in this mode. Thinking deltas arrive empty (only `estimated_tokens`), so the thinking block usually says Claude didn't share it.
+- `/model <name>` sent as a message switches the model from the next turn. It answers with a synthetic assistant message and a `result` with `num_turns: 0`.
+- `system/init` comes at the start of every turn, not once. `assistant` messages arrive one content block at a time, several per message id. `total_cost_usd` is the session's running total, so a turn's cost is the difference.
+
+Beyond the spec:
+
+- **Ended sessions stay listed** (status `ended` or `failed`) until their tab is closed, so the transcript survives a reload. `DELETE /api/sessions/:id` ends a live session and forgets it either way; End session closes the tab.
+- **Event kinds** are `claude` (a raw stream-json line), `user_prompt`, `error`, plus `interrupt` (Stop was pressed, so the next error result shows as "Interrupted", not red) and `ended` (`reason`: `user`, `sandbox`, `quit` or `exit`).
+- **Deltas are pruned** when a turn ends, for every message whose blocks all finished; the final `assistant` messages carry the same content. A message cut short by Stop keeps its deltas, since they are all there is of it.
+- **Session status changes** go out on `/api/events` as `{ type: "sessions", sessions }`, and the snapshot carries them, so tab dots stay current. Sandbox views carry a live `sessions` count.
+- **Stop asks first** when the sandbox has live sessions (it didn't ask at all before). Delete, Recreate and Save and recreate say how many sessions will end. Sessions also end when the list notices their sandbox stopped outside Bentomo.
+- **Subagent messages** (`parent_tool_use_id` set) are kept in the buffer but not shown; the subagent's own tool call shows as one line.
+- An unknown session's socket is accepted and closed with code `4404`, which a browser can see, rather than refused with an HTTP 404.

@@ -3,10 +3,9 @@ import { vmName, WORKSPACE_DIR, type LogLine, type SandboxView } from "@bentomo/
 import { SandboxActions, useActions } from "./actions";
 import { api, type LiveState } from "./api";
 import { Breadcrumbs } from "./Breadcrumbs";
-import { Header } from "./Header";
 import { Folder, Pencil } from "./icons";
 import { LogPanel } from "./LogPanel";
-import { COLORS, statusOf } from "./status";
+import { COLORS, plural, statusOf } from "./status";
 
 interface Props {
   name: string;
@@ -23,8 +22,7 @@ export function SandboxPage({ name, live, onBack, onEdit }: Props) {
   const home = useHome();
 
   return (
-    <div className="app">
-      <Header />
+    <>
 
       <main className="page">
         <Breadcrumbs items={[{ label: "Sandboxes", href: "#/" }, { label: name }]} />
@@ -59,7 +57,7 @@ export function SandboxPage({ name, live, onBack, onEdit }: Props) {
       </main>
 
       {actions.overlay}
-    </div>
+    </>
   );
 }
 
@@ -72,6 +70,7 @@ function DetailHead({ sb, lines, children }: { sb: SandboxView; lines: LogLine[]
         <span className="row-sub">
           <span className="mono dim">{sb.vm}</span>
           <span className="badge">Lima</span>
+          {sb.sessions > 0 && <span className="badge badge-sessions">{plural(sb.sessions, "live session")}</span>}
         </span>
       </div>
       <div className="detail-head-right">
@@ -201,5 +200,3 @@ function useEnvSet(names: string[]): Record<string, boolean> {
   }, [key]);
   return set;
 }
-
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;

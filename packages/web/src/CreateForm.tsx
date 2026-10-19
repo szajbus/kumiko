@@ -12,9 +12,9 @@ import {
   type TemplatesResponse,
 } from "@bentomo/shared";
 import { api, RequestError } from "./api";
+import { sessionsNote } from "./actions";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Breadcrumbs } from "./Breadcrumbs";
-import { Header } from "./Header";
 import { Cross, Folder, Plus } from "./icons";
 import { Select, type SelectGroup } from "./Select";
 import { COLORS } from "./status";
@@ -249,8 +249,7 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
   }, [name, template, cpus, memory, disk, mounts, envNames, envSet, provision, workdir]);
 
   return (
-    <div className="app">
-      <Header />
+    <>
 
       <form className="form-main" onSubmit={submit} noValidate>
         <Breadcrumbs
@@ -544,10 +543,11 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
             }}
           >
             <p>The VM and its disk are deleted, then created again from these settings and provisioned from scratch. Mounted host folders are not touched.</p>
+            {sessionsNote(editing)}
           </ConfirmDialog>
         )}
       </form>
-    </div>
+    </>
   );
 }
 

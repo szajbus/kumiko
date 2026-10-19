@@ -117,6 +117,48 @@ export interface SandboxView extends SandboxInfo {
   /** The running operation, or the last finished one. */
   operation?: Operation;
   busy: boolean;
+  /** Live agent sessions in this sandbox. */
+  sessions: number;
+}
+
+// ---- agent sessions -------------------------------------------------------------------------
+
+/** `starting` until Claude answers, `running` during a turn, `idle` between turns; `ended` and `failed` are final. */
+export type SessionStatus = "starting" | "idle" | "running" | "ended" | "failed";
+
+export const LIVE_SESSION_STATUSES: readonly SessionStatus[] = ["starting", "idle", "running"];
+
+export interface SessionInfo {
+  id: string;
+  sandbox: string;          // short name, without "bm-"
+  workdir: string;          // where Claude was started in the VM
+  status: SessionStatus;
+  /** The opening prompt, for the tab title. */
+  prompt: string;
+  startedAt: string;
+  endedAt?: string;
+  /** Claude's own session id and model, from its `system/init`. */
+  claudeSessionId?: string;
+  model?: string;
+}
+
+/** Why a session ended: End session, its sandbox stopping, the app quitting, or the process exiting by itself. */
+export type EndReason = "user" | "sandbox" | "quit" | "exit";
+
+/**
+ * One entry in a session's event buffer. `claude` carries a raw stream-json line from Claude; the rest are Bentomo's:
+ * the prompts we sent, Stop being pressed, errors (SSH, `claude` missing or signed out, a crash) and the end.
+ */
+export type SessionEvent =
+  | { seq: number; kind: "claude"; payload: Record<string, unknown> & { type: string } }
+  | { seq: number; kind: "user_prompt"; payload: { text: string } }
+  | { seq: number; kind: "interrupt"; payload: Record<string, never> }
+  | { seq: number; kind: "error"; payload: { message: string; hint?: string; stderr?: string[] } }
+  | { seq: number; kind: "ended"; payload: { reason: EndReason; code?: number } };
+
+export interface StartSessionRequest {
+  sandbox: string;
+  prompt: string;
 }
 
 export interface TemplatesResponse {
@@ -136,8 +178,10 @@ export interface ApiError {
 
 /** Messages on the /api/events WebSocket. */
 export type ServerEvent =
-  | { type: "snapshot"; sandboxes: SandboxView[]; logs: Record<string, LogLine[]>; error?: string }
+  | { type: "snapshot"; sandboxes: SandboxView[]; logs: Record<string, LogLine[]>; sessions: SessionInfo[]; error?: string }
   | { type: "list"; sandboxes: SandboxView[]; error?: string }
+  /** Sent whenever a session starts, changes status or ends. */
+  | { type: "sessions"; sessions: SessionInfo[] }
   | { sandbox: string; op: OpKind; type: "state"; data: Operation }
   | { sandbox: string; op: OpKind; type: "log"; data: LogLine }
   | { sandbox: string; op: OpKind; type: "done"; data: Operation }

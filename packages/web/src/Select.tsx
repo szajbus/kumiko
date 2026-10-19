@@ -3,6 +3,8 @@ import * as RS from "@radix-ui/react-select";
 export interface SelectGroup {
   label?: string;
   options: string[];
+  /** Listed but can't be picked. */
+  disabled?: boolean;
 }
 
 interface Props {
@@ -45,7 +47,7 @@ export function Select({ id, value, onValueChange, groups, placeholder, disabled
                 {i > 0 && <RS.Separator className="select-separator" />}
                 {g.label && <RS.Label className="select-label">{g.label}</RS.Label>}
                 {g.options.map((o) => (
-                  <RS.Item key={o} value={o} className="select-item">
+                  <RS.Item key={o} value={o} className="select-item" disabled={g.disabled}>
                     <RS.ItemText>{o}</RS.ItemText>
                     <RS.ItemIndicator className="select-check">
                       <Check />

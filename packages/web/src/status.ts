@@ -1,4 +1,4 @@
-import type { LogLine, OpKind, SandboxView } from "@bentomo/shared";
+import type { LogLine, OpKind, SandboxView, SessionStatus } from "@bentomo/shared";
 
 export const COLORS = {
   running: "#4CC38A",
@@ -69,3 +69,15 @@ export function resources(sb: SandboxView): string {
   }
   return `${sb.cpus ?? "?"} · ${sb.memoryGiB ?? "?"} GiB · ${sb.diskGiB ?? "?"} GiB`;
 }
+
+const SESSION_STATUS: Record<SessionStatus, { text: string; color: string }> = {
+  starting: { text: "Starting…", color: COLORS.busy },
+  running: { text: "Working…", color: COLORS.busy },
+  idle: { text: "Ready", color: COLORS.running },
+  ended: { text: "Ended", color: COLORS.stopped },
+  failed: { text: "Failed", color: COLORS.failed },
+};
+
+export const sessionStatus = (s: SessionStatus) => SESSION_STATUS[s];
+
+export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;

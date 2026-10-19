@@ -1,0 +1,16 @@
+{
+  "name": "@bentomo/agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "dependencies": {
+    "@bentomo/sandbox": "*",
+    "@bentomo/shared": "*"
+  }
+}
