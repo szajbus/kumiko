@@ -6,6 +6,7 @@ import {
   mountsExpression,
   vmName,
   VM_PREFIX,
+  WORKSPACE_DIR,
   type EditSpec,
   type Mount,
   type SandboxInfo,
@@ -67,9 +68,19 @@ export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-/** Builds the `bash -s` preamble: one export per forwarded variable that is set, then `exec <cmd>`. */
-export function execScript(cmd: string, names: string[], env: NodeJS.ProcessEnv): string {
-  const lines = names.filter((n) => env[n] !== undefined).map((n) => `export ${n}=${shellQuote(env[n]!)}`);
+/** A path in the VM for bash: quoted, with a leading "~/" left to the shell's $HOME. */
+export function shellPath(p: string): string {
+  return p.startsWith("~/") ? `"$HOME"/${shellQuote(p.slice(2))}` : shellQuote(p);
+}
+
+/**
+ * Builds the `bash -s` preamble: ~/.local/bin (where Claude Code installs) on PATH, one export per forwarded
+ * variable that is set, a `cd` into `cwd` (skipped if it's missing), then `exec <cmd>`.
+ */
+export function execScript(cmd: string, names: string[], env: NodeJS.ProcessEnv, cwd?: string): string {
+  const lines = [`export PATH="$HOME/.local/bin:$PATH"`];
+  lines.push(...names.filter((n) => env[n] !== undefined).map((n) => `export ${n}=${shellQuote(env[n]!)}`));
+  if (cwd) lines.push(`cd ${shellPath(cwd)} 2>/dev/null || true`);
   lines.push(`exec ${cmd}`);
   return lines.join("\n") + "\n";
 }
@@ -91,6 +102,21 @@ export function provisionCommand(script: string): string {
   while (script.includes(tag));
   return `bash -c "$(cat <<'${tag}'\n${PROVISION_PRELUDE}${script}\n${tag}\n)"`;
 }
+
+/** True when Claude Code is installed for the VM user and linked into /usr/local/bin, on every shell's PATH. */
+const CLAUDE_CHECK = `test -x "$HOME/.local/bin/claude" && test "$(readlink /usr/local/bin/claude)" = "$HOME/.local/bin/claude"`;
+
+/**
+ * Installs Claude Code with the official native installer (into ~/.local/bin, no Node needed), unless it's
+ * there already, and links it into /usr/local/bin so login, non-login and `limactl shell` sessions all find it.
+ */
+export const CLAUDE_INSTALL = [
+  `set -o pipefail`,
+  `if ! command -v curl >/dev/null; then sudo apt-get update -qq && sudo apt-get install -y -qq curl; fi`,
+  `if [ ! -x "$HOME/.local/bin/claude" ]; then curl -fsSL https://claude.ai/install.sh | bash; fi`,
+  `sudo ln -sf "$HOME/.local/bin/claude" /usr/local/bin/claude`,
+  `claude --version`,
+].join("\n");
 
 export class LimaProvider implements SandboxProvider {
   readonly id = "lima" as const;
@@ -193,13 +219,55 @@ export class LimaProvider implements SandboxProvider {
     await this.start(spec.name, log);
   }
 
-  /** Starts the VM; on the first successful start of a sandbox still being set up, runs provisioning. */
+  /**
+   * Starts the VM and makes sure its working directory exists. On the first successful start, runs provisioning
+   * (Claude Code, then the user's script); on later ones, reinstalls Claude Code only if it went missing.
+   */
   async start(name: string, log: Log): Promise<void> {
     const vm = vmName(name);
     log(`$ limactl start --tty=false ${vm}`, "cmd");
     await runOk(this.limactl, ["start", "--tty=false", vm], { log, lima: true });
     const meta = await this.metadata.read(name);
+    if (meta) await this.ensureWorkdir(name, meta.spec.workdir ?? WORKSPACE_DIR, log);
     if (meta?.setup === "creating") await this.runProvisioning(name, log);
+    else if (meta && (await this.ensureClaude(name, log)) !== 0) log("warning: couldn't reinstall Claude Code; it is missing in the VM.");
+  }
+
+  /** Installs Claude Code if it's missing; silent when it's there. Returns the installer's exit code, 0 when nothing ran. */
+  private async ensureClaude(name: string, log: Log): Promise<number> {
+    const check = this.exec(name, `bash -c ${shellQuote(CLAUDE_CHECK)}`, []);
+    check.stdin!.end();
+    check.stdout!.resume();
+    check.stderr!.resume();
+    if ((await exitCode(check)) === 0) return 0;
+    log("— installing Claude Code —", "note");
+    return this.runScript(name, CLAUDE_INSTALL, [], log);
+  }
+
+  /** Runs a script the way provisioning does (traced, stops at the first failure), streaming it to the log. */
+  private async runScript(name: string, script: string, env: string[], log: Log, cwd?: string): Promise<number> {
+    const child = this.exec(name, provisionCommand(script), env, { cwd });
+    child.stdin!.end();
+    eachLine(child.stdout!, (l) => log(l));
+    eachLine(child.stderr!, (l) => log(l));
+    return exitCode(child);
+  }
+
+  /**
+   * Creates the working directory if it's missing and hands it to the VM user if they can't write to it
+   * (Lima creates /workspace as root when mounting under it). A failure is only a warning.
+   */
+  private async ensureWorkdir(name: string, workdir: string, log: Log): Promise<void> {
+    const script = `d=${shellPath(workdir)}; sudo mkdir -p "$d" && { [ -w "$d" ] || sudo chown "$(id -u):$(id -g)" "$d"; }`;
+    const child = this.exec(name, `bash -c ${shellQuote(script)}`, []);
+    child.stdin!.end();
+    const out: string[] = [];
+    eachLine(child.stdout!, (l) => out.push(l));
+    eachLine(child.stderr!, (l) => out.push(l));
+    const code = await exitCode(child);
+    if (code === 0) return;
+    for (const l of out) log(l);
+    log(`warning: couldn't prepare the working directory ${workdir} (exit ${code}).`);
   }
 
   async stop(name: string, log: Log): Promise<void> {
@@ -233,11 +301,16 @@ export class LimaProvider implements SandboxProvider {
       await runOk(this.limactl, args, { log, lima: true });
     }
     await this.metadata.update(name, { spec: plan.spec });
+    if (plan.prepareWorkdir) await this.ensureWorkdir(name, plan.spec.workdir ?? WORKSPACE_DIR, log);
     log(plan.limaArgs.length ? "Saved. Resource and mount changes apply on the next start." : "Saved.", "ok");
   }
 
   /** Works out what an edit changes and which `limactl edit` flags that needs. */
-  private async planEdit(name: string, patch: EditSpec, recreate = false): Promise<Validation & { limaArgs: string[] }> {
+  private async planEdit(
+    name: string,
+    patch: EditSpec,
+    recreate = false,
+  ): Promise<Validation & { limaArgs: string[]; prepareWorkdir?: boolean }> {
     const vm = vmName(name);
     const meta = await this.metadata.read(name);
     const inst = (await this.instances()).find((i) => i.name === vm);
@@ -247,8 +320,8 @@ export class LimaProvider implements SandboxProvider {
     }
 
     // Only these fields can change; an empty provision string clears the script.
-    const { cpus, memoryGiB, diskGiB, mounts, env, provision } = patch;
-    const defined = Object.fromEntries(Object.entries({ cpus, memoryGiB, diskGiB, mounts, env, provision }).filter(([, v]) => v !== undefined));
+    const { cpus, memoryGiB, diskGiB, mounts, env, provision, workdir } = patch;
+    const defined = Object.fromEntries(Object.entries({ cpus, memoryGiB, diskGiB, mounts, env, provision, workdir }).filter(([, v]) => v !== undefined));
     const merged: SandboxSpec = { ...meta.spec, ...defined, name: meta.spec.name, template: meta.spec.template };
     const v = await validateSpec(merged, this.env());
     const { spec } = v;
@@ -268,12 +341,24 @@ export class LimaProvider implements SandboxProvider {
     if (limaArgs.length && toStatus(inst.status) !== "stopped") {
       errors.push(`Stop ${vm} to change its resources or mounts. Variables and the provisioning script can change while it runs.`);
     }
-    return { errors, warnings: v.warnings, spec, limaArgs };
+    // A stopped VM gets its new working directory on the next start; a running one right after saving.
+    const prepareWorkdir = spec.workdir !== (meta.spec.workdir ?? WORKSPACE_DIR) && toStatus(inst.status) === "running";
+    return { errors, warnings: v.warnings, spec, limaArgs, prepareWorkdir };
   }
 
   private async runProvisioning(name: string, log: Log): Promise<void> {
     const meta = await this.metadata.read(name);
     if (!meta) return;
+    const fail = async (what: string, code: number) => {
+      await this.metadata.update(name, { setup: "provision_failed", provisionExitCode: code });
+      log(`${what} failed with exit code ${code}.`, "err");
+      log("The sandbox is kept: inspect it, fix the script and recreate it, or delete it.", "note");
+      throw new ProviderError(`${what} failed with exit code ${code}.`, code);
+    };
+
+    const claude = await this.ensureClaude(name, log);
+    if (claude !== 0) return fail("Installing Claude Code", claude);
+
     const script = meta.spec.provision;
     if (!script) {
       await this.metadata.update(name, { setup: "ready", provisionExitCode: undefined });
@@ -284,21 +369,13 @@ export class LimaProvider implements SandboxProvider {
     log("— provisioning (runs once, as the VM user) —", "note");
     if (forwarded.length) log(`forwarding ${forwarded.join(", ")}`, "note");
 
-    const child = this.exec(name, provisionCommand(script), meta.spec.env);
-    child.stdin!.end();
-    eachLine(child.stdout!, (l) => log(l));
-    eachLine(child.stderr!, (l) => log(l));
-    const code = await exitCode(child);
-
+    const code = await this.runScript(name, script, meta.spec.env, log, meta.spec.workdir ?? WORKSPACE_DIR);
     if (code === 0) {
       await this.metadata.update(name, { setup: "ready", provisionExitCode: undefined });
       log("Provisioning finished.", "ok");
       return;
     }
-    await this.metadata.update(name, { setup: "provision_failed", provisionExitCode: code });
-    log(`Provisioning failed with exit code ${code}.`, "err");
-    log("The sandbox is kept: inspect it, fix the script and recreate it, or delete it.", "note");
-    throw new ProviderError(`Provisioning failed with exit code ${code}.`, code);
+    return fail("Provisioning", code);
   }
 
   /**
@@ -306,13 +383,13 @@ export class LimaProvider implements SandboxProvider {
    * so their values never appear in process arguments, and are read fresh on every call.
    * Everything written to stdin after the preamble reaches `cmd`.
    */
-  exec(name: string, cmd: string, env: string[]): ChildProcess {
+  exec(name: string, cmd: string, env: string[], opts: { cwd?: string } = {}): ChildProcess {
     const vm = vmName(name);
     const sshConfig = join(this.limaHome(), vm, "ssh.config");
     const child = spawn(this.ssh, ["-F", sshConfig, "-T", `lima-${vm}`, "bash", "-s"], {
       stdio: ["pipe", "pipe", "pipe"],
     });
-    child.stdin!.write(execScript(cmd, env, this.env()));
+    child.stdin!.write(execScript(cmd, env, this.env(), opts.cwd));
     return child;
   }
 }

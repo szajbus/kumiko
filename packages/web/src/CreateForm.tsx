@@ -6,6 +6,7 @@ import {
   mountsExpression,
   NAME_PATTERN,
   vmName,
+  WORKSPACE_DIR,
   type SandboxSpec,
   type SandboxView,
   type TemplatesResponse,
@@ -35,20 +36,22 @@ interface MountRow {
   writable: boolean;
 }
 
-/** /workspace/<name>, with -2, -3… if another row already uses it. */
-function freeGuestPath(hostPath: string, rows: MountRow[], self?: number): string {
-  const base = defaultGuestPath(hostPath);
+/** <working directory>/<name>, with -2, -3… if another row already uses it. */
+function freeGuestPath(hostPath: string, rows: MountRow[], workdir: string, self?: number): string {
+  const base = defaultGuestPath(hostPath, workdir);
   const taken = new Set(rows.filter((r) => r.id !== self).map((r) => r.guestPath.trim()));
   let p = base;
   for (let i = 2; taken.has(p); i++) p = `${base}-${i}`;
   return p;
 }
 
+/** An absolute path or ~/…, but not / or ~ alone. */
+const vmPathShape = (t: string) => (t.startsWith("/") && t !== "/") || (t.startsWith("~/") && t.length > 2);
+
 function guestPathOk(p: string, rows: MountRow[], self: number): boolean {
   const t = p.trim();
   if (!t) return true; // falls back to the default
-  const shape = (t.startsWith("/") && t !== "/") || (t.startsWith("~/") && t.length > 2);
-  return shape && !rows.some((r) => r.id !== self && r.guestPath.trim() === t);
+  return vmPathShape(t) && !rows.some((r) => r.id !== self && r.guestPath.trim() === t);
 }
 
 interface EnvRow {
@@ -76,6 +79,9 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
   const [envRows, setEnvRows] = useState<EnvRow[]>(() => (was?.env ?? []).map((n) => ({ id: nextId++, name: n })));
   const [envSet, setEnvSet] = useState<Record<string, boolean>>({});
   const [provision, setProvision] = useState(was?.provision ?? "");
+  const [workdir, setWorkdirRaw] = useState(was ? was.workdir ?? WORKSPACE_DIR : WORKSPACE_DIR);
+  const wd = workdir.trim() || WORKSPACE_DIR;
+  const workdirOk = vmPathShape(wd);
   const [submitting, setSubmitting] = useState(false);
   const [confirmRecreate, setConfirmRecreate] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
@@ -132,7 +138,7 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
   const addFolder = async () => {
     if (hasPicker()) {
       const path = await window.bentomo!.pickFolder();
-      if (path) setMounts((all) => [...all, { id: nextId++, hostPath: path, guestPath: freeGuestPath(path, all), guestEdited: false, writable: false }]);
+      if (path) setMounts((all) => [...all, { id: nextId++, hostPath: path, guestPath: freeGuestPath(path, all, wd), guestEdited: false, writable: false }]);
     } else {
       setMounts((all) => [...all, { id: nextId++, hostPath: "", guestPath: "", guestEdited: false, writable: false }]);
     }
@@ -141,12 +147,24 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
   const setHost = (id: number, path: string) =>
     setMounts((all) =>
       all.map((r) =>
-        r.id !== id ? r : { ...r, hostPath: path, guestPath: r.guestEdited ? r.guestPath : path.trim() ? freeGuestPath(path, all, id) : "" },
+        r.id !== id ? r : { ...r, hostPath: path, guestPath: r.guestEdited ? r.guestPath : path.trim() ? freeGuestPath(path, all, wd, id) : "" },
       ),
     );
   const changeFolder = async (id: number) => {
     const path = await window.bentomo!.pickFolder();
     if (path) setHost(id, path);
+  };
+  /** Mounts still at their default path move along with the working directory. */
+  const setWorkdir = (value: string) => {
+    setWorkdirRaw(value);
+    const next = value.trim() || WORKSPACE_DIR;
+    if (!vmPathShape(next)) return;
+    setMounts((all) =>
+      all.reduce<MountRow[]>((done, r) => {
+        const moved = r.guestEdited || !r.hostPath.trim() ? r : { ...r, guestPath: freeGuestPath(r.hostPath, [...done, ...all.filter((x) => x.guestEdited)], next, r.id) };
+        return [...done, moved];
+      }, []),
+    );
   };
   const patchMount = (id: number, patch: Partial<MountRow>) => setMounts((all) => all.map((r) => (r.id === id ? { ...r, ...patch } : r)));
 
@@ -158,9 +176,10 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
     diskGiB: Number(disk),
     mounts: mounts
       .filter((m) => m.hostPath.trim())
-      .map((m) => ({ hostPath: m.hostPath.trim(), writable: m.writable, guestPath: m.guestPath.trim() || defaultGuestPath(m.hostPath.trim()) })),
+      .map((m) => ({ hostPath: m.hostPath.trim(), writable: m.writable, guestPath: m.guestPath.trim() || defaultGuestPath(m.hostPath.trim(), wd) })),
     env: envNames,
     provision: provision.trim() ? provision : undefined,
+    workdir: wd,
   });
 
   /**
@@ -199,8 +218,8 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
     setErrors([]);
     try {
       if (editing) {
-        const { cpus, memoryGiB, diskGiB, mounts, env, provision } = spec();
-        await api.edit(editing.name, { cpus, memoryGiB, diskGiB, mounts, env, provision: provision ?? "" }, recreate);
+        const { cpus, memoryGiB, diskGiB, mounts, env, provision, workdir } = spec();
+        await api.edit(editing.name, { cpus, memoryGiB, diskGiB, mounts, env, provision: provision ?? "", workdir }, recreate);
         onCreated(editing.name);
       } else {
         const res = await api.create(spec());
@@ -220,13 +239,14 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
     parts.push(s.mounts.length === 0 ? "--mount-none" : `--set '${mountsExpression(s.mounts).replace(/'/g, `'\\''`)}'`);
     parts.push(s.template || "template:default");
     const lines = [parts.join(" \\\n  "), `limactl start --tty=false ${vm}`];
+    lines.push("# then Claude Code's installer over ssh, linked to /usr/local/bin/claude");
     if (s.provision) {
       const fwd = s.env.filter((n) => envSet[n]);
-      lines.push(`# then the provisioning script over ssh${fwd.length ? `, with ${fwd.join(", ")} forwarded` : ""}`);
+      lines.push(`# then the provisioning script in ${s.workdir}${fwd.length ? `, with ${fwd.join(", ")} forwarded` : ""}`);
     }
     return lines.join("\n");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [name, template, cpus, memory, disk, mounts, envNames, envSet, provision]);
+  }, [name, template, cpus, memory, disk, mounts, envNames, envSet, provision, workdir]);
 
   return (
     <div className="app">
@@ -331,16 +351,34 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
         </Section>
 
         <Section
-          title="Mounts"
+          title="Workspace"
           id="sec-mounts"
           description={
             <>
-              Host folders shared into the VM, each at <code className="mono">/workspace/&lt;folder&gt;</code> unless you change it.{" "}
-              <code className="mono">~</code> in the VM is the VM user's home.
+              Host folders shared into the VM, each in the working directory unless you change its path. <code className="mono">~</code> in the VM is the
+              VM user's home.
             </>
           }
         >
           <div className="fieldset-stack">
+          <Field
+            label="Working directory"
+            htmlFor="f-workdir"
+            invalid={!workdirOk}
+            hint={workdirOk ? "Provisioning and sessions start here. Created on every start if it's missing." : "Use an absolute path or ~/…, not / or ~."}
+          >
+            <input
+              id="f-workdir"
+              className="input input-dark mono"
+              type="text"
+              value={workdir}
+              placeholder={WORKSPACE_DIR}
+              spellCheck={false}
+              autoComplete="off"
+              aria-invalid={!workdirOk}
+              onChange={(e) => setWorkdir(e.target.value)}
+            />
+          </Field>
           {mounts.map((m) => {
             const guestOk = guestPathOk(m.guestPath, mounts, m.id);
             return (
@@ -391,7 +429,7 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
                   className="input input-compact input-dark mono path"
                   type="text"
                   value={m.guestPath}
-                  placeholder={m.hostPath.trim() ? defaultGuestPath(m.hostPath.trim()) : "/workspace/…"}
+                  placeholder={m.hostPath.trim() ? defaultGuestPath(m.hostPath.trim(), wd) : `${wd}/…`}
                   aria-invalid={!guestOk}
                   title={guestOk ? "Where the folder appears in the VM" : "Use an absolute path or ~/…, not used by another mount"}
                   spellCheck={false}
@@ -432,7 +470,8 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
           id="sec-prov"
           description={
             <>
-              Runs once after the first start, as the VM user, with the forwarded variables set. <code className="mono">sudo</code> is available. Stops at
+              Bentomo first installs Claude Code, on <code className="mono">PATH</code> as <code className="mono">claude</code>. Then your script runs
+              once, as the VM user, in the working directory, with the forwarded variables set. <code className="mono">sudo</code> is available. Stops at
               the first failing command.
               {editing && " A new script runs when you save and recreate."}
             </>

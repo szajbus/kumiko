@@ -1,0 +1,11 @@
+#!/bin/sh
+# Stands in for curl in the VM: logs the call and hands out an installer that drops a fake claude into
+# ~/.local/bin, like the real one. FAKE_CURL_FAIL=1 makes the download fail.
+echo "$*" >> "${FAKE_LIMA_DIR:-/tmp/fake-lima}/curl.log"
+[ -n "$FAKE_CURL_FAIL" ] && { echo "curl: (6) Could not resolve host" >&2; exit 6; }
+cat <<'INSTALLER'
+mkdir -p "$HOME/.local/bin"
+printf '#!/bin/sh\necho "2.0.0 (Claude Code)"\n' > "$HOME/.local/bin/claude"
+chmod +x "$HOME/.local/bin/claude"
+echo "Claude Code successfully installed!"
+INSTALLER

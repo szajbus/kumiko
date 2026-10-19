@@ -19,7 +19,8 @@ export interface SandboxProvider {
   validateEdit(name: string, patch: EditSpec, opts?: { recreate?: boolean }): Promise<Validation>;
   /** Applies an edit: `limactl edit` for resources and mounts, then the stored spec. */
   edit(name: string, patch: EditSpec, log: Log): Promise<void>;
-  exec(name: string, cmd: string, env: string[]): ChildProcess; // stdio piped; the PoC's ACP pipe
+  /** Runs `cmd` in the VM with stdio piped (the PoC's ACP pipe); sessions pass the sandbox's working directory as `cwd`. */
+  exec(name: string, cmd: string, env: string[], opts?: { cwd?: string }): ChildProcess;
   /** Checks a spec before `create`: errors block it, warnings (unset variables) don't. */
   validate(spec: SandboxSpec): Promise<Validation>;
   /** Templates the create form can offer, plus the one to preselect. */

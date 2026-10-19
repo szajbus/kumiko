@@ -11,7 +11,7 @@ export const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export const DEFAULTS = { cpus: 4, memoryGiB: 4, diskGiB: 100 } as const;
 
-/** Where mounts land in the VM unless the user picks another path. */
+/** The default working directory in the VM. Mounts land under the working directory unless the user picks another path. */
 export const WORKSPACE_DIR = "/workspace";
 
 export interface Mount {
@@ -21,10 +21,10 @@ export interface Mount {
   guestPath?: string;
 }
 
-/** The default place in the VM for a host folder: /workspace/<folder name>. */
-export function defaultGuestPath(hostPath: string): string {
+/** The default place in the VM for a host folder: <working directory>/<folder name>. */
+export function defaultGuestPath(hostPath: string, workdir: string = WORKSPACE_DIR): string {
   const base = hostPath.replace(/\/+$/, "").split("/").pop() || "folder";
-  return `${WORKSPACE_DIR}/${base}`;
+  return `${workdir.replace(/\/+$/, "")}/${base}`;
 }
 
 /**
@@ -59,6 +59,8 @@ export interface SandboxSpec {
   mounts: Mount[];         // guestPath defaults to the host path
   env: string[];           // names of host variables to forward; values never stored
   provision?: string;      // shell script, run once after first start
+  /** Where provisioning and sessions start in the VM, created if missing; "~/…" is the VM user's home. Default /workspace. */
+  workdir?: string;
 }
 
 /**
@@ -66,7 +68,7 @@ export interface SandboxSpec {
  * and forwarded variables and the provisioning script can change anytime. Saved with a recreate, anything but
  * name and template can change. Name and template are fixed.
  */
-export type EditSpec = Partial<Pick<SandboxSpec, "cpus" | "memoryGiB" | "diskGiB" | "mounts" | "env" | "provision">>;
+export type EditSpec = Partial<Pick<SandboxSpec, "cpus" | "memoryGiB" | "diskGiB" | "mounts" | "env" | "provision" | "workdir">>;
 
 export type SandboxStatus = "running" | "stopped" | "broken" | "unknown";
 

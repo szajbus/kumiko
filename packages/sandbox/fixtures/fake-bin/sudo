@@ -1,0 +1,3 @@
+#!/bin/sh
+# Stands in for sudo in the VM, so tests never touch the host as root: it only reports what it was asked to do.
+echo "fake sudo: $*"

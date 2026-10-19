@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { vmName, type LogLine, type SandboxView } from "@bentomo/shared";
+import { vmName, WORKSPACE_DIR, type LogLine, type SandboxView } from "@bentomo/shared";
 import { SandboxActions, useActions } from "./actions";
 import { api, type LiveState } from "./api";
 import { Breadcrumbs } from "./Breadcrumbs";
@@ -103,6 +103,9 @@ function Details({ sb, home }: { sb: SandboxView; home?: string }) {
         <Fact label="Setup">
           <SetupState sb={sb} />
         </Fact>
+        <Fact label="Working directory" mono>
+          {spec ? spec.workdir ?? WORKSPACE_DIR : "—"}
+        </Fact>
         <Fact label="Created">{sb.meta ? new Date(sb.meta.createdAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "—"}</Fact>
       </section>
 
@@ -150,7 +153,8 @@ function Details({ sb, home }: { sb: SandboxView; home?: string }) {
 
       {spec && (
         <details className="card details">
-          <summary>Provisioning script{spec.provision ? ` · ${spec.provision.split("\n").length} lines` : ": none"}</summary>
+          <summary>Provisioning script{spec.provision ? ` · ${plural(spec.provision.split("\n").length, "line")}` : ": none"}</summary>
+          <p className="muted details-empty">Claude Code is installed first, and reinstalled on start if it goes missing.</p>
           {spec.provision ? <pre className="mono preview">{spec.provision}</pre> : <p className="muted details-empty">No provisioning command.</p>}
         </details>
       )}
@@ -197,3 +201,5 @@ function useEnvSet(names: string[]): Record<string, boolean> {
   }, [key]);
   return set;
 }
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;

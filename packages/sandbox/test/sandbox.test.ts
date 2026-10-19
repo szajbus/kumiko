@@ -24,7 +24,13 @@ describe("parsing", () => {
 
   it("quotes forwarded values and skips unset ones", () => {
     const s = execScript("cat", ["A", "B"], { A: "it's $x" });
-    assert.equal(s, "export A='it'\\''s $x'\nexec cat\n");
+    assert.equal(s, `export PATH="$HOME/.local/bin:$PATH"\nexport A='it'\\''s $x'\nexec cat\n`);
+  });
+
+  it("changes into the working directory, leaving ~ to the VM's shell", () => {
+    const path = `export PATH="$HOME/.local/bin:$PATH"\n`;
+    assert.equal(execScript("cat", [], {}, "/workspace"), `${path}cd '/workspace' 2>/dev/null || true\nexec cat\n`);
+    assert.equal(execScript("cat", [], {}, "~/my dir"), `${path}cd "$HOME"/'my dir' 2>/dev/null || true\nexec cat\n`);
   });
 
   it("builds the mounts expression with VM paths and ~ as Lima's {{.Home}}", () => {
@@ -39,6 +45,7 @@ describe("parsing", () => {
         '{"location":"/same","mountPoint":"/same","writable":false}]',
     );
     assert.equal(defaultGuestPath("/a/b/c/d/"), "/workspace/d");
+    assert.equal(defaultGuestPath("/a/b", "~/src/"), "~/src/b");
   });
 
   it("wraps a provisioning script so it can't be read from stdin", () => {
@@ -54,6 +61,12 @@ describe("validateSpec", () => {
     assert.deepEqual(v.errors, []);
     assert.equal(v.spec.template, undefined);
     assert.equal(v.spec.provision, undefined);
+    assert.equal(v.spec.workdir, "/workspace");
+  });
+
+  it("normalizes the working directory and rejects / and relative paths", async () => {
+    assert.equal((await validateSpec(spec({ workdir: "~/code/" }))).spec.workdir, "~/code");
+    for (const workdir of ["/", "~", "code"]) assert.match((await validateSpec(spec({ workdir }))).errors.join(), /can't be the working directory/);
   });
 
   it("rejects bad names, resources and mounts", async () => {
@@ -149,6 +162,39 @@ describe("LimaProvider against a fake limactl", () => {
     await provider.delete("web", log);
     assert.deepEqual(await provider.list(), []);
     assert.equal(await provider.metadata.read("web"), undefined);
+  });
+
+  it("prepares the working directory on start and provisions inside it", async () => {
+    const { mountDir, provider, log, lines } = await fakeLima();
+    await provider.create(spec({ workdir: mountDir, provision: "pwd > here" }), log);
+    assert.equal((await readFile(join(mountDir, "here"), "utf8")).trim(), mountDir);
+    assert.ok(!lines.some((l) => l.includes("couldn't prepare")), "an existing, writable directory needs nothing");
+  });
+
+  it("installs Claude Code before the script, links it onto PATH, and only once", async () => {
+    const { limaDir, provider, log, lines } = await fakeLima();
+    await provider.create(spec({ provision: "claude --version > ~/seen" }), log);
+    const at = (t: string) => lines.findIndex((l) => l.includes(t));
+    assert.ok(at("— installing Claude Code —") >= 0 && at("— installing Claude Code —") < at("— provisioning"), "Claude Code comes first");
+    assert.ok(lines.includes("+ sudo ln -sf \"$HOME/.local/bin/claude\" /usr/local/bin/claude"));
+    assert.equal((await readFile(join(limaDir, "vm-home", "seen"), "utf8")).trim(), "2.0.0 (Claude Code)", "the script finds claude on PATH");
+    assert.equal((await readFile(join(limaDir, "curl.log"), "utf8")).trim().split("\n").length, 1);
+
+    await provider.stop("web", log);
+    await provider.start("web", log);
+    assert.equal((await readFile(join(limaDir, "curl.log"), "utf8")).trim().split("\n").length, 1, "an installed claude isn't downloaded again");
+  });
+
+  it("fails provisioning when Claude Code can't be installed", async () => {
+    const { provider, log } = await fakeLima();
+    process.env.FAKE_CURL_FAIL = "1";
+    try {
+      await assert.rejects(provider.create(spec({ provision: "echo never" }), log), /Installing Claude Code failed with exit code 6/);
+    } finally {
+      delete process.env.FAKE_CURL_FAIL;
+    }
+    const [info] = await provider.list();
+    assert.deepEqual([info.meta?.setup, info.meta?.provisionExitCode], ["provision_failed", 6]);
   });
 
   it("uses --mount-none when no mounts are selected", async () => {

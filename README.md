@@ -75,14 +75,22 @@ Checked against Lima 2.2.1 (the spec's open questions):
 
 Beyond the spec:
 
-- **Mounts land in `/workspace` by default.** This replaces the spec's same-path rule.
-  - A host folder `/a/b/c/d` is offered at `/workspace/d` in the VM, with a `-2` suffix if that path is taken. The user can override it.
+- **Working directory** (`workdir` in the spec, default `/workspace`, `~/…` allowed). Provisioning runs in it, and `exec` takes it as `cwd` for sessions.
+  - Every start creates it if it's missing, and hands it to the VM user if they can't write to it; Lima creates `/workspace` as root when mounting under it. It can change in place, even while the VM runs.
+- **Mounts land in the working directory by default.** This replaces the spec's same-path rule.
+  - A host folder `/a/b/c/d` is offered at `/workspace/d` in the VM (or `<working directory>/d`), with a `-2` suffix if that path is taken. The user can override it.
   - `~/…` in the VM path means the VM user's home; it becomes Lima's `{{.Home}}`.
   - When the host has `~/.claude`, the form starts with it mounted writable at `~/.claude` in the VM (`GET /api/defaults`).
   - VM paths can't be `/` or `~` and can't overlap.
   - Mounts saved without a VM path keep the host path.
 
 - **`SandboxProvider`** has more methods: `validate` and `validateEdit` (so the server can answer `400` before going async), `edit` and `templates`. There is no separate "re-run provisioning": a sandbox is provisioned once, and a changed or fixed script runs by recreating it.
+- **Claude Code is always installed**, as the first provisioning step before the user's script.
+  - It uses the official native installer (`curl -fsSL https://claude.ai/install.sh | bash`), which puts it in `~/.local/bin` and needs no Node. curl is installed with apt if missing.
+  - It is linked to `/usr/local/bin/claude`, so every shell finds it: login, non-login and `limactl shell`. `exec` also puts `~/.local/bin` on `PATH`.
+  - If the install fails, provisioning fails (`provision_failed`), as for the script.
+  - Every later start checks for it and reinstalls only if it is missing. A failure there is a warning.
+  - With `~/.claude` mounted (the default), it uses the host's login and settings.
 - **Provisioning output:**
   - The script runs with `set -e`.
   - Each command is echoed before it runs via a `DEBUG` trap, not `set -x`, so `$GITHUB_TOKEN` shows in the log as written, never its value.

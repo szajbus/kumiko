@@ -1,7 +1,7 @@
 import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, normalize, posix, sep } from "node:path";
-import { ENV_NAME_PATTERN, NAME_PATTERN, type SandboxSpec } from "@bentomo/shared";
+import { ENV_NAME_PATTERN, NAME_PATTERN, WORKSPACE_DIR, type SandboxSpec } from "@bentomo/shared";
 
 export interface Validation {
   errors: string[];
@@ -99,12 +99,16 @@ export async function validateSpec(input: SandboxSpec, env: NodeJS.ProcessEnv = 
     else if (env[e] === undefined) warnings.push(`${e} is not set in Bentomo's environment; it will be skipped.`);
   }
 
+  const rawWorkdir = String(input.workdir ?? "").trim() || WORKSPACE_DIR;
+  const workdir = normalizeGuestPath(rawWorkdir);
+  if (!workdir) errors.push(`${rawWorkdir} can't be the working directory: use an absolute path or ~/…, not / or ~.`);
+
   const template = input.template?.trim() || undefined;
   const provision = input.provision?.trim() ? input.provision.replace(/\r\n/g, "\n") : undefined;
 
   return {
     errors,
     warnings,
-    spec: { name, template, cpus, memoryGiB, diskGiB, mounts, env: envNames, provision },
+    spec: { name, template, cpus, memoryGiB, diskGiB, mounts, env: envNames, provision, workdir: workdir ?? rawWorkdir },
   };
 }

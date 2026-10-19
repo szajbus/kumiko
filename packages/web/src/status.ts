@@ -29,9 +29,10 @@ const OP_NOUN: Record<OpKind, string> = {
 /** The status cell: what the sandbox is doing or how it is. */
 export function statusOf(sb: SandboxView, log: LogLine[] = []): { text: string; color: string } {
   if (sb.busy && sb.operation) {
-    // Once a create or start reaches the provisioning step, say so.
-    const provisioning = log.some((l) => l.kind === "note" && l.text.startsWith("— provisioning"));
-    return { text: `${provisioning ? "Provisioning" : OP_LABEL[sb.operation.op]}…`, color: COLORS.busy };
+    // Once a create or start reaches installing Claude Code or the provisioning script, say so.
+    const step = log.findLast((l) => l.kind === "note" && l.text.startsWith("— "))?.text;
+    const label = step?.startsWith("— installing Claude") ? "Installing Claude Code" : step?.startsWith("— provisioning") ? "Provisioning" : OP_LABEL[sb.operation.op];
+    return { text: `${label}…`, color: COLORS.busy };
   }
   if (sb.meta?.setup === "provision_failed") return { text: "Provisioning failed", color: COLORS.failed };
   switch (sb.status) {
