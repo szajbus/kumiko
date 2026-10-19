@@ -86,9 +86,14 @@ export function App() {
   };
 
   // Keyboard shortcuts act on the latest render's state, so the listeners below are installed once.
-  const shortcut = useRef<(action: "new" | "next" | "prev" | "close") => void>(() => {});
+  const shortcut = useRef<(action: "new" | "next" | "prev" | "close" | number) => void>(() => {});
   shortcut.current = (action) => {
     if (action === "new") return go("#/session/new");
+    // Cmd+1..9 jump to the nth session tab.
+    if (typeof action === "number") {
+      const target = live.sessions[action - 1];
+      return target ? select(`session:${target.id}`) : undefined;
+    }
     const tabs: TabId[] = ["sandboxes", ...live.sessions.map((s): TabId => `session:${s.id}`), ...(newSessionOpen ? ["new-session" as const] : [])];
     const current = tabOf(route);
     if (action === "close") return current === "sandboxes" ? undefined : close(current);
@@ -101,7 +106,8 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
       // e.code, because Shift turns "[" into "{" and layouts differ.
-      const action = e.shiftKey
+      const digit = !e.shiftKey && /^Digit[1-9]$/.test(e.code) ? Number(e.code.slice(5)) : undefined;
+      const action = digit ?? e.shiftKey
         ? e.code === "BracketRight" ? "next" : e.code === "BracketLeft" ? "prev" : undefined
         : e.code === "KeyT" ? "new" : e.code === "KeyW" ? "close" : undefined;
       if (!action) return;
