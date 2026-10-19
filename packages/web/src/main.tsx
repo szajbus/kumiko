@@ -10,6 +10,11 @@ import { App } from "./App";
 
 if (window.bentomo) document.documentElement.dataset.shell = `electron-${window.bentomo.platform}`;
 
+// Page zoom changes the viewport size, so resize is the hook for tracking it.
+const syncZoom = () => document.documentElement.style.setProperty("--page-zoom", String(window.bentomo?.getZoomFactor?.() ?? 1));
+syncZoom();
+window.addEventListener("resize", syncZoom);
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <App />

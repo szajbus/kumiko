@@ -44,8 +44,9 @@ code, .mono { font-family: var(--mono); }
   height: 40px; padding: 0 12px; background: var(--surface); box-shadow: 0 1px 0 var(--border);
 }
 /* In the macOS app the header is the title bar: draggable, with room for the traffic lights, which the window
-   centres in it, on the same line as the tab labels (see apps/desktop/src/main.ts). */
-[data-shell="electron-darwin"] .app-header { -webkit-app-region: drag; padding-left: 84px; }
+   centres in it, on the same line as the tab labels (see apps/desktop/src/main.ts).
+   It ignores page zoom (--page-zoom, set in main.tsx) so the fixed-size traffic lights stay centred in it. */
+[data-shell="electron-darwin"] .app-header { -webkit-app-region: drag; padding-left: 84px; zoom: calc(1 / var(--page-zoom, 1)); }
 [data-shell="electron-darwin"] .app-header :is(a, button) { -webkit-app-region: no-drag; }
 
 .build-sha { flex: none; margin-left: 12px; font: 11px var(--mono); color: var(--muted); user-select: text; }
@@ -354,6 +355,8 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 .session-status .spinner { width: 10px; height: 10px; }
 .session-controls { display: flex; align-items: center; gap: 10px; }
 .usage-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 20px; font-size: 12.5px; color: var(--text-2); }
+.usage-item { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.usage-warning { color: #e0a96d; cursor: help; }
 .usage-account { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .usage-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .usage-window { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
