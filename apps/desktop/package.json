@@ -11,6 +11,7 @@
     "bundle": "node build.mjs",
     "start": "node build.mjs && electron .",
     "dist:mac": "node build.mjs && electron-builder --mac --publish never",
+    "dist:mac-arm64-app": "node build.mjs && electron-builder --mac dir --arm64 --publish never",
     "dist:linux": "node build.mjs && electron-builder --linux dir --publish never"
   },
   "dependencies": {
