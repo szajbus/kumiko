@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { AccountUsage, UsageWindow } from "@bentomo/shared";
 import { api, errorMessage } from "./api";
+import { planName, resetText } from "./format";
 
 /** How often the numbers are re-read while the session is open. */
 const REFRESH_MS = 60_000;
@@ -80,19 +81,4 @@ function Window({ w, now }: { w: UsageWindow; now: number }) {
       {reset && <span className="dim">{reset}</span>}
     </span>
   );
-}
-
-function planName(plan: string): string {
-  return plan.charAt(0).toUpperCase() + plan.slice(1);
-}
-
-/** "resets in 2h 5m", "resets in 3d 4h"; empty once the time has passed. */
-export function resetText(ms: number): string | undefined {
-  if (!Number.isFinite(ms) || ms <= 0) return undefined;
-  const m = Math.ceil(ms / 60_000);
-  const d = Math.floor(m / 1440);
-  const h = Math.floor((m % 1440) / 60);
-  if (d > 0) return `resets in ${d}d ${h}h`;
-  if (h > 0) return `resets in ${h}h ${m % 60}m`;
-  return `resets in ${m}m`;
 }

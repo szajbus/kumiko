@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { WORKSPACE_DIR, type ResumableSession } from "@bentomo/shared";
 import { api, errorMessage, type LiveState } from "./api";
 import { Composer } from "./Composer";
-import { sessionTitle } from "./Header";
+import { ago, sessionTitle } from "./format";
 import { Resume, Trash } from "./icons";
 import { Select } from "./Select";
 
@@ -158,12 +158,3 @@ export function NewSession({ live, onStarted }: Props) {
 }
 
 const RESUME_LIMIT = 20;
-
-/** "5 min ago", "3 h ago", "2 d ago". */
-function ago(iso: string): string {
-  const min = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60_000));
-  if (min < 1) return "just now";
-  if (min < 60) return `${min} min ago`;
-  if (min < 60 * 24) return `${Math.round(min / 60)} h ago`;
-  return `${Math.round(min / (60 * 24))} d ago`;
-}

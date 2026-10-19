@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { matchCommands } from "./commands";
 import { drafts } from "./drafts";
 import { Send } from "./icons";
 
@@ -25,14 +26,6 @@ interface Props {
 
 const MAX_HEIGHT = 240;
 const MAX_SUGGESTIONS = 8;
-
-/** The commands matching what has been typed after the slash: names that start with it first, then ones that contain it. */
-export function matchCommands(commands: string[], typed: string): string[] {
-  const q = typed.toLowerCase();
-  const starts = commands.filter((c) => c.toLowerCase().startsWith(q));
-  const contains = commands.filter((c) => !c.toLowerCase().startsWith(q) && c.toLowerCase().includes(q));
-  return [...starts, ...contains];
-}
 
 /** A prompt box: Enter sends, Shift+Enter adds a line. Used by the New session tab and the chat. */
 export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder, autoFocus, label, commands, suggestion, draftKey, footer }: Props) {

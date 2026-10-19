@@ -6,6 +6,7 @@ import { Composer } from "./Composer";
 import { Markdown } from "./Markdown";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { drafts } from "./drafts";
+import { endedText, formatBytes, formatCost, formatDuration } from "./format";
 import { Fork, Rewind } from "./icons";
 import { Select } from "./Select";
 import { COLORS, sessionStatus } from "./status";
@@ -276,30 +277,6 @@ const Item = memo(function Item({ item, open, onRewind }: { item: ChatItem; open
   }
 });
 
-function endedText(reason: string, code?: number): string {
-  switch (reason) {
-    case "user":
-      return "Session ended.";
-    case "sandbox":
-      return "Session ended: its sandbox stopped.";
-    case "quit":
-      return "Session ended: Bentomo quit.";
-    default:
-      return code ? `Session ended: Claude exited with code ${code}.` : "Session ended: Claude exited.";
-  }
-}
-
-/** "812 B", "4.2 KB", "13 MB". */
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  const [value, unit] = n < 1024 ** 2 ? [n / 1024, "KB"] : [n / 1024 ** 2, "MB"];
-  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${unit}`;
-}
-
-function formatCost(usd: number): string {
-  return `$${usd.toFixed(usd < 0.01 ? 4 : 2)}`;
-}
-
 function TurnFooter({ item }: { item: Extract<ChatItem, { type: "turn" }> }) {
   const parts: string[] = [];
   if (item.durationMs !== undefined) parts.push(formatDuration(item.durationMs));
@@ -321,12 +298,6 @@ function TurnFooter({ item }: { item: Extract<ChatItem, { type: "turn" }> }) {
       ))}
     </div>
   );
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  const m = Math.floor(ms / 60_000);
-  return `${m}m ${Math.round((ms % 60_000) / 1000)}s`;
 }
 
 function BlockView({ block, open }: { block: Block; open: boolean }) {
