@@ -13,6 +13,8 @@ export interface Subscriber {
   event(ev: SessionEvent): void;
   /** The session was removed; nothing more will come. */
   gone(): void;
+  /** The buffer was rewritten (by a rewind); nothing more will come, and a new subscription replays it from the start. */
+  reset(): void;
 }
 
 interface Session {
@@ -48,6 +50,10 @@ const isChainEntry = (e: SessionEvent): e is ChainEntry =>
   e.kind === "claude" && (e.payload.type === "assistant" || e.payload.type === "user") && !e.payload.parent_tool_use_id && typeof e.payload.uuid === "string";
 
 const isLive = (s: SessionInfo) => LIVE_SESSION_STATUSES.includes(s.status);
+
+/** How to start Claude on the session's history: as it is, or cut where a rewind left it. */
+const continuing = (info: SessionInfo): Pick<StartOptions, "resume" | "fork" | "resumeAt"> =>
+  info.resumeAt ? { resume: info.claudeSessionId, fork: true, resumeAt: info.resumeAt } : { resume: info.claudeSessionId };
 
 const sizeOf = (e: SessionEvent) => Buffer.byteLength(JSON.stringify(e));
 
@@ -102,25 +108,42 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     if (!saved.claudeSessionId) throw new SessionNotResumable("This session has nothing of Claude's to resume.");
     const { endedAt: _endedAt, updatedAt: _updatedAt, unread: _unread, ...rest } = saved;
     const info: SessionInfo = { ...rest, status: "idle" };
-    return this.launch(info, stored.events, { sandbox: info.sandbox, workdir: info.workdir, env, resume: saved.claudeSessionId });
+    return this.launch(info, stored.events, { sandbox: info.sandbox, workdir: info.workdir, env, ...continuing(saved) });
   }
 
-  /** Starts a new session from a copy of this one's conversation, which carries on as it was. */
-  fork(id: string, env: string[]): SessionInfo {
+  /**
+   * Starts a new session from a copy of this one's conversation, which carries on as it was. With `promptId`, the copy
+   * ends with that prompt's turn.
+   */
+  fork(id: string, env: string[], promptId?: string): SessionInfo {
     const from = this.sessions.get(id);
     if (!from) throw new SessionNotFound(`No session ${id}.`);
     const { claudeSessionId, sandbox, workdir, prompt, model } = from.info;
     if (!claudeSessionId) throw new SessionNotResumable("There is nothing to fork yet: Claude hasn't started this session.");
+    let events = from.events;
+    let resumeAt = from.info.resumeAt;
+    if (promptId !== undefined) {
+      const at = events.findIndex((e) => e.kind === "user_prompt" && e.payload.id === promptId);
+      if (at < 0) throw new SessionNotResumable("That message can't be forked from.");
+      // Up to the next prompt; Claude's history is cut after the last of its messages before that.
+      const next = events.findIndex((e, i) => i > at && e.kind === "user_prompt");
+      if (next >= 0) {
+        events = events.slice(0, next);
+        const kept = events.findLast(isChainEntry);
+        if (!kept) throw new SessionNotResumable("That message can't be forked from.");
+        resumeAt = kept.payload.uuid;
+      }
+    }
     const info: SessionInfo = { id: this.newId(), sandbox, workdir, prompt, model, status: "idle", startedAt: new Date().toISOString() };
-    return this.launch(info, chatEvents(from.events), { sandbox, workdir, env, resume: claudeSessionId, fork: true });
+    return this.launch(info, chatEvents(events), { sandbox, workdir, env, resume: claudeSessionId, fork: true, ...(resumeAt ? { resumeAt } : {}) });
   }
 
   /**
-   * Starts a new session from this one's conversation as it was just before prompt `promptId`, which the original
-   * keeps. With `files`, the files Claude changed since are put back first; if that fails nothing is started.
-   * Returns the new session and the prompt's text, for the caller to edit and send again.
+   * Takes the session back to just before prompt `promptId`: the chat after it is dropped, and Claude starts again on
+   * its history cut at the same place. With `files`, the files Claude changed since are put back first; if that fails
+   * nothing changes. Returns the prompt's text, for the caller to edit and send again.
    */
-  async rewind(id: string, promptId: string, env: string[], { files }: RewindRequest): Promise<{ info: SessionInfo; text: string }> {
+  async rewind(id: string, promptId: string, env: string[], { files }: RewindRequest): Promise<{ text: string }> {
     const from = this.live(id);
     if (from.info.status !== "idle") throw new RewindRefused("Wait for Claude to finish, or stop it, before rewinding.");
     const at = from.events.findIndex((e) => e.kind === "user_prompt" && e.payload.id === promptId);
@@ -129,8 +152,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     // Claude cuts its history after one of its own messages: the last it logged before this prompt, if any.
     const before = from.events.slice(0, at);
     const kept = before.findLast(isChainEntry);
-    const { claudeSessionId, sandbox, workdir, prompt: title, model, commands } = from.info;
-    if (kept && !claudeSessionId) throw new RewindRefused("Claude hasn't started this session yet.");
+    if (kept && !from.info.claudeSessionId) throw new RewindRefused("Claude hasn't started this session yet.");
 
     if (files) {
       try {
@@ -142,9 +164,25 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     // Checked again: a prompt may have been sent while the files were being restored.
     if (from.info.status !== "idle" || !isLive(from.info)) throw new RewindRefused("Claude started working again; try once it's done.");
 
-    const info: SessionInfo = { id: this.newId(), sandbox, workdir, prompt: title, model, commands, status: "idle", startedAt: new Date().toISOString() };
-    const driverOpts: StartOptions = { sandbox, workdir, env, ...(kept ? { resume: claudeSessionId, fork: true, resumeAt: kept.payload.uuid } : {}) };
-    return { info: this.launch(info, chatEvents(before), driverOpts), text: prompt.payload.text };
+    // Tabs on the session drop what they have and subscribe again, to the chat as it is now.
+    for (const sub of from.subscribers) sub.reset();
+    from.subscribers.clear();
+    from.events = [];
+    from.bytes = 0;
+    from.blocks.clear();
+    from.pendingModel = undefined;
+    for (const ev of chatEvents(before)) this.push(from, ev);
+
+    // Rewound to the first prompt, there is nothing of Claude's to keep: it starts afresh and gets a new id.
+    const { claudeSessionId, resumeAt: _resumeAt, ...rest } = from.info;
+    from.info = { ...rest, status: "idle", unread: false, bufferBytes: from.bytes, ...(kept ? { claudeSessionId, resumeAt: kept.payload.uuid } : {}) };
+    const old = from.driver;
+    this.attach(from, { sandbox: from.info.sandbox, workdir: from.info.workdir, env, ...(kept ? continuing(from.info) : {}) });
+    void old.stop();
+    this.emit("changed");
+    if (kept) this.save(from);
+    else this.forget(from);
+    return { text: prompt.payload.text };
   }
 
   /** Saved sessions that aren't open, most recently used first. */
@@ -239,15 +277,15 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     if (!s) throw new SessionNotFound(`No session ${id}.`);
     if (s.info.status === "running" || s.info.status === "starting") throw new SessionNotResumable("Wait for Claude to finish, or stop it, first.");
     const succeeded = s.events.some((e) => e.kind === "claude" && e.payload.type === "result" && e.payload.is_error !== true);
-    const resume = succeeded ? s.info.claudeSessionId : undefined;
+    const resume = succeeded && s.info.claudeSessionId ? continuing(s.info) : undefined;
     const old = s.driver;
     const live = isLive(s.info);
     const { endedAt: _endedAt, ...rest } = s.info;
     // A fresh start gets a new Claude id from its first init; until then there is nothing to fork or resume.
-    s.info = { ...rest, status: "idle", unread: false, ...(resume ? {} : { claudeSessionId: undefined }) };
+    s.info = { ...rest, status: "idle", unread: false, ...(resume ? {} : { claudeSessionId: undefined, resumeAt: undefined }) };
     s.ending = undefined;
     s.blocks.clear();
-    this.attach(s, { sandbox: s.info.sandbox, workdir: s.info.workdir, env, ...(resume ? { resume } : {}) });
+    this.attach(s, { sandbox: s.info.sandbox, workdir: s.info.workdir, env, ...resume });
     if (live) void old.stop();
     this.emit("changed");
     return s.info;
@@ -259,6 +297,13 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     if (!store || !s.info.claudeSessionId) return;
     const stored: StoredSession = { info: { ...s.info, updatedAt: new Date().toISOString() }, events: chatEvents(s.events) };
     s.saving = s.saving.then(() => store.write(stored)).catch(() => {});
+  }
+
+  /** Deletes the session's saved copy, which no longer matches its chat and has nothing of Claude's to resume yet. */
+  private forget(s: Session) {
+    const { store } = this;
+    if (!store) return;
+    s.saving = s.saving.then(() => store.remove(s.info.id)).catch(() => {});
   }
 
   /** Resolves once everything handed to the store has been written. */
@@ -284,6 +329,8 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
       const isNew = typeof m.session_id === "string" && m.session_id !== s.info.claudeSessionId;
       this.setInfo(s, {
         claudeSessionId: typeof m.session_id === "string" ? m.session_id : s.info.claudeSessionId,
+        // The cut history has its own id now, which a restart resumes as it is.
+        resumeAt: isNew ? undefined : s.info.resumeAt,
         model: typeof m.model === "string" ? m.model : s.info.model,
         // Started without a model chosen: the first one reported is the default.
         defaultModel: s.info.defaultModel ?? (!s.info.model && typeof m.model === "string" ? m.model : undefined),

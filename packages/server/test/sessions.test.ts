@@ -287,11 +287,25 @@ describe("sessions", () => {
     await waitFor(() => copy.results().length === 4);
     assert.equal((await session(id))?.claudeSessionId, claudeId);
     assert.equal((await api("/api/sessions/abc123/fork", { method: "POST" })).status, 404);
-    await api(`/api/sessions/${forkId}`, { method: "DELETE" });
-    await api(`/api/sessions/${id}`, { method: "DELETE" });
+
+    // Forked from a message, the copy ends with that message's turn, and so does Claude's history.
+    const second = resumed.got.find((e) => e.kind === "user_prompt" && e.payload.text === "second");
+    const secondId = second?.kind === "user_prompt" ? second.payload.id : undefined;
+    assert.ok(secondId);
+    const fork = (prompt: string) => api(`/api/sessions/${id}/fork`, { method: "POST", body: JSON.stringify({ prompt }) });
+    assert.equal((await fork("nope")).status, 409, "a prompt the session never sent");
+    const atId = (await json(await fork(secondId))).id as string;
+    const at = await listen(atId);
+    assert.deepEqual(at.got.map((e) => e.kind === "claude" ? e.payload.type : e.kind), kinds);
+    const secondReply = resumed.got.findLast((e) => e.kind === "claude" && e.payload.type === "assistant" && e.seq < (resumed.got.find((x) => x.kind === "user_prompt" && x.payload.text === "third")?.seq ?? 0));
+    assert.ok(secondReply?.kind === "claude");
+    await api(`/api/sessions/${atId}/prompt`, { method: "POST", body: JSON.stringify({ text: "where" }) });
+    await waitFor(() => at.results().length === 3);
+    assert.ok(at.got.some((e) => e.kind === "claude" && JSON.stringify(e.payload).includes(`resumed at ${secondReply.payload.uuid}`)));
+    for (const x of [forkId, atId, id]) await api(`/api/sessions/${x}`, { method: "DELETE" });
   });
 
-  it("rewinds to just before a prompt, in a new session", async () => {
+  it("rewinds in place to just before a prompt", async () => {
     const id = await startSession("one", "first");
     const idle = (x: string) => waitFor(async () => { const i = await session(x); return i?.status === "idle" && i.claudeSessionId ? i : undefined; });
     const claudeId = (await idle(id)).claudeSessionId!;
@@ -309,33 +323,48 @@ describe("sessions", () => {
     assert.equal((await rewind({ prompt: "nope" })).status, 409, "a prompt the session never sent");
     assert.equal((await rewind({ prompt: prompts[1].id }, "abc123")).status, 404);
 
-    // Back to before "second": the new session has the chat up to there, and Claude's history is cut after the
-    // last message of the first turn.
+    // Back to before "second": the session keeps its id, its chat is cut there, and open sockets are told to start over.
     const res = await rewind({ prompt: prompts[1].id, files: true });
-    assert.equal(res.status, 201);
-    const { id: branchId, text } = await json(res);
-    assert.equal(text, "second");
-    const branch = await listen(branchId);
-    assert.deepEqual(branch.got.map((e) => (e.kind === "claude" ? e.payload.type : e.kind)), ["user_prompt", "user", "assistant", "result"]);
-    await api(`/api/sessions/${branchId}/prompt`, { method: "POST", body: JSON.stringify({ text: "where" }) });
-    await waitFor(() => branch.results().length === 2);
+    assert.equal(res.status, 200);
+    assert.equal((await json(res)).text, "second");
+    assert.equal(await s.closed, 4409);
+    const cut = await listen(id);
+    assert.deepEqual(cut.got.map((e) => (e.kind === "claude" ? e.payload.type : e.kind)), ["user_prompt", "user", "assistant", "result"]);
     const firstReply = s.got.find((e) => e.kind === "claude" && e.payload.type === "assistant");
     const firstReplyId = firstReply?.kind === "claude" ? String(firstReply.payload.uuid) : "";
     assert.ok(firstReplyId);
-    assert.ok(branch.got.some((e) => e.kind === "claude" && JSON.stringify(e.payload).includes(`resumed at ${firstReplyId}`)), "Claude resumes at the last message of the first turn");
-    assert.notEqual((await idle(branchId)).claudeSessionId, claudeId, "the branch is its own Claude session");
-    assert.equal((await session(id))?.claudeSessionId, claudeId, "the original is left as it was");
+    const info = await session(id);
+    assert.equal(info?.status, "idle");
+    assert.equal(info?.claudeSessionId, claudeId, "Claude's new id only comes with the next turn");
+    assert.equal(info?.resumeAt, firstReplyId);
 
-    // Back to before the very first prompt: nothing to keep, so a fresh session.
-    const fresh = await json(await rewind({ prompt: prompts[0].id }));
+    // Closed and resumed before that turn, it makes the same cut.
+    await api(`/api/sessions/${id}`, { method: "DELETE" });
+    assert.equal((await api(`/api/sessions/${id}/resume`, { method: "POST" })).status, 201);
+    const back = await listen(id);
+    assert.equal(back.got.length, 4);
+    await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: "where" }) });
+    await waitFor(() => back.results().length === 2);
+    assert.ok(back.got.some((e) => e.kind === "claude" && JSON.stringify(e.payload).includes(`resumed at ${firstReplyId}`)), "Claude resumes at the last message of the first turn");
+    const after = await idle(id);
+    assert.notEqual(after.claudeSessionId, claudeId, "the cut history is its own Claude session");
+    assert.equal(after.resumeAt, undefined);
+
+    // Back to before the very first prompt: nothing to keep, so Claude starts afresh and nothing is left to resume.
+    const firstAgain = back.got.find((e) => e.kind === "user_prompt");
+    const fresh = await json(await rewind({ prompt: firstAgain?.kind === "user_prompt" ? firstAgain.payload.id : "" }));
     assert.equal(fresh.text, "first");
-    assert.equal((await listen(fresh.id)).got.length, 0);
+    assert.equal((await listen(id)).got.length, 0);
+    assert.equal((await session(id))?.claudeSessionId, undefined);
+    await waitFor(async () => !((await json(await api("/api/sessions/resumable"))) as SessionInfo[]).some((x) => x.id === id) || undefined);
 
     // Not while Claude is working.
     await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: "slow" }) });
-    assert.equal((await rewind({ prompt: prompts[1].id })).status, 409);
+    const slow = await listen(id);
+    const slowPrompt = slow.got.find((e) => e.kind === "user_prompt");
+    assert.equal((await rewind({ prompt: slowPrompt?.kind === "user_prompt" ? slowPrompt.payload.id : "" })).status, 409);
     await api(`/api/sessions/${id}/interrupt`, { method: "POST" });
-    for (const x of [id, branchId, fresh.id]) await api(`/api/sessions/${x}`, { method: "DELETE" });
+    await api(`/api/sessions/${id}`, { method: "DELETE" });
   });
 
   it("deletes saved sessions by hand, and with their sandbox", async () => {

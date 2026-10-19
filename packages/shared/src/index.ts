@@ -264,6 +264,11 @@ export interface SessionInfo {
   updatedAt?: string;
   /** Claude's own session id and model, from its `system/init`. */
   claudeSessionId?: string;
+  /**
+   * After a rewind, the message of `claudeSessionId` that Claude's history is cut after. Claude gives the cut history
+   * a new id only with its next turn, so until then a restart has to make the same cut.
+   */
+  resumeAt?: string;
   model?: string;
   /** The model Claude used by default, known when the session started without choosing one. */
   defaultModel?: string;
@@ -316,15 +321,19 @@ export interface LoginStatusResponse {
   loggedIn?: LoginAccount;
 }
 
-/** Rewinds a session to just before one of its prompts, in a new session. */
+/** Rewinds a session in place to just before one of its prompts. */
 export interface RewindRequest {
   /** Also put the files Claude changed since back as they were. */
   files: boolean;
 }
 
+/** Starts a new session from a copy of a session's conversation. */
+export interface ForkRequest {
+  /** Copy the conversation only up to the end of this prompt's turn; all of it when omitted. */
+  prompt?: string;
+}
+
 export interface RewindResponse {
-  /** The new session. */
-  id: string;
   /** The prompt that was rewound to, to be edited and sent again. */
   text: string;
 }

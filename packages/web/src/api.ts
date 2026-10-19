@@ -5,6 +5,7 @@ import type {
   CreateProjectRequest,
   CreateResponse,
   DefaultsResponse,
+  ForkRequest,
   LoginAccount,
   LoginStartResponse,
   LoginStatusResponse,
@@ -88,9 +89,9 @@ export const api = {
   resumeSession: (id: string) => request<{ id: string }>("POST", `/api/sessions/${id}/resume`),
   /** Deletes a saved session for good. */
   deleteSavedSession: (id: string) => request("DELETE", `/api/sessions/saved/${id}`),
-  /** Starts a new session from a copy of this one's conversation. */
-  forkSession: (id: string) => request<{ id: string }>("POST", `/api/sessions/${id}/fork`),
-  /** Starts a new session from this one's conversation just before a prompt, optionally with the files put back too. */
+  /** Starts a new session from a copy of this one's conversation: all of it, or up to the end of a prompt's turn. */
+  forkSession: (id: string, prompt?: string) => request<{ id: string }>("POST", `/api/sessions/${id}/fork`, { prompt } satisfies ForkRequest),
+  /** Takes the session back to just before a prompt, optionally with the files put back too. */
   rewindSession: (id: string, prompt: string, files: boolean) =>
     request<RewindResponse>("POST", `/api/sessions/${id}/rewind`, { prompt, files } satisfies RewindRequest & { prompt: string }),
   /** Ends the session if it is live and forgets it; a session Claude has talked to stays resumable. */
@@ -177,7 +178,8 @@ export interface SessionStream {
 
 /**
  * Streams one session's events: the whole buffer first, then new ones. After a dropped connection it resumes from
- * the last `seq` it has, so nothing is lost or repeated.
+ * the last `seq` it has, so nothing is lost or repeated. After a rewind the server rewrites the buffer and closes with
+ * 4409, so it starts over.
  */
 export function useSessionEvents(id: string): SessionStream {
   const [state, setState] = useState<SessionStream>({ events: [], connected: false, gone: false });
@@ -203,6 +205,12 @@ export function useSessionEvents(id: string): SessionStream {
         setState((s) => ({ ...s, events: [...s.events, ev] }));
       };
       ws.onclose = (e) => {
+        if (e.code === 4409 && !closed) {
+          lastSeq = 0;
+          setState({ events: [], connected: false, gone: false });
+          connect();
+          return;
+        }
         setState((s) => ({ ...s, connected: false, gone: s.gone || e.code === 4404 }));
         if (closed || e.code === 4404) return;
         timer = setTimeout(connect, Math.min(5000, 300 * 2 ** retry++));

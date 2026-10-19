@@ -19,6 +19,7 @@ import {
   type CreateResponse,
   type DefaultsResponse,
   type EditSpec,
+  type ForkRequest,
   type LoginAccount,
   type LoginStartResponse,
   type LoginStatusResponse,
@@ -490,21 +491,23 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     return c.json({ ok: true }, 202);
   });
 
-  /** Starts a new session from a copy of this one's conversation. Returns the new session's id. */
+  /** Starts a new session from a copy of this one's conversation, or of it up to one prompt's turn. Returns the new session's id. */
   app.post("/api/sessions/:id/fork", async (c) => {
     const from = sessionOf(c);
+    const req = await c.req.json<ForkRequest>().catch(() => ({}) as ForkRequest);
+    if (req.prompt !== undefined && typeof req.prompt !== "string") throw new HttpError(400, "Which message to fork from?");
     const ready = await readyProject(from.sandbox);
-    return c.json({ id: sessions.fork(from.id, ready.env).id }, 201);
+    return c.json({ id: sessions.fork(from.id, ready.env, req.prompt).id }, 201);
   });
 
-  /** Rewinds to just before one of this session's prompts, in a new session. Returns its id and the prompt's text. */
+  /** Rewinds this session in place to just before one of its prompts. Returns the prompt's text. */
   app.post("/api/sessions/:id/rewind", async (c) => {
     const from = sessionOf(c);
     const req = await c.req.json<{ prompt?: unknown; files?: unknown }>().catch(() => ({}) as { prompt?: unknown; files?: unknown });
     if (typeof req.prompt !== "string" || !req.prompt) throw new HttpError(400, "Which message to rewind to?");
     const ready = await readyProject(from.sandbox);
-    const { info, text } = await sessions.rewind(from.id, req.prompt, ready.env, { files: req.files === true });
-    return c.json({ id: info.id, text } satisfies RewindResponse, 201);
+    const { text } = await sessions.rewind(from.id, req.prompt, ready.env, { files: req.files === true });
+    return c.json({ text } satisfies RewindResponse);
   });
 
   // A login is the project's: its Claude home holds it, so every session of the project shares it. It is started from
@@ -599,11 +602,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     });
   });
 
-  /** Replays a session's events after `after`, then streams new ones; closes when the session is removed. */
+  /** Replays a session's events after `after`, then streams new ones; closes when the session is removed or rewound. */
   const streamSession = (ws: WebSocket, id: string, after: number) => {
     sessionSockets.add(ws);
     const send = (ev: SessionEvent) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(ev));
-    const unsubscribe = sessions.subscribe(id, after, { event: send, gone: () => ws.close(4404, "session removed") });
+    const unsubscribe = sessions.subscribe(id, after, { event: send, gone: () => ws.close(4404, "session removed"), reset: () => ws.close(4409, "session rewound") });
     const done = () => {
       unsubscribe?.();
       sessionSockets.delete(ws);

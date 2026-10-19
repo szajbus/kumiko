@@ -14,6 +14,8 @@ import { COLORS, sessionStatus } from "./status";
 import { UsageStrip } from "./UsageStrip";
 
 const MODELS = ["default", "opus", "sonnet", "haiku"];
+/** Commands Bentomo handles itself, since Claude can't run them headless; offered alongside Claude's own. */
+const OWN_COMMANDS = ["fork", "rewind"];
 
 interface Props {
   session: SessionInfo;
@@ -50,6 +52,8 @@ export function SessionView({ session, onForked }: Props) {
   const [rewinding, setRewinding] = useState<Extract<ChatItem, { type: "user" }> | undefined>();
   const [restoreFiles, setRestoreFiles] = useState(false);
   useEffect(() => setRestoreFiles(false), [rewinding]);
+  // Bumped by a rewind, so the composer starts again from the draft it left.
+  const [composerKey, setComposerKey] = useState(0);
   const [loggingIn, setLoggingIn] = useState(false);
   // What is known about the login behind the last logged-out card; `loginCards` decides what that shows.
   const [answer, setAnswer] = useState<LoginAnswer | undefined>();
@@ -106,6 +110,10 @@ export function SessionView({ session, onForked }: Props) {
     }
   };
 
+  /** A new tab with the conversation up to the end of `prompt`'s turn, or all of it. */
+  const fork = (prompt?: string) => call(() => api.forkSession(session.id, prompt).then(({ id }) => onForked(id)));
+  const canBranch = idle && Boolean(session.claudeSessionId);
+
   return (
     <div className="session">
       <div className="session-head">
@@ -120,23 +128,14 @@ export function SessionView({ session, onForked }: Props) {
         </div>
         <div className="session-controls">
           <UsageStrip sessionId={session.id} live={live} turnDone={idle} cost={totalCost} bufferBytes={session.bufferBytes} />
-          <button
-            type="button"
-            className="btn btn-secondary btn-compact"
-            disabled={!session.claudeSessionId || busy}
-            title="Continue from here in a new tab, leaving this session as it is"
-            onClick={() => void call(() => api.forkSession(session.id).then(({ id }) => onForked(id)))}
-          >
-            <Fork />
-            Fork
-          </button>
         </div>
       </div>
 
       <Chat
         chat={chat}
         running={busy}
-        onRewind={idle && session.claudeSessionId ? setRewinding : undefined}
+        onRewind={canBranch ? setRewinding : undefined}
+        onFork={canBranch ? (item) => void fork(item.id) : undefined}
         hidden={login.hidden}
         actions={
           login.card && {
@@ -180,17 +179,17 @@ export function SessionView({ session, onForked }: Props) {
             const target = rewinding;
             setRewinding(undefined);
             void call(() =>
-              api.rewindSession(session.id, target.id!, restoreFiles).then(({ id, text }) => {
-                drafts.set(id, text);
-                onForked(id);
+              api.rewindSession(session.id, target.id!, restoreFiles).then(({ text }) => {
+                drafts.set(session.id, text);
+                setComposerKey((k) => k + 1);
               }),
             );
           }}
         >
-          <p>A new tab opens with the conversation as it was before this message, which goes back into its message box. This session stays as it is.</p>
+          <p>The conversation goes back to just before this message, and the message goes back into the box to edit. Everything after it is removed.</p>
           <label className="rewind-files">
             <input type="checkbox" checked={restoreFiles} onChange={(e) => setRestoreFiles(e.target.checked)} />
-            <span>Also put back the files Claude has changed since. The sandbox's files are shared, so this affects this session too.</span>
+            <span>Also put back the files Claude has changed since.</span>
           </label>
         </ConfirmDialog>
       )}
@@ -202,16 +201,29 @@ export function SessionView({ session, onForked }: Props) {
         )}
         {error && <div className="banner banner-error">{error}</div>}
         <Composer
+          key={composerKey}
           label="Message Claude"
-          commands={session.commands}
+          commands={session.commands && [...session.commands, ...OWN_COMMANDS.filter((c) => !session.commands!.includes(c))]}
           suggestion={chat.suggestion}
           draftKey={session.id}
           submitLabel="Send"
           placeholder={live ? "Message Claude…" : "This session has ended."}
           disabled={!live || session.status === "starting"}
           onStop={session.status === "running" ? () => void call(() => api.interrupt(session.id)) : undefined}
-          // Claude can't log in from here, but Bentomo can.
-          onSubmit={(text) => (text === "/login" ? (setLoggingIn(true), Promise.resolve(true)) : call(() => api.prompt(session.id, text)))}
+          onSubmit={(text) => {
+            // Claude can't log in or fork from here, but Bentomo can.
+            if (text === "/login") return (setLoggingIn(true), Promise.resolve(true));
+            if (text === "/fork") return idle ? fork() : (setError("Wait for Claude to finish, or stop it, before forking."), Promise.resolve(false));
+            if (text === "/rewind") {
+              // To just before the last message, as its arrow would; older ones have their own arrows.
+              const last = chat.items.findLast((i): i is UserItem => i.type === "user" && Boolean(i.replayed && i.id));
+              if (!idle) setError("Wait for Claude to finish, or stop it, before rewinding.");
+              else if (!last || !session.claudeSessionId) setError("There is nothing to rewind yet.");
+              else setRewinding(last);
+              return Promise.resolve(Boolean(idle && last && session.claudeSessionId));
+            }
+            return call(() => api.prompt(session.id, text));
+          }}
           autoFocus
           footer={
             <>
@@ -240,12 +252,13 @@ export function SessionView({ session, onForked }: Props) {
 
 /** Folds events into the chat incrementally: only new events are applied, and unchanged items keep their identity. */
 function useChat(events: ReturnType<typeof useSessionEvents>["events"]): ChatState {
-  const ref = useRef({ state: emptyChat(), count: 0 });
+  const ref = useRef<{ state: ChatState; count: number; last?: unknown }>({ state: emptyChat(), count: 0 });
   return useMemo(() => {
-    // The stream only grows; if it shrank, it was reset, so start over.
-    let { state, count } = events.length < ref.current.count ? { state: emptyChat(), count: 0 } : ref.current;
+    // The stream only grows; if the last event applied isn't where it was, the stream was reset (a rewind), so start over.
+    const same = ref.current.count === 0 || events[ref.current.count - 1] === ref.current.last;
+    let { state, count } = same ? ref.current : { state: emptyChat(), count: 0 };
     for (; count < events.length; count++) state = applyEvent(state, events[count]);
-    ref.current = { state, count };
+    ref.current = { state, count, last: events[count - 1] };
     return state;
   }, [events]);
 }
@@ -291,13 +304,14 @@ interface ChatProps {
   chat: ChatState;
   running: boolean;
   onRewind?: (item: UserItem) => void;
+  onFork?: (item: UserItem) => void;
   /** Shown in place of one item: the logged-out card, with Log in, or once logged in, the green one with Retry. */
   actions?: { key: string; node: ReactNode };
   /** Items not to show at all. */
   hidden?: ReadonlySet<string>;
 }
 
-function Chat({ chat, running, onRewind, actions, hidden }: ChatProps) {
+function Chat({ chat, running, onRewind, onFork, actions, hidden }: ChatProps) {
   const box = useRef<HTMLDivElement>(null);
   const inner = useRef<HTMLDivElement>(null);
   // Follows new output while the view is at the bottom; scrolling up stops that until it is back at the bottom.
@@ -345,7 +359,7 @@ function Chat({ chat, running, onRewind, actions, hidden }: ChatProps) {
       <div ref={inner} className="chat-inner">
         {chat.items.map((item, i) => (
           hidden?.has(item.key) ? null : (
-            <Item key={item.key} item={item} open={running && i > lastTurn} onRewind={onRewind} actions={actions?.key === item.key ? actions.node : undefined} />
+            <Item key={item.key} item={item} open={running && i > lastTurn} onRewind={onRewind} onFork={onFork} actions={actions?.key === item.key ? actions.node : undefined} />
           )
         ))}
         {running && chat.items.at(-1)?.type === "user" && (
@@ -358,16 +372,34 @@ function Chat({ chat, running, onRewind, actions, hidden }: ChatProps) {
   );
 }
 
-const Item = memo(function Item({ item, open, onRewind, actions }: { item: ChatItem; open: boolean; onRewind?: (item: UserItem) => void; actions?: ReactNode }) {
+interface ItemProps {
+  item: ChatItem;
+  open: boolean;
+  onRewind?: (item: UserItem) => void;
+  onFork?: (item: UserItem) => void;
+  actions?: ReactNode;
+}
+
+const Item = memo(function Item({ item, open, onRewind, onFork, actions }: ItemProps) {
   if (actions) return <>{actions}</>;
   switch (item.type) {
     case "user":
+      // Only prompts Claude has echoed are in its history, so only those can be branched from.
       return (
         <div className="msg-user-row">
-          {onRewind && item.replayed && item.id && (
-            <button type="button" className="btn btn-secondary btn-compact msg-rewind" title="Rewind to just before this message" aria-label="Rewind to this message" onClick={() => onRewind(item)}>
-              <Rewind />
-            </button>
+          {item.replayed && item.id && (onRewind || onFork) && (
+            <div className="msg-actions">
+              {onFork && (
+                <button type="button" className="btn btn-secondary btn-compact" title="Fork from here: a new tab with the conversation up to Claude's reply to this message" aria-label="Fork from this message" onClick={() => onFork(item)}>
+                  <Fork />
+                </button>
+              )}
+              {onRewind && (
+                <button type="button" className="btn btn-secondary btn-compact" title="Rewind to just before this message" aria-label="Rewind to this message" onClick={() => onRewind(item)}>
+                  <Rewind />
+                </button>
+              )}
+            </div>
           )}
           <div className="msg-user">{item.text}</div>
         </div>
