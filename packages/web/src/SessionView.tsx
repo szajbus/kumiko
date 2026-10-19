@@ -139,6 +139,7 @@ export function SessionView({ session, onForked }: Props) {
           label="Message Claude"
           commands={session.commands}
           initialText={draft}
+          draftKey={session.id}
           submitLabel="Send"
           placeholder={live ? "Message Claude…" : "This session has ended."}
           disabled={!live || session.status === "starting"}

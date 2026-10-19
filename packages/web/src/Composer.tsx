@@ -16,7 +16,11 @@ interface Props {
   commands?: string[];
   /** The box starts with this text, and the cursor at its end. */
   initialText?: string;
+  /** Remembers the unsent text under this key while the composer is unmounted (switching tabs). */
+  draftKey?: string;
 }
+
+const drafts = new Map<string, string>();
 
 const MAX_HEIGHT = 240;
 const MAX_SUGGESTIONS = 8;
@@ -30,8 +34,14 @@ export function matchCommands(commands: string[], typed: string): string[] {
 }
 
 /** A prompt box: Enter sends, Shift+Enter adds a line. Used by the New session tab and the chat. */
-export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder, autoFocus, label, commands, initialText }: Props) {
-  const [text, setText] = useState(initialText ?? "");
+export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder, autoFocus, label, commands, initialText, draftKey }: Props) {
+  const [text, setTextState] = useState(() => initialText || (draftKey && drafts.get(draftKey)) || "");
+  const setText = (value: string) => {
+    setTextState(value);
+    if (!draftKey) return;
+    if (value) drafts.set(draftKey, value);
+    else drafts.delete(draftKey);
+  };
   const [picked, setPicked] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [sending, setSending] = useState(false);
