@@ -74,6 +74,11 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     return this.sessions.get(id)?.info;
   }
 
+  /** The session's event buffer, as it stands. */
+  events(id: string): readonly SessionEvent[] {
+    return this.sessions.get(id)?.events ?? [];
+  }
+
   /** How many sessions are live in each sandbox. */
   liveCounts(): Map<string, number> {
     const counts = new Map<string, number>();
@@ -176,21 +181,37 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
   }
 
   private launch(info: SessionInfo, seed: NewEvent[], driverOpts: StartOptions): SessionInfo {
-    const driver = this.makeDriver();
-    let resolveExit!: () => void;
-    const s: Session = { info, driver, events: [], bytes: 0, seq: 0, subscribers: new Set(), blocks: new Map(), exited: new Promise((r) => (resolveExit = r)), saving: Promise.resolve() };
+    const s: Session = { info, driver: undefined!, events: [], bytes: 0, seq: 0, subscribers: new Set(), blocks: new Map(), exited: Promise.resolve(), saving: Promise.resolve() };
     for (const ev of seed) this.push(s, ev);
     s.info = { ...info, bufferBytes: s.bytes };
     this.sessions.set(info.id, s);
+    try {
+      this.attach(s, driverOpts);
+    } catch (err) {
+      // Nothing started (e.g. a saved Claude id that isn't one), so there is no exit to wait for: forget it now.
+      this.sessions.delete(info.id);
+      throw err;
+    }
+    this.emit("changed");
+    return s.info;
+  }
+
+  /** Starts a Claude process for the session. Once another replaces it, nothing it says reaches the session any more. */
+  private attach(s: Session, driverOpts: StartOptions) {
+    const driver = this.makeDriver();
+    let resolveExit!: () => void;
+    s.driver = driver;
+    s.exited = new Promise((r) => (resolveExit = r));
 
     driver.onEvent((ev) => {
+      if (s.driver !== driver) return;
       switch (ev.kind) {
         case "message":
           this.push(s, { kind: "claude", payload: ev.payload });
           this.onMessage(s, ev.payload);
           break;
         case "error":
-          this.push(s, { kind: "error", payload: { message: ev.message, hint: ev.hint, stderr: ev.stderr } });
+          this.push(s, { kind: "error", payload: { message: ev.message, hint: ev.hint, stderr: ev.stderr, ...(ev.signedOut ? { signedOut: true } : {}) } });
           break;
         case "exit": {
           const reason = s.ending ?? "exit";
@@ -205,14 +226,29 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
         }
       }
     });
+    driver.start(driverOpts);
+  }
 
-    try {
-      driver.start(driverOpts);
-    } catch (err) {
-      // Nothing started (e.g. a saved Claude id that isn't one), so there is no exit to wait for: forget it now.
-      this.sessions.delete(info.id);
-      throw err;
-    }
+  /**
+   * Swaps the session's Claude process for a new one, keeping the chat: for after a login, since a process that
+   * started logged out stays that way. It continues Claude's session if a turn ever succeeded in it; otherwise there is
+   * nothing of Claude's to continue, and it starts afresh. Works on an ended session too, which becomes live again.
+   */
+  relaunch(id: string, env: string[]): SessionInfo {
+    const s = this.sessions.get(id);
+    if (!s) throw new SessionNotFound(`No session ${id}.`);
+    if (s.info.status === "running" || s.info.status === "starting") throw new SessionNotResumable("Wait for Claude to finish, or stop it, first.");
+    const succeeded = s.events.some((e) => e.kind === "claude" && e.payload.type === "result" && e.payload.is_error !== true);
+    const resume = succeeded ? s.info.claudeSessionId : undefined;
+    const old = s.driver;
+    const live = isLive(s.info);
+    const { endedAt: _endedAt, ...rest } = s.info;
+    // A fresh start gets a new Claude id from its first init; until then there is nothing to fork or resume.
+    s.info = { ...rest, status: "idle", unread: false, ...(resume ? {} : { claudeSessionId: undefined }) };
+    s.ending = undefined;
+    s.blocks.clear();
+    this.attach(s, { sandbox: s.info.sandbox, workdir: s.info.workdir, env, ...(resume ? { resume } : {}) });
+    if (live) void old.stop();
     this.emit("changed");
     return s.info;
   }

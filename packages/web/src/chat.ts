@@ -19,7 +19,7 @@ export type ChatItem =
   /** One assistant message: finished blocks, then the ones still streaming (by content index). */
   | { type: "assistant"; key: string; final: Block[]; drafts: Block[] }
   | { type: "turn"; key: string; status: "ok" | "interrupted" | "error"; durationMs?: number; costUsd?: number; message?: string }
-  | { type: "error"; key: string; message: string; hint?: string; stderr?: string[] }
+  | { type: "error"; key: string; message: string; hint?: string; stderr?: string[]; signedOut?: boolean }
   | { type: "retry"; key: string; attempt?: number; max?: number }
   | { type: "notice"; key: string; text: string }
   | { type: "ended"; key: string; reason: EndReason; code?: number };

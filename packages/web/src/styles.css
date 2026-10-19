@@ -334,6 +334,19 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 .dialog-body .dialog-note { margin-top: 10px; color: var(--text); font-weight: 500; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px; }
 
+/* Logging Claude in */
+.chat-error-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 6px; color: var(--text); }
+.login-dialog { width: min(520px, calc(100vw - 32px)); }
+.login-steps { display: flex; flex-direction: column; gap: 16px; }
+.login-step { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 12px; align-items: start; }
+.login-step .form-note { margin-top: 6px; }
+.login-num { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--border-strong); font-size: 12px; font-weight: 600; color: var(--text); }
+.login-code { display: flex; flex-direction: column; gap: 6px; }
+.login-code label { color: var(--text); font-weight: 500; }
+.login-error { flex-direction: column; align-items: stretch; }
+.login-error pre { margin: 0; max-height: 160px; overflow: auto; }
+.login-steps .dialog-actions { margin-top: 4px; }
+
 /* Tabs, in the title bar: pills centred in it */
 .tabbar { flex: 1; min-width: 0; height: 100%; display: flex; align-items: center; }
 .tabs { flex: 0 1 auto; min-width: 0; height: 100%; display: flex; align-items: center; gap: 4px; overflow-x: auto; scrollbar-width: none; }

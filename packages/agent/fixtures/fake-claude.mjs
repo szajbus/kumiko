@@ -8,14 +8,47 @@
 //   "crash"      writes to stderr and exits 3
 //   "signed out" answers with an error result, as Claude does without a login
 //   anything else is echoed back as "You said: …"
+// With a `.require-login` file in $CLAUDE_CONFIG_DIR, every prompt is answered as "signed out" until there is a
+// `.credentials.json` beside it. `claude auth status` and `claude auth login` work against that folder: the login
+// prints a sign-in URL, reads a code from stdin, and logs in for the code "good-code".
 // Prompts carrying a uuid are echoed back as `isReplay` user messages, as with --replay-user-messages, and every
 // assistant message has a uuid. A `rewind_files` control request is answered with success, or with an error for a uuid
 // the session never saw. --resume-session-at <uuid> keeps only the messages up to that one.
 import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 
-// --resume <id> continues that session; with --fork-session it gets a new id instead.
 const args = process.argv.slice(2);
+const configDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
+const credentials = join(configDir, ".credentials.json");
+const loggedIn = () => existsSync(credentials);
+const signedOut = () => existsSync(join(configDir, ".require-login")) && !loggedIn();
+
+if (args[0] === "auth" && args[1] === "status") {
+  const status = loggedIn() ? { loggedIn: true, authMethod: "claude.ai", email: "you@example.com", subscriptionType: "max" } : { loggedIn: false, authMethod: "none" };
+  process.stdout.write(JSON.stringify(status, null, 2) + "\n");
+  process.exit(loggedIn() ? 0 : 1);
+}
+if (args[0] === "auth" && args[1] === "login") {
+  process.stdout.write("Opening browser to sign in…\n");
+  process.stdout.write("If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&client_id=fake&state=fake\n");
+  process.stdout.write("Paste code here if prompted > ");
+  const rl = createInterface({ input: process.stdin });
+  const code = await new Promise((r) => rl.once("line", r));
+  rl.close();
+  if (String(code).trim() !== "good-code") {
+    process.stdout.write("\nOAuth error: Invalid code\n");
+    process.exit(1);
+  }
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(credentials, JSON.stringify({ claudeAiOauth: { accessToken: "fake" } }));
+  process.stdout.write("\nLogin successful.\n");
+  process.exit(0);
+}
+
+// --resume <id> continues that session; with --fork-session it gets a new id instead.
 const resumed = args.includes("--resume") ? args[args.indexOf("--resume") + 1] : undefined;
 const session_id = resumed && !args.includes("--fork-session") ? resumed : randomUUID();
 let model = "claude-sonnet-5-5";
@@ -66,7 +99,7 @@ async function turn(text) {
     process.stderr.write("Error: something broke inside Claude\n");
     process.exit(3);
   }
-  if (text === "signed out") {
+  if (text === "signed out" || signedOut()) {
     out({ type: "assistant", message: { model: "<synthetic>", id: randomUUID(), type: "message", role: "assistant", content: [{ type: "text", text: "Invalid API key · Please run /login" }] }, parent_tool_use_id: null, session_id, uuid: randomUUID() });
     return result(start, { is_error: true, text: "Invalid API key · Please run /login", cost: 0 });
   }

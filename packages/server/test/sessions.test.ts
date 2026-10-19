@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -374,6 +374,52 @@ describe("sessions", () => {
     assert.ok(!left.includes(doomed), "a deleted project takes its saved sessions with it");
     assert.ok(left.includes(kept), "other projects keep theirs");
     await api(`/api/sessions/saved/${kept}`, { method: "DELETE" });
+  });
+
+  it("logs Claude in from a session, then retries the prompt that failed", async () => {
+    // The fake Claude reads its config from the fake sandbox's ~/.claude: logged out until it has credentials.
+    const claudeHome = join(limaDir, "vm-home", ".claude");
+    await mkdir(claudeHome, { recursive: true });
+    await writeFile(join(claudeHome, ".require-login"), "");
+    const post = (path: string, body?: object) => api(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });
+    try {
+      const id = await startSession("one", "hello while logged out");
+      const s = await listen(id);
+      const err = await waitFor(() => s.got.find((e) => e.kind === "error"));
+      assert.ok(err.kind === "error" && err.payload.signedOut, "the error says Claude isn't logged in");
+      await waitFor(async () => (await session(id))?.status === "idle" || undefined);
+      const before = (await session(id))?.claudeSessionId;
+
+      // A login started twice is one login.
+      const started = await json(await post(`/api/sessions/${id}/login`));
+      assert.match(started.url, /^https:\/\/claude\.com\//);
+      assert.equal((await json(await post(`/api/sessions/${id}/login`))).url, started.url);
+
+      // A wrong code fails with Claude's own words, and ends that login.
+      const bad = await post(`/api/sessions/${id}/login/code`, { code: "nope" });
+      assert.equal(bad.status, 422);
+      assert.match((await json(bad)).details.join("\n"), /Invalid code/);
+      assert.equal((await post(`/api/sessions/${id}/login/code`, { code: "good-code" })).status, 422, "no login is waiting any more");
+      assert.equal((await post(`/api/sessions/${id}/login/code`, { code: " " })).status, 400);
+
+      await post(`/api/sessions/${id}/login`);
+      const ok = await post(`/api/sessions/${id}/login/code`, { code: "good-code" });
+      assert.equal(ok.status, 200);
+      assert.deepEqual(await json(ok), { email: "you@example.com", plan: "max" });
+      // Logged in now, for every session of the project.
+      assert.deepEqual(await json(await post(`/api/sessions/${id}/login`)), { loggedIn: { email: "you@example.com", plan: "max" } });
+
+      // Retry: a new Claude process (fresh, since no turn ever succeeded) and the failed prompt again.
+      assert.equal((await post(`/api/sessions/${id}/retry`)).status, 202);
+      await waitFor(() => s.got.some((e) => e.kind === "claude" && JSON.stringify(e.payload).includes("You said: hello while logged out")));
+      const after = await waitFor(async () => { const i = await session(id); return i?.status === "idle" && i.claudeSessionId ? i : undefined; });
+      assert.notEqual(after.claudeSessionId, before);
+      assert.equal(s.got.filter((e) => e.kind === "ended").length, 0, "the swap doesn't end the session");
+      await api(`/api/sessions/${id}`, { method: "DELETE" });
+    } finally {
+      await rm(join(claudeHome, ".require-login"), { force: true });
+      await rm(join(claudeHome, ".credentials.json"), { force: true });
+    }
   });
 
   it("ends every live session when the server closes", async () => {

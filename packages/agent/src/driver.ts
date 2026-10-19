@@ -29,12 +29,12 @@ export type AgentMessage = Record<string, unknown> & { type: string };
 /**
  * What an agent reports.
  * - `message`: one line of the agent's own protocol, parsed (for Claude, a stream-json object).
- * - `error`: something the user should see, with a hint where one exists.
+ * - `error`: something the user should see, with a hint where one exists. `signedOut` when the agent isn't logged in.
  * - `exit`: the process is gone; always the last event. `requested` is true after `stop()`.
  */
 export type AgentEvent =
   | { kind: "message"; payload: AgentMessage }
-  | { kind: "error"; message: string; hint?: string; stderr?: string[] }
+  | { kind: "error"; message: string; hint?: string; stderr?: string[]; signedOut?: boolean }
   | { kind: "exit"; code: number; requested: boolean };
 
 /**

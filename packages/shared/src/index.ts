@@ -257,8 +257,22 @@ export type SessionEvent =
   | { seq: number; kind: "claude"; payload: Record<string, unknown> & { type: string } }
   | { seq: number; kind: "user_prompt"; payload: { text: string; id?: string } }
   | { seq: number; kind: "interrupt"; payload: Record<string, never> }
-  | { seq: number; kind: "error"; payload: { message: string; hint?: string; stderr?: string[] } }
+  /** `signedOut`: Claude isn't logged in, so the UI offers to log in instead of only showing the message. */
+  | { seq: number; kind: "error"; payload: { message: string; hint?: string; stderr?: string[]; signedOut?: boolean } }
   | { seq: number; kind: "ended"; payload: { reason: EndReason; code?: number } };
+
+/** Who Claude is logged in as in a project's Claude home. */
+export interface LoginAccount {
+  email?: string;
+  /** The subscription plan, e.g. "max" or "pro". */
+  plan?: string;
+}
+
+/**
+ * Starting a login from a session: the page to sign in on, after which Claude shows a code to paste back; or, when
+ * the project is logged in already (from another session, say), who it is logged in as.
+ */
+export type LoginStartResponse = { url: string } | { loggedIn: LoginAccount };
 
 /** Rewinds a session to just before one of its prompts, in a new session. */
 export interface RewindRequest {

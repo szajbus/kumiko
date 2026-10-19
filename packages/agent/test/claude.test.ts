@@ -74,12 +74,13 @@ describe("ClaudeDriver", () => {
     assert.match(err.hint ?? "", /isn't installed/);
   });
 
-  it("hints at signing in when Claude has no login", async () => {
+  it("says so when Claude has no login, so the UI can offer one", async () => {
     const d = await drive();
     d.start("signed out");
     const err = await d.waitFor(() => d.events.find((e) => e.kind === "error"));
     assert.ok(err.kind === "error");
-    assert.match(err.hint ?? "", /sign in/);
+    assert.match(err.hint ?? "", /Log in/);
+    assert.equal(err.signedOut, true);
     await d.driver.stop();
   });
 

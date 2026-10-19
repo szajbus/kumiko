@@ -5,6 +5,8 @@ import type {
   CreateProjectRequest,
   CreateResponse,
   DefaultsResponse,
+  LoginAccount,
+  LoginStartResponse,
   LogLine,
   ProjectEdit,
   ProjectView,
@@ -62,6 +64,13 @@ export const api = {
   startSession: (project: string, prompt: string, model?: string) => request<{ id: string }>("POST", "/api/sessions", { sandbox: project, prompt, model }),
   /** The user has seen the session, so it no longer waits on them. */
   seen: (id: string) => request("POST", `/api/sessions/${id}/seen`),
+  /** Starts logging Claude in for the session's project: a sign-in URL, or who it is logged in as already. */
+  login: (id: string) => request<LoginStartResponse>("POST", `/api/sessions/${id}/login`),
+  /** Finishes the login with the code the sign-in page shows. */
+  loginCode: (id: string, code: string) => request<LoginAccount>("POST", `/api/sessions/${id}/login/code`, { code }),
+  cancelLogin: (id: string) => request("DELETE", `/api/sessions/${id}/login`),
+  /** Starts the session's Claude again and resends the prompt that failed. */
+  retry: (id: string) => request("POST", `/api/sessions/${id}/retry`),
   prompt: (id: string, text: string) => request("POST", `/api/sessions/${id}/prompt`, { text }),
   /** The Claude account behind a session and how much of its subscription is used. */
   usage: (id: string) => request<AccountUsage>("GET", `/api/sessions/${id}/usage`),

@@ -47,7 +47,9 @@ export function userMessage(text: string, uuid?: string): string {
 }
 
 /** Claude's result text when it isn't signed in, e.g. "Invalid API key · Please run /login". */
-const SIGNED_OUT = /\/login|not logged in|invalid api key|oauth token|authentication/i;
+export const SIGNED_OUT = /\/login|not logged in|invalid api key|oauth token|authentication/i;
+
+const LOGIN_HINT = "Log in to continue. The login is the project's, so its other sessions get it too.";
 
 /** A hint for why the process ended, from its exit code and stderr. */
 export function exitHint(code: number, stderr: string[]): string | undefined {
@@ -55,7 +57,7 @@ export function exitHint(code: number, stderr: string[]): string | undefined {
   if (code === 127 || /claude: (command )?not found/.test(text)) {
     return "Claude Code isn't installed in this sandbox. Stop and start the sandbox to reinstall it.";
   }
-  if (SIGNED_OUT.test(text)) return "Run `claude` once in the sandbox to sign in.";
+  if (SIGNED_OUT.test(text)) return LOGIN_HINT;
   if (code === 255) return "Couldn't reach the sandbox over SSH. Is it still running?";
   return undefined;
 }
@@ -111,7 +113,8 @@ export class ClaudeDriver implements AgentDriver {
       this.emit({ kind: "message", payload });
       // Signed out, Claude still answers each turn, with an error result rather than an exit.
       if (payload.type === "result" && payload.is_error === true && SIGNED_OUT.test(String(payload.result ?? ""))) {
-        this.emit({ kind: "error", message: String(payload.result), hint: "Run `claude` once in the sandbox to sign in." });
+        // The failed turn already shows Claude's own words ("Invalid API key · Please run /login").
+        this.emit({ kind: "error", message: "Claude isn't logged in.", hint: LOGIN_HINT, signedOut: true });
       }
     });
     eachLine(child.stderr!, (line) => this.keepTail(line));
@@ -137,7 +140,8 @@ export class ClaudeDriver implements AgentDriver {
         if (!this.requested) {
           const tail = [...this.stderr];
           const message = exitCode === 0 ? "Claude exited." : `Claude exited with code ${exitCode}.`;
-          this.emit({ kind: "error", message, hint: exitHint(exitCode, tail), stderr: tail.length ? tail : undefined });
+          const signedOut = SIGNED_OUT.test(tail.join("\n")) && exitCode !== 127;
+          this.emit({ kind: "error", message, hint: exitHint(exitCode, tail), stderr: tail.length ? tail : undefined, ...(signedOut ? { signedOut } : {}) });
         }
         this.emit({ kind: "exit", code: exitCode, requested: this.requested });
         abandon();

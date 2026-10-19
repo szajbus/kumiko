@@ -93,6 +93,11 @@ export class UsageCache {
 
   constructor(private readonly load: (sandbox: string) => Promise<AccountUsage>, private readonly ttlMs = 30_000) {}
 
+  /** Drops what is known about a sandbox, e.g. after its Claude logged in. */
+  forget(sandbox: string): void {
+    this.entries.delete(sandbox);
+  }
+
   get(sandbox: string): Promise<AccountUsage> {
     const e = this.entries.get(sandbox);
     if (e && "pending" in e) return e.pending;

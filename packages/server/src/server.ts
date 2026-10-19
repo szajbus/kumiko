@@ -18,6 +18,8 @@ import {
   type CreateResponse,
   type DefaultsResponse,
   type EditSpec,
+  type LoginAccount,
+  type LoginStartResponse,
   type OpKind,
   type Project,
   type ProjectEdit,
@@ -36,6 +38,7 @@ import { LimaProvider, validateSpec, type Log, type SandboxProvider } from "@ben
 import { ClaudeDriver, type AgentDriver } from "@bentomo/agent";
 import { GitError, worktreeStatuses } from "./git.js";
 import { isLocalRequest } from "./guard.js";
+import { LoginFailed, Logins } from "./logins.js";
 import { BusyError, Operations } from "./operations.js";
 import { ProjectStore } from "./projects.js";
 import { RewindRefused, SessionEnded, SessionNotFound, SessionNotResumable, Sessions } from "./sessions.js";
@@ -78,6 +81,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   const host = opts.host ?? "127.0.0.1";
   const ops = new Operations();
   const projects = new ProjectStore(opts.dataDir);
+  const logins = new Logins(provider.exec.bind(provider));
   const sessionStore = new SessionStore(opts.sessionsDir);
   const sessions = new Sessions(opts.driver ?? (() => new ClaudeDriver(provider.exec.bind(provider))), sessionStore);
   const clients = new Set<WebSocket>();
@@ -190,6 +194,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
 
   app.onError((err, c) => {
     if (err instanceof HttpError) return c.json(fail(err.message, err.details), err.status);
+    if (err instanceof LoginFailed) return c.json(fail(err.message, err.output), 422);
     if (err instanceof BusyError) return c.json(fail(err.message), 409);
     if (err instanceof SessionNotFound) return c.json(fail(err.message), 404);
     if (err instanceof SessionEnded || err instanceof SessionNotResumable || err instanceof RewindRefused) return c.json(fail(err.message), 409);
@@ -464,6 +469,44 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     return c.json({ id: info.id, text } satisfies RewindResponse, 201);
   });
 
+  // A login is the project's: its Claude home holds it, so every session of the project shares it. It is started from
+  // a session because that is where being logged out shows.
+
+  /** Starts logging Claude in for the session's project: the sign-in URL, or who it is logged in as already. */
+  app.post("/api/sessions/:id/login", async (c) => {
+    const { sandbox } = sessionOf(c);
+    const ready = await readyProject(sandbox);
+    return c.json((await logins.start(sandbox, ready.workdir)) satisfies LoginStartResponse);
+  });
+
+  /** Finishes the login with the code from the sign-in page. 422 with Claude's output if it doesn't take. */
+  app.post("/api/sessions/:id/login/code", async (c) => {
+    const { sandbox } = sessionOf(c);
+    const req = await c.req.json<{ code?: unknown }>().catch(() => ({}) as { code?: unknown });
+    if (typeof req.code !== "string" || !req.code.trim()) throw new HttpError(400, "Paste the code from the sign-in page.");
+    const account = await logins.finish(sandbox, req.code);
+    usage.forget(sandbox);
+    return c.json(account satisfies LoginAccount);
+  });
+
+  app.delete("/api/sessions/:id/login", (c) => {
+    logins.cancel(sessionOf(c).sandbox);
+    return c.json({ ok: true });
+  });
+
+  /**
+   * After a login: starts the session's Claude again (a process that started logged out stays so) and sends the last
+   * prompt again, the one that failed.
+   */
+  app.post("/api/sessions/:id/retry", async (c) => {
+    const { id, sandbox } = sessionOf(c);
+    const ready = await readyProject(sandbox);
+    const last = sessions.events(id).findLast((e) => e.kind === "user_prompt");
+    sessions.relaunch(id, ready.env);
+    if (last?.kind === "user_prompt") sessions.prompt(id, last.payload.text);
+    return c.json({ ok: true }, 202);
+  });
+
   /** The user is looking at the session, so it no longer waits on them. */
   app.post("/api/sessions/:id/seen", (c) => {
     sessions.markSeen(sessionOf(c).id);
@@ -529,6 +572,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     port,
     close: async () => {
       clearInterval(timer);
+      logins.cancelAll();
       await sessions.endAll("quit");
       await sessions.flush();
       for (const ws of clients) ws.terminate();
