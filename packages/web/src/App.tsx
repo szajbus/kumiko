@@ -133,6 +133,12 @@ export function App() {
     };
   }, []);
 
+  const onSessionStarted = (id: string, keepNewTab?: boolean) => {
+    started.current.add(id);
+    if (!keepNewTab) setNewSessionOpen(false);
+    go(`#/session/${id}`);
+  };
+
   return (
     <div className="app">
       <Header
@@ -143,15 +149,17 @@ export function App() {
         onClose={close}
         onNewSession={() => go("#/session/new")}
       />
+      {/* Kept mounted while its tab is open, so a half-typed prompt survives switching tabs. */}
+      {newSessionOpen && (
+        <div hidden={route.view !== "new-session"}>
+          <NewSession live={live} onStarted={(id) => onSessionStarted(id)} />
+        </div>
+      )}
       <Body
         route={route}
         live={live}
         started={started.current}
-        onSessionStarted={(id, keepNewTab) => {
-          started.current.add(id);
-          if (!keepNewTab) setNewSessionOpen(false);
-          go(`#/session/${id}`);
-        }}
+        onSessionStarted={onSessionStarted}
       />
     </div>
   );
@@ -182,7 +190,7 @@ function Body({ route, live, started, onSessionStarted }: BodyProps) {
       return <CreateForm key={`edit-${route.name}`} editing={sb} onCancel={back} onCreated={back} />;
     }
     case "new-session":
-      return <NewSession live={live} onStarted={onSessionStarted} />;
+      return null; // rendered by App, which keeps it mounted
     case "session": {
       const s = live.sessions.find((x) => x.id === route.id);
       if (!live.loaded || (!s && started.has(route.id))) return null;
