@@ -16,6 +16,28 @@ function webDir(): string {
 let server: RunningServer | undefined;
 let win: BrowserWindow | undefined;
 
+/**
+ * Opens a link in the default browser. Chat text comes from Claude and the code it reads, so only web and mail
+ * links go out: shell.openExternal on file:, smb: or a custom scheme can open or run things on the host.
+ */
+function openOutside(target: string) {
+  let link: URL;
+  try {
+    link = new URL(target);
+  } catch {
+    return;
+  }
+  if (link.protocol === "http:" || link.protocol === "https:" || link.protocol === "mailto:") void shell.openExternal(link.href);
+}
+
+const sameOrigin = (target: string, origin: string) => {
+  try {
+    return new URL(target).origin === origin;
+  } catch {
+    return false;
+  }
+};
+
 function createWindow(url: string) {
   win = new BrowserWindow({
     width: 1280,
@@ -36,14 +58,16 @@ function createWindow(url: string) {
   });
   win.once("ready-to-show", () => win?.show());
   // Keep the window on the app; anything else opens in the browser.
+  // Compared by origin: a prefix check would let http://127.0.0.1:43170 pass for an app on port 4317.
+  const origin = new URL(url).origin;
   win.webContents.setWindowOpenHandler(({ url: target }) => {
-    void shell.openExternal(target);
+    openOutside(target);
     return { action: "deny" };
   });
   win.webContents.on("will-navigate", (e, target) => {
-    if (!target.startsWith(url)) {
+    if (!sameOrigin(target, origin)) {
       e.preventDefault();
-      void shell.openExternal(target);
+      openOutside(target);
     }
   });
   // Cmd/Ctrl+W closes the current tab, not the window; intercept it before the default menu accelerator does.
