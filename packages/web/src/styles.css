@@ -48,7 +48,7 @@ code, .mono { font-family: var(--mono); }
 [data-shell="electron-darwin"] .app-header { -webkit-app-region: drag; padding-left: 84px; }
 [data-shell="electron-darwin"] .app-header :is(a, button) { -webkit-app-region: no-drag; }
 
-.build-sha { flex: none; margin-left: 12px; font: 11px var(--mono, "IBM Plex Mono", monospace); color: var(--muted); user-select: text; }
+.build-sha { flex: none; margin-left: 12px; font: 11px var(--mono); color: var(--muted); user-select: text; }
 
 /* Buttons */
 .btn {
@@ -431,4 +431,10 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 
 @media (max-width: 640px) {
   .page, .form-main { padding-left: 16px; padding-right: 16px; }
+}
+
+.kbd {
+  font-family: var(--mono); font-size: 11px; line-height: 1;
+  padding: 2px 5px; border-radius: 4px; border: 1px solid var(--border-strong);
+  border-bottom-width: 2px; background: rgba(255, 255, 255, 0.06); color: var(--text-2);
 }

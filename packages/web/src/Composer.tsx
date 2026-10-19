@@ -80,6 +80,7 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
             <rect x="2" y="2" width="8" height="8" rx="1.5" fill="currentColor" />
           </svg>
           Stop
+          <kbd className="kbd">Esc</kbd>
         </button>
       ) : (
         <button type="submit" className="btn btn-primary btn-compact composer-btn" disabled={!canSend}>
