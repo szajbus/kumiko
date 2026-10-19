@@ -390,6 +390,7 @@ describe("sessions", () => {
       await waitFor(async () => (await session(id))?.status === "idle" || undefined);
       const before = (await session(id))?.claudeSessionId;
 
+      assert.deepEqual(await json(await api(`/api/sessions/${id}/login`)), {}, "not logged in, and asking starts nothing");
       // A login started twice is one login.
       const started = await json(await post(`/api/sessions/${id}/login`));
       assert.match(started.url, /^https:\/\/claude\.com\//);
@@ -407,6 +408,7 @@ describe("sessions", () => {
       assert.equal(ok.status, 200);
       assert.deepEqual(await json(ok), { email: "you@example.com", plan: "max" });
       // Logged in now, for every session of the project.
+      assert.deepEqual(await json(await api(`/api/sessions/${id}/login`)), { loggedIn: { email: "you@example.com", plan: "max" } });
       assert.deepEqual(await json(await post(`/api/sessions/${id}/login`)), { loggedIn: { email: "you@example.com", plan: "max" } });
 
       // Retry: a new Claude process (fresh, since no turn ever succeeded) and the failed prompt again.

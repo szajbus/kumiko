@@ -7,6 +7,7 @@ import type {
   DefaultsResponse,
   LoginAccount,
   LoginStartResponse,
+  LoginStatusResponse,
   LogLine,
   ProjectEdit,
   ProjectView,
@@ -64,6 +65,8 @@ export const api = {
   startSession: (project: string, prompt: string, model?: string) => request<{ id: string }>("POST", "/api/sessions", { sandbox: project, prompt, model }),
   /** The user has seen the session, so it no longer waits on them. */
   seen: (id: string) => request("POST", `/api/sessions/${id}/seen`),
+  /** Whether the session's project is logged in now; starts nothing. */
+  loginStatus: (id: string) => request<LoginStatusResponse>("GET", `/api/sessions/${id}/login`),
   /** Starts logging Claude in for the session's project: a sign-in URL, or who it is logged in as already. */
   login: (id: string) => request<LoginStartResponse>("POST", `/api/sessions/${id}/login`),
   /** Finishes the login with the code the sign-in page shows. */

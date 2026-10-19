@@ -274,6 +274,11 @@ export interface LoginAccount {
  */
 export type LoginStartResponse = { url: string } | { loggedIn: LoginAccount };
 
+/** Whether a project's Claude is logged in now; `loggedIn` is missing when it isn't, or its sandbox isn't running. */
+export interface LoginStatusResponse {
+  loggedIn?: LoginAccount;
+}
+
 /** Rewinds a session to just before one of its prompts, in a new session. */
 export interface RewindRequest {
   /** Also put the files Claude changed since back as they were. */

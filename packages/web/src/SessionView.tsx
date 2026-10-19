@@ -67,12 +67,39 @@ export function SessionView({ session, onForked }: Props) {
   const live = LIVE_SESSION_STATUSES.includes(session.status);
   const busy = live && !idle;
 
-  // The last time Claude said it isn't logged in, unless a turn has worked since.
-  const signedOut = useMemo(() => {
+  // The last time Claude said it isn't logged in (`last`), and the same if no turn has worked since (`signedOut`).
+  const { last, signedOut, notLoggedInKeys } = useMemo(() => {
+    const keys = chat.items.filter((i) => i.type === "error" && i.signedOut === true).map((i) => i.key);
     const at = chat.items.findLastIndex((i) => i.type === "error" && i.signedOut === true);
-    if (at < 0 || chat.items.slice(at).some((i) => i.type === "turn" && i.status === "ok")) return undefined;
-    return chat.items[at].key;
+    const resolved = at < 0 || chat.items.slice(at).some((i) => i.type === "turn" && i.status === "ok");
+    return { last: keys.at(-1), signedOut: resolved ? undefined : keys.at(-1), notLoggedInKeys: keys };
   }, [chat.items]);
+
+  // A logged-out card that is still the last word may be out of date (logged in from another session, or before a
+  // reload): ask whether the project is logged in now, and show nothing until the answer is in.
+  const [checked, setChecked] = useState<{ key: string; loggedOut: boolean } | undefined>();
+  useEffect(() => {
+    if (!signedOut || loggedIn?.key === signedOut) return;
+    let current = true;
+    api.loginStatus(session.id).then(
+      (res) => {
+        if (!current) return;
+        if (res.loggedIn) setLoggedIn({ key: signedOut, account: res.loggedIn });
+        else setChecked({ key: signedOut, loggedOut: true });
+      },
+      () => current && setChecked({ key: signedOut, loggedOut: true }),
+    );
+    return () => {
+      current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signedOut, session.id]);
+
+  // Only the last of these cards shows, and only while it says something: logged out still (red), or logged in
+  // from this tab (green). The rest are history and stay hidden.
+  const red = signedOut && signedOut === last && checked?.key === signedOut && checked.loggedOut && loggedIn?.key !== signedOut ? signedOut : undefined;
+  const green = loggedIn?.key && loggedIn.key === last ? loggedIn.key : undefined;
+  const hidden = useMemo(() => new Set(notLoggedInKeys.filter((k) => k !== red && k !== green)), [notLoggedInKeys, red, green]);
 
   // When a prompt sent while this tab is open fails for want of a login, the login opens straight away. Replaying an
   // old session's chat doesn't: Claude has to have been working since the tab opened.
@@ -129,10 +156,11 @@ export function SessionView({ session, onForked }: Props) {
         chat={chat}
         running={busy}
         onRewind={idle && session.claudeSessionId ? setRewinding : undefined}
+        hidden={hidden}
         actions={
-          loggedIn?.key
+          green && loggedIn
             ? {
-                key: loggedIn.key,
+                key: green,
                 node: (
                   <div className="chat-ok" role="status">
                     <strong>
@@ -158,9 +186,9 @@ export function SessionView({ session, onForked }: Props) {
                   </div>
                 ),
               }
-            : signedOut
+            : red
               ? {
-                  key: signedOut,
+                  key: red,
                   node: (
                     <div className="chat-error" role="alert">
                       <strong>Claude isn't logged in.</strong>
@@ -276,9 +304,11 @@ interface ChatProps {
   onRewind?: (item: UserItem) => void;
   /** Shown in place of one item: the logged-out card, with Log in, or once logged in, the green one with Retry. */
   actions?: { key: string; node: ReactNode };
+  /** Items not to show at all. */
+  hidden?: ReadonlySet<string>;
 }
 
-function Chat({ chat, running, onRewind, actions }: ChatProps) {
+function Chat({ chat, running, onRewind, actions, hidden }: ChatProps) {
   const box = useRef<HTMLDivElement>(null);
   const inner = useRef<HTMLDivElement>(null);
   // Follows new output while the view is at the bottom; scrolling up stops that until it is back at the bottom.
@@ -325,7 +355,9 @@ function Chat({ chat, running, onRewind, actions }: ChatProps) {
     >
       <div ref={inner} className="chat-inner">
         {chat.items.map((item, i) => (
-          <Item key={item.key} item={item} open={running && i > lastTurn} onRewind={onRewind} actions={actions?.key === item.key ? actions.node : undefined} />
+          hidden?.has(item.key) ? null : (
+            <Item key={item.key} item={item} open={running && i > lastTurn} onRewind={onRewind} actions={actions?.key === item.key ? actions.node : undefined} />
+          )
         ))}
         {running && chat.items.at(-1)?.type === "user" && (
           <div className="chat-waiting">

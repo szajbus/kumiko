@@ -20,6 +20,7 @@ import {
   type EditSpec,
   type LoginAccount,
   type LoginStartResponse,
+  type LoginStatusResponse,
   type OpKind,
   type Project,
   type ProjectEdit,
@@ -471,6 +472,15 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
 
   // A login is the project's: its Claude home holds it, so every session of the project shares it. It is started from
   // a session because that is where being logged out shows.
+
+  /** Whether the session's project is logged in now, without starting a login. */
+  app.get("/api/sessions/:id/login", async (c) => {
+    const { sandbox } = sessionOf(c);
+    const { info } = await known(sandbox);
+    if (info.status !== "running") return c.json({} satisfies LoginStatusResponse);
+    const account = await logins.account(sandbox);
+    return c.json((account ? { loggedIn: account } : {}) satisfies LoginStatusResponse);
+  });
 
   /** Starts logging Claude in for the session's project: the sign-in URL, or who it is logged in as already. */
   app.post("/api/sessions/:id/login", async (c) => {
