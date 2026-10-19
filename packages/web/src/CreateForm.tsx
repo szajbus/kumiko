@@ -3,8 +3,10 @@ import {
   DEFAULTS,
   defaultGuestPath,
   ENV_NAME_PATTERN,
+  MINIMUMS,
   mountsExpression,
   NAME_PATTERN,
+  sameMounts,
   vmName,
   WORKSPACE_DIR,
   type SandboxSpec,
@@ -189,13 +191,12 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
   const inPlaceBlocked = (() => {
     if (!editing) return undefined;
     const s = spec();
-    const key = (ms: SandboxSpec["mounts"]) => JSON.stringify(ms.map((m) => [m.hostPath, m.guestPath ?? m.hostPath, m.writable]));
     const diskNow = Math.ceil(editing.diskGiB ?? was?.diskGiB ?? 0);
     const vmChanged =
       s.cpus !== (editing.cpus ?? was?.cpus) ||
       s.memoryGiB !== (editing.memoryGiB ?? was?.memoryGiB) ||
       s.diskGiB !== diskNow ||
-      key(s.mounts) !== key(was?.mounts ?? []);
+      !sameMounts(s.mounts, was?.mounts ?? []);
     if (s.diskGiB < diskNow) return `Disk can only shrink by recreating; it is ${diskNow} GiB now.`;
     if (vmChanged && editing.status !== "stopped") return `Stop ${editing.vm} to save resource or mount changes without recreating it.`;
     return undefined;
@@ -343,9 +344,9 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
 
         <Section title="Resources" id="sec-res">
           <div className="grid grid-160">
-            <NumberField id="f-cpu" label="CPUs" min={1} value={cpus} onChange={setCpus} />
-            <NumberField id="f-mem" label="Memory (GiB)" min={1} value={memory} onChange={setMemory} />
-            <NumberField id="f-disk" label="Disk (GiB)" min={1} value={disk} onChange={setDisk} />
+            <NumberField id="f-cpu" label="CPUs" min={MINIMUMS.cpus} whole value={cpus} onChange={setCpus} />
+            <NumberField id="f-mem" label="Memory (GiB)" min={MINIMUMS.memoryGiB} value={memory} onChange={setMemory} />
+            <NumberField id="f-disk" label="Disk (GiB)" min={MINIMUMS.diskGiB} value={disk} onChange={setDisk} />
           </div>
         </Section>
 
@@ -593,11 +594,13 @@ function templateGroups(t: TemplatesResponse | undefined, error: string | undefi
   return experimental.length ? [{ options: regular }, { label: "Experimental", options: experimental }] : [{ options: regular }];
 }
 
-function NumberField({ id, label, min, value, onChange }: { id: string; label: string; min: number; value: string; onChange(v: string): void }) {
-  const bad = value !== "" && (!Number.isFinite(Number(value)) || Number(value) < min);
+/** A number input that flags what the server would refuse: below `min`, or a fraction when `whole`. */
+function NumberField({ id, label, min, whole, value, onChange }: { id: string; label: string; min: number; whole?: boolean; value: string; onChange(v: string): void }) {
+  const n = Number(value);
+  const bad = value !== "" && (!Number.isFinite(n) || n < min || (whole && !Number.isInteger(n)));
   return (
-    <Field label={label} htmlFor={id} hint={bad ? `At least ${min}.` : undefined} invalid={bad}>
-      <input id={id} className="input input-dark mono" type="number" min={min} value={value} aria-invalid={bad} onChange={(e) => onChange(e.target.value)} />
+    <Field label={label} htmlFor={id} hint={bad ? `${whole ? "A whole number, at" : "At"} least ${min}.` : undefined} invalid={bad}>
+      <input id={id} className="input input-dark mono" type="number" min={min} step={whole ? 1 : "any"} value={value} aria-invalid={bad} onChange={(e) => onChange(e.target.value)} />
     </Field>
   );
 }

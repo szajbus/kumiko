@@ -4,11 +4,11 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   mountsExpression,
+  sameMounts,
   vmName,
   VM_PREFIX,
   WORKSPACE_DIR,
   type EditSpec,
-  type Mount,
   type SandboxInfo,
   type SandboxSpec,
   type SandboxStatus,
@@ -372,8 +372,7 @@ export class LimaProvider implements SandboxProvider {
     const diskNow = inst.disk ?? meta.spec.diskGiB * GiB;
     if (spec.diskGiB * GiB < diskNow) errors.push(`Disk can only grow; it is ${gib(diskNow)} GiB now.`);
     else if (spec.diskGiB * GiB > diskNow) limaArgs.push(`--disk=${spec.diskGiB}`);
-    const key = (ms: Mount[]) => JSON.stringify(ms.map((m) => [m.hostPath, m.guestPath ?? m.hostPath, m.writable]));
-    if (key(spec.mounts) !== key(meta.spec.mounts)) limaArgs.push(spec.mounts.length ? `--set=${mountsExpression(spec.mounts)}` : "--mount-none");
+    if (!sameMounts(spec.mounts, meta.spec.mounts)) limaArgs.push(spec.mounts.length ? `--set=${mountsExpression(spec.mounts)}` : "--mount-none");
 
     if (limaArgs.length && toStatus(inst.status) !== "stopped") {
       errors.push(`Stop ${vm} to change its resources or mounts. Variables and the provisioning script can change while it runs.`);

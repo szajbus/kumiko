@@ -14,6 +14,9 @@ export const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export const DEFAULTS = { cpus: 4, memoryGiB: 4, diskGiB: 100 } as const;
 
+/** The smallest resources a sandbox can have. */
+export const MINIMUMS = { cpus: 1, memoryGiB: 1, diskGiB: 10 } as const;
+
 /** The default working directory in the VM. Mounts land under the working directory unless the user picks another path. */
 export const WORKSPACE_DIR = "/workspace";
 
@@ -44,6 +47,12 @@ export function mountsExpression(mounts: Mount[]): string {
     };
   });
   return `.mounts = ${JSON.stringify(list)}`;
+}
+
+/** Whether two mount lists give the VM the same folders at the same places, in the same order. */
+export function sameMounts(a: Mount[], b: Mount[]): boolean {
+  const key = (ms: Mount[]) => JSON.stringify(ms.map((m) => [m.hostPath, m.guestPath ?? m.hostPath, m.writable]));
+  return key(a) === key(b);
 }
 
 /** Defaults the create form starts from. */

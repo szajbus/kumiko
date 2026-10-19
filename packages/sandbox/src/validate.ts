@@ -1,7 +1,7 @@
 import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, normalize, posix, sep } from "node:path";
-import { ENV_NAME_PATTERN, NAME_PATTERN, WORKSPACE_DIR, type SandboxSpec } from "@bentomo/shared";
+import { ENV_NAME_PATTERN, MINIMUMS, NAME_PATTERN, WORKSPACE_DIR, type SandboxSpec } from "@bentomo/shared";
 
 export interface Validation {
   errors: string[];
@@ -52,10 +52,10 @@ export async function validateSpec(input: SandboxSpec, env: NodeJS.ProcessEnv = 
     if (!Number.isFinite(n) || n < min) errors.push(`${label} must be a number of at least ${min}.`);
     return n;
   };
-  const cpus = num(input.cpus, "CPUs", 1);
+  const cpus = num(input.cpus, "CPUs", MINIMUMS.cpus);
   if (Number.isFinite(cpus) && !Number.isInteger(cpus)) errors.push("CPUs must be a whole number.");
-  const memoryGiB = num(input.memoryGiB, "Memory", 1);
-  const diskGiB = num(input.diskGiB, "Disk", 10);
+  const memoryGiB = num(input.memoryGiB, "Memory", MINIMUMS.memoryGiB);
+  const diskGiB = num(input.diskGiB, "Disk", MINIMUMS.diskGiB);
 
   const mounts = (Array.isArray(input.mounts) ? input.mounts : []).map((m) => {
     const hostPath = normalize(expandHome(String(m?.hostPath ?? "").trim())).replace(/(.)\/+$/, "$1");
