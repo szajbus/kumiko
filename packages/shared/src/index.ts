@@ -160,6 +160,8 @@ export interface SessionInfo {
   model?: string;
   /** The slash commands Claude accepts in this session (without the slash), from its `system/init`. */
   commands?: string[];
+  /** How much memory the session's event buffer takes on the server, in bytes; updated when a turn ends. */
+  bufferBytes?: number;
 }
 
 /** Why a session ended: End session, its sandbox stopping, the app quitting, or the process exiting by itself. */

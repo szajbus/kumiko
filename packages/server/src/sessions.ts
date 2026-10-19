@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { LIVE_SESSION_STATUSES, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo } from "@bentomo/shared";
 import type { AgentDriver, AgentMessage, StartOptions } from "@bentomo/agent";
 import { chatEvents, type SessionStore, type StoredSession } from "./store.js";
+import { trimMessage } from "./trim.js";
 
 /** A SessionEvent before it has its place in the buffer. */
 type WithoutSeq<E> = E extends unknown ? Omit<E, "seq"> : never;
@@ -18,6 +19,8 @@ interface Session {
   info: SessionInfo;
   driver: AgentDriver;
   events: SessionEvent[];
+  /** The size of `events` as JSON, in bytes; shown in the session's header once per turn. */
+  bytes: number;
   seq: number;
   subscribers: Set<Subscriber>;
   /** Content blocks started (by stream events) and finished (by `assistant` messages), per message id. */
@@ -45,6 +48,8 @@ const isChainEntry = (e: SessionEvent): e is ChainEntry =>
   e.kind === "claude" && (e.payload.type === "assistant" || e.payload.type === "user") && !e.payload.parent_tool_use_id && typeof e.payload.uuid === "string";
 
 const isLive = (s: SessionInfo) => LIVE_SESSION_STATUSES.includes(s.status);
+
+const sizeOf = (e: SessionEvent) => Buffer.byteLength(JSON.stringify(e));
 
 /**
  * Agent sessions, kept in memory: one driver per session and a buffer of everything it said, so a tab that opens
@@ -173,8 +178,9 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
   private launch(info: SessionInfo, seed: NewEvent[], driverOpts: StartOptions): SessionInfo {
     const driver = this.makeDriver();
     let resolveExit!: () => void;
-    const s: Session = { info, driver, events: [], seq: 0, subscribers: new Set(), blocks: new Map(), exited: new Promise((r) => (resolveExit = r)), saving: Promise.resolve() };
+    const s: Session = { info, driver, events: [], bytes: 0, seq: 0, subscribers: new Set(), blocks: new Map(), exited: new Promise((r) => (resolveExit = r)), saving: Promise.resolve() };
     for (const ev of seed) this.push(s, ev);
+    s.info = { ...info, bufferBytes: s.bytes };
     this.sessions.set(info.id, s);
 
     driver.onEvent((ev) => {
@@ -189,7 +195,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
         case "exit": {
           const reason = s.ending ?? "exit";
           const failed = !s.ending && (ev.code !== 0 || s.info.status === "starting");
-          this.setInfo(s, { status: failed ? "failed" : "ended", endedAt: new Date().toISOString() });
+          this.setInfo(s, { status: failed ? "failed" : "ended", endedAt: new Date().toISOString(), bufferBytes: s.bytes });
           this.push(s, { kind: "ended", payload: { reason, code: ev.code } });
           this.save(s);
           resolveExit();
@@ -206,7 +212,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
       throw err;
     }
     this.emit("changed");
-    return info;
+    return s.info;
   }
 
   /** Writes the session's chat to the store, once Claude has given it an id to resume by. */
@@ -254,13 +260,14 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
       const model = (m.message as { model?: unknown } | undefined)?.model;
       if (typeof model === "string" && !model.startsWith("<")) this.setInfo(s, { model });
     } else if (m.type === "result") {
-      const switched = s.pendingModel && typeof m.result === "string" && m.result.startsWith("Set model to");
-      this.setInfo(s, { status: "idle", ...(switched ? { model: s.pendingModel } : {}) });
       // A finished message carries everything its deltas did, so drop them to keep long sessions small. Deltas of
       // a message cut short by Stop are all there is of it, so those stay.
       const done = new Set([...s.blocks].filter(([, c]) => c.finished >= c.started).map(([id]) => id));
       s.events = s.events.filter((e) => !(e.kind === "claude" && e.payload.type === "stream_event" && done.has(String(e.payload.api_message_id))));
+      s.bytes = s.events.reduce((n, e) => n + sizeOf(e), 0);
       s.blocks.clear();
+      const switched = s.pendingModel && typeof m.result === "string" && m.result.startsWith("Set model to");
+      this.setInfo(s, { status: "idle", bufferBytes: s.bytes, ...(switched ? { model: s.pendingModel } : {}) });
       this.save(s);
     }
   }
@@ -274,8 +281,11 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
   }
 
   private push(s: Session, ev: NewEvent) {
-    const full = { ...ev, seq: ++s.seq } as SessionEvent;
+    // Large tool output is cut before it is kept; Claude's own transcript in the sandbox has all of it.
+    const kept = ev.kind === "claude" ? { ...ev, payload: trimMessage(ev.payload) } : ev;
+    const full = { ...kept, seq: ++s.seq } as SessionEvent;
     s.events.push(full);
+    s.bytes += sizeOf(full);
     for (const sub of s.subscribers) sub.event(full);
   }
 

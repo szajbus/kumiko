@@ -74,6 +74,11 @@ export function SessionView({ session, onForked }: Props) {
               {formatCost(totalCost)}
             </span>
           )}
+          {session.bufferBytes !== undefined && (
+            <span className="mono dim session-cost" title="Memory this session's chat takes in Bentomo's server, as of the last finished turn. Tool output past 64 KB isn't kept.">
+              {formatBytes(session.bufferBytes)}
+            </span>
+          )}
           <button
             type="button"
             className="btn btn-secondary btn-compact"
@@ -282,6 +287,13 @@ function endedText(reason: string, code?: number): string {
     default:
       return code ? `Session ended: Claude exited with code ${code}.` : "Session ended: Claude exited.";
   }
+}
+
+/** "812 B", "4.2 KB", "13 MB". */
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  const [value, unit] = n < 1024 ** 2 ? [n / 1024, "KB"] : [n / 1024 ** 2, "MB"];
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${unit}`;
 }
 
 function formatCost(usd: number): string {
