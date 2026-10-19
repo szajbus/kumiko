@@ -489,6 +489,20 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
   background: transparent; color: var(--text); font-size: 14px; line-height: 1.45;
 }
 .composer-input:focus-visible { outline: none; }
+/* Past its height limit the box scrolls, without showing a scrollbar. */
+.composer-input { scrollbar-width: none; }
+.composer-input::-webkit-scrollbar { display: none; }
+/* Paste labels show as pills: the box's text is drawn over a copy of it, laid out the same, with the labels marked. */
+.composer-field { position: relative; flex: 1; min-width: 0; display: flex; }
+.composer-field .composer-input { position: relative; }
+.composer-marks {
+  position: absolute; inset: 0; padding: 8px 0; overflow: hidden; pointer-events: none; color: transparent;
+  white-space: pre-wrap; overflow-wrap: break-word; font-size: 14px; line-height: 1.45;
+}
+.composer-paste {
+  color: transparent; background: #263152; border-radius: 4px; box-shadow: 0 0 0 2px #263152;
+  -webkit-box-decoration-break: clone; box-decoration-break: clone;
+}
 /* A bare icon, no button chrome: Enter's arrow, or Stop while a turn runs. */
 .composer-icon {
   flex: none; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--text-2);

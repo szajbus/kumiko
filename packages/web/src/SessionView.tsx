@@ -180,7 +180,7 @@ export function SessionView({ session, onForked }: Props) {
             setRewinding(undefined);
             void call(() =>
               api.rewindSession(session.id, target.id!, restoreFiles).then(({ text }) => {
-                drafts.set(session.id, text);
+                drafts.set(session.id, { text });
                 setComposerKey((k) => k + 1);
               }),
             );
