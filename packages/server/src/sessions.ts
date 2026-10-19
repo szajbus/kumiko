@@ -191,6 +191,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
       this.setInfo(s, {
         claudeSessionId: typeof m.session_id === "string" ? m.session_id : s.info.claudeSessionId,
         model: typeof m.model === "string" ? m.model : s.info.model,
+        commands: Array.isArray(m.slash_commands) ? m.slash_commands.filter((c): c is string => typeof c === "string") : s.info.commands,
         status: "running",
       });
       // Saved as soon as it can be resumed, in case the app goes away before the first turn ends.

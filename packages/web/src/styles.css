@@ -415,6 +415,14 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
   border-radius: 10px; background: var(--surface);
 }
 .composer:focus-within { border-color: #4a5a8a; }
+.composer { position: relative; }
+.command-list {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 5; margin: 0; padding: 4px; list-style: none;
+  max-height: 280px; overflow-y: auto; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.command-item { padding: 6px 10px; border-radius: 6px; font-size: 13px; color: var(--text-2); cursor: pointer; }
+.command-item-active { background: rgba(255, 255, 255, 0.08); color: var(--text); }
 .composer-input {
   flex: 1; min-width: 0; min-height: 36px; max-height: 240px; padding: 8px 0; border: 0; outline: none; resize: none; overflow-y: hidden;
   background: transparent; color: var(--text); font-size: 14px; line-height: 1.45;

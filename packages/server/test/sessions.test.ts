@@ -118,6 +118,7 @@ describe("sessions", () => {
     });
     assert.equal(info?.sandbox, "one");
     assert.equal(info?.model, "claude-sonnet-5-5");
+    assert.deepEqual(info?.commands, ["compact", "model", "context"], "the slash commands from init are kept on the session");
     assert.ok(info?.claudeSessionId);
     assert.equal((await sandbox("one")).sessions, 1);
     assert.ok(events.some((e) => e.type === "sessions" && e.sessions.some((x) => x.id === id)));

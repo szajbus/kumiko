@@ -102,6 +102,7 @@ export function SessionView({ session, onForked }: Props) {
         {error && <div className="banner banner-error">{error}</div>}
         <Composer
           label="Message Claude"
+          commands={session.commands}
           submitLabel="Send"
           placeholder={live ? "Message Claude…" : "This session has ended."}
           disabled={!live || session.status === "starting"}

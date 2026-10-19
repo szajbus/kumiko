@@ -45,7 +45,7 @@ async function turn(text) {
   let cancelled = false;
   current = { cancel: () => (cancelled = true) };
   const start = Date.now();
-  out({ type: "system", subtype: "init", cwd: process.cwd(), session_id, model, tools: ["Bash", "Read"], permissionMode: "bypassPermissions" });
+  out({ type: "system", subtype: "init", cwd: process.cwd(), session_id, model, tools: ["Bash", "Read"], permissionMode: "bypassPermissions", slash_commands: ["compact", "model", "context"] });
 
   if (text.startsWith("/model ")) {
     model = `claude-${text.slice(7).trim()}-5-5`;

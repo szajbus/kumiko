@@ -12,13 +12,26 @@ interface Props {
   placeholder?: string;
   autoFocus?: boolean;
   label: string;
+  /** Slash commands Claude accepts, without the slash. Typing "/" offers them. */
+  commands?: string[];
 }
 
 const MAX_HEIGHT = 240;
+const MAX_SUGGESTIONS = 8;
+
+/** The commands matching what has been typed after the slash: names that start with it first, then ones that contain it. */
+export function matchCommands(commands: string[], typed: string): string[] {
+  const q = typed.toLowerCase();
+  const starts = commands.filter((c) => c.toLowerCase().startsWith(q));
+  const contains = commands.filter((c) => !c.toLowerCase().startsWith(q) && c.toLowerCase().includes(q));
+  return [...starts, ...contains];
+}
 
 /** A prompt box: Enter sends, Shift+Enter adds a line. Used by the New session tab and the chat. */
-export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder, autoFocus, label }: Props) {
+export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder, autoFocus, label, commands }: Props) {
   const [text, setText] = useState("");
+  const [picked, setPicked] = useState(0);
+  const [dismissed, setDismissed] = useState(false);
   const [sending, setSending] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
 
@@ -31,6 +44,15 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
     // scrollHeight is rounded, so the text can overflow by a fraction of a pixel and show a scrollbar; scroll only past the limit.
     el.style.overflowY = el.scrollHeight > MAX_HEIGHT ? "auto" : "hidden";
   }, [text]);
+
+  // Only the command word itself is completed: once there is a space, what follows is its arguments.
+  const typed = /^\/(\S*)$/.exec(text)?.[1];
+  const suggestions = !dismissed && typed !== undefined && commands ? matchCommands(commands, typed).slice(0, MAX_SUGGESTIONS) : [];
+  const choice = suggestions[Math.min(picked, suggestions.length - 1)];
+  const complete = (name: string) => {
+    setText(`/${name} `);
+    setPicked(0);
+  };
 
   const canSend = !disabled && !sending && text.trim().length > 0;
 
@@ -54,6 +76,26 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
           void send();
         }}
       >
+        {suggestions.length > 0 && (
+          <ul className="command-list" role="listbox" aria-label="Slash commands">
+            {suggestions.map((name) => (
+              <li
+                key={name}
+                role="option"
+                aria-selected={name === choice}
+                className={`command-item mono${name === choice ? " command-item-active" : ""}`}
+                // Mouse down, not click: a click would blur the box first.
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  complete(name);
+                  box.current?.focus();
+                }}
+              >
+                /{name}
+              </li>
+            ))}
+          </ul>
+        )}
         <textarea
           ref={box}
           className="composer-input"
@@ -62,8 +104,31 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
           placeholder={placeholder}
           aria-label={label}
           autoFocus={autoFocus}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value);
+            setPicked(0);
+            setDismissed(false);
+          }}
           onKeyDown={(e) => {
+            if (choice && !e.nativeEvent.isComposing) {
+              if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                e.preventDefault();
+                const step = e.key === "ArrowDown" ? 1 : -1;
+                setPicked((Math.min(picked, suggestions.length - 1) + step + suggestions.length) % suggestions.length);
+                return;
+              }
+              // Enter on a name that is already complete sends it; otherwise it completes the highlighted one.
+              if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && text !== `/${choice}`)) {
+                e.preventDefault();
+                complete(choice);
+                return;
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setDismissed(true);
+                return;
+              }
+            }
             if (e.key === "Escape" && onStop && !e.nativeEvent.isComposing) {
               e.preventDefault();
               onStop();

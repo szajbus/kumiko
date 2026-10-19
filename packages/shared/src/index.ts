@@ -142,6 +142,8 @@ export interface SessionInfo {
   /** Claude's own session id and model, from its `system/init`. */
   claudeSessionId?: string;
   model?: string;
+  /** The slash commands Claude accepts in this session (without the slash), from its `system/init`. */
+  commands?: string[];
 }
 
 /** Why a session ended: End session, its sandbox stopping, the app quitting, or the process exiting by itself. */
