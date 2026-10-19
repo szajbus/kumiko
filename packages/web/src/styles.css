@@ -335,6 +335,7 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px; }
 
 /* Logging Claude in */
+.chat-ok { display: flex; flex-direction: column; gap: 4px; padding: 10px 14px; border-radius: 8px; border: 1px solid #2b5c45; background: #13241c; color: #a9e3c4; }
 .chat-error-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 6px; color: var(--text); }
 .login-dialog { width: min(520px, calc(100vw - 32px)); }
 .login-steps { display: flex; flex-direction: column; gap: 16px; }

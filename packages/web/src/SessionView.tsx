@@ -51,10 +51,8 @@ export function SessionView({ session, onForked }: Props) {
   const [restoreFiles, setRestoreFiles] = useState(false);
   useEffect(() => setRestoreFiles(false), [rewinding]);
   const [loggingIn, setLoggingIn] = useState(false);
-  // Who the project got logged in as from this tab: the signed-out card then offers Retry instead of Log in.
-  const [account, setAccount] = useState<LoginAccount | undefined>();
-  // The signed-out card whose Retry was pressed; it has done its job.
-  const [retried, setRetried] = useState<string | undefined>();
+  // The logged-out card that a login from this tab answered, and who it logged in as; it turns green and offers Retry.
+  const [loggedIn, setLoggedIn] = useState<{ key?: string; account: LoginAccount; retried?: boolean } | undefined>();
   const idle = session.status === "idle";
   // Claude reports a full model id; the dropdown lists aliases, so show the alias it belongs to.
   const reported = session.model ?? "";
@@ -75,6 +73,16 @@ export function SessionView({ session, onForked }: Props) {
     if (at < 0 || chat.items.slice(at).some((i) => i.type === "turn" && i.status === "ok")) return undefined;
     return chat.items[at].key;
   }, [chat.items]);
+
+  // When a prompt sent while this tab is open fails for want of a login, the login opens straight away. Replaying an
+  // old session's chat doesn't: Claude has to have been working since the tab opened.
+  const sawWork = useRef(false);
+  if (session.status === "running" || session.status === "starting") sawWork.current = true;
+  useEffect(() => {
+    if (!signedOut || !sawWork.current) return;
+    sawWork.current = false;
+    setLoggingIn(true);
+  }, [signedOut]);
 
   const call = async (fn: () => Promise<unknown>): Promise<boolean> => {
     setError(undefined);
@@ -122,39 +130,50 @@ export function SessionView({ session, onForked }: Props) {
         running={busy}
         onRewind={idle && session.claudeSessionId ? setRewinding : undefined}
         actions={
-          signedOut && signedOut !== retried
+          loggedIn?.key
             ? {
-                key: signedOut,
+                key: loggedIn.key,
                 node: (
-                  <div className="chat-error-actions">
-                    {account ? (
-                      <>
-                        <span>
-                          Logged in as {account.email ?? "your account"}
-                          {account.plan ? ` (${planName(account.plan)})` : ""}.
-                        </span>
+                  <div className="chat-ok" role="status">
+                    <strong>
+                      Logged in as {loggedIn.account.email ?? "your Claude account"}
+                      {loggedIn.account.plan ? ` (${planName(loggedIn.account.plan)})` : ""}.
+                    </strong>
+                    {!loggedIn.retried && (
+                      <div className="chat-error-actions">
+                        <span>Send your last message again, logged in.</span>
                         <button
                           type="button"
                           className="btn btn-primary btn-compact"
                           disabled={busy}
-                          title="Start Claude again, logged in, and send the last message again"
                           onClick={() => {
-                            setRetried(signedOut);
-                            void call(() => api.retry(session.id)).then((ok) => ok || setRetried(undefined));
+                            setLoggedIn({ ...loggedIn, retried: true });
+                            void call(() => api.retry(session.id)).then((ok) => ok || setLoggedIn({ ...loggedIn, retried: false }));
                           }}
                         >
                           Retry
                         </button>
-                      </>
-                    ) : (
-                      <button type="button" className="btn btn-primary btn-compact" onClick={() => setLoggingIn(true)}>
-                        Log in
-                      </button>
+                      </div>
                     )}
                   </div>
                 ),
               }
-            : undefined
+            : signedOut
+              ? {
+                  key: signedOut,
+                  node: (
+                    <div className="chat-error" role="alert">
+                      <strong>Claude isn't logged in.</strong>
+                      <div className="chat-error-actions">
+                        <span>Log in once for the project {session.sandbox}; all its sessions use it.</span>
+                        <button type="button" className="btn btn-primary btn-compact" onClick={() => setLoggingIn(true)}>
+                          Log in
+                        </button>
+                      </div>
+                    </div>
+                  ),
+                }
+              : undefined
         }
       />
 
@@ -163,9 +182,9 @@ export function SessionView({ session, onForked }: Props) {
           sessionId={session.id}
           project={session.sandbox}
           onClose={() => setLoggingIn(false)}
-          onDone={(a) => {
+          onDone={(account) => {
             setLoggingIn(false);
-            setAccount(a);
+            setLoggedIn({ key: signedOut, account });
           }}
         />
       )}
@@ -255,7 +274,7 @@ interface ChatProps {
   chat: ChatState;
   running: boolean;
   onRewind?: (item: UserItem) => void;
-  /** Buttons to show inside one item: Log in or Retry on the card that says Claude isn't logged in. */
+  /** Shown in place of one item: the logged-out card, with Log in, or once logged in, the green one with Retry. */
   actions?: { key: string; node: ReactNode };
 }
 
@@ -319,6 +338,7 @@ function Chat({ chat, running, onRewind, actions }: ChatProps) {
 }
 
 const Item = memo(function Item({ item, open, onRewind, actions }: { item: ChatItem; open: boolean; onRewind?: (item: UserItem) => void; actions?: ReactNode }) {
+  if (actions) return <>{actions}</>;
   switch (item.type) {
     case "user":
       return (
@@ -347,7 +367,6 @@ const Item = memo(function Item({ item, open, onRewind, actions }: { item: ChatI
           <strong>{item.message}</strong>
           {item.hint && <span>{item.hint}</span>}
           {item.stderr && item.stderr.length > 0 && <pre className="mono">{item.stderr.join("\n")}</pre>}
-          {actions}
         </div>
       );
     case "retry":

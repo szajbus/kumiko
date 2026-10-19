@@ -100,8 +100,8 @@ async function turn(text) {
     process.exit(3);
   }
   if (text === "signed out" || signedOut()) {
-    out({ type: "assistant", message: { model: "<synthetic>", id: randomUUID(), type: "message", role: "assistant", content: [{ type: "text", text: "Invalid API key · Please run /login" }] }, parent_tool_use_id: null, session_id, uuid: randomUUID() });
-    return result(start, { is_error: true, text: "Invalid API key · Please run /login", cost: 0 });
+    out({ type: "assistant", message: { model: "<synthetic>", id: randomUUID(), type: "message", role: "assistant", content: [{ type: "text", text: "Not logged in · Please run /login" }] }, parent_tool_use_id: null, session_id, uuid: randomUUID() });
+    return result(start, { is_error: true, text: "Not logged in · Please run /login", cost: 0 });
   }
 
   const id = `msg_${++msgN}`;

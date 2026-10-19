@@ -87,12 +87,26 @@ export function applyEvent(s: ChatState, ev: SessionEvent): ChatState {
     case "interrupt":
       return { ...s, interruptPending: true };
     case "error":
-      return push({ type: "error", key, ...ev.payload });
+      return ev.payload.signedOut ? replaceFailedTurn(s, { type: "error", key, ...ev.payload }) : push({ type: "error", key, ...ev.payload });
     case "ended":
       return push({ type: "ended", key, reason: ev.payload.reason, code: ev.payload.code });
     case "claude":
       return applyClaude(s, ev.payload, key);
   }
+}
+
+/**
+ * Being logged out reaches the chat three times: Claude's reply ("Not logged in · Please run /login"), the failed turn,
+ * then our error. The error says it best and can offer to log in, so it replaces the other two. Only those: anything
+ * else after the prompt means it wasn't that kind of turn, and everything stays.
+ */
+function replaceFailedTurn(s: ChatState, error: ChatItem): ChatState {
+  const cut = s.items.findLastIndex((i) => i.type === "user") + 1;
+  const tail = s.items.slice(cut);
+  const failedTurn = tail.length > 0 && tail.every((i) => i.type === "assistant" || (i.type === "turn" && i.status === "error"));
+  if (!failedTurn) return { ...s, items: [...s.items, error] };
+  const keep = (index: Record<string, number>) => Object.fromEntries(Object.entries(index).filter(([, i]) => i < cut));
+  return { ...s, items: [...s.items.slice(0, cut), error], messages: keep(s.messages), tools: keep(s.tools) };
 }
 
 function applyClaude(s: ChatState, m: Json & { type: string }, key: string): ChatState {

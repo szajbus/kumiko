@@ -17,6 +17,27 @@ const result = (extra: Record<string, unknown> = {}) => claude({ type: "result",
 const ofType = <T extends ChatItem["type"]>(s: ChatState, type: T) => s.items.filter((i): i is Extract<ChatItem, { type: T }> => i.type === type);
 
 describe("chat", () => {
+  it("shows a logged-out turn as one error, in place of Claude's reply and the failed turn", () => {
+    const signedOut: NewEvent = { kind: "error", payload: { message: "Claude isn't logged in.", hint: "Log in to continue.", signedOut: true } };
+    const s = fold([
+      { kind: "user_prompt", payload: { text: "hi", id: "p1" } },
+      assistant("m1", [{ type: "text", text: "Not logged in · Please run /login" }]),
+      result({ subtype: "success", is_error: true, result: "Not logged in · Please run /login" }),
+      signedOut,
+    ]);
+    assert.deepEqual(s.items.map((i) => i.type), ["user", "error"]);
+    assert.deepEqual(s.messages, {}, "the dropped reply leaves no index behind");
+
+    // A turn that did more than fail on the login keeps everything.
+    const worked = fold([
+      { kind: "user_prompt", payload: { text: "hi", id: "p1" } },
+      assistant("m1", [{ type: "text", text: "Done." }]),
+      result(),
+      signedOut,
+    ]);
+    assert.deepEqual(worked.items.map((i) => i.type), ["user", "assistant", "turn", "error"]);
+  });
+
   it("shows streamed text as it arrives, then the finished message in its place", () => {
     const streaming = fold([
       { kind: "user_prompt", payload: { text: "hi", id: "p1" } },

@@ -49,7 +49,7 @@ export function userMessage(text: string, uuid?: string): string {
 /** Claude's result text when it isn't signed in, e.g. "Invalid API key · Please run /login". */
 export const SIGNED_OUT = /\/login|not logged in|invalid api key|oauth token|authentication/i;
 
-const LOGIN_HINT = "Log in to continue. The login is the project's, so its other sessions get it too.";
+const LOGIN_HINT = "Log in to continue.";
 
 /** A hint for why the process ended, from its exit code and stderr. */
 export function exitHint(code: number, stderr: string[]): string | undefined {
