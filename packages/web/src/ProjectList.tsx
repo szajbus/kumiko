@@ -43,7 +43,7 @@ export function ProjectList({ live, onOpen, onNew }: Props) {
           <div className="empty-state">
             <EmptyBento />
             <h2>No projects yet</h2>
-            <p className="muted">Pick a git clone on this machine. Bentomo gives it a VM of its own, where Claude works in worktrees beside the clone.</p>
+            <p className="muted">Pick a git clone on this machine. Bentomo gives it a sandbox of its own, where Claude works in worktrees beside the clone.</p>
             <button type="button" className="btn btn-primary" onClick={onNew}>
               <Plus />
               New project
@@ -56,7 +56,7 @@ export function ProjectList({ live, onOpen, onNew }: Props) {
             <div className="table-inner">
               <div className="table-row table-headrow">
                 <span>Project</span>
-                <span>VM</span>
+                <span>Sandbox</span>
                 <span>CPU · Memory · Disk</span>
                 <span className="align-right">Actions</span>
               </div>

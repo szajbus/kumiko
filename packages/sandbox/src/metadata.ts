@@ -12,7 +12,7 @@ export function defaultMetadataDir(): string {
 /** Bentomo's record of a sandbox is there but can't be used: not JSON, edited by hand, or unreadable. */
 export class MetadataError extends Error {
   constructor(readonly file: string, why: string) {
-    super(`Bentomo's record of this sandbox, ${file}, can't be read (${why}). Fix the file, or delete it to treat the VM as one Bentomo didn't create.`);
+    super(`Bentomo's record of this sandbox, ${file}, can't be read (${why}). Fix the file, or delete it to treat the sandbox as one Bentomo didn't create.`);
     this.name = "MetadataError";
   }
 }

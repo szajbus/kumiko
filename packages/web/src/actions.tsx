@@ -14,7 +14,7 @@ const TITLES = {
   recreate: (p: ProjectView) => `Recreate ${p.vm}?`,
   stop: (p: ProjectView) => `Stop ${p.vm}?`,
 } as const;
-const LABELS = { delete: "Delete project", recreate: "Recreate VM", stop: "Stop VM" } as const;
+const LABELS = { delete: "Delete project", recreate: "Recreate sandbox", stop: "Stop sandbox" } as const;
 
 /** The line a confirm dialog adds when the project has live agent sessions. */
 export function sessionsNote(sb: ProjectView) {
@@ -65,17 +65,17 @@ export function useActions({ onDeleted }: { onDeleted?(name: string): void } = {
         >
           {confirm.kind === "delete" && (
             <p>
-              The VM and its disk, the project's Claude home (its login and Claude's history) and its saved sessions are deleted for good.{" "}
+              The sandbox and its disk, the project's Claude home (its login and Claude's history) and its saved sessions are deleted for good.{" "}
               <span className="mono">{confirm.sandbox.project.clonePath}</span>, its worktrees and other mounted folders are not touched.
             </p>
           )}
           {confirm.kind === "recreate" && (
             <p>
-              The VM and its disk are deleted, then created again from the same settings and provisioned from scratch. Claude's login and history are
+              The sandbox and its disk are deleted, then created again from the same settings and provisioned from scratch. Claude's login and history are
               kept: they live in the project's Claude home, on this machine.
             </p>
           )}
-          {confirm.kind === "stop" && <p>The VM shuts down. Saved sessions can be resumed once it runs again.</p>}
+          {confirm.kind === "stop" && <p>The sandbox shuts down. Saved sessions can be resumed once it runs again.</p>}
           {sessionsNote(confirm.sandbox)}
         </ConfirmDialog>
       )}
@@ -129,7 +129,7 @@ export function SandboxActions({ sb, actions, labeled }: { sb: ProjectView; acti
           <Menu.Content className="menu" align="end" sideOffset={6} collisionPadding={8} aria-label={`Actions for ${sb.vm}`}>
             <Menu.Item className="menu-item" disabled={Boolean(sb.metaError || sb.problem)} onSelect={() => actions.askRecreate(sb)}>
               <Redo />
-              Recreate VM
+              Recreate sandbox
             </Menu.Item>
             <Menu.Separator className="menu-separator" />
             <Menu.Item className="menu-item danger" onSelect={() => actions.askDelete(sb)}>

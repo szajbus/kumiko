@@ -41,7 +41,7 @@ export function ProjectPage({ id, live, onBack, onEdit, onNewSession }: Props) {
               type="button"
               className="btn btn-primary btn-compact"
               disabled={p.status !== "running" || p.busy}
-              title={p.status === "running" ? "Start a Claude session in this project" : "Start the VM first"}
+              title={p.status === "running" ? "Start a Claude session in this project" : "Start the sandbox first"}
               onClick={onNewSession}
             >
               <Plus />
@@ -64,7 +64,7 @@ export function ProjectPage({ id, live, onBack, onEdit, onNewSession }: Props) {
         )}
         {p?.metaError && (
           <div className="banner banner-error">
-            <strong>Bentomo's record of this project's VM is unreadable.</strong>
+            <strong>Bentomo's record of this project's sandbox is unreadable.</strong>
             <span className="mono">{p.metaError}</span>
           </div>
         )}
@@ -274,7 +274,10 @@ function Details({ p, home }: { p: ProjectView; home?: string }) {
 
   return (
     <>
-      <section className="card facts" aria-label="VM">
+      <div className="form-group-head">
+        <h2>Sandbox</h2>
+      </div>
+      <section className="card facts" aria-label="Sandbox">
         <Fact label="CPUs">{p.cpus ?? spec?.cpus ?? "—"}</Fact>
         <Fact label="Memory">{gib(p.memoryGiB ?? spec?.memoryGiB)}</Fact>
         <Fact label="Disk">{gib(p.diskGiB ?? spec?.diskGiB)}</Fact>

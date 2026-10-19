@@ -81,7 +81,7 @@ export async function validateSpec(input: SandboxSpec, env: NodeJS.ProcessEnv = 
   for (const m of mounts) {
     if (m.guestPath === m.hostPath && !isAbsolute(m.hostPath)) continue; // already reported above
     const g = normalizeGuestPath(m.guestPath);
-    if (!g) errors.push(`${m.guestPath} can't be a path in the VM: use an absolute path or ~/…, not / or ~.`);
+    if (!g) errors.push(`${m.guestPath} can't be a path in the sandbox: use an absolute path or ~/…, not / or ~.`);
     else if (g.includes("{{")) errors.push(`${m.guestPath} can't contain "{{".`);
     else m.guestPath = g;
   }
@@ -89,7 +89,7 @@ export async function validateSpec(input: SandboxSpec, env: NodeJS.ProcessEnv = 
   for (let i = 0; i < mounts.length; i++) {
     for (let j = i + 1; j < mounts.length; j++) {
       const a = mounts[i].guestPath, b = mounts[j].guestPath;
-      if (isWithin(a, b, "/") || isWithin(b, a, "/")) errors.push(`Mounts at ${a} and ${b} overlap in the VM.`);
+      if (isWithin(a, b, "/") || isWithin(b, a, "/")) errors.push(`Mounts at ${a} and ${b} overlap in the sandbox.`);
     }
   }
 

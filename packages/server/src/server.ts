@@ -253,7 +253,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     return c.json(templatesCache);
   });
 
-  app.get("/api/defaults", (c) => c.json({ home: opts.home ?? homedir() } satisfies DefaultsResponse));
+  app.get("/api/defaults", (c) => c.json({ home: opts.home ?? homedir(), claudeHomes: projects.claudeRoot } satisfies DefaultsResponse));
 
   /** Which of the given variable names are set in Bentomo's environment. Never returns values. */
   app.get("/api/env", (c) => {

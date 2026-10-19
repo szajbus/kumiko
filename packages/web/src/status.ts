@@ -47,7 +47,7 @@ export function statusOf(sb: SandboxView, log: LogLine[] = []): { text: string; 
     case "broken":
       return { text: "Broken", color: COLORS.failed };
     case "absent":
-      return { text: "No VM", color: COLORS.warn };
+      return { text: "No sandbox", color: COLORS.warn };
     default:
       return { text: "Unknown", color: COLORS.warn };
   }

@@ -13,7 +13,7 @@ import {
   type ProjectView,
   type TemplatesResponse,
 } from "@bentomo/shared";
-import { api, errorMessage, RequestError, useHome } from "./api";
+import { api, errorMessage, RequestError, useDefaults } from "./api";
 import { sessionsNote } from "./actions";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Breadcrumbs } from "./Breadcrumbs";
@@ -73,7 +73,8 @@ const hasPicker = () => typeof window.bentomo?.pickFolder === "function";
 
 export function ProjectForm({ editing, onCancel, onCreated }: Props) {
   const was = editing?.meta?.spec;
-  const home = useHome();
+  const defaults = useDefaults();
+  const home = defaults?.home;
   const [clonePath, setClonePath] = useState(editing?.project.clonePath ?? "");
   const [name, setNameRaw] = useState(editing?.name ?? "");
   // The name follows the clone's folder until the user types one.
@@ -229,7 +230,7 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
   const preview = useMemo(() => {
     const s = request();
     const vm = vmName(s.name || "<name>");
-    const repo = s.clonePath || "<clone>";
+    const repo = s.clonePath || "<host directory>";
     const fixed = [
       `#   ${repo}  at the same path, writable`,
       `#   ${repo}${WORKTREES_SUFFIX}  at the same path, writable (created if missing)`,
@@ -266,17 +267,17 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
             <>
               <h1 className="page-title page-title-lg">Edit {editing.name}</h1>
               <p className="muted">
-                <strong>Save and recreate</strong> deletes the VM and builds it again from these settings, provisioning included; Claude's login and
-                history stay. <strong>Save</strong> keeps the VM: resource and mount changes need it stopped and apply on its next start, and disk can only
-                grow.
+                <strong>Save and recreate sandbox</strong> deletes the sandbox and builds it again from these settings, provisioning included; Claude's
+                login and history stay. <strong>Save</strong> keeps the sandbox: resource and mount changes need it stopped and apply on its next start,
+                and disk can only grow.
               </p>
             </>
           ) : (
             <>
               <h1 className="page-title page-title-lg">New project</h1>
               <p className="muted">
-                A git clone on this machine, with a VM of its own. Claude works in the clone and in worktrees beside it, in{" "}
-                <code className="mono">{clone ? tilde(clone, home) : "<clone>"}{WORKTREES_SUFFIX}</code>. Nothing is written into the repository.
+                A git clone on this machine, with a sandbox of its own. Claude works in the clone and in worktrees beside it, in{" "}
+                <code className="mono">{clone ? tilde(clone, home) : "<host directory>"}{WORKTREES_SUFFIX}</code>. Nothing is written into the repository.
               </p>
             </>
           )}
@@ -284,15 +285,15 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
 
         <Section title="Project" id="sec-basics">
           <Field
-            label="Clone"
+            label="Host directory"
             htmlFor="f-clone"
             invalid={touched && !cloneOk}
             hint={
               editing
-                ? "The clone can't change after creation."
+                ? "The host directory can't change after creation."
                 : touched && !cloneOk
                   ? "Pick the folder of a git clone."
-                  : "An existing clone with a working tree: its top folder, not a worktree. It is mounted at the same path in the VM."
+                  : "A git clone on this machine: its top folder, not a worktree."
             }
           >
             {hasPicker() && !editing ? (
@@ -320,35 +321,45 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
               />
             )}
           </Field>
+          <Field
+            label="Name"
+            htmlFor="f-name"
+            invalid={touched && !nameOk}
+            hint={
+              editing ? (
+                "The name can't change after creation."
+              ) : (
+                <>
+                  Lowercase letters, digits and dashes. The sandbox will be <code className="mono">{vmName(shownName)}</code>.
+                </>
+              )
+            }
+          >
+            <input
+              id="f-name"
+              className={`input input-dark mono${touched && !nameOk ? " is-invalid" : ""}`}
+              type="text"
+              value={name}
+              disabled={Boolean(editing)}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="web"
+              aria-invalid={touched && !nameOk}
+              onChange={(e) => setName(e.target.value)}
+              onBlur={() => name && setTouched(true)}
+            />
+          </Field>
+        </Section>
+
+        <div className="form-group-head">
+          <h2>Sandbox</h2>
+          <p className="muted">
+            Everything below configures the project's sandbox, <code className="mono">{vmName(shownName)}</code>: the Lima instance Claude runs in.
+          </p>
+        </div>
+
+        <Section title="Template and resources" id="sec-res">
           <div className="grid grid-220">
-            <Field
-              label="Name"
-              htmlFor="f-name"
-              invalid={touched && !nameOk}
-              hint={
-                editing ? (
-                  "The name can't change after creation."
-                ) : (
-                  <>
-                    Lowercase letters, digits and dashes. The VM will be <code className="mono">{vmName(shownName)}</code>.
-                  </>
-                )
-              }
-            >
-              <input
-                id="f-name"
-                className={`input input-dark mono${touched && !nameOk ? " is-invalid" : ""}`}
-                type="text"
-                value={name}
-                disabled={Boolean(editing)}
-                autoComplete="off"
-                spellCheck={false}
-                placeholder="web"
-                aria-invalid={touched && !nameOk}
-                onChange={(e) => setName(e.target.value)}
-                onBlur={() => name && setTouched(true)}
-              />
-            </Field>
             <Field
               label="Template"
               htmlFor="f-template"
@@ -375,9 +386,6 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
               />
             </Field>
           </div>
-        </Section>
-
-        <Section title="Resources" id="sec-res">
           <div className="grid grid-160">
             <NumberField id="f-cpu" label="CPUs" min={MINIMUMS.cpus} whole value={cpus} onChange={setCpus} />
             <NumberField id="f-mem" label="Memory (GiB)" min={MINIMUMS.memoryGiB} value={memory} onChange={setMemory} />
@@ -385,13 +393,40 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
           </div>
         </Section>
 
+        <Section title="Default mounts" id="sec-default-mounts" description="Every project's sandbox has these; they can't be changed.">
+          <div className="fieldset-stack">
+            {[
+              { host: clone ? tilde(clone, home) : "<host directory>", at: "the same path", what: "The clone" },
+              { host: `${clone ? tilde(clone, home) : "<host directory>"}${WORKTREES_SUFFIX}`, at: "the same path", what: "Worktrees, created if missing" },
+              {
+                host: defaults ? `${tilde(defaults.claudeHomes, home)}/${name.trim() || "<name>"}` : "The project's Claude home",
+                at: CLAUDE_HOME_IN_VM,
+                what: "Claude home: login, settings, history",
+              },
+            ].map((m) => (
+              <div key={m.what} className="detail-mount mount-grid">
+                <span className="mount-icon">
+                  <Folder />
+                </span>
+                <span className="mono path">{m.host}</span>
+                <span className="row-sub">
+                  <span className="badge">Writable</span>
+                </span>
+                <span className="mount-at">at</span>
+                <span className="mono path">
+                  {m.at} <span className="dim">· {m.what}</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </Section>
+
         <Section
-          title="More folders"
+          title="Extra mounts"
           id="sec-mounts"
           description={
             <>
-              The clone, its worktrees folder and the project's Claude home are always mounted. Add other host folders here; each appears at the same path
-              in the VM unless you give another. <code className="mono">~</code> in the VM is the VM user's home.
+              Other host folders, at the same path in the sandbox unless you set another. <code className="mono">~</code> is the sandbox user's home.
             </>
           }
         >
@@ -448,7 +483,7 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
                     value={m.guestPath}
                     placeholder={m.hostPath.trim() ? `${m.hostPath.trim()} (the same path)` : "the same path"}
                     aria-invalid={!guestOk}
-                    title={guestOk ? "Where the folder appears in the VM" : "Use an absolute path or ~/…, not used by another mount"}
+                    title={guestOk ? "Where the folder appears in the sandbox" : "Use an absolute path or ~/…, not used by another mount"}
                     spellCheck={false}
                     onChange={(e) => patchMount(m.id, { guestPath: e.target.value })}
                   />
@@ -465,7 +500,7 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
         <Section
           title="Environment"
           id="sec-env"
-          description="Host variables forwarded on provisioning and every session. Names only: values are read from the host each time and never saved."
+          description="Variables forwarded from host to sandbox (names only; values are read from the host each time and never saved)."
         >
           {envRows.map((r) => (
             <EnvRowView
@@ -488,7 +523,7 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
           description={
             <>
               Bentomo first installs Claude Code, on <code className="mono">PATH</code> as <code className="mono">claude</code>. Then your script runs
-              once, as the VM user, in the clone, with the forwarded variables set. <code className="mono">sudo</code> is available. Stops at the first
+              once, as the sandbox user, in the clone, with the forwarded variables set. <code className="mono">sudo</code> is available. Stops at the first
               failing command.
               {editing && " A new script runs when you save and recreate."}
             </>
@@ -548,14 +583,14 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
           )}
           <button type="submit" className="btn btn-primary" disabled={submitting}>
             {editing ? <Redo /> : <Plus />}
-            {editing ? (submitting ? "Saving…" : "Save and recreate") : submitting ? "Creating…" : "Create project"}
+            {editing ? (submitting ? "Saving…" : "Save and recreate sandbox") : submitting ? "Creating…" : "Create project"}
           </button>
         </div>
 
         {confirmRecreate && editing && (
           <ConfirmDialog
             title={`Recreate ${editing.vm}?`}
-            confirmLabel={`Save and recreate`}
+            confirmLabel="Save and recreate sandbox"
             danger
             onCancel={() => setConfirmRecreate(false)}
             onConfirm={() => {
@@ -564,7 +599,7 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
             }}
           >
             <p>
-              The VM and its disk are deleted, then created again from these settings and provisioned from scratch. The clone, its worktrees and the
+              The sandbox and its disk are deleted, then created again from these settings and provisioned from scratch. The clone, its worktrees and the
               project's Claude home are not touched.
             </p>
             {sessionsNote(editing)}

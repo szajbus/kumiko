@@ -100,7 +100,7 @@ describe("server", () => {
     assert.equal(t.preferred, "template:debian-12");
     const env = await json(await api("/api/env?names=TOKEN,NOPE,bad-name"));
     assert.deepEqual(env, { TOKEN: true, NOPE: false });
-    assert.deepEqual(await json(await api("/api/defaults")), { home });
+    assert.deepEqual(await json(await api("/api/defaults")), { home, claudeHomes: join(dataDir, "claude") });
   });
 
   it("refuses what can't be a project's clone, leaving nothing behind", async () => {

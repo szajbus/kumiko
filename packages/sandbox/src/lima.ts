@@ -263,7 +263,7 @@ export class LimaProvider implements SandboxProvider {
     });
     if (meta) await this.prepareShells(name, meta.spec.workdir ?? WORKSPACE_DIR, log);
     if (meta?.setup === "creating") await this.runProvisioning(name, log);
-    else if (meta && (await this.ensureClaude(name, log)) !== 0) log("warning: couldn't reinstall Claude Code; it is missing in the VM.");
+    else if (meta && (await this.ensureClaude(name, log)) !== 0) log("warning: couldn't reinstall Claude Code; it is missing in the sandbox.");
   }
 
   /** Installs Claude Code if it's missing; silent when it's there. Returns the installer's exit code, 0 when nothing ran. */
@@ -431,7 +431,7 @@ export class LimaProvider implements SandboxProvider {
       return;
     }
     const forwarded = meta.spec.env.filter((n) => this.env()[n] !== undefined);
-    log("— provisioning (runs once, as the VM user) —", "note");
+    log("— provisioning (runs once, as the sandbox user) —", "note");
     if (forwarded.length) log(`forwarding ${forwarded.join(", ")}`, "note");
 
     const code = await this.runScript(name, script, meta.spec.env, log, meta.spec.workdir ?? WORKSPACE_DIR);

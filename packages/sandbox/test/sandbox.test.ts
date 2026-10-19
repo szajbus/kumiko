@@ -84,7 +84,7 @@ describe("validateSpec", () => {
       }),
     );
     const text = v.errors.join("\n");
-    for (const needle of ["Name", "CPUs", "Disk", "does not exist", "absolute", "relative/in/vm can't", "~ can't", "overlap in the VM"]) {
+    for (const needle of ["Name", "CPUs", "Disk", "does not exist", "absolute", "relative/in/vm can't", "~ can't", "overlap in the sandbox"]) {
       assert.ok(text.includes(needle), `expected an error about ${needle}:\n${text}`);
     }
   });
@@ -103,7 +103,7 @@ describe("validateSpec", () => {
     assert.deepEqual(v.errors, []);
     assert.deepEqual(v.spec.mounts.map((m) => m.guestPath), [mountDir, "/workspace/d", "~/.claude"]);
     const clash = await validateSpec(spec({ mounts: [{ hostPath: mountDir, writable: false, guestPath: "/workspace" }, { hostPath: mountDir, writable: false, guestPath: "/workspace/d" }] }));
-    assert.match(clash.errors.join(), /overlap in the VM/);
+    assert.match(clash.errors.join(), /overlap in the sandbox/);
   });
 
   it("warns, not fails, on unset variables", async () => {

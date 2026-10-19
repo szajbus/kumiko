@@ -16,14 +16,14 @@ export const MANAGED_FILE = "bentomo.md";
 const TEMPLATE_CLAUDE_MD = `@${MANAGED_FILE}
 
 <!--
-  Your instructions for Claude in this project's VM go here. Bentomo seeded this file once and won't touch it again;
+  Your instructions for Claude in this project's sandbox go here. Bentomo seeded this file once and won't touch it again;
   its own instructions are in ${MANAGED_FILE}, which it rewrites, so keep the import above.
 -->
 `;
 
 /** Bentomo's instructions for a project: the worktree convention, with the project's real paths. */
 export function managedInstructions(p: Project): string {
-  return `<!-- Written by Bentomo, and rewritten whenever the VM starts: edit CLAUDE.md instead. -->
+  return `<!-- Written by Bentomo, and rewritten whenever the sandbox starts: edit CLAUDE.md instead. -->
 
 # Working in this project
 

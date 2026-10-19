@@ -201,11 +201,16 @@ export function useSessionEvents(id: string): SessionStream {
   return state;
 }
 
+/** What the server says about the host; undefined until it answers. */
+export function useDefaults(): DefaultsResponse | undefined {
+  const [defaults, setDefaults] = useState<DefaultsResponse | undefined>();
+  useEffect(() => {
+    api.defaults().then(setDefaults, () => {});
+  }, []);
+  return defaults;
+}
+
 /** The host user's home, for showing paths as ~/…; undefined until the server answers. */
 export function useHome(): string | undefined {
-  const [home, setHome] = useState<string | undefined>();
-  useEffect(() => {
-    api.defaults().then((d) => setHome(d.home), () => {});
-  }, []);
-  return home;
+  return useDefaults()?.home;
 }

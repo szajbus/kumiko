@@ -44,7 +44,7 @@ export function endedText(reason: EndReason, code?: number): string {
     case "user":
       return "Session ended.";
     case "sandbox":
-      return "Session ended: its VM stopped.";
+      return "Session ended: its sandbox stopped.";
     case "quit":
       return "Session ended: Bentomo quit.";
     default:

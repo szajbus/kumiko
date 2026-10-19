@@ -62,6 +62,8 @@ export function sameMounts(a: Mount[], b: Mount[]): boolean {
 export interface DefaultsResponse {
   /** The host user's home, so the UI can show paths as ~/…. */
   home: string;
+  /** The folder holding each project's Claude home, as `<claudeHomes>/<project id>`. */
+  claudeHomes: string;
 }
 
 export interface SandboxSpec {

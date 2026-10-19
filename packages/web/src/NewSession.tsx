@@ -102,12 +102,12 @@ export function NewSession({ live, project: initial, onStarted }: Props) {
               id="ns-sandbox"
               mono
               value={sandbox}
-              placeholder={running.length ? "Pick a project" : "No project's VM is running"}
+              placeholder={running.length ? "Pick a project" : "No project's sandbox is running"}
               disabled={running.length === 0}
               onValueChange={setPicked}
               groups={[
                 { options: running.map((s) => s.name) },
-                ...(others.length ? [{ label: "VM not running: start it from Projects", options: others.map((s) => s.name), disabled: true }] : []),
+                ...(others.length ? [{ label: "Sandbox not running: start it from Projects", options: others.map((s) => s.name), disabled: true }] : []),
               ]}
             />
           )}
@@ -118,7 +118,7 @@ export function NewSession({ live, project: initial, onStarted }: Props) {
               </>
             ) : live.projects.length > 0 ? (
               <>
-                Start a project's VM from <a href="#/">Projects</a> to begin.
+                Start a project's sandbox from <a href="#/">Projects</a> to begin.
               </>
             ) : null}
           </span>
@@ -155,7 +155,7 @@ export function NewSession({ live, project: initial, onStarted }: Props) {
                     <span className="resume-title" title={r.prompt}>
                       {sessionTitle(r)}
                     </span>
-                    <span className="dim resume-when">{runs ? ago(r.updatedAt ?? r.startedAt) : `${ago(r.updatedAt ?? r.startedAt)} · VM not running`}</span>
+                    <span className="dim resume-when">{runs ? ago(r.updatedAt ?? r.startedAt) : `${ago(r.updatedAt ?? r.startedAt)} · sandbox not running`}</span>
                   </div>
                   <div className="resume-actions">
                     <button type="button" className="btn btn-secondary btn-compact" disabled={!runs || resuming !== undefined} onClick={() => void resume(r.id)}>

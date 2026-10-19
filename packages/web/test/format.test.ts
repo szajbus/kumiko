@@ -38,7 +38,7 @@ describe("format", () => {
 
   it("names plans and endings", () => {
     assert.equal(planName("max"), "Max");
-    assert.equal(endedText("sandbox"), "Session ended: its VM stopped.");
+    assert.equal(endedText("sandbox"), "Session ended: its sandbox stopped.");
     assert.equal(endedText("exit", 2), "Session ended: Claude exited with code 2.");
     assert.equal(endedText("exit", 0), "Session ended: Claude exited.");
   });
@@ -68,7 +68,7 @@ describe("status", () => {
     assert.deepEqual(statusOf(sb({ busy: true, operation: op }), log), { text: "Creating…", color: COLORS.busy });
     log.push({ text: "— installing Claude Code —", kind: "note" });
     assert.equal(statusOf(sb({ busy: true, operation: op }), log).text, "Installing Claude Code…");
-    log.push({ text: "— provisioning (runs once, as the VM user) —", kind: "note" });
+    log.push({ text: "— provisioning (runs once, as the sandbox user) —", kind: "note" });
     assert.equal(statusOf(sb({ busy: true, operation: op }), log).text, "Provisioning…");
   });
 
