@@ -28,7 +28,6 @@ import {
   type RewindResponse,
   type SandboxInfo,
   type SandboxSpec,
-  type SandboxView,
   type ServerEvent,
   type SessionEvent,
   type StartSessionRequest,
@@ -41,7 +40,7 @@ import { GitError, worktreeStatuses } from "./git.js";
 import { isLocalRequest } from "./guard.js";
 import { LoginFailed, Logins } from "./logins.js";
 import { BusyError, Operations } from "./operations.js";
-import { ProjectStore } from "./projects.js";
+import { ProjectExists, ProjectStore } from "./projects.js";
 import { RewindRefused, SessionEnded, SessionNotFound, SessionNotResumable, Sessions } from "./sessions.js";
 import { SessionStore } from "./store.js";
 import { serveWeb } from "./static.js";
@@ -106,13 +105,16 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     for (const ws of clients) if (ws.readyState === ws.OPEN) ws.send(msg);
   };
 
-  /** Each project with its VM's view. A project whose VM doesn't exist (yet) shows as `absent`, or `unknown` while busy. */
+  /** A project's VM as last listed; `absent` when the provider has neither the VM nor a record of it. */
+  const infoOf = (id: string): SandboxInfo => infos.find((i) => i.name === id) ?? { name: id, status: "absent" };
+
+  /** Each project with its VM's view. VMs that aren't a project's are left out. */
   const views = (): ProjectView[] => {
-    const vms = ops.views(infos, sessions.liveCounts());
+    const vms = ops.views(projectList.map((p) => infoOf(p.id)), sessions.liveCounts());
     const waiting = new Map<string, number>();
     for (const s of sessions.list()) if (isWaiting(s)) waiting.set(s.sandbox, (waiting.get(s.sandbox) ?? 0) + 1);
     return projectList.map((project) => {
-      const vm: SandboxView = vms.find((v) => v.name === project.id) ?? { name: project.id, status: "absent", vm: vmName(project.id), provider: "lima", busy: false, sessions: 0 };
+      const vm = vms.find((v) => v.name === project.id)!;
       const problem = problems.get(project.id);
       return { ...vm, project, waiting: waiting.get(project.id) ?? 0, ...(problem ? { problem } : {}) };
     });
@@ -176,8 +178,6 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     await sessions.endSandbox(name, "sandbox");
   };
 
-
-
   const timer = setInterval(() => void refresh(), opts.refreshMs ?? 5000);
   await refresh();
 
@@ -196,7 +196,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   app.onError((err, c) => {
     if (err instanceof HttpError) return c.json(fail(err.message, err.details), err.status);
     if (err instanceof LoginFailed) return c.json(fail(err.message, err.output), 422);
-    if (err instanceof BusyError) return c.json(fail(err.message), 409);
+    if (err instanceof BusyError || err instanceof ProjectExists) return c.json(fail(err.message), 409);
     if (err instanceof SessionNotFound) return c.json(fail(err.message), 404);
     if (err instanceof SessionEnded || err instanceof SessionNotResumable || err instanceof RewindRefused) return c.json(fail(err.message), 409);
     // Anything else is a bug or a tool failing; the UI still gets JSON it can show.
@@ -223,13 +223,19 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     if (cur && !cur.endedAt) throw new BusyError(name, cur.op);
   };
 
-  /** Looks up a project: 400 for a bad id, 404 for an unknown one. Returns it with its VM's current state. */
-  const known = async (id: string): Promise<{ project: Project; info: SandboxInfo }> => {
+  /** Looks up a project's record, without asking the provider: 400 for a bad id, 404 for an unknown one. */
+  const projectOf = async (id: string): Promise<Project> => {
     if (!NAME_PATTERN.test(id)) throw new HttpError(400, `Invalid project name "${id}".`);
-    await refresh();
-    const project = projectList.find((p) => p.id === id);
+    const project = await projects.get(id);
     if (!project) throw new HttpError(404, `There is no project ${id}.`);
-    return { project, info: infos.find((i) => i.name === id) ?? { name: id, status: "absent" } };
+    return project;
+  };
+
+  /** Looks up a project as `projectOf` does, with its VM's current state. */
+  const known = async (id: string): Promise<{ project: Project; info: SandboxInfo }> => {
+    const project = await projectOf(id);
+    await refresh();
+    return { project, info: infoOf(id) };
   };
 
   /**
@@ -274,18 +280,20 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
    */
   app.post("/api/projects", async (c) => {
     const req = await body<CreateProjectRequest>(c, "Body must be JSON: { name, clonePath, cpus, memoryGiB, diskGiB, mounts, env }.");
-    const id = String(req?.name ?? "").trim();
+    if (typeof req !== "object" || req === null) throw new HttpError(400, "Body must be a JSON object.");
+    const { name: rawName, clonePath, ...rest } = req;
+    const id = String(rawName ?? "").trim();
+    const base = { ...rest, mounts: Array.isArray(rest.mounts) ? rest.mounts : [], env: Array.isArray(rest.env) ? rest.env : [] };
     assertIdle(id);
-    const checked = await projects.check(id, String(req?.clonePath ?? ""));
+    const checked = await projects.check(id, String(clonePath ?? ""));
     // The VM's own settings, before anything is made on the host; the fixed mounts are checked once they exist.
-    const { errors: specErrors } = await validateSpec({ ...req, name: id, mounts: Array.isArray(req?.mounts) ? req.mounts : [], workdir: undefined }, env());
-    const errors = [...checked.errors, ...specErrors.filter((e) => !e.startsWith("Name must"))];
+    const { errors: specErrors } = await validateSpec({ ...base, name: id }, env());
+    // Both checks know a bad name; it is said once.
+    const errors = [...new Set([...checked.errors, ...specErrors])];
     if (errors.length || !checked.clonePath || !checked.worktreesPath) throw new HttpError(400, "Can't create this project.", errors);
 
-    const { project, rollback } = await projects.create(id, checked.clonePath, checked.worktreesPath).catch((err: unknown) => {
-      throw new HttpError(409, err instanceof Error ? err.message : String(err));
-    });
-    const v = await provider.validate(projects.spec(project, { ...req, mounts: req.mounts ?? [], env: req.env ?? [] }));
+    const { project, rollback } = await projects.create(id, checked.clonePath, checked.worktreesPath);
+    const v = await provider.validate(projects.spec(project, base));
     if (v.errors.length) {
       await rollback();
       throw new HttpError(400, "Can't create this project.", v.errors);
@@ -301,10 +309,14 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     return c.json({ name: id, warnings: v.warnings } satisfies CreateResponse, 202);
   });
 
-  const action = (op: OpKind, work: (project: Project, info: SandboxInfo, log: Log) => Promise<void>) => async (c: Context) => {
+  type Work = (project: Project, info: SandboxInfo, log: Log) => Promise<void>;
+
+  /** An operation on a project's VM, run in the background. `check` can refuse it first, by throwing. */
+  const action = (op: OpKind, work: Work, check?: (project: Project, info: SandboxInfo) => Promise<void>) => async (c: Context) => {
     const id = c.req.param("id")!;
     assertIdle(id);
     const { project, info } = await known(id);
+    await check?.(project, info);
     ops.start(id, op, (log) => work(project, info, log));
     return c.json({ name: id, op }, 202);
   };
@@ -315,15 +327,20 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     if (problem) throw new HttpError(409, problem);
   };
 
-  app.post("/api/projects/:id/start", async (c, next) => {
-    const { project, info } = await known(c.req.param("id") ?? "");
-    if (info.status === "absent") throw new HttpError(409, `${vmName(project.id)} doesn't exist. Recreate it.`);
-    await assertFolders(project);
-    return next();
-  }, action("starting", async (p, _i, log) => {
-    await projects.writeManaged(p);
-    await provider.start(p.id, log);
-  }));
+  app.post(
+    "/api/projects/:id/start",
+    action(
+      "starting",
+      async (p, _i, log) => {
+        await projects.writeManaged(p);
+        await provider.start(p.id, log);
+      },
+      async (p, i) => {
+        if (i.status === "absent") throw new HttpError(409, `${vmName(p.id)} doesn't exist. Recreate it.`);
+        await assertFolders(p);
+      },
+    ),
+  );
   app.post("/api/projects/:id/stop", action("stopping", async (p, _i, log) => {
     await endSessions(p.id, log);
     await provider.stop(p.id, log);
@@ -359,8 +376,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     const { project, info } = await known(id);
     const raw = await body<ProjectEdit>(c, "Body must be a JSON object of fields to change.");
     const { workdir: _workdir, ...edit } = (raw ?? {}) as EditSpec;
-    const patch: EditSpec = edit.mounts ? { ...edit, mounts: projects.spec(project, { ...DEFAULTS, mounts: edit.mounts, env: [] }).mounts } : edit;
+    const patch: EditSpec = Array.isArray(edit.mounts) ? { ...edit, mounts: projects.mounts(project, edit.mounts) } : edit;
     const again = c.req.query("recreate") === "1";
+    if (again) await assertFolders(project);
     if (again && info.status === "absent") {
       // Nothing to edit in place: build the VM from the stored spec with the changes.
       const v = await validateSpec({ ...vmSpec(project, info), ...patch, name: id, workdir: project.clonePath }, env());
@@ -371,22 +389,26 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     const v = await provider.validateEdit(id, patch, { recreate: again });
     if (v.errors.length) throw new HttpError(400, "Can't apply these changes.", v.errors);
     const op: OpKind = again ? "recreating" : "editing";
-    if (again) await assertFolders(project);
     ops.start(id, op, (log) => (again ? recreate(project, projects.spec(project, v.spec), log) : provider.edit(id, patch, log)));
     return c.json({ name: id, op, warnings: v.warnings }, 202);
   });
 
   /** Delete, then create again from the stored spec (or the defaults, if there is none). */
-  app.post("/api/projects/:id/recreate", async (c, next) => {
-    const { project, info } = await known(c.req.param("id") ?? "");
-    if (info.metaError) throw new HttpError(400, info.metaError);
-    await assertFolders(project);
-    return next();
-  }, action("recreating", (p, i, log) => recreate(p, vmSpec(p, i), log)));
+  app.post(
+    "/api/projects/:id/recreate",
+    action(
+      "recreating",
+      (p, i, log) => recreate(p, vmSpec(p, i), log),
+      async (p, i) => {
+        if (i.metaError) throw new HttpError(400, i.metaError);
+        await assertFolders(p);
+      },
+    ),
+  );
 
-  /** The clone's worktrees, from git on the host, with what needs attention in each. */
+  /** The clone's worktrees, from git on the host, with what needs attention in each. Needs nothing of the VM. */
   app.get("/api/projects/:id/worktrees", async (c) => {
-    const { project } = await known(c.req.param("id") ?? "");
+    const project = await projectOf(c.req.param("id"));
     await assertFolders(project);
     try {
       return c.json((await worktreeStatuses(project.clonePath)) satisfies WorktreesResponse);

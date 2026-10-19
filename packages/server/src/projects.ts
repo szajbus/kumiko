@@ -1,15 +1,15 @@
 import { constants } from "node:fs";
 import { access, cp, lstat, mkdir, readdir, readFile, realpath, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, normalize } from "node:path";
-import { CLAUDE_HOME_IN_VM, NAME_PATTERN, WORKTREES_SUFFIX, type Mount, type Project, type SandboxSpec } from "@bentomo/shared";
+import { dirname, isAbsolute, join, normalize } from "node:path";
+import { CLAUDE_HOME_IN_VM, NAME_PATTERN, projectMountRole, WORKTREES_SUFFIX, type Mount, type Project, type SandboxSpec } from "@bentomo/shared";
 import { cloneProblem } from "./git.js";
 
 export function defaultBentomoHome(): string {
   return process.env.BENTOMO_HOME ?? join(homedir(), ".bentomo");
 }
 
-/** The file Bentomo owns in each Claude home, imported by CLAUDE.md. Rewritten whenever the project's VM starts. */
+/** The file Bentomo owns in each Claude home, imported by CLAUDE.md. Rewritten whenever the VM or a session starts. */
 export const MANAGED_FILE = "bentomo.md";
 
 /** What a new app-level template's CLAUDE.md says. The import is what brings in Bentomo's instructions. */
@@ -23,7 +23,7 @@ const TEMPLATE_CLAUDE_MD = `@${MANAGED_FILE}
 
 /** Bentomo's instructions for a project: the worktree convention, with the project's real paths. */
 export function managedInstructions(p: Project): string {
-  return `<!-- Written by Bentomo, and rewritten whenever the sandbox starts: edit CLAUDE.md instead. -->
+  return `<!-- Written by Bentomo, and rewritten whenever the sandbox or a session starts: edit CLAUDE.md instead. -->
 
 # Working in this project
 
@@ -40,10 +40,16 @@ The git clone is \`${p.clonePath}\`. Sessions start there.
 `;
 }
 
-/** A project id taken from a folder name: lowercase letters, digits and dashes, short enough for a sandbox name. */
-export function suggestId(clonePath: string): string {
-  const slug = basename(clonePath).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 30).replace(/-+$/, "");
-  return slug || "project";
+/** Creating a project whose id is taken: by an earlier project, or by a create that raced this one. */
+export class ProjectExists extends Error {
+  constructor(id: string) {
+    super(`There is already a project called ${id}.`);
+  }
+}
+
+/** Ids name files and folders; only the sandbox name shape may. */
+function assertId(id: string): void {
+  if (!NAME_PATTERN.test(id)) throw new Error(`Not a project id: ${id}`);
 }
 
 export interface CreatedProject {
@@ -67,14 +73,13 @@ export class ProjectStore {
     this.templateDir = join(home, "claude-template");
   }
 
-  /** Ids name files and folders; only the sandbox name shape may. */
   private file(id: string): string {
-    if (!NAME_PATTERN.test(id)) throw new Error(`Not a project id: ${id}`);
+    assertId(id);
     return join(this.dir, `${id}.json`);
   }
 
   claudeHome(id: string): string {
-    if (!NAME_PATTERN.test(id)) throw new Error(`Not a project id: ${id}`);
+    assertId(id);
     return join(this.claudeRoot, id);
   }
 
@@ -103,7 +108,7 @@ export class ProjectStore {
   private async claim(p: Project): Promise<void> {
     await mkdir(this.dir, { recursive: true });
     await writeFile(this.file(p.id), JSON.stringify(p, null, 2) + "\n", { flag: "wx" }).catch((err: NodeJS.ErrnoException) => {
-      throw err.code === "EEXIST" ? new Error(`There is already a project called ${p.id}.`) : err;
+      throw err.code === "EEXIST" ? new ProjectExists(p.id) : err;
     });
   }
 
@@ -114,7 +119,8 @@ export class ProjectStore {
   async check(id: string, rawClonePath: string): Promise<{ errors: string[]; clonePath?: string; worktreesPath?: string }> {
     const errors: string[] = [];
     if (!NAME_PATTERN.test(id)) errors.push("Name must be 1–30 lowercase letters, digits or dashes, not starting or ending with a dash.");
-    else if (await this.get(id)) errors.push(`There is already a project called ${id}.`);
+    // Taken even when its record can't be read: creating would fail on the file anyway.
+    else if (await lstat(this.file(id)).then(() => true, () => false)) errors.push(new ProjectExists(id).message);
 
     const raw = rawClonePath.trim().replace(/^~(?=\/|$)/, homedir());
     if (!raw) return { errors: [...errors, "Pick the clone to work in."] };
@@ -222,14 +228,14 @@ export class ProjectStore {
     ];
   }
 
-  /** Whether a mount is one of the project's fixed ones, which the user can't change. */
-  isFixed(p: Project, m: Mount): boolean {
-    return this.fixedMounts(p).some((f) => f.hostPath === m.hostPath && (m.guestPath ?? m.hostPath) === f.guestPath);
+  /** The project's fixed mounts, then the others in `mounts`; any fixed ones among those are replaced, not repeated. */
+  mounts(p: Project, mounts: Mount[]): Mount[] {
+    const extra = mounts.filter((m) => !projectMountRole(p, m, this.claudeHome(p.id)));
+    return [...this.fixedMounts(p), ...extra];
   }
 
   /** The VM's spec: the user's resources, extra mounts, variables and script, plus what every project has. */
   spec(p: Project, base: Omit<SandboxSpec, "name" | "workdir">): SandboxSpec {
-    const extra = base.mounts.filter((m) => !this.isFixed(p, m));
-    return { ...base, name: p.id, mounts: [...this.fixedMounts(p), ...extra], workdir: p.clonePath };
+    return { ...base, name: p.id, mounts: this.mounts(p, base.mounts), workdir: p.clonePath };
   }
 }

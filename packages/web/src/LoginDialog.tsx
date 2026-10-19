@@ -14,7 +14,7 @@ type Step =
   | { step: "starting" }
   | { step: "code"; url: string }
   | { step: "checking"; url: string }
-  | { step: "failed"; message: string; details: string[]; url?: string };
+  | { step: "failed"; message: string; details: string[] };
 
 /**
  * Logs Claude in for a project: the sandbox's Claude prints a sign-in link, the user signs in in their browser, and
@@ -28,6 +28,7 @@ export function LoginDialog({ sessionId, project, onDone, onClose }: Props) {
 
   const start = async () => {
     setState({ step: "starting" });
+    setCode("");
     try {
       const res = await api.login(sessionId);
       if ("loggedIn" in res) {
@@ -61,7 +62,7 @@ export function LoginDialog({ sessionId, project, onDone, onClose }: Props) {
       onDone(account);
     } catch (err) {
       // A wrong code ends that login on the server; Try again starts a new one.
-      setState({ step: "failed", message: errorMessage(err), details: err instanceof RequestError ? err.details : [], url: state.url });
+      setState({ step: "failed", message: errorMessage(err), details: err instanceof RequestError ? err.details : [] });
     }
   };
 

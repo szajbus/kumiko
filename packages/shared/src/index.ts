@@ -155,6 +155,24 @@ export interface Project {
   createdAt: string;
 }
 
+/** A project id from its clone's folder name: lowercase letters, digits and dashes, short enough for a sandbox name. */
+export function suggestProjectId(clonePath: string): string {
+  const base = clonePath.replace(/\/+$/, "").split("/").pop() ?? "";
+  return base.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 30).replace(/-+$/, "");
+}
+
+/**
+ * Which of the mounts every project's VM has this one is, if any: the clone and its worktrees at their own paths, and
+ * the Claude home at ~/.claude. With `claudeHome`, the Claude home's host folder must match too.
+ */
+export function projectMountRole(p: Project, m: Mount, claudeHome?: string): "clone" | "worktrees" | "claude-home" | undefined {
+  const guest = m.guestPath ?? m.hostPath;
+  if (m.hostPath === p.clonePath && guest === p.clonePath) return "clone";
+  if (m.hostPath === p.worktreesPath && guest === p.worktreesPath) return "worktrees";
+  if (guest === CLAUDE_HOME_IN_VM && (claudeHome === undefined || m.hostPath === claudeHome)) return "claude-home";
+  return undefined;
+}
+
 /** A project as the UI sees it: its VM's view, plus the project itself and what needs the user. */
 export interface ProjectView extends SandboxView {
   project: Project;

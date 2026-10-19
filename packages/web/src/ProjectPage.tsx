@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { CLAUDE_HOME_IN_VM, isWaiting, vmName, type LogLine, type Mount, type ProjectView, type SessionInfo, type WorktreeStatus, type WorktreesResponse } from "@bentomo/shared";
+import { isWaiting, projectMountRole, vmName, type LogLine, type ProjectView, type SessionInfo, type WorktreeStatus, type WorktreesResponse } from "@bentomo/shared";
 import { SandboxActions, useActions } from "./actions";
 import { api, errorMessage, useHome, type LiveState } from "./api";
 import { Breadcrumbs } from "./Breadcrumbs";
@@ -258,14 +258,7 @@ function WorktreeBadges({ w }: { w: WorktreeStatus }) {
   );
 }
 
-/** Which of a project's own mounts this is, if any. */
-function mountRole(p: ProjectView, m: Mount): string | undefined {
-  const guest = m.guestPath ?? m.hostPath;
-  if (m.hostPath === p.project.clonePath && guest === p.project.clonePath) return "Clone";
-  if (m.hostPath === p.project.worktreesPath && guest === p.project.worktreesPath) return "Worktrees";
-  if (guest === CLAUDE_HOME_IN_VM) return "Claude home";
-  return undefined;
-}
+const MOUNT_ROLE = { clone: "Clone", worktrees: "Worktrees", "claude-home": "Claude home" } as const;
 
 function Details({ p, home }: { p: ProjectView; home?: string }) {
   const spec = p.meta?.spec;
@@ -295,7 +288,7 @@ function Details({ p, home }: { p: ProjectView; home?: string }) {
           <section className="card section" aria-labelledby="d-mounts">
             <h2 id="d-mounts">Mounts</h2>
             {spec.mounts.map((m) => {
-              const role = mountRole(p, m);
+              const role = projectMountRole(p.project, m);
               return (
                 <div key={m.hostPath + (m.guestPath ?? "")} className="detail-mount mount-grid">
                   <span className="mount-icon">
@@ -305,7 +298,7 @@ function Details({ p, home }: { p: ProjectView; home?: string }) {
                     {tilde(m.hostPath, home)}
                   </span>
                   <span className="row-sub">
-                    {role && <span className="badge">{role}</span>}
+                    {role && <span className="badge">{MOUNT_ROLE[role]}</span>}
                     <span className="badge">{m.writable ? "Writable" : "Read-only"}</span>
                   </span>
                   <span className="mount-at">at</span>

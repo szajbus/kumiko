@@ -5,7 +5,9 @@ import {
   ENV_NAME_PATTERN,
   MINIMUMS,
   NAME_PATTERN,
+  projectMountRole,
   sameMounts,
+  suggestProjectId,
   vmName,
   WORKTREES_SUFFIX,
   type CreateProjectRequest,
@@ -47,22 +49,6 @@ function guestPathOk(p: string, rows: MountRow[], self: number): boolean {
   return vmPathShape(t) && !rows.some((r) => r.id !== self && (r.guestPath.trim() || r.hostPath.trim()) === t);
 }
 
-/** A project name from a folder name, as the server would suggest it. */
-export function suggestName(path: string): string {
-  const base = path.replace(/\/+$/, "").split("/").pop() ?? "";
-  return base.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 30).replace(/-+$/, "");
-}
-
-/** Whether a stored mount is one every project has: clone, worktrees or Claude home. The form only shows the others. */
-const isFixed = (p: ProjectView, m: Mount) => {
-  const guest = m.guestPath ?? m.hostPath;
-  return (
-    (m.hostPath === p.project.clonePath && guest === p.project.clonePath) ||
-    (m.hostPath === p.project.worktreesPath && guest === p.project.worktreesPath) ||
-    guest === CLAUDE_HOME_IN_VM
-  );
-};
-
 interface EnvRow {
   id: number;
   name: string;
@@ -86,7 +72,7 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
   const [cpus, setCpus] = useState(String(editing?.cpus ?? was?.cpus ?? DEFAULTS.cpus));
   const [memory, setMemory] = useState(String(editing?.memoryGiB ?? was?.memoryGiB ?? DEFAULTS.memoryGiB));
   const [disk, setDisk] = useState(String(editing?.diskGiB ?? was?.diskGiB ?? DEFAULTS.diskGiB));
-  const extraWas = useMemo(() => (editing && was ? was.mounts.filter((m) => !isFixed(editing, m)) : []), [editing, was]);
+  const extraWas = useMemo(() => (editing && was ? was.mounts.filter((m) => !projectMountRole(editing.project, m)) : []), [editing, was]);
   const [mounts, setMounts] = useState<MountRow[]>(() =>
     extraWas.map((m) => ({ id: nextId++, hostPath: m.hostPath, guestPath: m.guestPath && m.guestPath !== m.hostPath ? m.guestPath : "", writable: m.writable })),
   );
@@ -131,7 +117,7 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
 
   const setClone = (path: string) => {
     setClonePath(path);
-    if (!nameEdited) setNameRaw(suggestName(path));
+    if (!nameEdited) setNameRaw(suggestProjectId(path));
   };
   const setName = (v: string) => {
     setNameRaw(v.toLowerCase());

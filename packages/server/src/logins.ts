@@ -48,17 +48,18 @@ export class Logins {
 
   constructor(
     private readonly exec: Exec,
-    private readonly opts: { waitForCodeMs?: number; startMs?: number; finishMs?: number } = {},
+    private readonly opts: { waitForCodeMs?: number; startMs?: number; finishMs?: number; statusMs?: number } = {},
   ) {}
 
-  /** Who Claude in the project's sandbox is logged in as, or undefined when it isn't. */
+  /** Who Claude in the project's sandbox is logged in as, or undefined when it isn't (or doesn't answer in time). */
   async account(project: string): Promise<LoginAccount | undefined> {
     const child = this.exec(project, "claude auth status --json", []);
     child.stdin!.end();
     const out: string[] = [];
     eachLine(child.stdout!, (l) => out.push(l));
     child.stderr!.resume();
-    await exitCode(child); // 1 when logged out; the JSON says the same
+    const kill = setTimeout(() => child.kill("SIGTERM"), this.opts.statusMs ?? 30_000);
+    await exitCode(child).finally(() => clearTimeout(kill)); // 1 when logged out; the JSON says the same
     try {
       const s = JSON.parse(out.join("\n")) as { loggedIn?: unknown; email?: unknown; subscriptionType?: unknown };
       if (s.loggedIn !== true) return undefined;
@@ -137,8 +138,8 @@ export class Logins {
     clearTimeout(p.timer);
     p.child.stdin!.end(`${trimmed}\n`);
     const kill = setTimeout(() => p.child.kill("SIGTERM"), this.opts.finishMs ?? 60_000);
-    const code0 = await p.exited.finally(() => clearTimeout(kill));
-    if (code0 !== 0) throw new LoginFailed("Claude didn't accept the code.", p.output);
+    const exit = await p.exited.finally(() => clearTimeout(kill));
+    if (exit !== 0) throw new LoginFailed("Claude didn't accept the code.", p.output);
     const account = await this.account(project);
     if (!account) throw new LoginFailed("The login finished, but Claude still isn't logged in.", p.output);
     return account;

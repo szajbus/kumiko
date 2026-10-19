@@ -260,6 +260,11 @@ describe("server", () => {
     assert.equal(created.done.type, "error");
     assert.equal((await project("gone"))?.status, "absent");
     assert.equal((await api("/api/projects/gone/start", { method: "POST" })).status, 409);
+    // Nor is it built again while its clone is away, either way of asking.
+    await rename(created.clone, created.clone + "-moved");
+    assert.equal((await api("/api/projects/gone/recreate", { method: "POST" })).status, 409);
+    assert.equal((await api("/api/projects/gone?recreate=1", { method: "PATCH", body: JSON.stringify({ cpus: 2 }) })).status, 409);
+    await rename(created.clone + "-moved", created.clone);
     const since = events.length;
     assert.equal((await api("/api/projects/gone/recreate", { method: "POST" })).status, 202);
     assert.equal((await finished("gone", "recreating", since)).type, "done");
