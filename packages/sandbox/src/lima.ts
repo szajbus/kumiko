@@ -426,6 +426,9 @@ export class LimaProvider implements SandboxProvider {
     const child = spawn(this.ssh, ["-F", sshConfig, "-T", `lima-${vm}`, "bash", "-s"], {
       stdio: ["pipe", "pipe", "pipe"],
     });
+    // Writing to a process that has gone (the VM stopped, ssh couldn't connect) fails with EPIPE, and an unhandled
+    // stream error would take the whole server down. The exit code already says what happened.
+    child.stdin!.on("error", () => {});
     child.stdin!.write(execScript(cmd, env, this.env(), opts.cwd));
     return child;
   }

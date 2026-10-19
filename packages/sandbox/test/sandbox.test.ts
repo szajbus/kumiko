@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { defaultGuestPath } from "@bentomo/shared";
-import { execScript, mountsExpression, parseLimaList, provisionCommand, tidyLimaLine, validateSpec } from "../src/index.js";
+import { execScript, exitCode, mountsExpression, parseLimaList, provisionCommand, tidyLimaLine, validateSpec } from "../src/index.js";
 import { fakeLima } from "./helpers.js";
 
 const spec = (over = {}) => ({ name: "web", cpus: 4, memoryGiB: 4, diskGiB: 100, mounts: [], env: [], ...over });
@@ -335,5 +335,16 @@ describe("LimaProvider against a fake limactl", () => {
     child.stdin!.end("world\n");
     await new Promise((r) => child.on("close", r));
     assert.equal(out, "hello world\n");
+  });
+
+  it("survives writing to a command that has stopped reading", async () => {
+    const { provider } = await fakeLima();
+    const child = provider.exec("web", "sh -c 'exec 0<&-; sleep 0.2'", []);
+    child.stdout!.resume();
+    await new Promise((r) => setTimeout(r, 100));
+    // Without a handler on stdin this EPIPE is an uncaught error that ends the process.
+    child.stdin!.write("x".repeat(1 << 20));
+    child.stdin!.end();
+    assert.equal(await exitCode(child), 0);
   });
 });
