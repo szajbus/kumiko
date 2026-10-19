@@ -225,3 +225,29 @@ describe("server", () => {
     await waitFor(() => events.slice(since).find((e) => e.type === "list" && e.sandboxes.some((s) => s.name === "outside")));
   });
 });
+
+describe("server errors", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const json = (r: Response): Promise<any> => r.json();
+  it("answers in JSON when a route fails unexpectedly or gets a bad body", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bentomo-server-errors-"));
+    const provider = new LimaProvider({ limactl: join(fixtures, "fake-limactl.mjs"), metadata: new MetadataStore(join(root, "sandboxes")) });
+    provider.templates = async () => {
+      throw new Error("limactl exploded");
+    };
+    process.env.FAKE_LIMA_DIR = join(root, "lima");
+    await mkdir(process.env.FAKE_LIMA_DIR);
+    const server = await startServer({ provider, port: 0, sessionsDir: join(root, "sessions") });
+    try {
+      const templates = await fetch(`${server.url}/api/templates`);
+      assert.equal(templates.status, 500);
+      assert.deepEqual(await json(templates), { error: "limactl exploded" });
+
+      const bad = await fetch(`${server.url}/api/sandboxes`, { method: "POST", body: "{nope" });
+      assert.equal(bad.status, 400);
+      assert.match((await json(bad)).error, /JSON SandboxSpec/);
+    } finally {
+      await server.close();
+    }
+  });
+});

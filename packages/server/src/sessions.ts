@@ -88,7 +88,8 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
    */
   resume(stored: StoredSession, env: string[]): SessionInfo {
     const { info: saved } = stored;
-    if (!saved.claudeSessionId || this.sessions.has(saved.id)) throw new SessionNotResumable(`Session ${saved.id} can't be resumed.`);
+    if (this.sessions.has(saved.id)) throw new SessionNotResumable("This session is already open.");
+    if (!saved.claudeSessionId) throw new SessionNotResumable("This session has nothing of Claude's to resume.");
     const { endedAt: _endedAt, updatedAt: _updatedAt, ...rest } = saved;
     const info: SessionInfo = { ...rest, status: "idle" };
     return this.launch(info, stored.events, { sandbox: info.sandbox, workdir: info.workdir, env, resume: saved.claudeSessionId });
@@ -148,7 +149,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
 
   /** Deletes a saved session for good. An open one can't be: close its tab first. */
   async deleteSaved(id: string): Promise<boolean> {
-    if (this.sessions.has(id)) throw new SessionNotResumable(`Session ${id} is open.`);
+    if (this.sessions.has(id)) throw new SessionNotResumable("This session is open; close its tab first.");
     if (!(await this.store?.read(id))) return false;
     await this.store!.remove(id);
     return true;

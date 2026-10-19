@@ -10,8 +10,8 @@ interface Entry {
 }
 
 export class BusyError extends Error {
-  constructor(readonly name: string, readonly op: OpKind) {
-    super(`${vmName(name)} is busy ${op}.`);
+  constructor(readonly sandbox: string, readonly op: OpKind) {
+    super(`${vmName(sandbox)} is busy ${op}.`);
   }
 }
 
@@ -24,11 +24,6 @@ export class Operations extends EventEmitter<{ event: [ServerEvent]; settled: [s
 
   get(name: string): Operation | undefined {
     return this.entries.get(name)?.operation;
-  }
-
-  running(name: string): boolean {
-    const op = this.get(name);
-    return Boolean(op && !op.endedAt);
   }
 
   logs(): Record<string, LogLine[]> {

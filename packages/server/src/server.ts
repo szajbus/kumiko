@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { Server } from "node:http";
 import { serve } from "@hono/node-server";
 import { Hono, type Context } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   ENV_NAME_PATTERN,
@@ -71,8 +72,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   const sessions = new Sessions(opts.driver ?? (() => new ClaudeDriver(provider.exec.bind(provider))), sessionStore);
   const clients = new Set<WebSocket>();
   const readUsage = opts.usage ?? ((sandbox: string, forwarded: string[]) => fetchAccountUsage(provider.exec.bind(provider), sandbox, forwarded));
-  const usageEnv = new Map<string, string[]>();
-  const usage = new UsageCache((sandbox) => readUsage(sandbox, usageEnv.get(sandbox) ?? []));
+  // The probe forwards the sandbox's variables, as sessions do, in case the login is CLAUDE_CODE_OAUTH_TOKEN.
+  const usage = new UsageCache((sandbox) => readUsage(sandbox, infos.find((i) => i.name === sandbox)?.meta?.spec.env ?? []));
 
   // ---- list state -------------------------------------------------------------------------
 
@@ -159,25 +160,70 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   const app = new Hono();
   const fail = (error: string, details?: string[]): ApiError => (details?.length ? { error, details } : { error });
 
+  /** Routes throw these, or the typed errors below, and `onError` turns them into JSON with the right status. */
+  class HttpError extends Error {
+    constructor(readonly status: ContentfulStatusCode, message: string, readonly details?: string[]) {
+      super(message);
+    }
+  }
+
+  app.onError((err, c) => {
+    if (err instanceof HttpError) return c.json(fail(err.message, err.details), err.status);
+    if (err instanceof BusyError) return c.json(fail(err.message), 409);
+    if (err instanceof SessionNotFound) return c.json(fail(err.message), 404);
+    if (err instanceof SessionEnded || err instanceof SessionNotResumable || err instanceof RewindRefused) return c.json(fail(err.message), 409);
+    // Anything else is a bug or a tool failing; the UI still gets JSON it can show.
+    return c.json(fail(err instanceof Error ? err.message : String(err)), 500);
+  });
+
   app.use("/api/*", async (c, next) => {
     if (!isLocalRequest(c.req.raw.headers)) return c.json(fail("Forbidden: not a local request."), 403);
     await next();
   });
 
+  /** Parses the JSON body, or answers 400 with `usage`. */
+  const body = async <T>(c: Context, usage: string): Promise<T> => {
+    try {
+      return await c.req.json<T>();
+    } catch {
+      throw new HttpError(400, usage);
+    }
+  };
+
+  /** Answers 409 while an operation runs on the sandbox. `ops.start` checks again, for a request that raced this one. */
+  const assertIdle = (name: string) => {
+    const cur = ops.get(name);
+    if (cur && !cur.endedAt) throw new BusyError(name, cur.op);
+  };
+
+  /** Looks up a sandbox the provider knows: 400 for a bad name, 404 for an unknown one. */
+  const known = async (name: string): Promise<SandboxInfo> => {
+    if (!NAME_PATTERN.test(name)) throw new HttpError(400, `Invalid sandbox name "${name}".`);
+    await refresh();
+    const info = infos.find((i) => i.name === name);
+    if (!info) throw new HttpError(404, `${vmName(name)} does not exist.`);
+    return info;
+  };
+
+  /** A sandbox a session can start in: running and not busy. Returns where sessions start and what they forward. */
+  const readySandbox = async (name: string): Promise<{ workdir: string; env: string[] }> => {
+    const info = await known(name);
+    if (info.status !== "running") throw new HttpError(409, `${vmName(name)} is not running. Start it first.`);
+    assertIdle(name);
+    const spec = info.meta?.spec;
+    return { workdir: spec?.workdir ?? WORKSPACE_DIR, env: spec?.env ?? [] };
+  };
+
   app.get("/api/sandboxes", async (c) => {
     await refresh();
-    if (listError && infos.length === 0) return c.json(fail(listError), 500);
+    if (listError && infos.length === 0) throw new HttpError(500, listError);
     return c.json(views());
   });
 
   let templatesCache: TemplatesResponse | undefined;
   app.get("/api/templates", async (c) => {
-    try {
-      templatesCache ??= await provider.templates();
-      return c.json(templatesCache);
-    } catch (err) {
-      return c.json(fail(err instanceof Error ? err.message : String(err)), 500);
-    }
+    templatesCache ??= await provider.templates();
+    return c.json(templatesCache);
   });
 
   /** What the create form starts from: ~/.claude mounted at ~/.claude in the VM, when the host has one. */
@@ -198,55 +244,21 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     return c.json(Object.fromEntries(names.map((n) => [n, e[n] !== undefined])));
   });
 
-  const begin = (name: string, op: OpKind, work: (log: Log) => Promise<void>) => {
-    ops.start(name, op, work);
-  };
-
   app.post("/api/sandboxes", async (c) => {
-    let body: SandboxSpec;
-    try {
-      body = await c.req.json<SandboxSpec>();
-    } catch {
-      return c.json(fail("Body must be a JSON SandboxSpec."), 400);
-    }
-    const name = String(body?.name ?? "").trim();
-    if (ops.running(name)) return c.json(fail(`${vmName(name)} is busy ${ops.get(name)!.op}.`), 409);
-    let v;
-    try {
-      v = await provider.validate(body);
-    } catch (err) {
-      return c.json(fail(err instanceof Error ? err.message : String(err)), 500);
-    }
-    if (v.errors.length) return c.json(fail("Invalid sandbox spec.", v.errors), 400);
-    try {
-      begin(v.spec.name, "creating", (log) => provider.create(v.spec, log));
-    } catch (err) {
-      if (err instanceof BusyError) return c.json(fail(err.message), 409);
-      throw err;
-    }
+    const spec = await body<SandboxSpec>(c, "Body must be a JSON SandboxSpec.");
+    assertIdle(String(spec?.name ?? "").trim());
+    const v = await provider.validate(spec);
+    if (v.errors.length) throw new HttpError(400, "Invalid sandbox spec.", v.errors);
+    ops.start(v.spec.name, "creating", (log) => provider.create(v.spec, log));
     void refresh();
     return c.json({ name: v.spec.name, warnings: v.warnings } satisfies CreateResponse, 202);
   });
 
-  /** Looks up a sandbox the provider knows; 400 for a bad name, 404 for an unknown one. */
-  const known = async (name: string): Promise<SandboxInfo | ApiError> => {
-    if (!NAME_PATTERN.test(name)) return fail(`Invalid sandbox name "${name}".`);
-    await refresh();
-    return infos.find((i) => i.name === name) ?? fail(`${vmName(name)} does not exist.`);
-  };
-
   const action = (op: OpKind, work: (info: SandboxInfo, log: Log) => Promise<void>) => async (c: Context) => {
     const name = c.req.param("name")!;
-    const cur = ops.get(name);
-    if (cur && !cur.endedAt) return c.json(fail(`${vmName(name)} is busy ${cur.op}.`), 409);
+    assertIdle(name);
     const info = await known(name);
-    if ("error" in info) return c.json(info, NAME_PATTERN.test(name) ? 404 : 400);
-    try {
-      begin(name, op, (log) => work(info, log));
-    } catch (err) {
-      if (err instanceof BusyError) return c.json(fail(err.message), 409);
-      throw err;
-    }
+    ops.start(name, op, (log) => work(info, log));
     return c.json({ name, op }, 202);
   };
 
@@ -260,177 +272,118 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     await provider.delete(i.name, log);
   }));
 
+  /** Deletes the VM and creates it again from `spec`, ending and dropping its sessions first. */
+  const recreate = async (name: string, spec: SandboxSpec, log: Log) => {
+    await dropSessions(name, log);
+    await provider.delete(name, log);
+    await provider.create(spec, log);
+  };
+
   /**
    * Change resources, mounts (VM stopped), forwarded variables or the provisioning script.
    * With `?recreate=1`, delete the VM and create it again from the changed spec instead, running or not.
    */
   app.patch("/api/sandboxes/:name", async (c) => {
     const name = c.req.param("name");
-    const cur = ops.get(name);
-    if (cur && !cur.endedAt) return c.json(fail(`${vmName(name)} is busy ${cur.op}.`), 409);
-    const info = await known(name);
-    if ("error" in info) return c.json(info, NAME_PATTERN.test(name) ? 404 : 400);
-    let patch: EditSpec;
-    try {
-      patch = await c.req.json<EditSpec>();
-    } catch {
-      return c.json(fail("Body must be a JSON object of fields to change."), 400);
-    }
-    const recreate = c.req.query("recreate") === "1";
-    const v = await provider.validateEdit(name, patch, { recreate });
-    if (v.errors.length) return c.json(fail("Can't apply these changes.", v.errors), 400);
-    const op: OpKind = recreate ? "recreating" : "editing";
-    try {
-      begin(name, op, async (log) => {
-        if (!recreate) return provider.edit(name, patch, log);
-        await dropSessions(name, log);
-        await provider.delete(name, log);
-        await provider.create(v.spec, log);
-      });
-    } catch (err) {
-      if (err instanceof BusyError) return c.json(fail(err.message), 409);
-      throw err;
-    }
+    assertIdle(name);
+    await known(name);
+    const patch = await body<EditSpec>(c, "Body must be a JSON object of fields to change.");
+    const again = c.req.query("recreate") === "1";
+    const v = await provider.validateEdit(name, patch, { recreate: again });
+    if (v.errors.length) throw new HttpError(400, "Can't apply these changes.", v.errors);
+    const op: OpKind = again ? "recreating" : "editing";
+    ops.start(name, op, (log) => (again ? recreate(name, v.spec, log) : provider.edit(name, patch, log)));
     return c.json({ name, op, warnings: v.warnings }, 202);
   });
 
   /** Delete, then create again from the stored spec. */
   app.post("/api/sandboxes/:name/recreate", async (c, next) => {
     const info = await known(c.req.param("name") ?? "");
-    if (!("error" in info) && !info.meta) return c.json(fail(`${vmName(info.name)} has no stored spec to recreate from.`), 400);
+    if (!info.meta) throw new HttpError(400, `${vmName(info.name)} has no stored spec to recreate from.`);
     return next();
-  }, action("recreating", async (i, log) => {
-    const spec = i.meta!.spec;
-    await dropSessions(i.name, log);
-    await provider.delete(i.name, log);
-    await provider.create(spec, log);
-  }));
+  }, action("recreating", (i, log) => recreate(i.name, i.meta!.spec, log)));
 
   // ---- agent sessions --------------------------------------------------------------------
+
+  /** The session a route names; 404 if there is none. */
+  const sessionOf = (c: Context) => {
+    const id = c.req.param("id")!;
+    const info = sessions.get(id);
+    if (!info) throw new SessionNotFound(`No session ${id}.`);
+    return info;
+  };
 
   app.get("/api/sessions", (c) => c.json(sessions.list()));
 
   app.post("/api/sessions", async (c) => {
-    let body: StartSessionRequest;
-    try {
-      body = await c.req.json<StartSessionRequest>();
-    } catch {
-      return c.json(fail("Body must be JSON: { sandbox, prompt }."), 400);
-    }
-    const name = String(body?.sandbox ?? "");
-    const prompt = typeof body?.prompt === "string" ? body.prompt.trim() : "";
-    if (!prompt) return c.json(fail("The opening prompt is empty."), 400);
+    const req = await body<StartSessionRequest>(c, "Body must be JSON: { sandbox, prompt }.");
+    const name = String(req?.sandbox ?? "");
+    const prompt = typeof req?.prompt === "string" ? req.prompt.trim() : "";
+    if (!prompt) throw new HttpError(400, "The opening prompt is empty.");
     const ready = await readySandbox(name);
-    if (ready instanceof Response) return ready;
     const session = sessions.start({ sandbox: name, workdir: ready.workdir, env: ready.env, prompt });
     return c.json({ id: session.id }, 201);
   });
 
   /** The Claude account of a session's sandbox and how much of its subscription is used. */
   app.get("/api/sessions/:id/usage", async (c) => {
-    const session = sessions.get(c.req.param("id"));
-    if (!session) return c.json(fail(`No session ${c.req.param("id")}.`), 404);
-    const info = await known(session.sandbox);
-    if ("error" in info) return c.json(info, 404);
-    if (info.status !== "running") return c.json(fail(`${vmName(session.sandbox)} is not running.`), 409);
-    usageEnv.set(session.sandbox, info.meta?.spec.env ?? []);
-    return c.json(await usage.get(session.sandbox));
+    const { sandbox } = sessionOf(c);
+    const info = await known(sandbox);
+    if (info.status !== "running") throw new HttpError(409, `${vmName(sandbox)} is not running.`);
+    return c.json(await usage.get(sandbox));
   });
-
-  /** A sandbox a session can start in: running and not busy; otherwise the error response to send. */
-  const readySandbox = async (name: string): Promise<Response | { workdir: string; env: string[] }> => {
-    const info = await known(name);
-    if ("error" in info) return new Response(JSON.stringify(info), { status: NAME_PATTERN.test(name) ? 404 : 400, headers: { "content-type": "application/json" } });
-    const refuse = (message: string) => new Response(JSON.stringify(fail(message)), { status: 409, headers: { "content-type": "application/json" } });
-    if (info.status !== "running") return refuse(`${vmName(name)} is not running. Start it first.`);
-    const cur = ops.get(name);
-    if (cur && !cur.endedAt) return refuse(`${vmName(name)} is busy ${cur.op}.`);
-    const spec = info.meta?.spec;
-    return { workdir: spec?.workdir ?? WORKSPACE_DIR, env: spec?.env ?? [] };
-  };
 
   /** Saved sessions that can be resumed, most recent first. */
   app.get("/api/sessions/resumable", async (c) => c.json(await sessions.resumable()));
 
   /** Deletes a saved session that isn't open. */
   app.delete("/api/sessions/saved/:id", async (c) => {
-    try {
-      if (!(await sessions.deleteSaved(c.req.param("id")))) return c.json(fail(`No saved session ${c.req.param("id")}.`), 404);
-    } catch (err) {
-      if (err instanceof SessionNotResumable) return c.json(fail("This session is open; close its tab first."), 409);
-      throw err;
-    }
+    if (!(await sessions.deleteSaved(c.req.param("id")))) throw new HttpError(404, `No saved session ${c.req.param("id")}.`);
     return c.json({ ok: true });
   });
 
   app.post("/api/sessions/:id/resume", async (c) => {
     const stored = await sessionStore.read(c.req.param("id"));
-    if (!stored?.info.claudeSessionId) return c.json(fail(`No saved session ${c.req.param("id")}.`), 404);
+    if (!stored?.info.claudeSessionId) throw new HttpError(404, `No saved session ${c.req.param("id")}.`);
     const ready = await readySandbox(stored.info.sandbox);
-    if (ready instanceof Response) return ready;
-    try {
-      return c.json({ id: sessions.resume(stored, ready.env).id }, 201);
-    } catch (err) {
-      if (err instanceof SessionNotResumable) return c.json(fail("This session is already open."), 409);
-      throw err;
-    }
+    return c.json({ id: sessions.resume(stored, ready.env).id }, 201);
   });
 
-  /** Runs `fn` on a session: 404 if it doesn't exist, 409 if it has ended. */
-  const onSession = (fn: (id: string, c: Context) => Promise<Response> | Response) => async (c: Context) => {
-    try {
-      return await fn(c.req.param("id")!, c);
-    } catch (err) {
-      if (err instanceof SessionNotFound) return c.json(fail(err.message), 404);
-      if (err instanceof SessionEnded || err instanceof SessionNotResumable) return c.json(fail(err.message), 409);
-      throw err;
-    }
-  };
-
-  app.post("/api/sessions/:id/prompt", onSession(async (id, c) => {
-    const body = await c.req.json<{ text?: unknown }>().catch(() => ({}) as { text?: unknown });
-    const text = typeof body.text === "string" ? body.text.trim() : "";
-    if (!text) return c.json(fail("The prompt is empty."), 400);
+  app.post("/api/sessions/:id/prompt", async (c) => {
+    const { id } = sessionOf(c);
+    const req = await c.req.json<{ text?: unknown }>().catch(() => ({}) as { text?: unknown });
+    const text = typeof req.text === "string" ? req.text.trim() : "";
+    if (!text) throw new HttpError(400, "The prompt is empty.");
     sessions.prompt(id, text);
     return c.json({ ok: true }, 202);
-  }));
+  });
 
   /** Starts a new session from a copy of this one's conversation. Returns the new session's id. */
-  app.post("/api/sessions/:id/fork", onSession(async (id, c) => {
-    const from = sessions.get(id);
-    if (!from) throw new SessionNotFound(`No session ${id}.`);
+  app.post("/api/sessions/:id/fork", async (c) => {
+    const from = sessionOf(c);
     const ready = await readySandbox(from.sandbox);
-    if (ready instanceof Response) return ready;
-    return c.json({ id: sessions.fork(id, ready.env).id }, 201);
-  }));
+    return c.json({ id: sessions.fork(from.id, ready.env).id }, 201);
+  });
 
   /** Rewinds to just before one of this session's prompts, in a new session. Returns its id and the prompt's text. */
-  app.post("/api/sessions/:id/rewind", onSession(async (id, c) => {
-    const body = await c.req.json<{ prompt?: unknown; files?: unknown }>().catch(() => ({}) as { prompt?: unknown; files?: unknown });
-    if (typeof body.prompt !== "string" || !body.prompt) return c.json(fail("Which message to rewind to?"), 400);
-    const from = sessions.get(id);
-    if (!from) throw new SessionNotFound(`No session ${id}.`);
+  app.post("/api/sessions/:id/rewind", async (c) => {
+    const from = sessionOf(c);
+    const req = await c.req.json<{ prompt?: unknown; files?: unknown }>().catch(() => ({}) as { prompt?: unknown; files?: unknown });
+    if (typeof req.prompt !== "string" || !req.prompt) throw new HttpError(400, "Which message to rewind to?");
     const ready = await readySandbox(from.sandbox);
-    if (ready instanceof Response) return ready;
-    try {
-      const { info, text } = await sessions.rewind(id, body.prompt, ready.env, { files: body.files === true });
-      return c.json({ id: info.id, text } satisfies RewindResponse, 201);
-    } catch (err) {
-      if (err instanceof RewindRefused) return c.json(fail(err.message), 409);
-      throw err;
-    }
-  }));
+    const { info, text } = await sessions.rewind(from.id, req.prompt, ready.env, { files: req.files === true });
+    return c.json({ id: info.id, text } satisfies RewindResponse, 201);
+  });
 
-  app.post("/api/sessions/:id/interrupt", onSession((id, c) => {
-    sessions.interrupt(id);
+  app.post("/api/sessions/:id/interrupt", (c) => {
+    sessions.interrupt(sessionOf(c).id);
     return c.json({ ok: true }, 202);
-  }));
+  });
 
-  app.delete("/api/sessions/:id", onSession(async (id, c) => {
-    if (!sessions.get(id)) throw new SessionNotFound(`No session ${id}.`);
-    await sessions.remove(id);
+  app.delete("/api/sessions/:id", async (c) => {
+    await sessions.remove(sessionOf(c).id);
     return c.json({ ok: true });
-  }));
+  });
 
   app.all("/api/*", (c) => c.json(fail("Not found."), 404));
   if (opts.webDir) app.get("*", serveWeb(opts.webDir));
