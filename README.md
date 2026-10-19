@@ -67,6 +67,8 @@ packages/shared/       API and event types
 
 State: Lima owns the VMs (`~/.lima/bm-*`). Bentomo keeps one JSON file per sandbox in `~/.bentomo/sandboxes/<name>.json`, holding the spec with variable names only, never values. Operation logs and live agent sessions live in server memory; Claude keeps its transcripts in the VM. Each session that has talked to Claude is also saved in `~/.bentomo/sessions/<id>.json` (its info and chat), so it can be resumed. `BENTOMO_HOME` and `LIMA_HOME` override the locations.
 
+If a sandbox's JSON file exists but can't be read (edited by hand, not JSON), the sandbox shows "Record unreadable", its page says which file and why, and Edit and Recreate refuse until the file is fixed or deleted. It still starts. A deleted file makes the VM one Bentomo didn't create.
+
 ## Notes on the implementation
 
 Checked against Lima 2.2.1 (the spec's open questions):
@@ -106,7 +108,10 @@ Beyond the spec:
   - **Save** keeps the VM. CPUs, memory, disk and mounts go through `limactl edit`; they need the VM stopped, apply on its next start, and the disk can only grow. Forwarded variables and the provisioning script live only in Bentomo's metadata, so they can change while the VM runs, but a new script only runs on a recreate.
 - **Recreate** (in the design's row menu) deletes a sandbox and creates it again from its stored spec: `POST /api/sandboxes/:name/recreate`.
 - **`GET /api/env?names=A,B`** backs the form's "set on host" dots. It answers `true`/`false`, never values.
-- **Request guard:** the server listens on `127.0.0.1` only. It also refuses requests whose `Host` or `Origin` isn't local, so a web page open in your browser can't drive it (DNS rebinding, CSRF).
+- **Request guard:** the server listens on `127.0.0.1` only. It also refuses requests whose `Host` or `Origin` isn't local, so a web page open in your browser can't drive it (DNS rebinding, CSRF). Session ids from URLs must be Bentomo's own hex ids before they name a file or a socket, since route parameters decode `%2F`.
+- **Errors are JSON** (`{ error, details? }`) with a fitting status, including unexpected ones (500), so the UI can always show the message.
+- **limactl runs in the temp directory**, because `limactl edit` saves a config it rejects as `lima.REJECTED.yaml` in the current one.
+- **Links in the desktop app:** only `http(s)` and `mailto` links open in the browser; chat text comes from Claude, and a `file:` or custom-scheme link could open or run things on the host. Anything else is ignored.
 
 ## Notes on agent sessions
 
@@ -119,9 +124,10 @@ Checked against Claude Code 2.1.303 (the sessions spec's open question):
 
 Beyond the spec:
 
-- **Ended sessions stay listed** (status `ended` or `failed`) until their tab is closed, so the transcript survives a reload. `DELETE /api/sessions/:id` ends a live session and forgets it either way; End session closes the tab.
+- **Ended sessions stay listed** (status `ended` or `failed`) until their tab is closed, so the transcript survives a reload. `DELETE /api/sessions/:id`, sent when a tab closes, ends a live session and forgets it either way.
 - **Event kinds** are `claude` (a raw stream-json line), `user_prompt`, `error`, plus `interrupt` (Stop was pressed, so the next error result shows as "Interrupted", not red) and `ended` (`reason`: `user`, `sandbox`, `quit` or `exit`).
 - **Deltas are pruned** when a turn ends, for every message whose blocks all finished; the final `assistant` messages carry the same content. A message cut short by Stop keeps its deltas, since they are all there is of it.
+- **Large tool output is cut** to 64 KB per tool result, with a note saying how much went, and `tool_use_result` (the same output again, structured) is dropped. Claude's transcript in the VM keeps everything. The session header shows how much memory the session's buffer takes, as of the last finished turn.
 - **Session status changes** go out on `/api/events` as `{ type: "sessions", sessions }`, and the snapshot carries them, so tab dots stay current. Sandbox views carry a live `sessions` count.
 - **Stop asks first** when the sandbox has live sessions (it didn't ask at all before). Delete, Recreate and Save and recreate say how many sessions will end. Sessions also end when the list notices their sandbox stopped outside Bentomo.
 - **Subagent messages** (`parent_tool_use_id` set) are kept in the buffer but not shown; the subagent's own tool call shows as one line.

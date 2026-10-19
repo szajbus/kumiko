@@ -164,7 +164,7 @@ export interface SessionInfo {
   bufferBytes?: number;
 }
 
-/** Why a session ended: End session, its sandbox stopping, the app quitting, or the process exiting by itself. */
+/** Why a session ended: its tab closing, its sandbox stopping, the app quitting, or the process exiting by itself. */
 export type EndReason = "user" | "sandbox" | "quit" | "exit";
 
 /**
