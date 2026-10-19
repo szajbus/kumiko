@@ -23,6 +23,13 @@ export function SessionView({ session, onForked }: Props) {
   const totalCost = useMemo(() => chat.items.reduce((sum, i) => sum + (i.type === "turn" ? (i.costUsd ?? 0) : 0), 0), [chat.items]);
   const [error, setError] = useState<string | undefined>();
   const [model, setModel] = useState("");
+  // Claude reports a full model id; the dropdown lists aliases, so show the alias it belongs to.
+  const reported = session.model ?? "";
+  const alias = MODELS.find((m) => m !== "default" && reported.toLowerCase().includes(m));
+  const currentModel = alias ?? reported;
+  const modelOptions = currentModel && !MODELS.includes(currentModel) ? [...MODELS, currentModel] : MODELS;
+  // Once Claude reports the model in use, that replaces what was picked.
+  useEffect(() => setModel(""), [reported]);
   const status = sessionStatus(session.status);
   const live = session.status === "starting" || session.status === "idle" || session.status === "running";
   const busy = session.status === "starting" || session.status === "running";
@@ -60,13 +67,12 @@ export function SessionView({ session, onForked }: Props) {
               {formatCost(totalCost)}
             </span>
           )}
-          {session.model && <span className="mono dim session-model">{session.model}</span>}
           <div className="session-picker">
             <Select
-              value={model}
+              value={model || currentModel}
               placeholder="Model"
               disabled={session.status !== "idle"}
-              groups={[{ options: MODELS }]}
+              groups={[{ options: modelOptions }]}
               onValueChange={(v) => {
                 setModel(v);
                 void call(() => api.prompt(session.id, `/model ${v}`));

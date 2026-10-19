@@ -349,7 +349,6 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 .session-status { font-size: 13px; white-space: nowrap; }
 .session-status .spinner { width: 10px; height: 10px; }
 .session-controls { display: flex; align-items: center; gap: 10px; }
-.session-model { font-size: 12px; }
 .session-picker { width: 130px; }
 .session-picker .select-trigger { min-height: 36px; font-size: 13px; }
 .chat { flex: 1; min-height: 0; overflow-y: auto; }
