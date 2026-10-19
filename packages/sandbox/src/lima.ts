@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   mountsExpression,
@@ -14,7 +14,7 @@ import {
   type SandboxStatus,
 } from "@bentomo/shared";
 import { MetadataStore } from "./metadata.js";
-import { eachLine, exitCode, run, runOk } from "./proc.js";
+import { eachLine, exitCode, runOk, type RunOptions } from "./proc.js";
 import { ProviderError, type Log, type SandboxProvider } from "./provider.js";
 import { validateSpec, type Validation } from "./validate.js";
 
@@ -66,6 +66,11 @@ const gib = (bytes?: number) => (bytes ? Math.round((bytes / GiB) * 10) / 10 : u
 /** Single-quotes a value for bash. */
 export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/** A command line as it would be typed, quoting only the arguments that need it. */
+function commandLine(cmd: string, args: string[]): string {
+  return [cmd, ...args.map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a)))].join(" ");
 }
 
 /** Adds ~/.local/bin (where Claude Code installs) to PATH unless the shell's startup files already did. */
@@ -139,8 +144,16 @@ export class LimaProvider implements SandboxProvider {
     return process.env.LIMA_HOME || join(homedir(), ".lima");
   }
 
+  /**
+   * Runs limactl, failing with its output tail. It runs in the temp directory because `limactl edit` saves a
+   * config it rejects as lima.REJECTED.yaml in the current one, which would otherwise be wherever the app started.
+   */
+  private limactlRun(args: string[], opts: RunOptions = {}) {
+    return runOk(this.limactl, args, { lima: true, cwd: tmpdir(), ...opts });
+  }
+
   private async instances(): Promise<LimaInstance[]> {
-    const res = await runOk(this.limactl, ["list", "--format", "json"], { captureStdout: true, lima: true });
+    const res = await this.limactlRun(["list", "--format", "json"], { captureStdout: true });
     return parseLimaList(res.stdout).filter((i) => i.name.startsWith(VM_PREFIX));
   }
 
@@ -162,7 +175,7 @@ export class LimaProvider implements SandboxProvider {
   }
 
   async templates(): Promise<{ templates: string[]; preferred: string }> {
-    const res = await runOk(this.limactl, ["create", "--list-templates"], { captureStdout: true, lima: true });
+    const res = await this.limactlRun(["create", "--list-templates"], { captureStdout: true });
     const templates = res.stdout
       .split("\n")
       .map((l) => l.trim())
@@ -211,9 +224,9 @@ export class LimaProvider implements SandboxProvider {
     else args.push(`--set=${mountsExpression(spec.mounts)}`);
     args.push(spec.template || "template:default");
 
-    log(`$ limactl ${args.map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a))).join(" ")}`, "cmd");
+    log(`$ ${commandLine("limactl", args)}`, "cmd");
     try {
-      await runOk(this.limactl, args, { log, lima: true });
+      await this.limactlRun(args, { log });
     } catch (err) {
       // Nothing was created, so there is nothing to keep metadata for.
       if (!(await this.instances()).some((i) => i.name === vm)) await this.metadata.remove(spec.name);
@@ -229,7 +242,7 @@ export class LimaProvider implements SandboxProvider {
   async start(name: string, log: Log): Promise<void> {
     const vm = vmName(name);
     log(`$ limactl start --tty=false ${vm}`, "cmd");
-    await runOk(this.limactl, ["start", "--tty=false", vm], { log, lima: true });
+    await this.limactlRun(["start", "--tty=false", vm], { log });
     const meta = await this.metadata.read(name);
     if (meta) await this.prepareShells(name, meta.spec.workdir ?? WORKSPACE_DIR, log);
     if (meta?.setup === "creating") await this.runProvisioning(name, log);
@@ -297,14 +310,14 @@ export class LimaProvider implements SandboxProvider {
   async stop(name: string, log: Log): Promise<void> {
     const vm = vmName(name);
     log(`$ limactl stop ${vm}`, "cmd");
-    await runOk(this.limactl, ["stop", vm], { log, lima: true });
+    await this.limactlRun(["stop", vm], { log });
     log("Stopped.", "ok");
   }
 
   async delete(name: string, log: Log): Promise<void> {
     const vm = vmName(name);
     log(`$ limactl delete --force ${vm}`, "cmd");
-    await runOk(this.limactl, ["delete", "--force", vm], { log, lima: true });
+    await this.limactlRun(["delete", "--force", vm], { log });
     await this.metadata.remove(name);
     log("Deleted.", "ok");
   }
@@ -321,8 +334,8 @@ export class LimaProvider implements SandboxProvider {
     const vm = vmName(name);
     if (plan.limaArgs.length) {
       const args = ["edit", "--tty=false", vm, ...plan.limaArgs];
-      log(`$ limactl ${args.map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a))).join(" ")}`, "cmd");
-      await runOk(this.limactl, args, { log, lima: true });
+      log(`$ ${commandLine("limactl", args)}`, "cmd");
+      await this.limactlRun(args, { log });
     }
     await this.metadata.update(name, { spec: plan.spec });
     if (plan.prepareShells) await this.prepareShells(name, plan.spec.workdir ?? WORKSPACE_DIR, log);
