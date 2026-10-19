@@ -349,7 +349,7 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 .session-status { font-size: 13px; white-space: nowrap; }
 .session-status .spinner { width: 10px; height: 10px; }
 .session-controls { display: flex; align-items: center; gap: 10px; }
-.usage-strip { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 20px; font-size: 12.5px; color: var(--text-2); }
+.usage-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 20px; font-size: 12.5px; color: var(--text-2); }
 .usage-account { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .usage-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .usage-window { display: flex; align-items: center; gap: 8px; white-space: nowrap; }

@@ -41,7 +41,7 @@ export function UsageStrip({ sessionId, live, turnDone }: Props) {
     return () => clearInterval(tick);
   }, []);
 
-  if (!usage) return error ? <div className="usage-strip dim">Usage unavailable: {error}</div> : null;
+  if (!usage) return error ? <div className="usage-strip dim" title={error}>Usage unavailable</div> : null;
   const stale = error ? ` (couldn't refresh: ${error})` : "";
   return (
     <div className="usage-strip" title={`Updated ${new Date(usage.fetchedAt).toLocaleTimeString()}${stale}`}>
@@ -56,7 +56,11 @@ export function UsageStrip({ sessionId, live, turnDone }: Props) {
       {usage.windows.map((w) => (
         <Window key={w.id} w={w} now={now} />
       ))}
-      {usage.error && <span className="dim">{usage.error}</span>}
+      {usage.error && (
+        <span className="dim" title={usage.error}>
+          Usage unavailable
+        </span>
+      )}
     </div>
   );
 }

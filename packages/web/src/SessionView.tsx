@@ -71,6 +71,7 @@ export function SessionView({ session, onForked }: Props) {
           </span>
         </div>
         <div className="session-controls">
+          <UsageStrip sessionId={session.id} live={live} turnDone={session.status === "idle"} />
           {totalCost > 0 && (
             <span className="mono dim session-cost" title="Total cost of this session">
               {formatCost(totalCost)}
@@ -87,7 +88,6 @@ export function SessionView({ session, onForked }: Props) {
             Fork
           </button>
         </div>
-        <UsageStrip sessionId={session.id} live={live} turnDone={session.status === "idle"} />
       </div>
 
       <Chat chat={chat} running={busy} onRewind={session.status === "idle" && session.claudeSessionId ? setRewinding : undefined} />
