@@ -13,7 +13,7 @@
   "scripts": {
     "build": "tsc -b packages/shared packages/sandbox packages/agent packages/server apps/desktop && npm run build -w @bentomo/web",
     "typecheck": "tsc -b packages/shared packages/sandbox packages/agent packages/server apps/desktop && npm run typecheck -w @bentomo/web",
-    "test": "npm run build && node --test packages/sandbox/dist/test/*.test.js packages/agent/dist/test/*.test.js packages/server/dist/test/*.test.js",
+    "test": "npm run build && node --test packages/sandbox/dist/test/*.test.js packages/agent/dist/test/*.test.js packages/server/dist/test/*.test.js packages/web/test/*.test.ts",
     "server": "node packages/server/dist/src/main.js",
     "dev:server": "tsc -b packages/server && node packages/server/dist/src/main.js --port 4317",
     "dev:web": "npm run dev -w @bentomo/web",

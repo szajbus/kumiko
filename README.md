@@ -48,7 +48,7 @@ npm run dev:server
 | Script | Does |
 | --- | --- |
 | `npm run build` | Type-checks and builds every package, including the web UI. |
-| `npm test` | Builds, then runs the adapter and server tests against the fake `limactl`. |
+| `npm test` | Builds, then runs the adapter and server tests against the fake `limactl`, and the web UI's chat tests. |
 | `npm run roundtrip` | Build step 1's check against **real Lima**: creates `bm-roundtrip` (Debian 12, writable mount), provisions it with a forwarded variable, then checks exec stdin, stop, start (no re-provisioning) and delete. |
 | `npm run drive -- --sandbox <name>` | Sessions step 1's check against a **running sandbox**: starts Claude, sends two prompts (one reads a forwarded variable), interrupts a third mid-tool-call and sends a fourth, printing every event. `--local` runs `claude` on this machine instead, for trying it from inside a VM. |
 | `npm run server` | Runs the server alone and serves the built UI. |
