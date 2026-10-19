@@ -12,6 +12,8 @@ interface Props {
   value: string;
   onValueChange(v: string): void;
   groups: SelectGroup[];
+  /** Text to show for an option instead of its value. */
+  labels?: Record<string, string>;
   placeholder?: string;
   disabled?: boolean;
   mono?: boolean;
@@ -32,7 +34,7 @@ const Check = () => (
 );
 
 /** A styled dropdown; the list opens below the trigger at its width and scrolls when long. */
-export function Select({ id, value, onValueChange, groups, placeholder, disabled, mono, compact }: Props) {
+export function Select({ id, value, onValueChange, groups, labels, placeholder, disabled, mono, compact }: Props) {
   return (
     <RS.Root value={value} onValueChange={onValueChange} disabled={disabled}>
       <RS.Trigger id={id} className={`select-trigger${mono ? " mono" : ""}${compact ? " select-compact" : ""}`}>
@@ -50,7 +52,7 @@ export function Select({ id, value, onValueChange, groups, placeholder, disabled
                 {g.label && <RS.Label className="select-label">{g.label}</RS.Label>}
                 {g.options.map((o) => (
                   <RS.Item key={o} value={o} className="select-item" disabled={g.disabled}>
-                    <RS.ItemText>{o}</RS.ItemText>
+                    <RS.ItemText>{labels?.[o] ?? o}</RS.ItemText>
                     <RS.ItemIndicator className="select-check">
                       <Check />
                     </RS.ItemIndicator>

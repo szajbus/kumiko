@@ -19,6 +19,8 @@ export interface StartOptions {
   fork?: boolean;
   /** With `resume`: continue from this message of the earlier session (its id, from the agent's own stream), dropping what came after. */
   resumeAt?: string;
+  /** The model to start with (an alias such as "opus"); the agent's default when omitted. */
+  model?: string;
 }
 
 /** One parsed protocol message; every one has a `type`. */

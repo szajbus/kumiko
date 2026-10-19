@@ -215,6 +215,8 @@ export interface AccountUsage {
 export interface StartSessionRequest {
   sandbox: string;
   prompt: string;
+  /** A model alias to start with; Claude's default when omitted. */
+  model?: string;
 }
 
 /** A session saved on disk that can be resumed: closed, or left behind when Bentomo quit. */

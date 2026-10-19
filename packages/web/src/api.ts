@@ -56,7 +56,7 @@ export const api = {
   /** Saves in place, or with `recreate` deletes the VM and creates it again from the changed spec. */
   edit: (name: string, patch: EditSpec, recreate = false) =>
     request<{ warnings: string[] }>("PATCH", `/api/sandboxes/${name}${recreate ? "?recreate=1" : ""}`, patch),
-  startSession: (sandbox: string, prompt: string) => request<{ id: string }>("POST", "/api/sessions", { sandbox, prompt }),
+  startSession: (sandbox: string, prompt: string, model?: string) => request<{ id: string }>("POST", "/api/sessions", { sandbox, prompt, model }),
   prompt: (id: string, text: string) => request("POST", `/api/sessions/${id}/prompt`, { text }),
   /** The Claude account behind a session and how much of its subscription is used. */
   usage: (id: string) => request<AccountUsage>("GET", `/api/sessions/${id}/usage`),

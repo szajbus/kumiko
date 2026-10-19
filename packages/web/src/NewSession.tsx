@@ -16,6 +16,7 @@ export function NewSession({ live, onStarted }: Props) {
   const running = live.sandboxes.filter((s) => s.status === "running" && !s.busy);
   const others = live.sandboxes.filter((s) => !running.includes(s));
   const [picked, setPicked] = useState("");
+  const [model, setModel] = useState("default");
   const [error, setError] = useState<string | undefined>();
 
   // Preselect the first running sandbox, and move off one that stops.
@@ -38,6 +39,12 @@ export function NewSession({ live, onStarted }: Props) {
       current = false;
     };
   }, [open]);
+
+  // Claude doesn't say what its default is until a session runs, so go by the latest session in this sandbox.
+  const lastModel = [...live.sessions, ...saved]
+    .filter((s) => s.sandbox === sandbox && s.model)
+    .sort((a, b) => (b.updatedAt ?? b.startedAt).localeCompare(a.updatedAt ?? a.startedAt))[0]?.model?.toLowerCase();
+  const defaultModel = MODELS.find((m) => m !== "default" && lastModel?.includes(m));
 
   const resume = async (id: string) => {
     setError(undefined);
@@ -64,7 +71,7 @@ export function NewSession({ live, onStarted }: Props) {
   const start = async (prompt: string) => {
     setError(undefined);
     try {
-      const { id } = await api.startSession(sandbox, prompt);
+      const { id } = await api.startSession(sandbox, prompt, model);
       onStarted(id);
       return true;
     } catch (err) {
@@ -116,7 +123,16 @@ export function NewSession({ live, onStarted }: Props) {
 
         <div className="field">
           <span className="field-label">Opening prompt</span>
-          <Composer label="Opening prompt" submitLabel="Start" placeholder="What should Claude work on?" disabled={!sandbox} onSubmit={start} autoFocus />
+          <Composer label="Opening prompt" submitLabel="Start" placeholder="What should Claude work on?" disabled={!sandbox} onSubmit={start} autoFocus
+            footer={
+              <>
+                <span className="badge badge-bypass" title="Claude runs tools without asking for permission. The sandbox is the boundary.">
+                  Bypass permissions
+                </span>
+                <Select compact value={model} labels={defaultModel ? { default: `default (${defaultModel})` } : undefined} placeholder="Model" groups={[{ options: MODELS }]} onValueChange={setModel} />
+              </>
+            }
+          />
         </div>
         {error && <div className="banner banner-error">{error}</div>}
       </section>
@@ -157,4 +173,5 @@ export function NewSession({ live, onStarted }: Props) {
   );
 }
 
+const MODELS = ["default", "opus", "sonnet", "haiku"];
 const RESUME_LIMIT = 20;

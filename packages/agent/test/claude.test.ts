@@ -97,6 +97,8 @@ describe("ClaudeDriver", () => {
     const at = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
     assert.equal(claudeCommand(id, true, at), `${CLAUDE_COMMAND} --resume ${id} --fork-session --resume-session-at ${at}`);
     assert.throws(() => claudeCommand(id, true, "x; rm -rf ~"), /Not a Claude message id/);
+    assert.equal(claudeCommand(undefined, undefined, undefined, "opus"), `${CLAUDE_COMMAND} --model opus`);
+    assert.throws(() => claudeCommand(undefined, undefined, undefined, "x; rm -rf ~"), /Not a model/);
   });
 
   it("tags prompts with ids and restores files by them", async () => {

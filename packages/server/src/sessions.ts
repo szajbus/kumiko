@@ -81,10 +81,10 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     return counts;
   }
 
-  start(opts: { sandbox: string; workdir: string; env: string[]; prompt: string }): SessionInfo {
-    const info: SessionInfo = { id: this.newId(), sandbox: opts.sandbox, workdir: opts.workdir, status: "starting", prompt: opts.prompt, startedAt: new Date().toISOString() };
+  start(opts: { sandbox: string; workdir: string; env: string[]; prompt: string; model?: string }): SessionInfo {
+    const info: SessionInfo = { id: this.newId(), sandbox: opts.sandbox, workdir: opts.workdir, status: "starting", prompt: opts.prompt, model: opts.model, startedAt: new Date().toISOString() };
     const promptId = randomUUID();
-    return this.launch(info, [{ kind: "user_prompt", payload: { text: opts.prompt, id: promptId } }], { sandbox: opts.sandbox, workdir: opts.workdir, env: opts.env, prompt: opts.prompt, promptId });
+    return this.launch(info, [{ kind: "user_prompt", payload: { text: opts.prompt, id: promptId } }], { sandbox: opts.sandbox, workdir: opts.workdir, env: opts.env, prompt: opts.prompt, promptId, model: opts.model });
   }
 
   /**

@@ -14,6 +14,9 @@ export const CLAUDE_COMMAND = [
   "--permission-mode bypassPermissions",
 ].join(" ");
 
+/** A model alias or id, checked before it goes into a shell command. */
+const MODEL_ALIAS = /^[\w.\[\]-]+$/;
+
 /** The shape of the ids Claude gives sessions; checked before one goes into a shell command. */
 const SESSION_ID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
@@ -21,11 +24,13 @@ const SESSION_ID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
  * The command that starts Claude, continuing session `resume` (as a copy, with `fork`) when given. With `resumeAt`
  * (the id of one of that session's messages) the conversation is cut after that message.
  */
-export function claudeCommand(resume?: string, fork?: boolean, resumeAt?: string): string {
-  if (resume === undefined) return CLAUDE_COMMAND;
+export function claudeCommand(resume?: string, fork?: boolean, resumeAt?: string, model?: string): string {
+  if (model !== undefined && !MODEL_ALIAS.test(model)) throw new Error(`Not a model: ${model}`);
+  const base = model ? `${CLAUDE_COMMAND} --model ${model}` : CLAUDE_COMMAND;
+  if (resume === undefined) return base;
   if (!SESSION_ID.test(resume)) throw new Error(`Not a Claude session id: ${resume}`);
   if (resumeAt !== undefined && !SESSION_ID.test(resumeAt)) throw new Error(`Not a Claude message id: ${resumeAt}`);
-  return `${CLAUDE_COMMAND} --resume ${resume}${fork ? " --fork-session" : ""}${resumeAt ? ` --resume-session-at ${resumeAt}` : ""}`;
+  return `${base} --resume ${resume}${fork ? " --fork-session" : ""}${resumeAt ? ` --resume-session-at ${resumeAt}` : ""}`;
 }
 
 const STDERR_TAIL = 20;
@@ -84,9 +89,9 @@ export class ClaudeDriver implements AgentDriver {
     if (this.stderr.length > STDERR_TAIL) this.stderr.shift();
   }
 
-  start({ sandbox, workdir, env, prompt, promptId, resume, fork, resumeAt }: StartOptions): void {
+  start({ sandbox, workdir, env, prompt, promptId, resume, fork, resumeAt, model }: StartOptions): void {
     if (this.child) throw new Error("This driver has already started.");
-    const child = this.exec(sandbox, claudeCommand(resume, fork, resumeAt), env, { cwd: workdir });
+    const child = this.exec(sandbox, claudeCommand(resume, fork, resumeAt, model), env, { cwd: workdir });
     this.child = child;
     // Writes after the process is gone fail with EPIPE; the exit event already says what happened.
     child.stdin!.on("error", () => {});

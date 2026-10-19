@@ -321,8 +321,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     const name = String(req?.sandbox ?? "");
     const prompt = typeof req?.prompt === "string" ? req.prompt.trim() : "";
     if (!prompt) throw new HttpError(400, "The opening prompt is empty.");
+    const model = typeof req?.model === "string" && req.model && req.model !== "default" ? req.model : undefined;
+    if (model && !/^[\w.\[\]-]+$/.test(model)) throw new HttpError(400, `Not a model: ${model}`);
     const ready = await readySandbox(name);
-    const session = sessions.start({ sandbox: name, workdir: ready.workdir, env: ready.env, prompt });
+    const session = sessions.start({ sandbox: name, workdir: ready.workdir, env: ready.env, prompt, model });
     return c.json({ id: session.id }, 201);
   });
 
