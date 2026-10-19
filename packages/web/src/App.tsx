@@ -144,9 +144,9 @@ export function App() {
       if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
       // e.code, because Shift turns "[" into "{" and layouts differ.
       const digit = !e.shiftKey && /^Digit[1-9]$/.test(e.code) ? Number(e.code.slice(5)) : undefined;
-      const action = digit ?? e.shiftKey
+      const action = digit ?? (e.shiftKey
         ? e.code === "BracketRight" ? "next" : e.code === "BracketLeft" ? "prev" : e.code === "KeyW" ? "delete" : undefined
-        : e.code === "KeyT" ? "new" : e.code === "KeyW" ? "close" : undefined;
+        : e.code === "KeyT" ? "new" : e.code === "KeyW" ? "close" : undefined);
       if (!action) return;
       e.preventDefault();
       shortcut.current(action);
