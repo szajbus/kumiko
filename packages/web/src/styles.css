@@ -371,7 +371,7 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 .chat-ended { align-self: center; padding: 4px 12px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 12.5px; }
 
 /* Claude's markdown */
-.md { line-height: 1.6; overflow-wrap: anywhere; }
+.md { line-height: 1.6; overflow-wrap: anywhere; color: #d0d4db; }
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
 .md p, .md ul, .md ol, .md pre, .md blockquote, .md table { margin: 0 0 10px; }
