@@ -107,7 +107,8 @@ describe("sessions", () => {
     const id = await startSession("one", "hello there");
     const s = await listen(id);
     await waitFor(() => s.results().length === 1);
-    assert.deepEqual(s.got[0], { seq: 1, kind: "user_prompt", payload: { text: "hello there" } });
+    assert.deepEqual(s.got[0], { seq: 1, kind: "user_prompt", payload: { text: "hello there", id: (s.got[0] as { payload: { id?: string } }).payload.id } });
+    assert.match((s.got[0] as { payload: { id?: string } }).payload.id ?? "", /^[0-9a-f-]{36}$/, "the prompt is tagged with an id");
     const init = s.got.find((e) => e.kind === "claude" && e.payload.subtype === "init");
     assert.equal(init?.kind === "claude" && init.payload.cwd, workdir, "Claude starts in the sandbox's working directory");
     assert.ok(s.got.some((e) => e.kind === "claude" && e.payload.type === "stream_event"), "deltas stream live");
@@ -228,7 +229,8 @@ describe("sessions", () => {
     // The chat is back, without the streaming events; Claude is ready for a prompt at once.
     const resumed = await listen(id);
     const kinds = resumed.got.map((e) => e.kind === "claude" ? e.payload.type : e.kind);
-    assert.deepEqual(kinds, ["user_prompt", "assistant", "result", "user_prompt", "assistant", "result"]);
+    // The `user` entries are Claude's echoes of the prompts, which carry the ids a rewind goes by.
+    assert.deepEqual(kinds, ["user_prompt", "user", "assistant", "result", "user_prompt", "user", "assistant", "result"]);
     assert.equal((await session(id))?.status, "idle");
     await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: "third" }) });
     await waitFor(() => resumed.results().length === 3);
@@ -241,7 +243,7 @@ describe("sessions", () => {
     const forkId = (await json(forked)).id as string;
     assert.notEqual(forkId, id);
     const copy = await listen(forkId);
-    assert.deepEqual(copy.got.map((e) => e.kind === "claude" ? e.payload.type : e.kind), [...kinds, "user_prompt", "assistant", "result"]);
+    assert.deepEqual(copy.got.map((e) => e.kind === "claude" ? e.payload.type : e.kind), [...kinds, "user_prompt", "user", "assistant", "result"]);
     await api(`/api/sessions/${forkId}/prompt`, { method: "POST", body: JSON.stringify({ text: "on a branch" }) });
     assert.notEqual((await idle(forkId)).claudeSessionId, claudeId);
     await waitFor(() => copy.results().length === 4);
@@ -249,6 +251,53 @@ describe("sessions", () => {
     assert.equal((await api("/api/sessions/abc123/fork", { method: "POST" })).status, 404);
     await api(`/api/sessions/${forkId}`, { method: "DELETE" });
     await api(`/api/sessions/${id}`, { method: "DELETE" });
+  });
+
+  it("rewinds to just before a prompt, in a new session", async () => {
+    const id = await startSession("one", "first");
+    const idle = (x: string) => waitFor(async () => { const i = await session(x); return i?.status === "idle" && i.claudeSessionId ? i : undefined; });
+    const claudeId = (await idle(id)).claudeSessionId!;
+    const s = await listen(id);
+    for (const [n, text] of ["second", "third"].entries()) {
+      await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text }) });
+      await waitFor(() => s.results().length === n + 2);
+    }
+    const prompts = s.got.flatMap((e) => (e.kind === "user_prompt" ? [e.payload] : []));
+    assert.deepEqual(prompts.map((p) => p.text), ["first", "second", "third"]);
+    assert.ok(prompts.every((p) => p.id), "every prompt is tagged with an id");
+    const rewind = (body: object, from = id) => api(`/api/sessions/${from}/rewind`, { method: "POST", body: JSON.stringify(body) });
+
+    assert.equal((await rewind({})).status, 400);
+    assert.equal((await rewind({ prompt: "nope" })).status, 409, "a prompt the session never sent");
+    assert.equal((await rewind({ prompt: prompts[1].id }, "abc123")).status, 404);
+
+    // Back to before "second": the new session has the chat up to there, and Claude's history is cut after the
+    // last message of the first turn.
+    const res = await rewind({ prompt: prompts[1].id, files: true });
+    assert.equal(res.status, 201);
+    const { id: branchId, text } = await json(res);
+    assert.equal(text, "second");
+    const branch = await listen(branchId);
+    assert.deepEqual(branch.got.map((e) => (e.kind === "claude" ? e.payload.type : e.kind)), ["user_prompt", "user", "assistant", "result"]);
+    await api(`/api/sessions/${branchId}/prompt`, { method: "POST", body: JSON.stringify({ text: "where" }) });
+    await waitFor(() => branch.results().length === 2);
+    const firstReply = s.got.find((e) => e.kind === "claude" && e.payload.type === "assistant");
+    const firstReplyId = firstReply?.kind === "claude" ? String(firstReply.payload.uuid) : "";
+    assert.ok(firstReplyId);
+    assert.ok(branch.got.some((e) => e.kind === "claude" && JSON.stringify(e.payload).includes(`resumed at ${firstReplyId}`)), "Claude resumes at the last message of the first turn");
+    assert.notEqual((await idle(branchId)).claudeSessionId, claudeId, "the branch is its own Claude session");
+    assert.equal((await session(id))?.claudeSessionId, claudeId, "the original is left as it was");
+
+    // Back to before the very first prompt: nothing to keep, so a fresh session.
+    const fresh = await json(await rewind({ prompt: prompts[0].id }));
+    assert.equal(fresh.text, "first");
+    assert.equal((await listen(fresh.id)).got.length, 0);
+
+    // Not while Claude is working.
+    await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: "slow" }) });
+    assert.equal((await rewind({ prompt: prompts[1].id })).status, 409);
+    await api(`/api/sessions/${id}/interrupt`, { method: "POST" });
+    for (const x of [id, branchId, fresh.id]) await api(`/api/sessions/${x}`, { method: "DELETE" });
   });
 
   it("deletes saved sessions by hand, and with their sandbox", async () => {

@@ -7,32 +7,38 @@ import type { AgentDriver, AgentEvent, AgentMessage, Exec, StartOptions } from "
  * between turns. Permissions are bypassed because the sandbox is the boundary.
  */
 export const CLAUDE_COMMAND = [
-  "claude -p",
+  // Checkpoints are what lets a prompt's file changes be undone; --replay-user-messages is how Claude says a prompt has one.
+  "env CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=1 claude -p",
   "--input-format stream-json --output-format stream-json",
-  "--verbose --include-partial-messages",
+  "--verbose --include-partial-messages --replay-user-messages",
   "--permission-mode bypassPermissions",
 ].join(" ");
 
 /** The shape of the ids Claude gives sessions; checked before one goes into a shell command. */
 const SESSION_ID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
-/** The command that starts Claude, continuing session `resume` (as a copy, with `fork`) when given. */
-export function claudeCommand(resume?: string, fork?: boolean): string {
+/**
+ * The command that starts Claude, continuing session `resume` (as a copy, with `fork`) when given. With `resumeAt`
+ * (the id of one of that session's messages) the conversation is cut after that message.
+ */
+export function claudeCommand(resume?: string, fork?: boolean, resumeAt?: string): string {
   if (resume === undefined) return CLAUDE_COMMAND;
   if (!SESSION_ID.test(resume)) throw new Error(`Not a Claude session id: ${resume}`);
-  return `${CLAUDE_COMMAND} --resume ${resume}${fork ? " --fork-session" : ""}`;
+  if (resumeAt !== undefined && !SESSION_ID.test(resumeAt)) throw new Error(`Not a Claude message id: ${resumeAt}`);
+  return `${CLAUDE_COMMAND} --resume ${resume}${fork ? " --fork-session" : ""}${resumeAt ? ` --resume-session-at ${resumeAt}` : ""}`;
 }
 
 const STDERR_TAIL = 20;
+const REQUEST_TIMEOUT_MS = 15_000;
 
 export interface ClaudeDriverOptions {
   /** How long `stop()` waits after closing stdin before killing the SSH process, in ms. */
   graceMs?: number;
 }
 
-/** A stream-json message line for a user prompt. */
-export function userMessage(text: string): string {
-  return JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } }) + "\n";
+/** A stream-json message line for a user prompt, tagged with `uuid` when given. */
+export function userMessage(text: string, uuid?: string): string {
+  return JSON.stringify({ type: "user", ...(uuid ? { uuid } : {}), message: { role: "user", content: [{ type: "text", text }] } }) + "\n";
 }
 
 /** Claude's result text when it isn't signed in, e.g. "Invalid API key · Please run /login". */
@@ -55,7 +61,9 @@ export class ClaudeDriver implements AgentDriver {
   private stderr: string[] = [];
   private requested = false;
   private exited?: Promise<void>;
-  private interrupts = 0;
+  private requests = 0;
+  /** Control requests waiting for Claude's answer, by request id. */
+  private pending = new Map<string, { resolve(): void; reject(err: Error): void }>();
   private readonly graceMs: number;
 
   constructor(private readonly exec: Exec, opts: ClaudeDriverOptions = {}) {
@@ -76,9 +84,9 @@ export class ClaudeDriver implements AgentDriver {
     if (this.stderr.length > STDERR_TAIL) this.stderr.shift();
   }
 
-  start({ sandbox, workdir, env, prompt, resume, fork }: StartOptions): void {
+  start({ sandbox, workdir, env, prompt, promptId, resume, fork, resumeAt }: StartOptions): void {
     if (this.child) throw new Error("This driver has already started.");
-    const child = this.exec(sandbox, claudeCommand(resume, fork), env, { cwd: workdir });
+    const child = this.exec(sandbox, claudeCommand(resume, fork, resumeAt), env, { cwd: workdir });
     this.child = child;
     // Writes after the process is gone fail with EPIPE; the exit event already says what happened.
     child.stdin!.on("error", () => {});
@@ -94,6 +102,7 @@ export class ClaudeDriver implements AgentDriver {
       }
       if (!msg || typeof msg !== "object" || typeof (msg as { type?: unknown }).type !== "string") return;
       const payload = msg as AgentMessage;
+      if (payload.type === "control_response" && this.answer(payload)) return;
       this.emit({ kind: "message", payload });
       // Signed out, Claude still answers each turn, with an error result rather than an exit.
       if (payload.type === "result" && payload.is_error === true && SIGNED_OUT.test(String(payload.result ?? ""))) {
@@ -103,12 +112,18 @@ export class ClaudeDriver implements AgentDriver {
     eachLine(child.stderr!, (line) => this.keepTail(line));
 
     this.exited = new Promise<void>((resolve) => {
+      // Nothing answers a request once the process is gone.
+      const abandon = () => {
+        for (const p of this.pending.values()) p.reject(new Error("Claude exited."));
+        this.pending.clear();
+      };
       let failed = false;
       child.on("error", (err: NodeJS.ErrnoException) => {
         failed = true;
         const message = err.code === "ENOENT" ? "ssh not found on PATH." : `Couldn't start Claude: ${err.message}`;
         this.emit({ kind: "error", message });
         this.emit({ kind: "exit", code: 1, requested: this.requested });
+        abandon();
         resolve();
       });
       child.on("close", (code, signal) => {
@@ -120,19 +135,49 @@ export class ClaudeDriver implements AgentDriver {
           this.emit({ kind: "error", message, hint: exitHint(exitCode, tail), stderr: tail.length ? tail : undefined });
         }
         this.emit({ kind: "exit", code: exitCode, requested: this.requested });
+        abandon();
         resolve();
       });
     });
 
-    if (prompt !== undefined) this.send(prompt);
+    if (prompt !== undefined) this.send(prompt, promptId);
   }
 
-  send(text: string): void {
-    this.child?.stdin?.write(userMessage(text));
+  send(text: string, id?: string): void {
+    this.child?.stdin?.write(userMessage(text, id));
+  }
+
+  /** Settles the request a `control_response` answers, if one of ours is waiting; false for any other. */
+  private answer(msg: AgentMessage): boolean {
+    const response = msg.response as { request_id?: unknown; subtype?: unknown; error?: unknown } | undefined;
+    const id = typeof response?.request_id === "string" ? response.request_id : undefined;
+    const waiting = id ? this.pending.get(id) : undefined;
+    if (!id || !waiting) return false;
+    this.pending.delete(id);
+    if (response?.subtype === "error") waiting.reject(new Error(typeof response.error === "string" ? response.error : "Claude refused the request."));
+    else waiting.resolve();
+    return true;
+  }
+
+  rewindFiles(id: string): Promise<void> {
+    const stdin = this.child?.stdin;
+    if (!stdin || this.child?.exitCode != null) return Promise.reject(new Error("Claude isn't running."));
+    const request_id = `rewind-${++this.requests}`;
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(request_id);
+        reject(new Error("Claude didn't answer."));
+      }, REQUEST_TIMEOUT_MS);
+      this.pending.set(request_id, {
+        resolve: () => (clearTimeout(timer), resolve()),
+        reject: (err) => (clearTimeout(timer), reject(err)),
+      });
+      stdin.write(JSON.stringify({ type: "control_request", request_id, request: { subtype: "rewind_files", user_message_id: id } }) + "\n");
+    });
   }
 
   interrupt(): void {
-    const request = { type: "control_request", request_id: `interrupt-${++this.interrupts}`, request: { subtype: "interrupt" } };
+    const request = { type: "control_request", request_id: `interrupt-${++this.requests}`, request: { subtype: "interrupt" } };
     this.child?.stdin?.write(JSON.stringify(request) + "\n");
   }
 

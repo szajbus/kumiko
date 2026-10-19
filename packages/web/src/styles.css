@@ -360,6 +360,12 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
   align-self: flex-end; max-width: 85%; padding: 10px 14px; border-radius: 12px 12px 4px 12px;
   background: #222a3d; border: 1px solid #2f3a55; white-space: pre-wrap; overflow-wrap: anywhere;
 }
+.msg-user-row { align-self: flex-end; max-width: 85%; display: flex; align-items: flex-start; gap: 6px; }
+.msg-user-row .msg-user { max-width: none; min-width: 0; }
+.msg-rewind { flex: none; min-height: 0; margin-top: 8px; padding: 4px 7px; border-radius: 6px; opacity: 0; }
+.msg-user-row:hover .msg-rewind, .msg-rewind:focus-visible { opacity: 1; }
+.rewind-files { display: flex; align-items: flex-start; gap: 8px; margin-top: 12px; color: var(--text); }
+.rewind-files input { margin-top: 3px; }
 .msg-assistant { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .chat-quiet { color: var(--muted); font-size: 12.5px; font-style: italic; }
 .chat-waiting { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }

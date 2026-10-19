@@ -16,6 +16,7 @@ import {
   type DefaultsResponse,
   type EditSpec,
   type OpKind,
+  type RewindResponse,
   type SandboxInfo,
   type SandboxSpec,
   type SandboxView,
@@ -28,7 +29,7 @@ import { LimaProvider, type Log, type SandboxProvider } from "@bentomo/sandbox";
 import { ClaudeDriver, type AgentDriver } from "@bentomo/agent";
 import { isLocalRequest } from "./guard.js";
 import { BusyError, Operations } from "./operations.js";
-import { SessionEnded, SessionNotFound, SessionNotResumable, Sessions } from "./sessions.js";
+import { RewindRefused, SessionEnded, SessionNotFound, SessionNotResumable, Sessions } from "./sessions.js";
 import { SessionStore } from "./store.js";
 import { serveWeb } from "./static.js";
 
@@ -383,6 +384,23 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     const ready = await readySandbox(from.sandbox);
     if (ready instanceof Response) return ready;
     return c.json({ id: sessions.fork(id, ready.env).id }, 201);
+  }));
+
+  /** Rewinds to just before one of this session's prompts, in a new session. Returns its id and the prompt's text. */
+  app.post("/api/sessions/:id/rewind", onSession(async (id, c) => {
+    const body = await c.req.json<{ prompt?: unknown; files?: unknown }>().catch(() => ({}) as { prompt?: unknown; files?: unknown });
+    if (typeof body.prompt !== "string" || !body.prompt) return c.json(fail("Which message to rewind to?"), 400);
+    const from = sessions.get(id);
+    if (!from) throw new SessionNotFound(`No session ${id}.`);
+    const ready = await readySandbox(from.sandbox);
+    if (ready instanceof Response) return ready;
+    try {
+      const { info, text } = await sessions.rewind(id, body.prompt, ready.env, { files: body.files === true });
+      return c.json({ id: info.id, text } satisfies RewindResponse, 201);
+    } catch (err) {
+      if (err instanceof RewindRefused) return c.json(fail(err.message), 409);
+      throw err;
+    }
   }));
 
   app.post("/api/sessions/:id/interrupt", onSession((id, c) => {

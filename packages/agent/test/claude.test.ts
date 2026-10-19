@@ -94,5 +94,24 @@ describe("ClaudeDriver", () => {
     assert.equal(claudeCommand(id), `${CLAUDE_COMMAND} --resume ${id}`);
     assert.equal(claudeCommand(id, true), `${CLAUDE_COMMAND} --resume ${id} --fork-session`);
     assert.throws(() => claudeCommand("x; rm -rf ~"), /Not a Claude session id/);
+    const at = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+    assert.equal(claudeCommand(id, true, at), `${CLAUDE_COMMAND} --resume ${id} --fork-session --resume-session-at ${at}`);
+    assert.throws(() => claudeCommand(id, true, "x; rm -rf ~"), /Not a Claude message id/);
+  });
+
+  it("tags prompts with ids and restores files by them", async () => {
+    const d = await drive();
+    const first = "11111111-1111-4111-8111-111111111111";
+    d.driver.start({ sandbox: "test", workdir: d.home, env: [], prompt: "hello", promptId: first });
+    await d.waitFor(() => d.results().length === 1);
+    const echo = d.messages().find((m) => m.type === "user" && m.isReplay === true);
+    assert.equal(echo?.uuid, first, "Claude echoes the prompt back under the id it was given");
+
+    await d.driver.rewindFiles(first);
+    await assert.rejects(d.driver.rewindFiles("22222222-2222-4222-8222-222222222222"), /No file checkpoint/);
+    assert.ok(!d.messages().some((m) => m.type === "control_response"), "answers to requests aren't passed on as messages");
+
+    await d.driver.stop();
+    await assert.rejects(d.driver.rewindFiles(first), /isn't running/);
   });
 });

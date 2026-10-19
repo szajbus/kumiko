@@ -7,6 +7,9 @@
 //   "crash"      writes to stderr and exits 3
 //   "signed out" answers with an error result, as Claude does without a login
 //   anything else is echoed back as "You said: …"
+// Prompts carrying a uuid are echoed back as `isReplay` user messages, as with --replay-user-messages, and every
+// assistant message has a uuid. A `rewind_files` control request is answered with success, or with an error for a uuid
+// the session never saw. --resume-session-at <uuid> keeps only the messages up to that one.
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 
@@ -18,6 +21,8 @@ let model = "claude-sonnet-5-5";
 let total = 0;
 let msgN = 0;
 const queue = [];
+const seen = new Set(); // uuids of the prompts this process has been sent
+const resumeAt = args.includes("--resume-session-at") ? args[args.indexOf("--resume-session-at") + 1] : undefined;
 let current; // { cancel(): void }
 
 const out = (o) => process.stdout.write(JSON.stringify(o) + "\n");
@@ -32,7 +37,7 @@ async function streamText(id, text, index, cancelled, delay = 0) {
     if (delay) await sleep(delay);
   }
   ev({ type: "content_block_stop", index }, id);
-  out({ type: "assistant", message: { model, id, type: "message", role: "assistant", content: [{ type: "text", text }] }, parent_tool_use_id: null, session_id });
+  out({ type: "assistant", message: { model, id, type: "message", role: "assistant", content: [{ type: "text", text }] }, parent_tool_use_id: null, session_id, uuid: randomUUID() });
   return true;
 }
 
@@ -49,7 +54,7 @@ async function turn(text) {
 
   if (text.startsWith("/model ")) {
     model = `claude-${text.slice(7).trim()}-5-5`;
-    out({ type: "assistant", message: { model: "<synthetic>", id: randomUUID(), type: "message", role: "assistant", content: [{ type: "text", text: `Set model to ${model}` }] }, parent_tool_use_id: null, session_id });
+    out({ type: "assistant", message: { model: "<synthetic>", id: randomUUID(), type: "message", role: "assistant", content: [{ type: "text", text: `Set model to ${model}` }] }, parent_tool_use_id: null, session_id, uuid: randomUUID() });
     return result(start, { cost: 0, num_turns: 0 });
   }
   if (text === "crash") {
@@ -57,7 +62,7 @@ async function turn(text) {
     process.exit(3);
   }
   if (text === "signed out") {
-    out({ type: "assistant", message: { model: "<synthetic>", id: randomUUID(), type: "message", role: "assistant", content: [{ type: "text", text: "Invalid API key · Please run /login" }] }, parent_tool_use_id: null, session_id });
+    out({ type: "assistant", message: { model: "<synthetic>", id: randomUUID(), type: "message", role: "assistant", content: [{ type: "text", text: "Invalid API key · Please run /login" }] }, parent_tool_use_id: null, session_id, uuid: randomUUID() });
     return result(start, { is_error: true, text: "Invalid API key · Please run /login", cost: 0 });
   }
 
@@ -70,7 +75,7 @@ async function turn(text) {
     ev({ type: "content_block_start", index: 0, content_block: { ...tool, input: {} } }, id);
     ev({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify(tool.input) } }, id);
     ev({ type: "content_block_stop", index: 0 }, id);
-    out({ type: "assistant", message: { model, id, type: "message", role: "assistant", content: [tool] }, parent_tool_use_id: null, session_id });
+    out({ type: "assistant", message: { model, id, type: "message", role: "assistant", content: [tool] }, parent_tool_use_id: null, session_id, uuid: randomUUID() });
     const value = process.env[name] ?? "";
     out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: tool.id, content: value, is_error: false }] }, parent_tool_use_id: null, session_id });
     const id2 = `msg_${++msgN}`;
@@ -83,10 +88,15 @@ async function turn(text) {
     ev({ type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } }, id);
     ev({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Counting slowly.", estimated_tokens: 5 } }, id);
     ev({ type: "content_block_stop", index: 0 }, id);
-    out({ type: "assistant", message: { model, id, type: "message", role: "assistant", content: [{ type: "thinking", thinking: "Counting slowly." }] }, parent_tool_use_id: null, session_id });
+    out({ type: "assistant", message: { model, id, type: "message", role: "assistant", content: [{ type: "thinking", thinking: "Counting slowly." }] }, parent_tool_use_id: null, session_id, uuid: randomUUID() });
     const done = await streamText(id, Array.from({ length: 200 }, (_, i) => `${i + 1}`).join(" "), 1, () => cancelled, 50);
     if (!done) return result(start, { subtype: "error_during_execution", is_error: false });
     return result(start, { text: "counted" });
+  }
+
+  if (text === "where") {
+    await streamText(id, `resumed at ${resumeAt ?? "nothing"}`, 0, () => cancelled);
+    return result(start, { text: "where" });
   }
 
   const reply = `You said: ${text}`;
@@ -106,8 +116,20 @@ rl.on("line", (line) => {
   const msg = JSON.parse(line);
   if (msg.type === "user") {
     const text = msg.message.content.filter((b) => b.type === "text").map((b) => b.text).join("");
+    if (msg.uuid) {
+      seen.add(msg.uuid);
+      out({ type: "user", message: msg.message, parent_tool_use_id: null, session_id, uuid: msg.uuid, isReplay: true });
+    }
     queue.push(text);
     void pump();
+  } else if (msg.type === "control_request" && msg.request?.subtype === "rewind_files") {
+    const ok = seen.has(msg.request.user_message_id);
+    out({
+      type: "control_response",
+      response: ok
+        ? { subtype: "success", request_id: msg.request_id, response: { canRewind: true, skippedLinks: 0 } }
+        : { subtype: "error", request_id: msg.request_id, error: "No file checkpoint found for this message." },
+    });
   } else if (msg.type === "control_request" && msg.request?.subtype === "interrupt") {
     current?.cancel();
     out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: { still_queued: [] } } });

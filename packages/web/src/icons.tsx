@@ -119,3 +119,9 @@ export const Close = () => (
     <path d="M3 3l8 8M11 3l-8 8" {...stroke} />
   </svg>
 );
+
+export const Rewind = () => (
+  <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+    <path d="M2.5 7a4.5 4.5 0 1 0 1.4-3.3M2.5 1.8v2.4h2.4" {...stroke} />
+  </svg>
+);

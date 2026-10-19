@@ -4,7 +4,9 @@ import { api, RequestError, useSessionEvents } from "./api";
 import { applyEvent, blocksOf, emptyChat, partialToolSummary, toolSummary, type Block, type ChatItem, type ChatState } from "./chat";
 import { Composer } from "./Composer";
 import { Markdown } from "./Markdown";
-import { Fork } from "./icons";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { drafts } from "./drafts";
+import { Fork, Rewind } from "./icons";
 import { Select } from "./Select";
 import { COLORS, sessionStatus } from "./status";
 
@@ -23,6 +25,13 @@ export function SessionView({ session, onForked }: Props) {
   const totalCost = useMemo(() => chat.items.reduce((sum, i) => sum + (i.type === "turn" ? (i.costUsd ?? 0) : 0), 0), [chat.items]);
   const [error, setError] = useState<string | undefined>();
   const [model, setModel] = useState("");
+  // Set when this tab was opened by a rewind: the message that was rewound to, ready to edit.
+  const [draft] = useState(() => drafts.get(session.id));
+  useEffect(() => () => void drafts.delete(session.id), [session.id]);
+  // The message a rewind was asked for, until it is confirmed or dropped.
+  const [rewinding, setRewinding] = useState<Extract<ChatItem, { type: "user" }> | undefined>();
+  const [restoreFiles, setRestoreFiles] = useState(false);
+  useEffect(() => setRestoreFiles(false), [rewinding]);
   // Claude reports a full model id; the dropdown lists aliases, so show the alias it belongs to.
   const reported = session.model ?? "";
   const alias = MODELS.find((m) => m !== "default" && reported.toLowerCase().includes(m));
@@ -92,7 +101,31 @@ export function SessionView({ session, onForked }: Props) {
         </div>
       </div>
 
-      <Chat chat={chat} running={busy} />
+      <Chat chat={chat} running={busy} onRewind={session.status === "idle" && session.claudeSessionId ? setRewinding : undefined} />
+
+      {rewinding && (
+        <ConfirmDialog
+          title="Rewind to this message?"
+          confirmLabel="Rewind"
+          onCancel={() => setRewinding(undefined)}
+          onConfirm={() => {
+            const target = rewinding;
+            setRewinding(undefined);
+            void call(() =>
+              api.rewindSession(session.id, target.id!, restoreFiles).then(({ id, text }) => {
+                drafts.set(id, text);
+                onForked(id);
+              }),
+            );
+          }}
+        >
+          <p>A new tab opens with the conversation as it was before this message, which goes back into its message box. This session stays as it is.</p>
+          <label className="rewind-files">
+            <input type="checkbox" checked={restoreFiles} onChange={(e) => setRestoreFiles(e.target.checked)} />
+            <span>Also put back the files Claude has changed since. The sandbox's files are shared, so this affects this session too.</span>
+          </label>
+        </ConfirmDialog>
+      )}
 
       <div className="session-foot">
         {stream.gone && <div className="banner banner-warn">This session is no longer on the server.</div>}
@@ -103,6 +136,7 @@ export function SessionView({ session, onForked }: Props) {
         <Composer
           label="Message Claude"
           commands={session.commands}
+          initialText={draft}
           submitLabel="Send"
           placeholder={live ? "Message Claude…" : "This session has ended."}
           disabled={!live || session.status === "starting"}
@@ -127,7 +161,9 @@ function useChat(events: ReturnType<typeof useSessionEvents>["events"]): ChatSta
   }, [events]);
 }
 
-function Chat({ chat, running }: { chat: ChatState; running: boolean }) {
+type UserItem = Extract<ChatItem, { type: "user" }>;
+
+function Chat({ chat, running, onRewind }: { chat: ChatState; running: boolean; onRewind?: (item: UserItem) => void }) {
   const box = useRef<HTMLDivElement>(null);
   const inner = useRef<HTMLDivElement>(null);
   // Follows new output while the view is at the bottom; scrolling up stops that until it is back at the bottom.
@@ -174,7 +210,7 @@ function Chat({ chat, running }: { chat: ChatState; running: boolean }) {
     >
       <div ref={inner} className="chat-inner">
         {chat.items.map((item, i) => (
-          <Item key={item.key} item={item} open={running && i > lastTurn} />
+          <Item key={item.key} item={item} open={running && i > lastTurn} onRewind={onRewind} />
         ))}
         {running && chat.items.at(-1)?.type === "user" && (
           <div className="chat-waiting">
@@ -186,10 +222,19 @@ function Chat({ chat, running }: { chat: ChatState; running: boolean }) {
   );
 }
 
-const Item = memo(function Item({ item, open }: { item: ChatItem; open: boolean }) {
+const Item = memo(function Item({ item, open, onRewind }: { item: ChatItem; open: boolean; onRewind?: (item: UserItem) => void }) {
   switch (item.type) {
     case "user":
-      return <div className="msg-user">{item.text}</div>;
+      return (
+        <div className="msg-user-row">
+          {onRewind && item.replayed && item.id && (
+            <button type="button" className="btn btn-secondary btn-compact msg-rewind" title="Rewind to just before this message" aria-label="Rewind to this message" onClick={() => onRewind(item)}>
+              <Rewind />
+            </button>
+          )}
+          <div className="msg-user">{item.text}</div>
+        </div>
+      );
     case "assistant":
       return (
         <div className="msg-assistant">

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Send } from "./icons";
 
 interface Props {
@@ -14,6 +14,8 @@ interface Props {
   label: string;
   /** Slash commands Claude accepts, without the slash. Typing "/" offers them. */
   commands?: string[];
+  /** The box starts with this text, and the cursor at its end. */
+  initialText?: string;
 }
 
 const MAX_HEIGHT = 240;
@@ -28,12 +30,20 @@ export function matchCommands(commands: string[], typed: string): string[] {
 }
 
 /** A prompt box: Enter sends, Shift+Enter adds a line. Used by the New session tab and the chat. */
-export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder, autoFocus, label, commands }: Props) {
-  const [text, setText] = useState("");
+export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder, autoFocus, label, commands, initialText }: Props) {
+  const [text, setText] = useState(initialText ?? "");
   const [picked, setPicked] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [sending, setSending] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
+
+  // A starting text is meant to be edited, so the cursor goes after it.
+  useEffect(() => {
+    const el = box.current;
+    if (el && initialText) el.setSelectionRange(el.value.length, el.value.length);
+    // Only on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Grow with the text, up to a limit, then scroll.
   useLayoutEffect(() => {

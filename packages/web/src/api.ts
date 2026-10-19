@@ -6,6 +6,8 @@ import type {
   EditSpec,
   LogLine,
   ResumableSession,
+  RewindRequest,
+  RewindResponse,
   SandboxSpec,
   SandboxView,
   ServerEvent,
@@ -61,6 +63,9 @@ export const api = {
   deleteSavedSession: (id: string) => request("DELETE", `/api/sessions/saved/${id}`),
   /** Starts a new session from a copy of this one's conversation. */
   forkSession: (id: string) => request<{ id: string }>("POST", `/api/sessions/${id}/fork`),
+  /** Starts a new session from this one's conversation just before a prompt, optionally with the files put back too. */
+  rewindSession: (id: string, prompt: string, files: boolean) =>
+    request<RewindResponse>("POST", `/api/sessions/${id}/rewind`, { prompt, files } satisfies RewindRequest & { prompt: string }),
   /** Ends the session if it is live and forgets it; a session Claude has talked to stays resumable. */
   endSession: (id: string) => request("DELETE", `/api/sessions/${id}`),
 };

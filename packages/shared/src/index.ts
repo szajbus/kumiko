@@ -151,14 +151,27 @@ export type EndReason = "user" | "sandbox" | "quit" | "exit";
 
 /**
  * One entry in a session's event buffer. `claude` carries a raw stream-json line from Claude; the rest are Bentomo's:
- * the prompts we sent, Stop being pressed, errors (SSH, `claude` missing or signed out, a crash) and the end.
+ * the prompts we sent (each tagged with an `id` that Claude knows it by, so it can be rewound to), Stop being pressed, errors (SSH, `claude` missing or signed out, a crash) and the end.
  */
 export type SessionEvent =
   | { seq: number; kind: "claude"; payload: Record<string, unknown> & { type: string } }
-  | { seq: number; kind: "user_prompt"; payload: { text: string } }
+  | { seq: number; kind: "user_prompt"; payload: { text: string; id?: string } }
   | { seq: number; kind: "interrupt"; payload: Record<string, never> }
   | { seq: number; kind: "error"; payload: { message: string; hint?: string; stderr?: string[] } }
   | { seq: number; kind: "ended"; payload: { reason: EndReason; code?: number } };
+
+/** Rewinds a session to just before one of its prompts, in a new session. */
+export interface RewindRequest {
+  /** Also put the files Claude changed since back as they were. */
+  files: boolean;
+}
+
+export interface RewindResponse {
+  /** The new session. */
+  id: string;
+  /** The prompt that was rewound to, to be edited and sent again. */
+  text: string;
+}
 
 export interface StartSessionRequest {
   sandbox: string;

@@ -1,6 +1,6 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { LIVE_SESSION_STATUSES, type EndReason, type ResumableSession, type SessionEvent, type SessionInfo } from "@bentomo/shared";
+import { LIVE_SESSION_STATUSES, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo } from "@bentomo/shared";
 import type { AgentDriver, AgentMessage, StartOptions } from "@bentomo/agent";
 import { chatEvents, type SessionStore, type StoredSession } from "./store.js";
 
@@ -33,6 +33,14 @@ export class SessionNotFound extends Error {}
 export class SessionEnded extends Error {}
 /** A session can't be resumed or forked: it is open already, or has nothing of Claude's to continue. */
 export class SessionNotResumable extends Error {}
+/** A rewind can't be done: the prompt isn't in the session, a turn is running, or Claude couldn't restore the files. */
+export class RewindRefused extends Error {}
+
+type ChainEntry = Extract<SessionEvent, { kind: "claude" }> & { payload: { uuid: string } };
+
+/** One of the messages Claude keeps its history in, as opposed to deltas, system notes and subagents' chatter. */
+const isChainEntry = (e: SessionEvent): e is ChainEntry =>
+  e.kind === "claude" && (e.payload.type === "assistant" || e.payload.type === "user") && !e.payload.parent_tool_use_id && typeof e.payload.uuid === "string";
 
 const isLive = (s: SessionInfo) => LIVE_SESSION_STATUSES.includes(s.status);
 
@@ -68,7 +76,8 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
 
   start(opts: { sandbox: string; workdir: string; env: string[]; prompt: string }): SessionInfo {
     const info: SessionInfo = { id: this.newId(), sandbox: opts.sandbox, workdir: opts.workdir, status: "starting", prompt: opts.prompt, startedAt: new Date().toISOString() };
-    return this.launch(info, [{ kind: "user_prompt", payload: { text: opts.prompt } }], { sandbox: opts.sandbox, workdir: opts.workdir, env: opts.env, prompt: opts.prompt });
+    const promptId = randomUUID();
+    return this.launch(info, [{ kind: "user_prompt", payload: { text: opts.prompt, id: promptId } }], { sandbox: opts.sandbox, workdir: opts.workdir, env: opts.env, prompt: opts.prompt, promptId });
   }
 
   /**
@@ -91,6 +100,38 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     if (!claudeSessionId) throw new SessionNotResumable("There is nothing to fork yet: Claude hasn't started this session.");
     const info: SessionInfo = { id: this.newId(), sandbox, workdir, prompt, model, status: "idle", startedAt: new Date().toISOString() };
     return this.launch(info, chatEvents(from.events), { sandbox, workdir, env, resume: claudeSessionId, fork: true });
+  }
+
+  /**
+   * Starts a new session from this one's conversation as it was just before prompt `promptId`, which the original
+   * keeps. With `files`, the files Claude changed since are put back first; if that fails nothing is started.
+   * Returns the new session and the prompt's text, for the caller to edit and send again.
+   */
+  async rewind(id: string, promptId: string, env: string[], { files }: RewindRequest): Promise<{ info: SessionInfo; text: string }> {
+    const from = this.live(id);
+    if (from.info.status !== "idle") throw new RewindRefused("Wait for Claude to finish, or stop it, before rewinding.");
+    const at = from.events.findIndex((e) => e.kind === "user_prompt" && e.payload.id === promptId);
+    const prompt = from.events[at];
+    if (prompt?.kind !== "user_prompt") throw new RewindRefused("That message can't be rewound to.");
+    // Claude cuts its history after one of its own messages: the last it logged before this prompt, if any.
+    const before = from.events.slice(0, at);
+    const kept = before.findLast(isChainEntry);
+    const { claudeSessionId, sandbox, workdir, prompt: title, model, commands } = from.info;
+    if (kept && !claudeSessionId) throw new RewindRefused("Claude hasn't started this session yet.");
+
+    if (files) {
+      try {
+        await from.driver.rewindFiles(promptId);
+      } catch (err) {
+        throw new RewindRefused(`Couldn't restore the files: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    // Checked again: a prompt may have been sent while the files were being restored.
+    if (from.info.status !== "idle" || !isLive(from.info)) throw new RewindRefused("Claude started working again; try once it's done.");
+
+    const info: SessionInfo = { id: this.newId(), sandbox, workdir, prompt: title, model, commands, status: "idle", startedAt: new Date().toISOString() };
+    const driverOpts: StartOptions = { sandbox, workdir, env, ...(kept ? { resume: claudeSessionId, fork: true, resumeAt: kept.payload.uuid } : {}) };
+    return { info: this.launch(info, chatEvents(before), driverOpts), text: prompt.payload.text };
   }
 
   /** Saved sessions that aren't open, most recently used first. */
@@ -234,8 +275,9 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
 
   prompt(id: string, text: string): void {
     const s = this.live(id);
-    this.push(s, { kind: "user_prompt", payload: { text } });
-    s.driver.send(text);
+    const promptId = randomUUID();
+    this.push(s, { kind: "user_prompt", payload: { text, id: promptId } });
+    s.driver.send(text, promptId);
     if (s.info.status === "idle") this.setInfo(s, { status: "running" });
   }
 

@@ -11,10 +11,14 @@ export interface StartOptions {
   env: string[];
   /** Sent as soon as the agent starts, so the session starts working without a second step. Omit when resuming. */
   prompt?: string;
+  /** The id `prompt` is known by; see `send`. */
+  promptId?: string;
   /** The agent's own id of an earlier session to continue; its history is already in the sandbox. */
   resume?: string;
   /** With `resume`: continue under a new session id, leaving the original as it is. */
   fork?: boolean;
+  /** With `resume`: continue from this message of the earlier session (its id, from the agent's own stream), dropping what came after. */
+  resumeAt?: string;
 }
 
 /** One parsed protocol message; every one has a `type`. */
@@ -37,8 +41,13 @@ export type AgentEvent =
  */
 export interface AgentDriver {
   start(opts: StartOptions): void;
-  /** Sends a prompt; it starts a turn, or queues behind the current one. */
-  send(text: string): void;
+  /**
+   * Sends a prompt; it starts a turn, or queues behind the current one. The agent tags the prompt with `id` in its
+   * stream and in its history, which is what `rewindFiles` and `resumeAt` refer to.
+   */
+  send(text: string, id?: string): void;
+  /** Puts the files the agent changed back as they were before prompt `id`. Rejects if the agent has no checkpoint for it. */
+  rewindFiles(id: string): Promise<void>;
   /** Ends the current turn but keeps the process. */
   interrupt(): void;
   /** Closes stdin and kills the process if it is still alive after a grace period. Resolves once it has exited. */
