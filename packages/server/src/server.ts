@@ -10,6 +10,7 @@ import {
   ENV_NAME_PATTERN,
   isWaiting,
   NAME_PATTERN,
+  parseSavedTabs,
   SESSION_ID_PATTERN,
   vmName,
   type AccountUsage,
@@ -43,6 +44,7 @@ import { BusyError, Operations } from "./operations.js";
 import { ProjectExists, ProjectRecordError, ProjectStore } from "./projects.js";
 import { RewindRefused, SessionEnded, SessionNotFound, SessionNotResumable, Sessions } from "./sessions.js";
 import { SessionStore } from "./store.js";
+import { TabsStore } from "./tabs.js";
 import { serveWeb } from "./static.js";
 import { fetchAccountUsage, UsageCache } from "./usage.js";
 
@@ -83,6 +85,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   const projects = new ProjectStore(opts.dataDir);
   const logins = new Logins(provider.exec.bind(provider));
   const sessionStore = new SessionStore(opts.sessionsDir);
+  const tabs = new TabsStore(opts.dataDir);
   const sessions = new Sessions(opts.driver ?? (() => new ClaudeDriver(provider.exec.bind(provider))), sessionStore);
   const clients = new Set<WebSocket>();
   const readUsage = opts.usage ?? ((sandbox: string, forwarded: string[]) => fetchAccountUsage(provider.exec.bind(provider), sandbox, forwarded));
@@ -268,6 +271,16 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   });
 
   app.get("/api/defaults", (c) => c.json({ home: opts.home ?? homedir(), claudeHomes: projects.claudeRoot } satisfies DefaultsResponse));
+
+  /** The window's tabs from its last run, or null if none were saved. */
+  app.get("/api/tabs", async (c) => c.json((await tabs.read()) ?? null));
+
+  app.put("/api/tabs", async (c) => {
+    const saved = parseSavedTabs(await body<unknown>(c, "Body must be JSON: { sessions, newSession, active }."));
+    if (!saved) throw new HttpError(400, "Body must be JSON: { sessions, newSession, active }.");
+    await tabs.write(saved);
+    return c.json({ ok: true });
+  });
 
   /** Which of the given variable names are set in Bentomo's environment. Never returns values. */
   app.get("/api/env", (c) => {

@@ -103,6 +103,19 @@ describe("server", () => {
     assert.deepEqual(await json(await api("/api/defaults")), { home, claudeHomes: join(dataDir, "claude") });
   });
 
+  it("keeps the window's tabs in Bentomo's home, refusing what isn't tabs", async () => {
+    assert.equal(await json(await api("/api/tabs")), null);
+    const tabs = { sessions: ["ab12", "../x", 3, "cd34"], newSession: true, active: "session:ab12" };
+    assert.equal((await api("/api/tabs", { method: "PUT", body: JSON.stringify(tabs) })).status, 200);
+    const kept = { sessions: ["ab12", "cd34"], newSession: true, active: "session:ab12" };
+    assert.deepEqual(await json(await api("/api/tabs")), kept);
+    assert.deepEqual(JSON.parse(await readFile(join(dataDir, "tabs.json"), "utf8")), kept);
+    for (const bad of ["nope", JSON.stringify({ sessions: "ab12", active: "projects" }), JSON.stringify({ sessions: [] })]) {
+      assert.equal((await api("/api/tabs", { method: "PUT", body: bad })).status, 400);
+    }
+    assert.deepEqual(await json(await api("/api/tabs")), kept);
+  });
+
   it("refuses what can't be a project's clone, leaving nothing behind", async () => {
     const clone = await makeClone(root, "refused");
     const refuse = async (body: object, why: RegExp) => {

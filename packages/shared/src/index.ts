@@ -58,6 +58,25 @@ export function sameMounts(a: Mount[], b: Mount[]): boolean {
   return key(a) === key(b);
 }
 
+/** The window's tabs as they were, to bring back on the next start. Kept by the server: the desktop app's port, and
+ * with it the page's origin and localStorage, changes every launch. */
+export interface SavedTabs {
+  /** Session ids in tab order. */
+  sessions: string[];
+  newSession: boolean;
+  /** The active tab's id, as the UI names it. */
+  active: string;
+}
+
+/** The saved tabs in `v`, or undefined if it isn't saved tabs. Session ids that can't be ids are dropped. */
+export function parseSavedTabs(v: unknown): SavedTabs | undefined {
+  if (typeof v !== "object" || v === null) return undefined;
+  const { sessions, newSession, active } = v as Partial<Record<keyof SavedTabs, unknown>>;
+  if (!Array.isArray(sessions) || typeof active !== "string" || active.length > 100) return undefined;
+  const ids = sessions.filter((x): x is string => typeof x === "string" && SESSION_ID_PATTERN.test(x));
+  return { sessions: ids.slice(0, 200), newSession: newSession === true, active };
+}
+
 /** What the UI needs from the host. */
 export interface DefaultsResponse {
   /** The host user's home, so the UI can show paths as ~/…. */

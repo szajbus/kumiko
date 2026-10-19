@@ -76,6 +76,7 @@ State, all under `~/.bentomo` (`BENTOMO_HOME` overrides it; `LIMA_HOME` moves Li
 | `claude/<id>/` | The project's Claude home, mounted into its sandbox: login, settings, Claude's session history. |
 | `claude-template/` | What a new Claude home starts as. Made on first use with a `CLAUDE.md`; edit it, or add settings or commands, to change what new projects get. |
 | `sessions/<id>.json` | Each session that has talked to Claude (its info and chat), so it can be resumed. |
+| `tabs.json` | The window's open tabs and which one is active, so they come back on the next start. |
 
 Lima owns the sandboxes (`~/.lima/bm-*`). Operation logs and live agent sessions live in server memory.
 

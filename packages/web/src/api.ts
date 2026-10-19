@@ -12,6 +12,7 @@ import type {
   ProjectEdit,
   ProjectView,
   ResumableSession,
+  SavedTabs,
   RewindRequest,
   RewindResponse,
   ServerEvent,
@@ -51,6 +52,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 export const api = {
   templates: () => request<TemplatesResponse>("GET", "/api/templates"),
   defaults: () => request<DefaultsResponse>("GET", "/api/defaults"),
+  /** The window's tabs from its last run, or null if none were saved. */
+  tabs: () => request<SavedTabs | null>("GET", "/api/tabs"),
+  saveTabs: (tabs: SavedTabs) => request("PUT", "/api/tabs", tabs),
   env: (names: string[]) => request<Record<string, boolean>>("GET", `/api/env?names=${encodeURIComponent(names.join(","))}`),
   create: (req: CreateProjectRequest) => request<CreateResponse>("POST", "/api/projects", req),
   start: (id: string) => request("POST", `/api/projects/${id}/start`),

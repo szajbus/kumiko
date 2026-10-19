@@ -68,10 +68,10 @@ export function App() {
   useEffect(() => {
     if (!live.loaded || restoring.current) return;
     restoring.current = true;
-    const saved = loadTabs();
-    if (!saved) return setRestored(true);
     const open = new Set(live.sessions.map((s) => s.id));
     void (async () => {
+      const saved = await loadTabs();
+      if (!saved) return setRestored(true);
       // Sessions that are gone or can't be resumed just don't get a tab. One at a time: the server lists sessions in the
       // order they started, which is the tab order.
       const back = new Set<string>();
