@@ -351,7 +351,8 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 .session-controls { display: flex; align-items: center; gap: 10px; }
 .session-picker { width: 130px; }
 .session-picker .select-trigger { min-height: 36px; font-size: 13px; }
-.chat { flex: 1; min-height: 0; overflow-y: auto; }
+/* A stable gutter on both edges keeps the messages centred on the same axis as the composer below. */
+.chat { flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable both-edges; }
 .chat-inner { max-width: 860px; margin: 0 auto; padding: 20px 24px 12px; display: flex; flex-direction: column; gap: 12px; }
 .session-foot { flex: none; max-width: 860px; width: 100%; margin: 0 auto; padding: 8px 24px 18px; display: flex; flex-direction: column; gap: 8px; }
 
