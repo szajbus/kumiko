@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
+import { Send } from "./icons";
 
 interface Props {
   /** Resolves true when the text was taken, so the box clears; false keeps it for another try. */
@@ -77,6 +78,7 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
         </button>
       ) : (
         <button type="submit" className="btn btn-primary btn-compact composer-btn" disabled={!canSend}>
+          <Send />
           {submitLabel}
         </button>
       )}

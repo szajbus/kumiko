@@ -4,6 +4,7 @@ import { api, RequestError, useSessionEvents } from "./api";
 import { applyEvent, blocksOf, emptyChat, partialToolSummary, toolSummary, type Block, type ChatItem, type ChatState } from "./chat";
 import { Composer } from "./Composer";
 import { Markdown } from "./Markdown";
+import { Fork } from "./icons";
 import { Select } from "./Select";
 import { COLORS, sessionStatus } from "./status";
 
@@ -70,6 +71,7 @@ export function SessionView({ session, onForked }: Props) {
             title="Continue from here in a new tab, leaving this session as it is"
             onClick={() => void call(() => api.forkSession(session.id).then(({ id }) => onForked(id)))}
           >
+            <Fork />
             Fork
           </button>
         </div>

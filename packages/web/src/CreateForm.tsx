@@ -15,7 +15,7 @@ import { api, RequestError } from "./api";
 import { sessionsNote } from "./actions";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Breadcrumbs } from "./Breadcrumbs";
-import { Cross, Folder, Plus } from "./icons";
+import { Cross, Folder, Plus, Redo, Save, Close } from "./icons";
 import { Select, type SelectGroup } from "./Select";
 import { COLORS } from "./status";
 
@@ -510,6 +510,7 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
             )}
           </div>
           <button type="button" className="btn btn-secondary" onClick={onCancel}>
+            <Close />
             Cancel
           </button>
           {editing && (
@@ -523,10 +524,12 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
                 void save();
               }}
             >
+              <Save />
               Save
             </button>
           )}
           <button type="submit" className="btn btn-primary" disabled={submitting}>
+            {editing ? <Redo /> : <Plus />}
             {editing ? (submitting ? "Saving…" : "Save and recreate") : submitting ? "Creating…" : "Create sandbox"}
           </button>
         </div>

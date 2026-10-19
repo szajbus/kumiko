@@ -3,7 +3,7 @@ import { WORKSPACE_DIR, type ResumableSession } from "@bentomo/shared";
 import { api, RequestError, type LiveState } from "./api";
 import { Composer } from "./Composer";
 import { sessionTitle } from "./Header";
-import { Trash } from "./icons";
+import { Resume, Trash } from "./icons";
 import { Select } from "./Select";
 
 interface Props {
@@ -140,6 +140,7 @@ export function NewSession({ live, onStarted }: Props) {
                   </div>
                   <div className="resume-actions">
                     <button type="button" className="btn btn-secondary btn-compact" disabled={!runs || resuming !== undefined} onClick={() => void resume(r.id)}>
+                      <Resume />
                       Resume
                     </button>
                     <button type="button" className="icon-btn" title="Delete session" aria-label="Delete session" disabled={resuming !== undefined} onClick={() => void remove(r.id)}>

@@ -77,3 +77,45 @@ export const Pencil = () => (
     <path d="M9.5 2.5l2 2L5 11H3v-2z" fill="none" stroke="#C3C8D1" strokeWidth="1.4" strokeLinejoin="round" />
   </svg>
 );
+
+const stroke = { fill: "none", stroke: "currentColor", strokeWidth: 1.5, strokeLinecap: "round", strokeLinejoin: "round" } as const;
+
+export const Fork = () => (
+  <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+    <circle cx="4" cy="3" r="1.5" {...stroke} />
+    <circle cx="10" cy="3" r="1.5" {...stroke} />
+    <circle cx="7" cy="11.5" r="1.5" {...stroke} />
+    <path d="M4 4.5v1a1.5 1.5 0 0 0 1.5 1.5h3A1.5 1.5 0 0 0 10 5.5v-1M7 7v3" {...stroke} />
+  </svg>
+);
+
+export const Send = () => (
+  <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+    <path d="M7 12V2.5M3 6.5l4-4 4 4" {...stroke} />
+  </svg>
+);
+
+export const Check = () => (
+  <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+    <path d="M2.5 7.5l3 3 6-6.5" {...stroke} />
+  </svg>
+);
+
+export const Save = () => (
+  <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+    <path d="M2.5 3.5a1 1 0 0 1 1-1h6l2 2v6a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1z" {...stroke} />
+    <path d="M4.5 2.5v3h4v-3M4.5 11.5v-3h5v3" {...stroke} />
+  </svg>
+);
+
+export const Resume = () => (
+  <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+    <path d="M4 2.5v9l7-4.5z" {...stroke} />
+  </svg>
+);
+
+export const Close = () => (
+  <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+    <path d="M3 3l8 8M11 3l-8 8" {...stroke} />
+  </svg>
+);
