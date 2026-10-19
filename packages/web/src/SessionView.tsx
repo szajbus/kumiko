@@ -20,6 +20,7 @@ interface Props {
 export function SessionView({ session, onForked }: Props) {
   const stream = useSessionEvents(session.id);
   const chat = useChat(stream.events);
+  const totalCost = useMemo(() => chat.items.reduce((sum, i) => sum + (i.type === "turn" ? (i.costUsd ?? 0) : 0), 0), [chat.items]);
   const [error, setError] = useState<string | undefined>();
   const [model, setModel] = useState("");
   const status = sessionStatus(session.status);
@@ -51,6 +52,11 @@ export function SessionView({ session, onForked }: Props) {
           </span>
         </div>
         <div className="session-controls">
+          {totalCost > 0 && (
+            <span className="mono dim session-cost" title="Total cost of this session">
+              {formatCost(totalCost)}
+            </span>
+          )}
           {session.model && <span className="mono dim session-model">{session.model}</span>}
           <div className="session-picker">
             <Select
@@ -218,10 +224,14 @@ function endedText(reason: string, code?: number): string {
   }
 }
 
+function formatCost(usd: number): string {
+  return `$${usd.toFixed(usd < 0.01 ? 4 : 2)}`;
+}
+
 function TurnFooter({ item }: { item: Extract<ChatItem, { type: "turn" }> }) {
   const parts: string[] = [];
   if (item.durationMs !== undefined) parts.push(formatDuration(item.durationMs));
-  if (item.costUsd) parts.push(`$${item.costUsd.toFixed(item.costUsd < 0.01 ? 4 : 2)}`);
+  if (item.costUsd) parts.push(formatCost(item.costUsd));
   if (item.status === "error") {
     return (
       <div className="chat-error" role="alert">
