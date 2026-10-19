@@ -45,7 +45,6 @@ code, .mono { font-family: var(--mono); }
 [data-shell="electron-darwin"] .app-header :is(a, button) { -webkit-app-region: no-drag; }
 .brand { display: flex; align-items: center; gap: 8px; }
 .brand-name { font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
-.link-back { display: inline-flex; align-items: center; height: 28px; padding: 0 4px; font-size: 13px; font-weight: 500; text-decoration: none; }
 
 /* Buttons */
 .btn {
@@ -76,6 +75,14 @@ code, .mono { font-family: var(--mono); }
 
 /* Pages */
 .page { flex: 1; width: 100%; max-width: 1200px; margin: 0 auto; padding: 28px 24px 40px; display: flex; flex-direction: column; gap: 16px; }
+/* Breadcrumbs sit just above the page title, closer to it than the page's usual gap. */
+.breadcrumbs { margin-bottom: -8px; font-size: 13px; }
+.breadcrumbs ol { display: flex; flex-wrap: wrap; align-items: center; margin: 0; padding: 0; list-style: none; }
+.breadcrumbs li { display: inline-flex; align-items: center; min-width: 0; }
+.breadcrumbs li + li::before { content: "/"; margin: 0 8px; color: var(--border-strong); }
+.breadcrumbs a { color: var(--muted); text-decoration: none; font-weight: 500; }
+.breadcrumbs a:hover { color: var(--text); text-decoration: underline; }
+.breadcrumbs [aria-current] { color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .page-title { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
 .page-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; }
 .page-title-lg { font-size: 24px; }

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { vmName, type LogLine, type SandboxView } from "@bentomo/shared";
 import { SandboxActions, useActions } from "./actions";
 import { api, type LiveState } from "./api";
+import { Breadcrumbs } from "./Breadcrumbs";
 import { Header } from "./Header";
 import { Folder, Pencil } from "./icons";
 import { LogPanel } from "./LogPanel";
@@ -23,20 +24,10 @@ export function SandboxPage({ name, live, onBack, onEdit }: Props) {
 
   return (
     <div className="app">
-      <Header>
-        <a
-          href="#/"
-          className="link-back"
-          onClick={(e) => {
-            e.preventDefault();
-            onBack();
-          }}
-        >
-          ← Back to sandboxes
-        </a>
-      </Header>
+      <Header />
 
       <main className="page">
+        <Breadcrumbs items={[{ label: "Sandboxes", href: "#/" }, { label: name }]} />
         {!sb ? (
           <div className="page-head">
             <div className="detail-title">

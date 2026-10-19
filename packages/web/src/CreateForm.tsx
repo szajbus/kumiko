@@ -12,6 +12,7 @@ import {
 } from "@bentomo/shared";
 import { api, RequestError } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { Breadcrumbs } from "./Breadcrumbs";
 import { Header } from "./Header";
 import { Cross, Folder, Plus } from "./icons";
 import { Select, type SelectGroup } from "./Select";
@@ -229,20 +230,16 @@ export function CreateForm({ editing, onCancel, onCreated }: Props) {
 
   return (
     <div className="app">
-      <Header>
-        <a
-          href="#/"
-          className="link-back"
-          onClick={(e) => {
-            e.preventDefault();
-            onCancel();
-          }}
-        >
-          {editing ? `← Back to ${editing.name}` : "← Back to sandboxes"}
-        </a>
-      </Header>
+      <Header />
 
       <form className="form-main" onSubmit={submit} noValidate>
+        <Breadcrumbs
+          items={
+            editing
+              ? [{ label: "Sandboxes", href: "#/" }, { label: editing.name, href: `#/sandbox/${editing.name}` }, { label: "Edit" }]
+              : [{ label: "Sandboxes", href: "#/" }, { label: "New sandbox" }]
+          }
+        />
         <div className="form-intro">
           {editing ? (
             <>
