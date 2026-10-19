@@ -49,7 +49,7 @@ npm run dev:server
 | Script | Does |
 | --- | --- |
 | `npm run build` | Type-checks and builds every package, including the web UI. |
-| `npm test` | Builds, then runs the adapter and server tests against the fake `limactl`, and the web UI's chat tests. |
+| `npm test` | Builds, then runs the adapter and server tests against the fake `limactl`, and the web UI's tests of its chat, text and project helpers. |
 | `npm run roundtrip` | Build step 1's check against **real Lima**: creates `bm-roundtrip` (Debian 12, writable mount), provisions it with a forwarded variable, then checks exec stdin, stop, start (no re-provisioning) and delete. |
 | `npm run projects-check` | The projects spec's check against **real Lima**: a throwaway clone with same-path mounts, a worktree made in the sandbox that git on the host reads (and the reverse), and `CLAUDE_CONFIG_DIR` writing into the project's Claude home. `--keep` leaves it for checking the Claude login by hand. |
 | `npm run drive -- --sandbox <name>` | Sessions step 1's check against a **running project's sandbox** (`<name>` is the project's): starts Claude, sends two prompts (one reads a forwarded variable), interrupts a third mid-tool-call and sends a fourth, printing every event. `--local` runs `claude` on this machine instead, for trying it from inside a sandbox. |
@@ -64,7 +64,7 @@ packages/server/       HTTP + WS (Hono, ws), projects, host git, operations, lis
 packages/agent/        AgentDriver interface, Claude Code stream-json driver, a fake claude for tests
 packages/sandbox/      SandboxProvider interface, Lima adapter, metadata files
 packages/web/          React + Vite UI
-packages/shared/       API and event types
+packages/shared/       API and event types, and the project helpers server and UI share
 ```
 
 State, all under `~/.bentomo` (`BENTOMO_HOME` overrides it; `LIMA_HOME` moves Lima's):
@@ -81,6 +81,8 @@ Lima owns the sandboxes (`~/.lima/bm-*`). Operation logs and live agent sessions
 
 If a sandbox's JSON file exists but can't be read (edited by hand, not JSON), the project shows "Record unreadable", its page says which file and why, and Edit and Recreate refuse until the file is fixed or deleted. It still starts.
 
+If a project's own file can't be used (not JSON, an `id` that isn't its file name, no clone or worktrees path), the project isn't listed. The Projects page says which file and why in a banner, requests for the project answer 409 with the same reason, and its name stays taken. Fix the file, or delete it to drop the project.
+
 There is no migration from the sandboxes of earlier versions: `bm-` sandboxes without a project aren't listed. Delete them with `limactl delete`.
 
 ## Notes on projects
@@ -88,7 +90,7 @@ There is no migration from the sandboxes of earlier versions: `bm-` sandboxes wi
 The spec's model, as built:
 
 - **Creating a project** (`POST /api/projects`, the **New project** form) takes a **host directory** (the clone) and a name, defaulting to the folder's name. The rest of the form, under **Sandbox**, is the sandbox's settings, the same as before: template, resources, extra mounts, variables and the provisioning script.
-  - Bentomo checks the clone with git on the host. It must be the top folder of a non-bare repository's main working tree: not a subfolder, not a linked worktree. It must not already be a project. Its real path is used (`/tmp` on macOS is `/private/tmp`), since a worktree's `.git` file holds real paths.
+  - Bentomo checks the clone with git on the host. It must be the top folder of a non-bare repository's main working tree: not a subfolder, not a linked worktree. It must not already be a project, and the name must be free: of two creates racing for one name, the loser gets a 409. Its real path is used (`/tmp` on macOS is `/private/tmp`), since a worktree's `.git` file holds real paths.
   - Then it creates `<clone>__worktrees` if it's missing, seeds the Claude home and writes the project, all before the sandbox is created. If something fails at that point (a name or mount the sandbox can't take, an unwritable parent folder), everything made so far is undone. The worktrees folder is only removed if Bentomo made it and it is still empty.
   - The sandbox is then created in the background, as before.
 - **Mounts**: the clone and its worktrees folder at the **same absolute paths** as on the host, writable, and the Claude home at `~/.claude`. These three are always there: the form lists them under **Default mounts** but can't change them. **Extra mounts** default to the same path too. The sandbox works in the clone: provisioning, sessions and interactive shells start there.
@@ -97,6 +99,7 @@ The spec's model, as built:
   - The home is never the host's `~/.claude`.
   - Its `CLAUDE.md` is copied from the template once, then it's yours. It imports `bentomo.md`, which Bentomo rewrites on every sandbox start and session start with the worktree convention and the project's real paths.
   - Login is per project, and done from a session. When Claude answers that it isn't logged in, that turn shows as one card, "Claude isn't logged in", in place of Claude's reply and the failed turn. If the prompt was sent while the tab was open, the login dialog opens straight away; otherwise the card has **Log in**. Typing `/login`, which headless Claude can't run itself, opens it too. Once logged in, the card turns green and says who as.
+    - Only the last of these cards shows. Before it does, Bentomo asks whether the project is logged in now (`GET /api/sessions/:id/login`, `claude auth status`, given 30 seconds): if it was logged in since, from another session or before a reload, the card is green straight away. Earlier cards, and one a working turn has answered, are hidden.
     - Bentomo runs `claude auth login` in the sandbox (`POST /api/sessions/:id/login`). It prints a sign-in link and waits for the code the sign-in page shows. The dialog opens the link and takes the code (`POST …/login/code`), which goes to the waiting login on stdin. A wrong code shows Claude's own output. A login waits 10 minutes for its code, closing the dialog cancels it, and one runs per project: a second session joins it, or hears who the project is logged in as already.
     - The login lands in the project's Claude home, so every session of the project has it, and it survives recreating the sandbox.
     - Then the card offers **Retry** (`POST /api/sessions/:id/retry`): the session's Claude is started again, since a process that started logged out stays that way, and the failed prompt is sent again. It continues Claude's session if a turn ever worked in it, and starts afresh otherwise. The session keeps its tab and chat.
@@ -106,13 +109,13 @@ The spec's model, as built:
   - A worktree also shows whether it is merged into the remote's default branch: `origin/HEAD`, else `origin/main` or `origin/master`. That is as of the last fetch; Bentomo never fetches. A branch still at the commit it was created from isn't counted as merged, since it has nothing in it yet; the branch's reflog says where that was.
   - Squash-merged branches don't show as merged.
   - git runs with `GIT_OPTIONAL_LOCKS=0`, so reading status never takes the index lock from under an agent committing in the sandbox.
-  - The project page reads worktrees every 10 seconds while it is open and the window is visible.
+  - The project page reads worktrees every 10 seconds while it is open and the window is visible. That reads the project's file and runs git, without asking Lima.
 - **Waiting on you**:
   - A session waits on the user when Claude has finished a turn, or the session stopped by itself, and nobody has looked at it since (`unread` on the session).
   - Claude runs with permissions bypassed, so there are no permission prompts to wait on; a finished turn is how it asks for an answer.
   - Opening the session's tab, with the window visible, clears it (`POST /api/sessions/:id/seen`). Projects carry a `waiting` count. Tabs show waiting sessions in amber.
 - **Missing sandbox**: a project whose sandbox doesn't exist (`limactl create` failed, or it was deleted outside Bentomo) shows as "No sandbox" and can be recreated from its stored spec, or from the defaults if there is none. A failed create now keeps the stored spec for that.
-- **Missing folders**: if the clone or the worktrees folder is gone, the project says so, and Start and Recreate refuse until it's back. Lima's own error would be cryptic.
+- **Missing folders**: if the clone or the worktrees folder is gone, the project says so, and Start, Recreate and Save and recreate refuse until it's back. Lima's own error would be cryptic.
 - **Deleting a project** removes its sandbox, its Claude home and its saved sessions, after confirmation. The clone and its worktrees are never touched.
 
 ## Notes on the implementation
@@ -129,7 +132,6 @@ Beyond the spec:
   - Every start creates it if it's missing, and hands it to the sandbox user if they can't write to it.
   - Interactive shells start there too. Without `--workdir`, `limactl shell` tries the host's current directory and home, which rarely exist in the sandbox, and falls back to `~`. Each start writes `~/.config/bentomo/shell.sh`, sourced at the end of `~/.bashrc`, which moves a shell that lands in `~` to the working directory. A shell sent anywhere else stays there.
 - **Mount paths in the sandbox:** `~/…` means the sandbox user's home; it becomes Lima's `{{.Home}}`. Sandbox paths can't be `/` or `~` and can't overlap. Mounts saved without a sandbox path keep the host path.
-
 - **`SandboxProvider`** has more methods: `validate` and `validateEdit` (so the server can answer `400` before going async), `edit` and `templates`. There is no separate "re-run provisioning": a sandbox is provisioned once, and a changed or fixed script runs by recreating it.
 - **Claude Code is always installed**, as the first provisioning step before the user's script.
   - It uses the official native installer (`curl -fsSL https://claude.ai/install.sh | bash`), which puts it in `~/.local/bin` and needs no Node. curl is installed with apt if missing.
