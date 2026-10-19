@@ -47,10 +47,11 @@ function createWindow(url: string) {
     }
   });
   // Cmd/Ctrl+W closes the current tab, not the window; intercept it before the default menu accelerator does.
+  // With Shift (the menu's Close Window on macOS) it also deletes the session.
   win.webContents.on("before-input-event", (e, input) => {
-    if (input.type === "keyDown" && (input.meta || input.control) && !input.shift && !input.alt && input.code === "KeyW") {
+    if (input.type === "keyDown" && (input.meta || input.control) && !input.alt && input.code === "KeyW") {
       e.preventDefault();
-      win?.webContents.send("bentomo:close-tab");
+      win?.webContents.send("bentomo:close-tab", input.shift);
     }
   });
   win.on("closed", () => (win = undefined));

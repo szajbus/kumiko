@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SessionInfo } from "@bentomo/shared";
-import { api, useLiveState } from "./api";
+import { api, RequestError, useLiveState } from "./api";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { CreateForm } from "./CreateForm";
-import { Header, type TabId } from "./Header";
+import { Header, sessionTitle, type TabId } from "./Header";
 import { NewSession } from "./NewSession";
 import { SandboxList } from "./SandboxList";
 import { SandboxPage } from "./SandboxPage";
@@ -44,6 +45,8 @@ export function App() {
   // Sessions being closed leave the tabs at once, without waiting for the server to confirm.
   const [ending, setEnding] = useState<ReadonlySet<string>>(new Set());
   const sessions = useMemo(() => live.sessions.filter((s) => !ending.has(s.id)), [live.sessions, ending]);
+  // The session whose Cmd+Shift+W is waiting for confirmation.
+  const [deleting, setDeleting] = useState<SessionInfo | undefined>();
   const [newSessionOpen, setNewSessionOpen] = useState(() => parseHash().view === "new-session");
   // Sessions this window just started: their tab opens before the session list may have caught up.
   const started = useRef(new Set<string>());
@@ -85,6 +88,25 @@ export function App() {
     );
   };
 
+  /** Closes a session's tab, then forgets its saved copy too, so it can't be resumed. */
+  const deleteSession = async (s: SessionInfo) => {
+    leave(`session:${s.id}`);
+    setEnding((all) => new Set(all).add(s.id));
+    try {
+      await api.endSession(s.id);
+    } catch {
+      return setEnding((all) => {
+        const rest = new Set(all);
+        rest.delete(s.id);
+        return rest;
+      });
+    }
+    // 404: Claude never answered, so nothing was saved.
+    await api.deleteSavedSession(s.id).catch((err) => {
+      if (!(err instanceof RequestError && err.status === 404)) console.error(err);
+    });
+  };
+
   const close = (tab: TabId) => {
     if (tab === "new-session") {
       setNewSessionOpen(false);
@@ -96,8 +118,13 @@ export function App() {
   };
 
   // Keyboard shortcuts act on the latest render's state, so the listeners below are installed once.
-  const shortcut = useRef<(action: "new" | "next" | "prev" | "close" | number) => void>(() => {});
+  const shortcut = useRef<(action: "new" | "next" | "prev" | "close" | "delete" | number) => void>(() => {});
   shortcut.current = (action) => {
+    if (deleting) return;
+    if (action === "delete") {
+      const current = tabOf(route);
+      return setDeleting(sessions.find((x) => `session:${x.id}` === current));
+    }
     if (action === "new") return go("#/session/new");
     // Cmd+1..9 jump to the nth session tab.
     if (typeof action === "number") {
@@ -118,7 +145,7 @@ export function App() {
       // e.code, because Shift turns "[" into "{" and layouts differ.
       const digit = !e.shiftKey && /^Digit[1-9]$/.test(e.code) ? Number(e.code.slice(5)) : undefined;
       const action = digit ?? e.shiftKey
-        ? e.code === "BracketRight" ? "next" : e.code === "BracketLeft" ? "prev" : undefined
+        ? e.code === "BracketRight" ? "next" : e.code === "BracketLeft" ? "prev" : e.code === "KeyW" ? "delete" : undefined
         : e.code === "KeyT" ? "new" : e.code === "KeyW" ? "close" : undefined;
       if (!action) return;
       e.preventDefault();
@@ -126,7 +153,7 @@ export function App() {
     };
     addEventListener("keydown", onKey);
     // Electron's menu claims Cmd+W for closing the window, so the shell forwards it instead.
-    const offClose = window.bentomo?.onCloseTab?.(() => shortcut.current("close"));
+    const offClose = window.bentomo?.onCloseTab?.((deleteToo) => shortcut.current(deleteToo ? "delete" : "close"));
     return () => {
       removeEventListener("keydown", onKey);
       offClose?.();
@@ -154,6 +181,24 @@ export function App() {
         <div hidden={route.view !== "new-session"}>
           <NewSession live={live} onStarted={(id) => onSessionStarted(id)} />
         </div>
+      )}
+      {deleting && (
+        <ConfirmDialog
+          title="Delete this session?"
+          confirmLabel="Delete session"
+          danger
+          enterConfirms
+          onCancel={() => setDeleting(undefined)}
+          onConfirm={() => {
+            const s = deleting;
+            setDeleting(undefined);
+            void deleteSession(s);
+          }}
+        >
+          <p>
+            <strong>{sessionTitle(deleting)}</strong> closes and its saved chat is deleted, so it can't be resumed.
+          </p>
+        </ConfirmDialog>
       )}
       <Body
         route={route}
