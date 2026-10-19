@@ -1,2 +1,5 @@
-/** Text waiting to be put into a new session's composer: what a rewind took out of the conversation, to edit and send again. */
+/**
+ * Unsent text per composer, kept while it is unmounted (switching tabs). A rewind also puts the message it took out
+ * of the conversation here, under the new session's id, for its composer to start with.
+ */
 export const drafts = new Map<string, string>();

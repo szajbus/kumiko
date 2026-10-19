@@ -26,9 +26,6 @@ export function SessionView({ session, onForked }: Props) {
   const totalCost = useMemo(() => chat.items.reduce((sum, i) => sum + (i.type === "turn" ? (i.costUsd ?? 0) : 0), 0), [chat.items]);
   const [error, setError] = useState<string | undefined>();
   const [model, setModel] = useState("");
-  // Set when this tab was opened by a rewind: the message that was rewound to, ready to edit.
-  const [draft] = useState(() => drafts.get(session.id));
-  useEffect(() => () => void drafts.delete(session.id), [session.id]);
   // The message a rewind was asked for, until it is confirmed or dropped.
   const [rewinding, setRewinding] = useState<Extract<ChatItem, { type: "user" }> | undefined>();
   const [restoreFiles, setRestoreFiles] = useState(false);
@@ -126,7 +123,6 @@ export function SessionView({ session, onForked }: Props) {
           label="Message Claude"
           commands={session.commands}
           suggestion={chat.suggestion}
-          initialText={draft}
           draftKey={session.id}
           submitLabel="Send"
           placeholder={live ? "Message Claude…" : "This session has ended."}

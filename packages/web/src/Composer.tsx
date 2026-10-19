@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { drafts } from "./drafts";
 import { Send } from "./icons";
 
 interface Props {
@@ -16,15 +17,11 @@ interface Props {
   commands?: string[];
   /** A guess at the next message, shown dimmed while the box is empty: Tab takes it into the box, Backspace drops it. */
   suggestion?: string;
-  /** The box starts with this text, and the cursor at its end. */
-  initialText?: string;
-  /** Remembers the unsent text under this key while the composer is unmounted (switching tabs). */
+  /** Keeps the unsent text in `drafts` under this key, and starts from what is there, with the cursor at its end. */
   draftKey?: string;
   /** Shown at the left of the line under the box, opposite the key hint. */
   footer?: ReactNode;
 }
-
-const drafts = new Map<string, string>();
 
 const MAX_HEIGHT = 240;
 const MAX_SUGGESTIONS = 8;
@@ -38,8 +35,8 @@ export function matchCommands(commands: string[], typed: string): string[] {
 }
 
 /** A prompt box: Enter sends, Shift+Enter adds a line. Used by the New session tab and the chat. */
-export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder, autoFocus, label, commands, suggestion, initialText, draftKey, footer }: Props) {
-  const [text, setTextState] = useState(() => initialText || (draftKey && drafts.get(draftKey)) || "");
+export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder, autoFocus, label, commands, suggestion, draftKey, footer }: Props) {
+  const [text, setTextState] = useState(() => (draftKey && drafts.get(draftKey)) || "");
   const setText = (value: string) => {
     setTextState(value);
     if (!draftKey) return;
@@ -54,10 +51,10 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
   const ghost = !text && suggestion && suggestion !== dropped ? suggestion : undefined;
   const box = useRef<HTMLTextAreaElement>(null);
 
-  // A starting text is meant to be edited, so the cursor goes after it.
+  // A starting text is meant to be carried on with, so the cursor goes after it.
   useEffect(() => {
     const el = box.current;
-    if (el && initialText) el.setSelectionRange(el.value.length, el.value.length);
+    if (el?.value) el.setSelectionRange(el.value.length, el.value.length);
     // Only on mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
