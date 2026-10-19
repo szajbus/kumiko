@@ -251,3 +251,26 @@ describe("server errors", () => {
     }
   });
 });
+
+describe("web UI", () => {
+  it("serves files, falls back to index.html, and 404s malformed paths", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bentomo-web-"));
+    const web = join(root, "web");
+    await mkdir(join(web, "assets"), { recursive: true });
+    await writeFile(join(web, "index.html"), "<p>app</p>");
+    await writeFile(join(web, "assets", "a.js"), "1");
+    process.env.FAKE_LIMA_DIR = join(root, "lima");
+    await mkdir(process.env.FAKE_LIMA_DIR);
+    const provider = new LimaProvider({ limactl: join(fixtures, "fake-limactl.mjs"), metadata: new MetadataStore(join(root, "sandboxes")) });
+    const server = await startServer({ provider, port: 0, webDir: web, sessionsDir: join(root, "sessions") });
+    try {
+      const asset = await fetch(`${server.url}/assets/a.js`);
+      assert.equal(asset.headers.get("cache-control"), "public, max-age=31536000, immutable");
+      assert.equal(await asset.text(), "1");
+      assert.equal(await (await fetch(`${server.url}/sandbox/x`)).text(), "<p>app</p>");
+      assert.equal((await fetch(`${server.url}/%E0%A4%A`)).status, 404);
+    } finally {
+      await server.close();
+    }
+  });
+});

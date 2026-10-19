@@ -21,7 +21,7 @@ type Route =
 function parseHash(): Route {
   if (location.hash === "#/new") return { view: "new" };
   if (location.hash === "#/session/new") return { view: "new-session" };
-  const s = /^#\/session\/([0-9a-f]+)$/.exec(location.hash);
+  const s = /^#\/session\/([0-9a-f]{1,64})$/.exec(location.hash);
   if (s) return { view: "session", id: s[1] };
   const m = /^#\/sandbox\/([a-z0-9-]+)(\/edit)?$/.exec(location.hash);
   if (!m) return { view: "list" };

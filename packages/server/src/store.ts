@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { SessionEvent, SessionInfo } from "@bentomo/shared";
+import { SESSION_ID_PATTERN, type SessionEvent, type SessionInfo } from "@bentomo/shared";
 
 export function defaultSessionsDir(): string {
   return join(process.env.BENTOMO_HOME ?? join(homedir(), ".bentomo"), "sessions");
@@ -17,11 +17,14 @@ export interface StoredSession {
 export class SessionStore {
   constructor(readonly dir: string = defaultSessionsDir()) {}
 
+  /** Ids come from URLs, where %2F decodes to "/", so only Bentomo's own id shape may name a file. */
   private file(id: string): string {
+    if (!SESSION_ID_PATTERN.test(id)) throw new Error(`Not a session id: ${id}`);
     return join(this.dir, `${id}.json`);
   }
 
   async read(id: string): Promise<StoredSession | undefined> {
+    if (!SESSION_ID_PATTERN.test(id)) return undefined;
     try {
       const stored = JSON.parse(await readFile(this.file(id), "utf8")) as StoredSession;
       return stored?.info?.id === id && Array.isArray(stored.events) ? stored : undefined;

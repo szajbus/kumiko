@@ -6,6 +6,9 @@ export const VM_PREFIX = "bm-";
 /** Short sandbox names: lowercase letters, digits and dashes, not starting or ending with a dash. */
 export const NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,28}[a-z0-9])?$/;
 
+/** Bentomo's own session ids (not Claude's): lowercase hex. Checked before an id names a file or a socket. */
+export const SESSION_ID_PATTERN = /^[0-9a-f]{1,64}$/;
+
 /** Variable names that can be forwarded from the host. */
 export const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 

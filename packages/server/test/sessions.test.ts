@@ -319,6 +319,9 @@ describe("sessions", () => {
     assert.equal((await api(`/api/sessions/saved/${id}`, { method: "DELETE" })).status, 200);
     assert.ok(!(await saved()).includes(id));
     assert.equal((await api(`/api/sessions/saved/${id}`, { method: "DELETE" })).status, 404);
+    // %2F decodes to "/" in route params; such an id must not reach the file system.
+    assert.equal((await api("/api/sessions/saved/..%2Fsessions%2Fx", { method: "DELETE" })).status, 404);
+    assert.equal((await api("/api/sessions/..%2Fx/resume", { method: "POST" })).status, 404);
 
     await create("doomed");
     const doomed = await startSession("doomed", "going away");

@@ -10,6 +10,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import {
   ENV_NAME_PATTERN,
   NAME_PATTERN,
+  SESSION_ID_PATTERN,
   vmName,
   WORKSPACE_DIR,
   type AccountUsage,
@@ -398,9 +399,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   const sessionSockets = new Set<WebSocket>();
   server.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url ?? "/", "http://localhost");
-    const sessionId = /^\/api\/sessions\/([0-9a-f]+)\/events$/.exec(url.pathname)?.[1];
+    const sessionId = /^\/api\/sessions\/([^/]+)\/events$/.exec(url.pathname)?.[1];
     // An unknown session is accepted and closed with 4404, which a browser can see; an HTTP 404 would look like a network error.
-    if ((url.pathname !== "/api/events" && !sessionId) || !isLocalRequest(req.headers)) {
+    if ((url.pathname !== "/api/events" && !(sessionId && SESSION_ID_PATTERN.test(sessionId))) || !isLocalRequest(req.headers)) {
       socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
       socket.destroy();
       return;

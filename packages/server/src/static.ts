@@ -18,7 +18,12 @@ const TYPES: Record<string, string> = {
 export function serveWeb(root: string) {
   const base = normalize(root + sep);
   return async (c: Context) => {
-    const path = decodeURIComponent(new URL(c.req.url).pathname);
+    let path: string;
+    try {
+      path = decodeURIComponent(new URL(c.req.url).pathname);
+    } catch {
+      return c.notFound(); // malformed percent-encoding
+    }
     let file = normalize(join(base, path));
     if (!file.startsWith(base)) return c.notFound();
     try {
