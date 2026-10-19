@@ -95,6 +95,19 @@ describe("chat", () => {
     assert.deepEqual(tool.result, { text: "a\nb", isError: true });
   });
 
+  it("leaves out text Claude adds for itself, like a skill's instructions", () => {
+    const s = fold([
+      assistant("m1", [{ type: "tool_use", id: "t1", name: "Skill", input: { skill: "hello" } }]),
+      claude({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "Launching skill: hello" }] } }),
+      claude({ type: "user", isSynthetic: true, message: { content: [{ type: "text", text: "Base directory for this skill: /x\n\nSay hi." }] } }),
+      claude({ type: "user", isSynthetic: true, message: { content: "Say hi." } }),
+    ]);
+    assert.deepEqual(ofType(s, "notice"), []);
+    const [tool] = blocksOf(ofType(s, "assistant")[0]);
+    assert.ok(tool.type === "tool");
+    assert.equal(tool.result?.text, "Launching skill: hello");
+  });
+
   it("marks a prompt rewindable once Claude echoes it", () => {
     const s = fold([{ kind: "user_prompt", payload: { text: "hi", id: "p1" } }, claude({ type: "user", isReplay: true, uuid: "p1", message: { content: "hi" } })]);
     const users = ofType(s, "user");

@@ -203,13 +203,15 @@ function applyClaude(s: ChatState, m: Json & { type: string }, key: string): Cha
         items[index] = { ...(items[index] as Extract<ChatItem, { type: "user" }>), replayed: true };
         return { ...s, items };
       }
+      // Text Claude adds on its own, like a skill's instructions after the Skill tool runs, is for Claude, not the reader.
+      const synthetic = m.isSynthetic === true;
       const content = obj(m.message).content;
-      if (typeof content === "string") return { ...s, items: [...s.items, { type: "notice", key, text: content }] };
+      if (typeof content === "string") return synthetic ? s : { ...s, items: [...s.items, { type: "notice", key, text: content }] };
       if (!Array.isArray(content)) return s;
       let next = s;
       for (const raw of content) {
         const c = obj(raw);
-        if (c.type === "text" && str(c.text)) {
+        if (c.type === "text" && str(c.text) && !synthetic) {
           next = { ...next, items: [...next.items, { type: "notice", key: `${key}-${next.items.length}`, text: str(c.text)! }] };
         } else if (c.type === "tool_result") {
           const toolId = str(c.tool_use_id) ?? "";
