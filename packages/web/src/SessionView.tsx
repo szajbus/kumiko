@@ -90,15 +90,11 @@ export function SessionView({ session, onForked }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, session.id]);
 
-  // When a prompt sent while this tab is open fails for want of a login, the login opens straight away. Replaying an
-  // old session's chat doesn't: Claude has to have been working since the tab opened.
-  const sawWork = useRef(false);
-  if (session.status === "running" || session.status === "starting") sawWork.current = true;
+  // When a prompt sent while this tab is open fails for want of a login, the login opens straight away. A card in the
+  // history replayed on opening the tab doesn't, even while Claude is still working past it.
   useEffect(() => {
-    if (!open || !sawWork.current) return;
-    sawWork.current = false;
-    setLoggingIn(true);
-  }, [open]);
+    if (open && stream.history !== undefined && Number(open) > stream.history) setLoggingIn(true);
+  }, [open, stream.history]);
 
   const call = async (fn: () => Promise<unknown>): Promise<boolean> => {
     setError(undefined);

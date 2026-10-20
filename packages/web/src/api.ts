@@ -179,6 +179,8 @@ export interface SessionStream {
   connected: boolean;
   /** The server doesn't know this session (it was removed, or the server restarted). */
   gone: boolean;
+  /** The last `seq` of the history replayed on connecting, once it's in; later events are new work. */
+  history?: number;
 }
 
 /**
@@ -200,6 +202,7 @@ export function useSessionEvents(id: string): SessionStream {
     const connect = () => {
       // What the server replays is held back until it has caught up, then shown at once: history, not new work.
       let backlog: SessionEvent[] | undefined = [];
+      const replay = lastSeq === 0;
       ws = new WebSocket(wsUrl(`/api/sessions/${id}/events?after=${lastSeq}`));
       ws.onopen = () => {
         retry = 0;
@@ -210,7 +213,7 @@ export function useSessionEvents(id: string): SessionStream {
         if (ev.kind === "caught_up") {
           const caught = backlog ?? [];
           backlog = undefined;
-          if (caught.length) setState((s) => ({ ...s, events: [...s.events, ...caught] }));
+          if (caught.length || replay) setState((s) => ({ ...s, events: [...s.events, ...caught], history: replay ? lastSeq : s.history }));
           return;
         }
         if (ev.seq <= lastSeq) return;
