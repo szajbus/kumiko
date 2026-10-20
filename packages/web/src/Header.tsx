@@ -123,12 +123,11 @@ export function Header({ sessions, newSessions, order, active, onSelect, onClose
   );
 }
 
-/** The way to the Projects pages: always first, never closes or moves. */
+/** The way to the Projects pages: always first, never closes or moves. Icon only, so its name lives in aria-label and title. */
 function HomeButton({ active, onSelect }: { active: boolean; onSelect(): void }) {
   return (
-    <button type="button" className={`home-button${active ? " is-active" : ""}`} aria-current={active ? "page" : undefined} title="Projects" onClick={onSelect}>
+    <button type="button" className={`home-button${active ? " is-active" : ""}`} aria-current={active ? "page" : undefined} aria-label="Projects" title="Projects" onClick={onSelect}>
       <Logo size={16} />
-      <span>Projects</span>
     </button>
   );
 }
