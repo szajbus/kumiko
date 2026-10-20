@@ -1,5 +1,6 @@
 import type { AddressInfo } from "node:net";
 import { homedir } from "node:os";
+import { join } from "node:path";
 import type { Server } from "node:http";
 import { serve } from "@hono/node-server";
 import { Hono, type Context } from "hono";
@@ -22,6 +23,7 @@ import {
   type LoginAccount,
   type LoginStartResponse,
   type LoginStatusResponse,
+  type PromptRequest,
   type OpKind,
   type Project,
   type ProjectEdit,
@@ -38,6 +40,7 @@ import {
 } from "@bentomo/shared";
 import { LimaProvider, validateSpec, type Log, type SandboxProvider } from "@bentomo/sandbox";
 import { ClaudeDriver, type AgentDriver } from "@bentomo/agent";
+import { AttachmentRefused, AttachmentStore } from "./attachments.js";
 import { GitError, worktreeStatuses } from "./git.js";
 import { isLocalRequest } from "./guard.js";
 import { LoginFailed, Logins } from "./logins.js";
@@ -88,6 +91,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   const projects = new ProjectStore(opts.dataDir);
   const logins = new Logins(provider.exec.bind(provider));
   const sessionStore = new SessionStore(opts.sessionsDir);
+  // Files sent with prompts are kept as long as a saved session names them.
+  const attachments = new AttachmentStore(join(sessionStore.dir, "attachments"));
+  await attachments.sweep((await sessionStore.readAll()).flatMap((s) => s.events));
   const tabs = new TabsStore(opts.dataDir);
   const sessions = new Sessions(opts.driver ?? (() => new ClaudeDriver(provider.exec.bind(provider))), sessionStore);
   const clients = new Set<WebSocket>();
@@ -203,6 +209,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
 
   app.onError((err, c) => {
     if (err instanceof HttpError) return c.json(fail(err.message, err.details), err.status);
+    if (err instanceof AttachmentRefused) return c.json(fail(err.message), 400);
     if (err instanceof LoginFailed) return c.json(fail(err.message, err.output), 422);
     if (err instanceof BusyError || err instanceof ProjectExists || err instanceof ProjectRecordError) return c.json(fail(err.message), 409);
     if (err instanceof SessionNotFound) return c.json(fail(err.message), 404);
@@ -452,11 +459,12 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     const req = await body<StartSessionRequest>(c, "Body must be JSON: { sandbox, prompt }.");
     const name = String(req?.sandbox ?? "");
     const prompt = typeof req?.prompt === "string" ? req.prompt.trim() : "";
-    if (!prompt) throw new HttpError(400, "The opening prompt is empty.");
+    if (!prompt && !req?.attachments?.length) throw new HttpError(400, "The opening prompt is empty.");
     const model = typeof req?.model === "string" && req.model && req.model !== "default" ? req.model : undefined;
     if (model && !/^[\w.\[\]-]+$/.test(model)) throw new HttpError(400, `Not a model: ${model}`);
     const ready = await readyProject(name);
-    const session = sessions.start({ sandbox: name, workdir: ready.workdir, env: ready.env, prompt, model });
+    const sent = await attachments.take(req.attachments);
+    const session = sessions.start({ sandbox: name, workdir: ready.workdir, env: ready.env, prompt, model, ...sent });
     return c.json({ id: session.id }, 201);
   });
 
@@ -486,10 +494,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
 
   app.post("/api/sessions/:id/prompt", async (c) => {
     const { id } = sessionOf(c);
-    const req = await c.req.json<{ text?: unknown }>().catch(() => ({}) as { text?: unknown });
+    const req = await c.req.json<Partial<PromptRequest>>().catch(() => ({}) as Partial<PromptRequest>);
     const text = typeof req.text === "string" ? req.text.trim() : "";
-    if (!text) throw new HttpError(400, "The prompt is empty.");
-    sessions.prompt(id, text);
+    if (!text && !req.attachments?.length) throw new HttpError(400, "The prompt is empty.");
+    const sent = await attachments.take(req.attachments);
+    sessions.prompt(id, text, sent.attachments, sent.files);
     return c.json({ ok: true }, 202);
   });
 
@@ -508,8 +517,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     const req = await c.req.json<{ prompt?: unknown; files?: unknown }>().catch(() => ({}) as { prompt?: unknown; files?: unknown });
     if (typeof req.prompt !== "string" || !req.prompt) throw new HttpError(400, "Which message to rewind to?");
     const ready = await readyProject(from.sandbox);
-    const { text } = await sessions.rewind(from.id, req.prompt, ready.env, { files: req.files === true });
-    return c.json({ text } satisfies RewindResponse);
+    return c.json((await sessions.rewind(from.id, req.prompt, ready.env, { files: req.files === true })) satisfies RewindResponse);
   });
 
   // A login is the project's: its Claude home holds it, so every session of the project shares it. It is started from
@@ -554,8 +562,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     const { id, sandbox } = sessionOf(c);
     const ready = await readyProject(sandbox);
     const last = sessions.events(id).findLast((e) => e.kind === "user_prompt");
+    // Read before the swap, so a file that is gone fails the retry instead of sending the prompt without it.
+    const files = last?.kind === "user_prompt" ? await attachments.load(last.payload.attachments) : [];
     sessions.relaunch(id, ready.env);
-    if (last?.kind === "user_prompt") sessions.prompt(id, last.payload.text);
+    if (last?.kind === "user_prompt") sessions.prompt(id, last.payload.text, last.payload.attachments, files);
     return c.json({ ok: true }, 202);
   });
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -462,6 +462,59 @@ describe("sessions", () => {
       await rm(join(claudeHome, ".require-login"), { force: true });
       await rm(join(claudeHome, ".credentials.json"), { force: true });
     }
+  });
+
+  it("sends files with prompts, keeps only their names, and sends them again on retry and after a rewind", async () => {
+    const png = Buffer.concat([Buffer.from("\x89PNG\r\n\x1a\n", "latin1"), Buffer.alloc(100, 7)]);
+    const notes = Buffer.from("secret word: OCTOPUS\n");
+    const res = await api("/api/sessions", { method: "POST", body: JSON.stringify({ sandbox: "one", prompt: "look", attachments: [{ name: "shot.png", data: png.toString("base64") }] }) });
+    assert.equal(res.status, 201);
+    const id = (await json(res)).id as string;
+    const s = await listen(id);
+    const said = (text: string) => waitFor(() => s.got.some((e) => e.kind === "claude" && e.payload.type === "result" && e.payload.result === text));
+    await said("You said: look [with image/png (108 bytes)]");
+    const idle = () => waitFor(async () => { const i = await session(id); return i?.status === "idle" && i.claudeSessionId ? i : undefined; });
+    await idle();
+
+    // The session names its files; their bytes are kept beside the saved sessions, once, under their hash.
+    const first = s.got.find((e) => e.kind === "user_prompt");
+    assert.ok(first?.kind === "user_prompt");
+    const [shot] = first.payload.attachments ?? [];
+    assert.deepEqual({ ...shot, hash: undefined }, { name: "shot.png", kind: "image", mediaType: "image/png", size: 108, hash: undefined });
+    assert.deepEqual(await readFile(join(sessionsDir, "attachments", shot.hash)), png);
+    assert.ok(!JSON.stringify(s.got).includes(png.toString("base64")), "Claude's echo of the prompt loses the bytes");
+
+    // Files alone make a prompt.
+    const prompt = (body: object) => api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify(body) });
+    assert.equal((await prompt({ text: "", attachments: [{ name: "notes.txt", data: notes.toString("base64") }] })).status, 202);
+    await said("You said:  [with notes.txt (21 bytes)]");
+    await idle();
+    const saved = await waitFor(async () => { const f = await readFile(join(sessionsDir, `${id}.json`), "utf8"); return f.includes("notes.txt") ? f : undefined; });
+    assert.ok(!saved.includes(notes.toString("base64")) && !saved.includes("OCTOPUS"), "the saved chat names the files only");
+
+    // Files Claude can't read, too much at once, and files the server doesn't have are refused, and nothing is sent.
+    const refused = async (attachments: object[], pattern: RegExp) => {
+      const r = await prompt({ text: "no", attachments });
+      assert.equal(r.status, 400);
+      assert.match((await json(r)).error, pattern);
+    };
+    await refused([{ name: "app.bin", data: Buffer.from([0, 1, 2]).toString("base64") }], /app\.bin can't be attached/);
+    await refused([{ name: "big.txt", data: Buffer.alloc(300 * 1024, 97).toString("base64") }], /big\.txt is too big/);
+    await refused([{ name: "gone.png", hash: "0".repeat(64) }], /gone\.png is no longer on the server/);
+    await refused([{ name: "x" }], /needs its data/);
+
+    // A retry sends the last prompt again, with its files.
+    assert.equal((await api(`/api/sessions/${id}/retry`, { method: "POST" })).status, 202);
+    await waitFor(() => s.got.filter((e) => e.kind === "claude" && e.payload.type === "result" && e.payload.result === "You said:  [with notes.txt (21 bytes)]").length === 2);
+    await idle();
+
+    // A rewind hands the files back, and they can be sent again by hash alone.
+    const rewound = await json(await api(`/api/sessions/${id}/rewind`, { method: "POST", body: JSON.stringify({ prompt: first.payload.id }) }));
+    assert.deepEqual(rewound, { text: "look", attachments: [shot] });
+    assert.equal((await prompt({ text: "look again", attachments: [{ name: shot.name, hash: shot.hash }] })).status, 202);
+    const after = await listen(id);
+    await waitFor(() => after.got.some((e) => e.kind === "claude" && e.payload.type === "result" && e.payload.result === "You said: look again [with image/png (108 bytes)]"));
+    await api(`/api/sessions/${id}`, { method: "DELETE" });
   });
 
   it("ends every live session when the server closes", async () => {

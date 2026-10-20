@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ResumableSession } from "@bentomo/shared";
 import { api, errorMessage, useHome, type LiveState } from "./api";
+import { toInput, type ComposerFile } from "./attachments";
 import { Composer } from "./Composer";
 import { ago, sessionTitle, tilde } from "./format";
 import { Resume, Trash } from "./icons";
@@ -68,10 +69,10 @@ export function NewSession({ live, project: initial, onStarted }: Props) {
     }
   };
 
-  const start = async (prompt: string) => {
+  const start = async (prompt: string, files: ComposerFile[]) => {
     setError(undefined);
     try {
-      const { id } = await api.startSession(sandbox, prompt, model);
+      const { id } = await api.startSession(sandbox, prompt, model, files.map(toInput));
       onStarted(id);
       return true;
     } catch (err) {

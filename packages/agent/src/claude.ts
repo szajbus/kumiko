@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { eachLine } from "@bentomo/sandbox";
-import type { AgentDriver, AgentEvent, AgentMessage, Exec, StartOptions } from "./driver.js";
+import type { AgentDriver, AgentEvent, AgentFile, AgentMessage, Exec, StartOptions } from "./driver.js";
 
 /**
  * Claude Code in its own streaming mode: one JSON object per line on stdin and stdout, and the process stays alive
@@ -41,9 +41,17 @@ export interface ClaudeDriverOptions {
   graceMs?: number;
 }
 
-/** A stream-json message line for a user prompt, tagged with `uuid` when given. */
-export function userMessage(text: string, uuid?: string): string {
-  return JSON.stringify({ type: "user", ...(uuid ? { uuid } : {}), message: { role: "user", content: [{ type: "text", text }] } }) + "\n";
+/** A file as a content block of its own, the way the API takes it: images and PDFs in base64, text as a titled document. */
+export function fileBlock(file: AgentFile): Record<string, unknown> {
+  if (file.mediaType.startsWith("image/")) return { type: "image", source: { type: "base64", media_type: file.mediaType, data: file.data.toString("base64") } };
+  if (file.mediaType === "application/pdf") return { type: "document", title: file.name, source: { type: "base64", media_type: file.mediaType, data: file.data.toString("base64") } };
+  return { type: "document", title: file.name, source: { type: "text", media_type: "text/plain", data: file.data.toString("utf8") } };
+}
+
+/** A stream-json message line for a user prompt, tagged with `uuid` when given. Files go before the text, as the API recommends. */
+export function userMessage(text: string, uuid?: string, files: AgentFile[] = []): string {
+  const content = [...files.map(fileBlock), ...(text ? [{ type: "text", text }] : [])];
+  return JSON.stringify({ type: "user", ...(uuid ? { uuid } : {}), message: { role: "user", content } }) + "\n";
 }
 
 /** Claude's result text when it isn't signed in, e.g. "Invalid API key · Please run /login". */
@@ -91,7 +99,7 @@ export class ClaudeDriver implements AgentDriver {
     if (this.stderr.length > STDERR_TAIL) this.stderr.shift();
   }
 
-  start({ sandbox, workdir, env, prompt, promptId, resume, fork, resumeAt, model }: StartOptions): void {
+  start({ sandbox, workdir, env, prompt, promptId, files, resume, fork, resumeAt, model }: StartOptions): void {
     if (this.child) throw new Error("This driver has already started.");
     const child = this.exec(sandbox, claudeCommand(resume, fork, resumeAt, model), env, { cwd: workdir });
     this.child = child;
@@ -149,11 +157,11 @@ export class ClaudeDriver implements AgentDriver {
       });
     });
 
-    if (prompt !== undefined) this.send(prompt, promptId);
+    if (prompt !== undefined) this.send(prompt, promptId, files);
   }
 
-  send(text: string, id?: string): void {
-    this.child?.stdin?.write(userMessage(text, id));
+  send(text: string, id?: string, files?: AgentFile[]): void {
+    this.child?.stdin?.write(userMessage(text, id, files));
   }
 
   /** Settles the request a `control_response` answers, if one of ours is waiting; false for any other. */

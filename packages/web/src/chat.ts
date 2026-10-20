@@ -1,4 +1,4 @@
-import type { EndReason, LoginAccount, SessionEvent } from "@bentomo/shared";
+import type { Attachment, EndReason, LoginAccount, SessionEvent } from "@bentomo/shared";
 
 // Turns a session's events into what the chat shows. Claude's stream-json is read loosely: only the fields the
 // chat needs, and anything unexpected is skipped rather than breaking the view.
@@ -15,7 +15,7 @@ export type Block =
 
 export type ChatItem =
   /** A prompt we sent. `id` is what Claude knows it by; `replayed` once Claude has echoed it, which means it can be rewound to. */
-  | { type: "user"; key: string; text: string; id?: string; replayed?: boolean }
+  | { type: "user"; key: string; text: string; id?: string; replayed?: boolean; attachments?: Attachment[] }
   /** One assistant message: finished blocks, then the ones still streaming (by content index). */
   | { type: "assistant"; key: string; final: Block[]; drafts: Block[] }
   | { type: "turn"; key: string; status: "ok" | "interrupted" | "error"; durationMs?: number; costUsd?: number; message?: string }
@@ -184,7 +184,7 @@ export function applyEvent(s: ChatState, ev: SessionEvent): ChatState {
 
   switch (ev.kind) {
     case "user_prompt":
-      return { ...push({ type: "user", key, text: ev.payload.text, id: ev.payload.id }), suggestion: undefined };
+      return { ...push({ type: "user", key, text: ev.payload.text, id: ev.payload.id, ...(ev.payload.attachments ? { attachments: ev.payload.attachments } : {}) }), suggestion: undefined };
     case "interrupt":
       return { ...s, interruptPending: true };
     case "error":

@@ -33,6 +33,28 @@ describe("trimMessage", () => {
     assert.equal(trimMessage(replay), replay);
   });
 
+  it("drops the data of images and documents, in a prompt Claude echoes or in a tool result", () => {
+    const image = { type: "image", source: { type: "base64", media_type: "image/png", data: big } };
+    const m = trimMessage({
+      type: "user",
+      isReplay: true,
+      message: {
+        content: [
+          image,
+          { type: "document", title: "notes.txt", source: { type: "text", media_type: "text/plain", data: big } },
+          { type: "tool_result", tool_use_id: "a", content: [image] },
+          { type: "text", text: "look" },
+        ],
+      },
+    });
+    assert.deepEqual((m.message as { content: unknown[] }).content, [
+      { type: "image", source: { type: "base64", media_type: "image/png" } },
+      { type: "document", title: "notes.txt", source: { type: "text", media_type: "text/plain" } },
+      { type: "tool_result", tool_use_id: "a", content: [{ type: "image", source: { type: "base64", media_type: "image/png" } }] },
+      { type: "text", text: "look" },
+    ]);
+  });
+
   it("keeps short text as it is", () => {
     assert.equal(truncate("short"), "short");
   });

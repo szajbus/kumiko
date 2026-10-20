@@ -13,6 +13,8 @@ export interface StartOptions {
   prompt?: string;
   /** The id `prompt` is known by; see `send`. */
   promptId?: string;
+  /** Files that go with `prompt`. */
+  files?: AgentFile[];
   /** The agent's own id of an earlier session to continue; its history is already in the sandbox. */
   resume?: string;
   /** With `resume`: continue under a new session id, leaving the original as it is. */
@@ -21,6 +23,13 @@ export interface StartOptions {
   resumeAt?: string;
   /** The model to start with (an alias such as "opus"); the agent's default when omitted. */
   model?: string;
+}
+
+/** A file sent with a prompt, for the agent to read itself: an image, a PDF, or text (`text/plain`, UTF-8). */
+export interface AgentFile {
+  name: string;
+  mediaType: string;
+  data: Buffer;
 }
 
 /** One parsed protocol message; every one has a `type`. */
@@ -45,9 +54,9 @@ export interface AgentDriver {
   start(opts: StartOptions): void;
   /**
    * Sends a prompt; it starts a turn, or queues behind the current one. The agent tags the prompt with `id` in its
-   * stream and in its history, which is what `rewindFiles` and `resumeAt` refer to.
+   * stream and in its history, which is what `rewindFiles` and `resumeAt` refer to. `files` go with it.
    */
-  send(text: string, id?: string): void;
+  send(text: string, id?: string, files?: AgentFile[]): void;
   /** Puts the files the agent changed back as they were before prompt `id`. Rejects if the agent has no checkpoint for it. */
   rewindFiles(id: string): Promise<void>;
   /** Ends the current turn but keeps the process. */

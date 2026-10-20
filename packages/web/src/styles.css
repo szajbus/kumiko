@@ -416,6 +416,9 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 }
 .msg-user-row { align-self: flex-end; max-width: 85%; display: flex; align-items: flex-start; gap: 6px; }
 .msg-user-row .msg-user { max-width: none; min-width: 0; }
+.msg-files { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.msg-user-text + .msg-files { margin-top: 8px; }
+.msg-file { padding: 2px 8px; border-radius: 6px; background: #2f3a55; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .msg-actions { flex: none; display: flex; gap: 4px; margin-top: 8px; opacity: 0; }
 .msg-actions .btn { min-height: 0; padding: 4px 7px; border-radius: 6px; }
 .msg-user-row:hover .msg-actions, .msg-actions:focus-within { opacity: 1; }
@@ -494,6 +497,21 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
   border-radius: 10px; background: var(--surface);
 }
 .composer:focus-within { border-color: #4a5a8a; }
+/* Files to send go on a line of their own above the text. */
+.composer { flex-wrap: wrap; }
+.composer-dropping { border-color: #8fa6f0; border-style: dashed; background: #1c2235; }
+.composer-files { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.composer-file {
+  display: flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 4px 3px 9px; border-radius: 6px;
+  background: #263152; font-size: 12.5px;
+}
+.composer-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-file-size { flex: none; color: var(--text-2); }
+.composer-file-remove {
+  flex: none; display: inline-flex; padding: 2px; border: 0; border-radius: 4px; background: transparent; color: var(--text-2); cursor: pointer;
+}
+.composer-file-remove:hover { color: var(--text); background: rgba(255, 255, 255, 0.08); }
+.composer-refused { color: #e0a96d; }
 .composer { position: relative; }
 .command-list {
   position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 5; margin: 0; padding: 4px; list-style: none;

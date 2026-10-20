@@ -1,6 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { LIVE_SESSION_STATUSES, type LoginAccount, type SessionInfo } from "@bentomo/shared";
+import { formatBytes, LIVE_SESSION_STATUSES, type LoginAccount, type SessionInfo } from "@bentomo/shared";
 import { api, errorMessage, useSessionEvents } from "./api";
+import { fromAttachment, toInput } from "./attachments";
 import { applyEvent, blocksOf, chatRows, emptyChat, loginCards, partialToolSummary, toolSummary, type Block, type ChatItem, type ChatState, type ItemRow, type LoginAnswer, type WorkRow } from "./chat";
 import { Composer } from "./Composer";
 import { Markdown } from "./Markdown";
@@ -179,8 +180,8 @@ export function SessionView({ session, onForked }: Props) {
             const target = rewinding;
             setRewinding(undefined);
             void call(() =>
-              api.rewindSession(session.id, target.id!, restoreFiles).then(({ text }) => {
-                drafts.set(session.id, { text });
+              api.rewindSession(session.id, target.id!, restoreFiles).then(({ text, attachments }) => {
+                drafts.set(session.id, { text, files: attachments?.map(fromAttachment) });
                 setComposerKey((k) => k + 1);
               }),
             );
@@ -210,7 +211,7 @@ export function SessionView({ session, onForked }: Props) {
           placeholder={live ? "Message Claude…" : "This session has ended."}
           disabled={!live || session.status === "starting"}
           onStop={session.status === "running" ? () => void call(() => api.interrupt(session.id)) : undefined}
-          onSubmit={(text) => {
+          onSubmit={(text, files) => {
             // Claude can't log in or fork from here, but Bentomo can.
             if (text === "/login") return (setLoggingIn(true), Promise.resolve(true));
             if (text === "/fork") return idle ? fork() : (setError("Wait for Claude to finish, or stop it, before forking."), Promise.resolve(false));
@@ -222,7 +223,7 @@ export function SessionView({ session, onForked }: Props) {
               else setRewinding(last);
               return Promise.resolve(Boolean(idle && last && session.claudeSessionId));
             }
-            return call(() => api.prompt(session.id, text));
+            return call(() => api.prompt(session.id, text, files.map(toInput)));
           }}
           autoFocus
           footer={
@@ -465,7 +466,22 @@ const Item = memo(function Item({ item, from, to, open, onRewind, onFork, action
               )}
             </div>
           )}
-          <div className="msg-user">{item.text}</div>
+          <div className="msg-user">
+            {item.attachments?.length ? (
+              <>
+                {item.text && <div className="msg-user-text">{item.text}</div>}
+                <ul className="msg-files" aria-label="Attached files">
+                  {item.attachments.map((a, i) => (
+                    <li key={i} className="msg-file" title={`${a.name}, ${formatBytes(a.size)}`}>
+                      {a.name}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : (
+              item.text
+            )}
+          </div>
         </div>
       );
     case "assistant":

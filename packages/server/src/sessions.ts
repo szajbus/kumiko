@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { LIVE_SESSION_STATUSES, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo } from "@bentomo/shared";
-import type { AgentDriver, AgentMessage, StartOptions } from "@bentomo/agent";
+import { LIVE_SESSION_STATUSES, type Attachment, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo } from "@bentomo/shared";
+import type { AgentDriver, AgentFile, AgentMessage, StartOptions } from "@bentomo/agent";
 import { chatEvents, type SessionStore, type StoredSession } from "./store.js";
 import { trimMessage } from "./trim.js";
 
@@ -92,10 +92,15 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     return counts;
   }
 
-  start(opts: { sandbox: string; workdir: string; env: string[]; prompt: string; model?: string }): SessionInfo {
-    const info: SessionInfo = { id: this.newId(), sandbox: opts.sandbox, workdir: opts.workdir, status: "starting", prompt: opts.prompt, model: opts.model, startedAt: new Date().toISOString() };
+  /** Starts Claude on an opening prompt; `attachments` are what the session records of `files`, which Claude gets. */
+  start(opts: { sandbox: string; workdir: string; env: string[]; prompt: string; attachments?: Attachment[]; files?: AgentFile[]; model?: string }): SessionInfo {
+    const { attachments = [] } = opts;
+    // A prompt that is only files is named after them.
+    const prompt = opts.prompt || attachments.map((a) => a.name).join(", ");
+    const info: SessionInfo = { id: this.newId(), sandbox: opts.sandbox, workdir: opts.workdir, status: "starting", prompt, model: opts.model, startedAt: new Date().toISOString() };
     const promptId = randomUUID();
-    return this.launch(info, [{ kind: "user_prompt", payload: { text: opts.prompt, id: promptId } }], { sandbox: opts.sandbox, workdir: opts.workdir, env: opts.env, prompt: opts.prompt, promptId, model: opts.model });
+    const seed: NewEvent = { kind: "user_prompt", payload: { text: opts.prompt, id: promptId, ...(attachments.length ? { attachments } : {}) } };
+    return this.launch(info, [seed], { sandbox: opts.sandbox, workdir: opts.workdir, env: opts.env, prompt: opts.prompt, promptId, files: opts.files, model: opts.model });
   }
 
   /**
@@ -141,9 +146,9 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
   /**
    * Takes the session back to just before prompt `promptId`: the chat after it is dropped, and Claude starts again on
    * its history cut at the same place. With `files`, the files Claude changed since are put back first; if that fails
-   * nothing changes. Returns the prompt's text, for the caller to edit and send again.
+   * nothing changes. Returns the prompt's text and files, for the caller to edit and send again.
    */
-  async rewind(id: string, promptId: string, env: string[], { files }: RewindRequest): Promise<{ text: string }> {
+  async rewind(id: string, promptId: string, env: string[], { files }: RewindRequest): Promise<{ text: string; attachments?: Attachment[] }> {
     const from = this.live(id);
     if (from.info.status !== "idle") throw new RewindRefused("Wait for Claude to finish, or stop it, before rewinding.");
     const at = from.events.findIndex((e) => e.kind === "user_prompt" && e.payload.id === promptId);
@@ -182,7 +187,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     this.emit("changed");
     if (kept) this.save(from);
     else this.forget(from);
-    return { text: prompt.payload.text };
+    return { text: prompt.payload.text, attachments: prompt.payload.attachments };
   }
 
   /** Saved sessions that aren't open, most recently used first. */
@@ -384,12 +389,13 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     return s;
   }
 
-  prompt(id: string, text: string): void {
+  /** Sends a prompt; `attachments` are what the session records of `files`, which Claude gets. */
+  prompt(id: string, text: string, attachments: Attachment[] = [], files: AgentFile[] = []): void {
     const s = this.live(id);
     const promptId = randomUUID();
-    this.push(s, { kind: "user_prompt", payload: { text, id: promptId } });
+    this.push(s, { kind: "user_prompt", payload: { text, id: promptId, ...(attachments.length ? { attachments } : {}) } });
     s.pendingModel = /^\/model\s+(\S+)/.exec(text)?.[1];
-    s.driver.send(text, promptId);
+    s.driver.send(text, promptId, files);
     if (s.info.status === "idle") this.setInfo(s, { status: "running" });
   }
 

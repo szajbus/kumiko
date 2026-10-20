@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type {
   AccountUsage,
+  AttachmentInput,
   ApiError,
   CreateProjectRequest,
   CreateResponse,
@@ -12,6 +13,7 @@ import type {
   LogLine,
   ProjectEdit,
   ProjectView,
+  PromptRequest,
   ResumableSession,
   SavedTabs,
   RewindRequest,
@@ -20,6 +22,7 @@ import type {
   SessionEvent,
   SessionStreamMessage,
   SessionInfo,
+  StartSessionRequest,
   TemplatesResponse,
   WorktreesResponse,
 } from "@bentomo/shared";
@@ -68,7 +71,8 @@ export const api = {
     request<{ warnings: string[] }>("PATCH", `/api/projects/${id}${recreate ? "?recreate=1" : ""}`, patch),
   /** The clone's worktrees, as git on the host sees them. */
   worktrees: (id: string) => request<WorktreesResponse>("GET", `/api/projects/${id}/worktrees`),
-  startSession: (project: string, prompt: string, model?: string) => request<{ id: string }>("POST", "/api/sessions", { sandbox: project, prompt, model }),
+  startSession: (project: string, prompt: string, model?: string, attachments?: AttachmentInput[]) =>
+    request<{ id: string }>("POST", "/api/sessions", { sandbox: project, prompt, model, attachments } satisfies StartSessionRequest),
   /** The user has seen the session, so it no longer waits on them. */
   seen: (id: string) => request("POST", `/api/sessions/${id}/seen`),
   /** Whether the session's project is logged in now; starts nothing. */
@@ -80,7 +84,7 @@ export const api = {
   cancelLogin: (id: string) => request("DELETE", `/api/sessions/${id}/login`),
   /** Starts the session's Claude again and resends the prompt that failed. */
   retry: (id: string) => request("POST", `/api/sessions/${id}/retry`),
-  prompt: (id: string, text: string) => request("POST", `/api/sessions/${id}/prompt`, { text }),
+  prompt: (id: string, text: string, attachments?: AttachmentInput[]) => request("POST", `/api/sessions/${id}/prompt`, { text, attachments } satisfies PromptRequest),
   /** The Claude account behind a session and how much of its subscription is used. */
   usage: (id: string) => request<AccountUsage>("GET", `/api/sessions/${id}/usage`),
   interrupt: (id: string) => request("POST", `/api/sessions/${id}/interrupt`),

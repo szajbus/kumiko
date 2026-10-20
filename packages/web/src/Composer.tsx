@@ -1,12 +1,14 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { formatBytes } from "@bentomo/shared";
+import { hasFiles, readFiles, type ComposerFile } from "./attachments";
 import { matchCommands } from "./commands";
 import { drafts } from "./drafts";
-import { Return, Stop } from "./icons";
+import { Close, Paperclip, Return, Stop } from "./icons";
 import { expandPastes, isMultiline, nextPasteId, pasteLabel, pasteSpans, type Pastes } from "./pastes";
 
 interface Props {
-  /** Resolves true when the text was taken, so the box clears; false keeps it for another try. */
-  onSubmit(text: string): Promise<boolean>;
+  /** Resolves true when the message was taken, so the box clears; false keeps it for another try. */
+  onSubmit(text: string, files: ComposerFile[]): Promise<boolean>;
   submitLabel: string;
   /** Sending is blocked (a turn is running, or the session has ended); typing isn't. */
   disabled?: boolean;
@@ -19,7 +21,7 @@ interface Props {
   commands?: string[];
   /** A guess at the next message, shown dimmed while the box is empty: Tab takes it into the box, Backspace drops it. */
   suggestion?: string;
-  /** Keeps the unsent text in `drafts` under this key, and starts from what is there, with the cursor at its end. */
+  /** Keeps the unsent message in `drafts` under this key, and starts from what is there, with the cursor at its end. */
   draftKey?: string;
   /** Shown at the left of the line under the box, opposite the key hint. */
   footer?: ReactNode;
@@ -32,16 +34,22 @@ const MAX_SUGGESTIONS = 8;
  * A prompt box: Enter sends, Shift+Enter adds a line. Used by the New session tab and the chat.
  * A multiline paste goes in as a label, "[Pasted text #1 +5 lines]", sent as the text it stands for; pasting the
  * same text again right after a label opens it up into the text, and Backspace takes the label out whole.
+ * Files dropped on it, pasted, or picked with the paperclip go with the message; they are listed above the text.
  */
 export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder, autoFocus, label, commands, suggestion, draftKey, footer }: Props) {
   const [text, setText] = useState(() => (draftKey && drafts.get(draftKey)?.text) || "");
   // Kept until the message is sent, even once a label is deleted, so undo can bring the label back.
   const [pastes, setPastes] = useState<Pastes>(() => (draftKey && drafts.get(draftKey)?.pastes) || {});
+  const [files, setFiles] = useState<ComposerFile[]>(() => (draftKey && drafts.get(draftKey)?.files) || []);
   useEffect(() => {
     if (!draftKey) return;
-    if (text) drafts.set(draftKey, { text, pastes });
+    if (text || files.length) drafts.set(draftKey, { text, pastes, files });
     else drafts.delete(draftKey);
-  }, [draftKey, text, pastes]);
+  }, [draftKey, text, pastes, files]);
+  // Why the files last dropped, pasted or picked weren't all taken.
+  const [refused, setRefused] = useState<string>();
+  const [dragging, setDragging] = useState(false);
+  const picker = useRef<HTMLInputElement>(null);
   const spans = pasteSpans(text, pastes);
   // The label just pasted, while the cursor stays right after it: pasting the same text there opens it up.
   const [fresh, setFresh] = useState<number>();
@@ -94,16 +102,26 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
     setPicked(0);
   };
 
-  const canSend = !disabled && !sending && text.trim().length > 0;
+  const canSend = !disabled && !sending && (text.trim().length > 0 || files.length > 0);
+
+  const attach = async (picked: File[]) => {
+    if (!picked.length) return;
+    const read = await readFiles(picked, files);
+    setFiles((have) => [...have, ...read.files]);
+    setRefused(read.errors.join(" ") || undefined);
+    box.current?.focus();
+  };
 
   const send = async () => {
     if (!canSend) return;
     setSending(true);
     try {
-      if (await onSubmit(expandPastes(text, pastes).trim())) {
+      if (await onSubmit(expandPastes(text, pastes).trim(), files)) {
         setText("");
         setPastes({});
         setFresh(undefined);
+        setFiles([]);
+        setRefused(undefined);
       }
     } finally {
       setSending(false);
@@ -114,10 +132,26 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
   return (
     <>
       <form
-        className="composer"
+        className={`composer${dragging ? " composer-dropping" : ""}`}
         onSubmit={(e) => {
           e.preventDefault();
           void send();
+        }}
+        onDragOver={(e) => {
+          if (!hasFiles(e.dataTransfer)) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
+          setDragging(true);
+        }}
+        // Leaving for one of its own children isn't leaving.
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+        }}
+        onDrop={(e) => {
+          if (!hasFiles(e.dataTransfer)) return;
+          e.preventDefault();
+          setDragging(false);
+          void attach([...e.dataTransfer.files]);
         }}
       >
         {suggestions.length > 0 && (
@@ -136,6 +170,21 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
                 }}
               >
                 /{name}
+              </li>
+            ))}
+          </ul>
+        )}
+        {files.length > 0 && (
+          <ul className="composer-files" aria-label="Attached files">
+            {files.map((f) => (
+              <li key={f.key} className="composer-file">
+                <span className="composer-file-name" title={f.name}>
+                  {f.name}
+                </span>
+                <span className="composer-file-size">{formatBytes(f.size)}</span>
+                <button type="button" className="composer-file-remove" aria-label={`Remove ${f.name}`} title="Remove" onClick={() => setFiles(files.filter((x) => x !== f))}>
+                  <Close />
+                </button>
               </li>
             ))}
           </ul>
@@ -176,6 +225,12 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
               if (marks.current) marks.current.scrollTop = e.currentTarget.scrollTop;
             }}
             onPaste={(e) => {
+              // A screenshot, or files copied as such. Text that comes with files (a spreadsheet's cells come as an image too) wins.
+              if (e.clipboardData.files.length > 0 && !e.clipboardData.getData("text/plain")) {
+                e.preventDefault();
+                void attach([...e.clipboardData.files]);
+                return;
+              }
               const pasted = e.clipboardData.getData("text/plain").replace(/\r\n?/g, "\n");
               if (!isMultiline(pasted)) return;
               e.preventDefault();
@@ -246,6 +301,20 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
             }}
           />
         </div>
+        <input
+          ref={picker}
+          type="file"
+          multiple
+          hidden
+          onChange={(e) => {
+            void attach([...(e.currentTarget.files ?? [])]);
+            // The same file picked again is a change too.
+            e.currentTarget.value = "";
+          }}
+        />
+        <button type="button" className="composer-icon" onClick={() => picker.current?.click()} aria-label="Attach files" title="Attach images, PDFs or text files (or drop or paste them)">
+          <Paperclip />
+        </button>
         {onStop ? (
           <button type="button" className="composer-icon" onClick={onStop} aria-label="Stop" title="Stop (Esc)">
             <Stop />
@@ -257,10 +326,11 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
         )}
       </form>
       <div className="composer-hint">
-        {(footer || fresh !== undefined) && (
+        {(footer || fresh !== undefined || refused) && (
           <div className="composer-footer">
             {footer}
             {fresh !== undefined && <span>Paste again to expand</span>}
+            {refused && <span className="composer-refused">{refused}</span>}
           </div>
         )}
         <span className="composer-keys">

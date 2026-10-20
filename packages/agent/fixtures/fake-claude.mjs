@@ -7,7 +7,7 @@
 //   "/rename X"  names the session, as a session_title_changed message
 //   "crash"      writes to stderr and exits 3
 //   "signed out" answers with an error result, as Claude does without a login
-//   anything else is echoed back as "You said: …"
+//   anything else is echoed back as "You said: …", followed by " [with …]" naming the files that came with it
 // With a `.require-login` file in $CLAUDE_CONFIG_DIR, every prompt is answered as "signed out" until there is a
 // `.credentials.json` beside it. `claude auth status` and `claude auth login` work against that folder: the login
 // prints a sign-in URL, reads a code from stdin, and logs in for the code "good-code".
@@ -80,7 +80,7 @@ function result(start, { subtype = "success", is_error = false, text = "", cost 
   out({ type: "result", subtype, is_error, duration_ms: Date.now() - start, num_turns, result: text, session_id, total_cost_usd: total });
 }
 
-async function turn(text) {
+async function turn({ text, files }) {
   let cancelled = false;
   current = { cancel: () => (cancelled = true) };
   const start = Date.now();
@@ -137,7 +137,7 @@ async function turn(text) {
     return result(start, { text: "where" });
   }
 
-  const reply = `You said: ${text}`;
+  const reply = `You said: ${text}${files.length ? ` [with ${files.join(", ")}]` : ""}`;
   await streamText(id, reply, 0, () => cancelled);
   return result(start, { text: reply });
 }
@@ -154,11 +154,15 @@ rl.on("line", (line) => {
   const msg = JSON.parse(line);
   if (msg.type === "user") {
     const text = msg.message.content.filter((b) => b.type === "text").map((b) => b.text).join("");
+    // An image as its type and size, a document as its title and size: enough to tell they arrived whole.
+    const files = msg.message.content
+      .filter((b) => b.type !== "text")
+      .map((b) => `${b.title ?? b.source.media_type} (${b.source.type === "base64" ? Buffer.from(b.source.data, "base64").length : Buffer.byteLength(b.source.data)} bytes)`);
     if (msg.uuid) {
       seen.add(msg.uuid);
       out({ type: "user", message: msg.message, parent_tool_use_id: null, session_id, uuid: msg.uuid, isReplay: true });
     }
-    queue.push(text);
+    queue.push({ text, files });
     void pump();
   } else if (msg.type === "control_request" && msg.request?.subtype === "rewind_files") {
     const ok = seen.has(msg.request.user_message_id);

@@ -120,6 +120,12 @@ export const Resume = () => (
   </svg>
 );
 
+export const Paperclip = () => (
+  <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M13 7.5l-5.2 5.2a3.2 3.2 0 0 1-4.5-4.5l5.6-5.6a2.1 2.1 0 0 1 3 3L6.3 11.2a1.05 1.05 0 0 1-1.5-1.5L10 4.5" {...stroke} />
+  </svg>
+);
+
 export const Close = () => (
   <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
     <path d="M3 3l8 8M11 3l-8 8" {...stroke} />

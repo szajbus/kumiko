@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { CLAUDE_COMMAND, ClaudeDriver, claudeCommand, exitHint, type AgentEvent, type AgentMessage } from "../src/index.js";
+import { CLAUDE_COMMAND, ClaudeDriver, claudeCommand, exitHint, userMessage, type AgentEvent, type AgentMessage } from "../src/index.js";
 import { localExec } from "./helpers.js";
 
 /** Starts a driver on the fake claude and collects its events. */
@@ -116,5 +116,29 @@ describe("ClaudeDriver", () => {
 
     await d.driver.stop();
     await assert.rejects(d.driver.rewindFiles(first), /isn't running/);
+  });
+
+  it("sends files as content blocks before the prompt's text", async () => {
+    const png = Buffer.from("\x89PNG fake", "latin1");
+    const files = [
+      { name: "shot.png", mediaType: "image/png", data: png },
+      { name: "spec.pdf", mediaType: "application/pdf", data: Buffer.from("%PDF-1.1") },
+      { name: "notes.txt", mediaType: "text/plain", data: Buffer.from("zażółć") },
+    ];
+    assert.deepEqual(JSON.parse(userMessage("look", "u", files)).message.content, [
+      { type: "image", source: { type: "base64", media_type: "image/png", data: png.toString("base64") } },
+      { type: "document", title: "spec.pdf", source: { type: "base64", media_type: "application/pdf", data: Buffer.from("%PDF-1.1").toString("base64") } },
+      { type: "document", title: "notes.txt", source: { type: "text", media_type: "text/plain", data: "zażółć" } },
+      { type: "text", text: "look" },
+    ]);
+    assert.deepEqual(JSON.parse(userMessage("", undefined, files.slice(2))).message.content.map((b: { type: string }) => b.type), ["document"], "files alone, without an empty text block");
+
+    const d = await drive();
+    d.driver.start({ sandbox: "test", workdir: d.home, env: [], prompt: "hello", files: files.slice(0, 1) });
+    await d.waitFor(() => d.results().length === 1);
+    d.driver.send("again", undefined, files.slice(1));
+    await d.waitFor(() => d.results().length === 2);
+    assert.deepEqual(d.results().map((r) => r.result), [`You said: hello [with image/png (${png.length} bytes)]`, "You said: again [with spec.pdf (8 bytes), notes.txt (10 bytes)]"]);
+    await d.driver.stop();
   });
 });

@@ -297,7 +297,7 @@ export type EndReason = "user" | "sandbox" | "quit" | "exit";
  */
 export type SessionEvent =
   | { seq: number; kind: "claude"; payload: Record<string, unknown> & { type: string } }
-  | { seq: number; kind: "user_prompt"; payload: { text: string; id?: string } }
+  | { seq: number; kind: "user_prompt"; payload: { text: string; id?: string; attachments?: Attachment[] } }
   | { seq: number; kind: "interrupt"; payload: Record<string, never> }
   /** `signedOut`: Claude isn't logged in, so the UI offers to log in instead of only showing the message. */
   | { seq: number; kind: "error"; payload: { message: string; hint?: string; stderr?: string[]; signedOut?: boolean } }
@@ -342,6 +342,82 @@ export interface ForkRequest {
 export interface RewindResponse {
   /** The prompt that was rewound to, to be edited and sent again. */
   text: string;
+  /** The files that went with it; sent again by their `hash`. */
+  attachments?: Attachment[];
+}
+
+/**
+ * The kinds of file Claude reads itself when they come with a prompt: images it looks at, PDFs, and text. Anything
+ * else would need to be a file in the sandbox, for a tool to open.
+ */
+export type AttachmentKind = "image" | "pdf" | "text";
+
+/** A file sent with a prompt, as the session keeps it: the bytes stay on the server, under `hash` (their SHA-256). */
+export interface Attachment {
+  name: string;
+  kind: AttachmentKind;
+  mediaType: string;
+  size: number;
+  hash: string;
+}
+
+/** A file to send with a prompt: a new one with its bytes in base64, or one the server has already, by its `hash`. */
+export type AttachmentInput = { name: string; data: string } | { name: string; hash: string };
+
+/**
+ * The most a file of each kind may be. The API's own limit for an image is 5 MB. Text is read whole into the context,
+ * and every file goes to the API again with each later turn, so they are kept well short of its 32 MB per request.
+ */
+export const ATTACHMENT_LIMITS: Record<AttachmentKind, number> = { image: 5 * 1024 * 1024, pdf: 10 * 1024 * 1024, text: 256 * 1024 };
+
+/** The most all the files of one prompt may add up to. */
+export const ATTACHMENTS_TOTAL_LIMIT = 20 * 1024 * 1024;
+
+/** "256 KB", "5 MB". */
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${Math.round((n / (1024 * 1024)) * 10) / 10} MB`;
+}
+
+// Both browsers and Node have it; this package is built without either's types.
+declare const TextDecoder: new (label: string, options: { fatal: boolean }) => { decode(bytes: Uint8Array): string };
+
+const startsWith = (bytes: Uint8Array, sig: string, at = 0) => [...sig].every((c, i) => bytes[at + i] === c.charCodeAt(0));
+
+/**
+ * What a file is, from its bytes rather than its name or the type the browser guessed: an image or a PDF by its
+ * signature, text if it is UTF-8 without NULs. Undefined for anything else.
+ */
+export function attachmentKind(bytes: Uint8Array): { kind: AttachmentKind; mediaType: string } | undefined {
+  if (startsWith(bytes, "\x89PNG\r\n\x1a\n")) return { kind: "image", mediaType: "image/png" };
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return { kind: "image", mediaType: "image/jpeg" };
+  if (startsWith(bytes, "GIF87a") || startsWith(bytes, "GIF89a")) return { kind: "image", mediaType: "image/gif" };
+  if (startsWith(bytes, "RIFF") && startsWith(bytes, "WEBP", 8)) return { kind: "image", mediaType: "image/webp" };
+  if (startsWith(bytes, "%PDF-")) return { kind: "pdf", mediaType: "application/pdf" };
+  if (bytes.includes(0)) return undefined;
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return { kind: "text", mediaType: "text/plain" };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Why a file can't go with a prompt, or what it is if it can. */
+export function checkAttachment(name: string, bytes: Uint8Array): { kind: AttachmentKind; mediaType: string } | { error: string } {
+  if (bytes.length === 0) return { error: `${name} is empty.` };
+  const what = attachmentKind(bytes);
+  if (!what) return { error: `${name} can't be attached: only images, PDFs and text files can.` };
+  const max = ATTACHMENT_LIMITS[what.kind];
+  if (bytes.length > max) return { error: `${name} is too big to attach: ${formatBytes(bytes.length)}, and ${what.kind === "text" ? "a text file" : what.kind === "pdf" ? "a PDF" : "an image"} can be ${formatBytes(max)} at most.` };
+  return what;
+}
+
+/** A prompt for a running session. */
+export interface PromptRequest {
+  text: string;
+  attachments?: AttachmentInput[];
 }
 
 /** One of the subscription's usage limits: the current 5-hour session, the week, a model's share of the week. */
@@ -370,6 +446,7 @@ export interface StartSessionRequest {
   /** The project's id. */
   sandbox: string;
   prompt: string;
+  attachments?: AttachmentInput[];
   /** A model alias to start with; Claude's default when omitted. */
   model?: string;
 }
