@@ -312,9 +312,11 @@ export type SessionEvent =
 
 /**
  * What a session's event socket sends: its events, and once it has replayed the ones it already had, `caught_up`,
- * so a tab can show the history in one go rather than as if it were happening.
+ * so a tab can show the history in one go rather than as if it were happening. `buffer` names the buffer the events'
+ * `seq`s count in; a tab reconnecting with `?after=<seq>&buffer=<it>` to one that has been replaced since (a rewind, or
+ * a server restart and a resume, which number the events afresh) is closed with 4409, to replay it from the start.
  */
-export type SessionStreamMessage = SessionEvent | { kind: "caught_up" };
+export type SessionStreamMessage = SessionEvent | { kind: "caught_up"; buffer: string };
 
 /** Who Claude is logged in as in a project's Claude home. */
 export interface LoginAccount {

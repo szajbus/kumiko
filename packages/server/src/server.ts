@@ -607,7 +607,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
       return;
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      if (sessionId) return streamSession(ws, sessionId, Number(url.searchParams.get("after") ?? 0) || 0);
+      if (sessionId) return streamSession(ws, sessionId, Number(url.searchParams.get("after") ?? 0) || 0, url.searchParams.get("buffer") ?? undefined);
       clients.add(ws);
       ws.on("close", () => clients.delete(ws));
       ws.on("error", () => clients.delete(ws));
@@ -617,9 +617,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
 
   /**
    * Replays a session's events after `after`, says it has caught up, then streams new ones; closes when the session is
-   * removed or rewound.
+   * removed or rewound. `after` counts in `buffer`: one that has been replaced is replayed from the start instead.
    */
-  const streamSession = (ws: WebSocket, id: string, after: number) => {
+  const streamSession = (ws: WebSocket, id: string, after: number, buffer?: string) => {
+    const current = sessions.bufferOf(id);
+    if (buffer !== undefined && current !== undefined && buffer !== current) return ws.close(4409, "session buffer replaced");
     sessionSockets.add(ws);
     const send = (msg: SessionStreamMessage) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(msg));
     const unsubscribe = sessions.subscribe(id, after, { event: send, gone: () => ws.close(4404, "session removed"), reset: () => ws.close(4409, "session rewound") });
@@ -630,7 +632,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     ws.on("close", done);
     ws.on("error", done);
     if (!unsubscribe) ws.close(4404, "no such session");
-    else send({ kind: "caught_up" });
+    else send({ kind: "caught_up", buffer: current! });
   };
 
   const port = (server.address() as AddressInfo).port;

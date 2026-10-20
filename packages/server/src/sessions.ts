@@ -24,6 +24,8 @@ interface Session {
   /** The size of `events` as JSON, in bytes; shown in the session's header once per turn. */
   bytes: number;
   seq: number;
+  /** Names the buffer `seq` counts in; a new one when the buffer is rewritten (a rewind), and per server run. */
+  buffer: string;
   subscribers: Set<Subscriber>;
   /** Content blocks started (by stream events) and finished (by `assistant` messages), per message id. */
   blocks: Map<string, { started: number; finished: number }>;
@@ -78,6 +80,11 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
 
   get(id: string): SessionInfo | undefined {
     return this.sessions.get(id)?.info;
+  }
+
+  /** The name of the session's event buffer; see `SessionStreamMessage`. */
+  bufferOf(id: string): string | undefined {
+    return this.sessions.get(id)?.buffer;
   }
 
   /** The session's event buffer, as it stands. */
@@ -173,6 +180,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     for (const sub of from.subscribers) sub.reset();
     from.subscribers.clear();
     from.events = [];
+    from.buffer = randomBytes(6).toString("hex");
     from.bytes = 0;
     from.blocks.clear();
     from.pendingModel = undefined;
@@ -224,7 +232,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
   }
 
   private launch(info: SessionInfo, seed: NewEvent[], driverOpts: StartOptions): SessionInfo {
-    const s: Session = { info, driver: undefined!, events: [], bytes: 0, seq: 0, subscribers: new Set(), blocks: new Map(), exited: Promise.resolve(), saving: Promise.resolve() };
+    const s: Session = { info, driver: undefined!, events: [], bytes: 0, seq: 0, buffer: randomBytes(6).toString("hex"), subscribers: new Set(), blocks: new Map(), exited: Promise.resolve(), saving: Promise.resolve() };
     for (const ev of seed) this.push(s, ev);
     s.info = { ...info, bufferBytes: s.bytes };
     this.sessions.set(info.id, s);

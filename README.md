@@ -184,7 +184,7 @@ Beyond the spec:
 - **Session status changes** go out on `/api/events` as `{ type: "sessions", sessions }`, and the snapshot carries them, so tab dots stay current. Project views carry a live `sessions` count and a `waiting` count.
 - **Stop asks first** when the project has live sessions. Delete project, Recreate sandbox and Save and recreate sandbox say how many sessions will end. Sessions also end when the list notices their sandbox stopped outside Kumiko.
 - **Subagent messages** (`parent_tool_use_id` set) are kept in the buffer but not shown; the subagent's own tool call shows as one line.
-- An unknown session's socket is accepted and closed with code `4404`, which a browser can see, rather than refused with an HTTP 404. A rewind rewrites the buffer and closes the session's sockets with `4409`; the tab drops its chat and subscribes again from the start.
+- An unknown session's socket is accepted and closed with code `4404`, which a browser can see, rather than refused with an HTTP 404. A rewind rewrites the buffer and closes the session's sockets with `4409`; the tab drops its chat and subscribes again from the start. A tab reconnects with `?after=<seq>&buffer=<name>`, the buffer's name coming with `caught_up`; one that has been replaced since (a rewind, or a server restart and a resume, which number events afresh) is also closed with `4409`.
 
 ### Resuming and forking
 

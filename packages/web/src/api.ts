@@ -187,8 +187,8 @@ export interface SessionStream {
 
 /**
  * Streams one session's events: the whole buffer first, then new ones. After a dropped connection it resumes from
- * the last `seq` it has, so nothing is lost or repeated. After a rewind the server rewrites the buffer and closes with
- * 4409, so it starts over.
+ * the last `seq` it has, so nothing is lost or repeated. A buffer replaced since (after a rewind, or a server restart and
+ * a resume, which number the events afresh) is closed with 4409, so it starts over.
  */
 export function useSessionEvents(id: string): SessionStream {
   const [state, setState] = useState<SessionStream>({ events: [], connected: false, gone: false });
@@ -198,6 +198,8 @@ export function useSessionEvents(id: string): SessionStream {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let closed = false;
     let lastSeq = 0;
+    // The buffer `lastSeq` counts in, from the server's caught_up.
+    let buffer: string | undefined;
     let retry = 0;
     setState({ events: [], connected: false, gone: false });
 
@@ -205,7 +207,7 @@ export function useSessionEvents(id: string): SessionStream {
       // What the server replays is held back until it has caught up, then shown at once: history, not new work.
       let backlog: SessionEvent[] | undefined = [];
       const replay = lastSeq === 0;
-      ws = new WebSocket(wsUrl(`/api/sessions/${id}/events?after=${lastSeq}`));
+      ws = new WebSocket(wsUrl(`/api/sessions/${id}/events?after=${lastSeq}${buffer ? `&buffer=${buffer}` : ""}`));
       ws.onopen = () => {
         retry = 0;
         setState((s) => ({ ...s, connected: true }));
@@ -213,6 +215,7 @@ export function useSessionEvents(id: string): SessionStream {
       ws.onmessage = (msg) => {
         const ev = JSON.parse(String(msg.data)) as SessionStreamMessage;
         if (ev.kind === "caught_up") {
+          buffer = ev.buffer;
           const caught = backlog ?? [];
           backlog = undefined;
           if (caught.length || replay) setState((s) => ({ ...s, events: [...s.events, ...caught], history: replay ? lastSeq : s.history }));
@@ -226,6 +229,7 @@ export function useSessionEvents(id: string): SessionStream {
       ws.onclose = (e) => {
         if (e.code === 4409 && !closed) {
           lastSeq = 0;
+          buffer = undefined;
           setState({ events: [], connected: false, gone: false });
           connect();
           return;

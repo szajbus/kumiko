@@ -43,19 +43,22 @@ describe("sessions", () => {
   const sandbox = async (name: string): Promise<ProjectView> => ((await json(await api("/api/projects"))) as ProjectView[]).find((s) => s.name === name)!;
 
   /** A socket on a session's events, collecting them; `caughtUp` is how many had come when the replay was done. */
-  const listen = async (id: string, afterSeq = 0) => {
+  const listen = async (id: string, afterSeq = 0, inBuffer?: string) => {
     const got: SessionEvent[] = [];
     let caughtUp: number | undefined;
-    const sock = new WebSocket(`${server.url.replace("http", "ws")}/api/sessions/${id}/events?after=${afterSeq}`);
+    let buffer: string | undefined;
+    const sock = new WebSocket(`${server.url.replace("http", "ws")}/api/sessions/${id}/events?after=${afterSeq}${inBuffer ? `&buffer=${inBuffer}` : ""}`);
     sock.on("message", (m) => {
       const msg = JSON.parse(String(m)) as SessionStreamMessage;
-      if (msg.kind === "caught_up") caughtUp ??= got.length;
-      else got.push(msg);
+      if (msg.kind === "caught_up") {
+        caughtUp ??= got.length;
+        buffer = msg.buffer;
+      } else got.push(msg);
     });
     const closed = new Promise<number>((r) => sock.once("close", (code) => r(code)));
     await new Promise((r) => sock.once("open", r));
     const results = () => got.filter((e) => e.kind === "claude" && e.payload.type === "result");
-    return { got, sock, closed, results, caughtUp: () => caughtUp };
+    return { got, sock, closed, results, caughtUp: () => caughtUp, buffer: () => buffer };
   };
 
   /** Creates a project from a fresh clone; returns the clone. */
@@ -181,6 +184,14 @@ describe("sessions", () => {
     // The replay ends with word that it has caught up, so the tab can show it as history.
     await waitFor(() => again.caughtUp() !== undefined);
     assert.equal(again.got.at(again.caughtUp()! - 1)?.seq, s.got.at(-1)!.seq, "everything there was came before it");
+    // Seqs count in a named buffer: the same name resumes as above, another (a server that has restarted since) starts over.
+    assert.match(again.buffer() ?? "", /^[0-9a-f]{12}$/);
+    assert.equal(again.buffer(), s.buffer());
+    const same = await listen(id, lastSeq, again.buffer());
+    await waitFor(() => same.caughtUp() !== undefined);
+    assert.equal(same.got[0].seq, lastSeq + 1);
+    same.sock.close();
+    assert.equal(await (await listen(id, lastSeq, "0123456789ab")).closed, 4409);
 
     // /rename shows up as the session's title.
     await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: "/rename fix-composer" }) });
@@ -338,6 +349,9 @@ describe("sessions", () => {
     assert.equal(await s.closed, 4409);
     const cut = await listen(id);
     assert.deepEqual(cut.got.map((e) => (e.kind === "claude" ? e.payload.type : e.kind)), ["user_prompt", "user", "assistant", "result"]);
+    // The rewritten buffer has a name of its own, so a tab that missed the 4409 can't resume in it from a stale seq.
+    await waitFor(() => cut.buffer());
+    assert.notEqual(cut.buffer(), s.buffer());
     const firstReply = s.got.find((e) => e.kind === "claude" && e.payload.type === "assistant");
     const firstReplyId = firstReply?.kind === "claude" ? String(firstReply.payload.uuid) : "";
     assert.ok(firstReplyId);
