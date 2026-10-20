@@ -58,11 +58,20 @@ export function App() {
   // The session Claude is working in whose closing is waiting for confirmation.
   const [stopping, setStopping] = useState<SessionInfo | undefined>();
   const [newSessionOpen, setNewSessionOpen] = useState(() => parseHash().view === "new-session");
-  // The project the New session tab was last opened from, if any.
+  // The project the New session tab starts in: the one it was opened from, else the most recently active one when it opened.
   const [newSessionProject, setNewSessionProject] = useState(() => {
     const r = parseHash();
     return r.view === "new-session" ? r.project : undefined;
   });
+  const newSessionWasOpen = useRef(newSessionOpen);
+  newSessionWasOpen.current = newSessionOpen;
+  // The project whose page or session tab was last active.
+  const recentProject = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const project =
+      route.view === "project" || route.view === "edit" ? route.name : route.view === "session" ? sessions.find((s) => s.id === route.id)?.sandbox : undefined;
+    if (project) recentProject.current = project;
+  }, [route, sessions]);
   // Sessions this window just started: their tab opens before the session list may have caught up.
   const started = useRef(new Set<string>());
   // Sessions whose tabs were closed, most recent last, for Cmd+Shift+T to bring back. Deleted ones are dropped.
@@ -109,8 +118,9 @@ export function App() {
       setRoute(r);
       if (tabOf(r) === "projects") projectsHash.current = location.hash || "#/";
       if (r.view === "new-session") {
+        // Switching back to the open tab keeps its pick.
+        if (r.project || !newSessionWasOpen.current) setNewSessionProject(r.project ?? recentProject.current);
         setNewSessionOpen(true);
-        if (r.project) setNewSessionProject(r.project);
       }
       scrollTo(0, 0);
     };

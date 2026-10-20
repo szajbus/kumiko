@@ -36,7 +36,7 @@ export function NewSession({ live, project: initial, onStarted }: Props) {
   const sb = live.projects.find((s) => s.name === sandbox);
   const workdir = sb?.project.clonePath;
 
-  // Saved sessions that aren't open; re-read when a session opens or closes, or a project (and its saved sessions) goes.
+  // The picked project's saved sessions that aren't open; re-read when a session opens or closes, or a project (and its saved sessions) goes.
   const [saved, setSaved] = useState<ResumableSession[]>([]);
   const [resuming, setResuming] = useState<string | undefined>();
   const key = resumableKey(live);
@@ -47,6 +47,9 @@ export function NewSession({ live, project: initial, onStarted }: Props) {
       current = false;
     };
   }, [key]);
+
+  // All of them while no project can be picked, to show what's there once its sandbox runs.
+  const shown = sandbox ? saved.filter((r) => r.sandbox === sandbox) : saved;
 
   const resume = async (id: string) => {
     setError(undefined);
@@ -145,14 +148,14 @@ export function NewSession({ live, project: initial, onStarted }: Props) {
         {error && <div className="banner banner-error">{error}</div>}
       </section>
 
-      {saved.length > 0 && (
+      {shown.length > 0 && (
         <section className="card section">
           <div className="section-head">
             <h2>Resume a session</h2>
             <p className="muted form-note">Pick up where you left off, with the chat as it was. Most recent first.</p>
           </div>
           <ul className="resume-list">
-            {saved.slice(0, RESUME_LIMIT).map((r) => {
+            {shown.slice(0, RESUME_LIMIT).map((r) => {
               const runs = live.projects.some((x) => x.name === r.sandbox && x.status === "running" && !x.busy);
               return (
                 <li key={r.id} className="resume-item">
