@@ -145,3 +145,9 @@ export const Rewind = () => (
     <path d="M2.5 7a4.5 4.5 0 1 0 1.4-3.3M2.5 1.8v2.4h2.4" {...stroke} />
   </svg>
 );
+
+export const Quote = () => (
+  <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M3.5 3.5v9M6.5 5.5h6M6.5 8h6M6.5 10.5h4" {...stroke} />
+  </svg>
+);

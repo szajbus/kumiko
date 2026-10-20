@@ -483,6 +483,14 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 .md code { padding: 1px 5px; border-radius: 4px; background: var(--surface-2); font-size: 12.5px; }
 .md pre { padding: 12px 14px; border-radius: 8px; background: var(--code-bg); border: 1px solid var(--border-soft); overflow-x: auto; }
 .md pre code { padding: 0; background: none; font-size: 12.5px; line-height: 1.55; }
+/* Over the text selected in the chat, to quote it in the message. */
+.quote-btn {
+  position: fixed; z-index: 15; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px;
+  border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface-2); color: var(--text);
+  font-size: 12.5px; cursor: pointer; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+.quote-btn:hover { background: var(--border); }
+.quote-btn svg { color: var(--text-2); }
 .md blockquote { padding-left: 12px; border-left: 3px solid var(--border-strong); color: var(--text-2); }
 .md table { border-collapse: collapse; display: block; overflow-x: auto; }
 .md th, .md td { padding: 5px 10px; border: 1px solid var(--border); text-align: left; }

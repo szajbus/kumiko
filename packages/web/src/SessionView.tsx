@@ -3,13 +3,14 @@ import { formatBytes, LIVE_SESSION_STATUSES, type LoginAccount, type SessionInfo
 import { api, errorMessage, useSessionEvents } from "./api";
 import { fromAttachment, toInput } from "./attachments";
 import { applyEvent, blocksOf, chatRows, emptyChat, loginCards, partialToolSummary, toolSummary, type Block, type ChatItem, type ChatState, type ItemRow, type LoginAnswer, type WorkRow } from "./chat";
-import { Composer } from "./Composer";
+import { Composer, type ComposerHandle } from "./Composer";
 import { Markdown } from "./Markdown";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { drafts } from "./drafts";
 import { endedText, formatCost, formatDuration, formatTokens, planName } from "./format";
 import { Fork, Rewind } from "./icons";
 import { LoginDialog } from "./LoginDialog";
+import { QuoteButton } from "./QuoteButton";
 import { Select } from "./Select";
 import { COLORS, sessionStatus } from "./status";
 import { UsageStrip } from "./UsageStrip";
@@ -56,6 +57,7 @@ export function SessionView({ session, onForked }: Props) {
   // Bumped by a rewind, so the composer starts again from the draft it left.
   const [composerKey, setComposerKey] = useState(0);
   const [loggingIn, setLoggingIn] = useState(false);
+  const composer = useRef<ComposerHandle>(null);
   // What is known about the login behind the last logged-out card; `loginCards` decides what that shows.
   const [answer, setAnswer] = useState<LoginAnswer | undefined>();
   const idle = session.status === "idle";
@@ -133,6 +135,7 @@ export function SessionView({ session, onForked }: Props) {
         running={busy}
         onRewind={canBranch ? setRewinding : undefined}
         onFork={canBranch ? (item) => void fork(item.id) : undefined}
+        onQuote={(quoted) => composer.current?.insertQuote(quoted)}
         hidden={login.hidden}
         actions={
           login.card && {
@@ -199,6 +202,7 @@ export function SessionView({ session, onForked }: Props) {
         {error && <div className="banner banner-error">{error}</div>}
         <Composer
           key={composerKey}
+          ref={composer}
           label="Message Claude"
           commands={session.commands && [...session.commands, ...OWN_COMMANDS.filter((c) => !session.commands!.includes(c))]}
           suggestion={chat.suggestion}
@@ -302,13 +306,15 @@ interface ChatProps {
   running: boolean;
   onRewind?: (item: UserItem) => void;
   onFork?: (item: UserItem) => void;
+  /** Text selected in the chat, quoted, to go in the message. */
+  onQuote(quoted: string): void;
   /** Shown in place of one item: the logged-out card, with Log in, or once logged in, the green one with Retry. */
   actions?: { key: string; node: ReactNode };
   /** Items not to show at all. */
   hidden?: ReadonlySet<string>;
 }
 
-function Chat({ chat, running, onRewind, onFork, actions, hidden }: ChatProps) {
+function Chat({ chat, running, onRewind, onFork, onQuote, actions, hidden }: ChatProps) {
   const box = useRef<HTMLDivElement>(null);
   const inner = useRef<HTMLDivElement>(null);
   // Follows new output while the view is at the bottom; scrolling up stops that until it is back at the bottom.
@@ -357,6 +363,7 @@ function Chat({ chat, running, onRewind, onFork, actions, hidden }: ChatProps) {
     );
 
   return (
+    <>
     <div
       ref={box}
       className="chat"
@@ -384,6 +391,9 @@ function Chat({ chat, running, onRewind, onFork, actions, hidden }: ChatProps) {
         )}
       </div>
     </div>
+    {/* Outside the log, so it isn't read out as new output. */}
+    <QuoteButton root={box} onQuote={onQuote} />
+    </>
   );
 }
 

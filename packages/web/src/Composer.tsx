@@ -1,10 +1,17 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { formatBytes } from "@kumiko/shared";
 import { hasFiles, readFiles, type ComposerFile } from "./attachments";
 import { matchCommands } from "./commands";
 import { drafts } from "./drafts";
 import { Close, Paperclip, Return, Stop } from "./icons";
 import { expandPastes, isMultiline, nextPasteId, pasteLabel, pasteSpans, type Pastes } from "./pastes";
+import { quoteInsert } from "./quote";
+
+/** What the composer lets its owner do to it. */
+export interface ComposerHandle {
+  /** Adds a markdown quote to the end of the message, with the cursor on the line after it, ready for the reply. */
+  insertQuote(quoted: string): void;
+}
 
 interface Props {
   /** Resolves true when the message was taken, so the box clears; false keeps it for another try. */
@@ -25,6 +32,7 @@ interface Props {
   draftKey?: string;
   /** Shown at the left of the line under the box, opposite the key hint. */
   footer?: ReactNode;
+  ref?: Ref<ComposerHandle>;
 }
 
 const MAX_HEIGHT = 240;
@@ -36,7 +44,7 @@ const MAX_SUGGESTIONS = 8;
  * same text again right after a label opens it up into the text, and Backspace takes the label out whole.
  * Files dropped on it, pasted, or picked with the paperclip go with the message; they are listed above the text.
  */
-export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder, autoFocus, label, commands, suggestion, draftKey, footer }: Props) {
+export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder, autoFocus, label, commands, suggestion, draftKey, footer, ref }: Props) {
   const [text, setText] = useState(() => (draftKey && drafts.get(draftKey)?.text) || "");
   // Kept until the message is sent, even once a label is deleted, so undo can bring the label back.
   const [pastes, setPastes] = useState<Pastes>(() => (draftKey && drafts.get(draftKey)?.pastes) || {});
@@ -92,6 +100,16 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
     el.setRangeText(insert, start, end, "end");
     setText(el.value);
   };
+
+  useImperativeHandle(ref, () => ({
+    insertQuote(quoted) {
+      const el = box.current;
+      if (!el || !quoted) return;
+      const { from, insert } = quoteInsert(el.value, quoted);
+      replace(from, el.value.length, insert);
+      el.scrollTop = el.scrollHeight;
+    },
+  }));
 
   // Only the command word itself is completed: once there is a space, what follows is its arguments.
   const typed = /^\/(\S*)$/.exec(text)?.[1];
