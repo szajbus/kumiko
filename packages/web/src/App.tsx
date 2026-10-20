@@ -64,6 +64,9 @@ export function App() {
   });
   // Sessions this window just started: their tab opens before the session list may have caught up.
   const started = useRef(new Set<string>());
+  // Sessions whose tabs were closed, most recent last, for Cmd+Shift+T to bring back. Deleted ones are dropped.
+  const closed = useRef<string[]>([]);
+  const reopening = useRef(false);
   // The Projects tab remembers where it was, so switching back returns to the same page.
   const projectsHash = useRef(tabOf(route) === "projects" ? location.hash || "#/" : "#/");
 
@@ -131,6 +134,7 @@ export function App() {
     setEnding((all) => new Set(all).add(s.id));
     try {
       await api.endSession(s.id);
+      closed.current = [...closed.current.filter((id) => id !== s.id), s.id];
       return true;
     } catch {
       setEnding((all) => {
@@ -145,10 +149,39 @@ export function App() {
   /** Closes a session's tab, then forgets its saved copy too, so it can't be resumed. */
   const deleteSession = async (s: SessionInfo) => {
     if (!(await endSession(s))) return;
+    closed.current = closed.current.filter((id) => id !== s.id);
     // 404: Claude never answered, so nothing was saved.
     await api.deleteSavedSession(s.id).catch((err) => {
       if (!(err instanceof RequestError && err.status === 404)) console.error(err);
     });
+  };
+
+  /** Resumes the most recently closed session that still can be. One deleted since, e.g. from the New session tab, is skipped. */
+  const reopen = async () => {
+    if (reopening.current) return;
+    reopening.current = true;
+    try {
+      while (closed.current.length) {
+        const id = closed.current[closed.current.length - 1];
+        // Reopened some other way in the meantime: it isn't closed any more.
+        if (live.sessions.some((s) => s.id === id)) {
+          closed.current = closed.current.slice(0, -1);
+          continue;
+        }
+        try {
+          await api.resumeSession(id);
+        } catch (err) {
+          // 404: its saved copy is gone. Anything else may pass, so it stays to try again.
+          if (!(err instanceof RequestError && err.status === 404)) return console.error(err);
+          closed.current = closed.current.filter((x) => x !== id);
+          continue;
+        }
+        closed.current = closed.current.filter((x) => x !== id);
+        return onSessionStarted(id, true);
+      }
+    } finally {
+      reopening.current = false;
+    }
   };
 
   const close = (tab: TabId) => {
@@ -163,7 +196,7 @@ export function App() {
   };
 
   // Keyboard shortcuts act on the latest render's state, so the listeners below are installed once.
-  const shortcut = useRef<(action: "new" | "next" | "prev" | "close" | "delete" | number) => void>(() => {});
+  const shortcut = useRef<(action: "new" | "reopen" | "next" | "prev" | "close" | "delete" | number) => void>(() => {});
   shortcut.current = (action) => {
     if (deleting || stopping) return;
     if (action === "delete") {
@@ -171,6 +204,7 @@ export function App() {
       return setDeleting(sessions.find((x) => `session:${x.id}` === current));
     }
     if (action === "new") return go("#/session/new");
+    if (action === "reopen") return void reopen();
     // Cmd+1..9 jump to the nth session tab.
     if (typeof action === "number") {
       const target = sessions[action - 1];
@@ -190,7 +224,7 @@ export function App() {
       // e.code, because Shift turns "[" into "{" and layouts differ.
       const digit = !e.shiftKey && /^Digit[1-9]$/.test(e.code) ? Number(e.code.slice(5)) : undefined;
       const action = digit ?? (e.shiftKey
-        ? e.code === "BracketRight" ? "next" : e.code === "BracketLeft" ? "prev" : e.code === "KeyW" ? "delete" : undefined
+        ? e.code === "BracketRight" ? "next" : e.code === "BracketLeft" ? "prev" : e.code === "KeyW" ? "delete" : e.code === "KeyT" ? "reopen" : undefined
         : e.code === "KeyT" ? "new" : e.code === "KeyW" ? "close" : undefined);
       if (!action) return;
       e.preventDefault();
