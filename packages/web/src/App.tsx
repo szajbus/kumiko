@@ -241,6 +241,13 @@ export function App() {
 
   const onSessionStarted = (id: string, keepNewTab?: boolean) => {
     started.current.add(id);
+    // A resumed session keeps its id, which is still marked as ending from when its tab was closed.
+    setEnding((all) => {
+      if (!all.has(id)) return all;
+      const next = new Set(all);
+      next.delete(id);
+      return next;
+    });
     if (!keepNewTab) setNewSessionOpen(false);
     go(`#/session/${id}`);
   };
