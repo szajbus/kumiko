@@ -20,6 +20,8 @@
 }
 
 * { box-sizing: border-box; }
+/* Icons are drawn at fixed sizes; as flex items they would otherwise shrink when the text beside them runs long. */
+svg { flex: none; }
 html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 var(--sans); }
 a { color: var(--accent); }
 a:hover { color: var(--accent-hover); }
@@ -496,7 +498,8 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 .thinking summary::before, .tool summary::before { content: "▸"; color: var(--border-strong); font-size: 11px; }
 .thinking[open] summary::before, .tool[open] summary::before { content: "▾"; }
 .thinking-text { padding: 0 14px 12px; color: var(--muted); font-size: 13px; white-space: pre-wrap; font-style: italic; }
-.tool summary .spinner { width: 11px; height: 11px; }
+/* Takes the same 14px box as the done and failed icons, so nothing moves when a tool finishes. */
+.tool summary .spinner { width: 10px; height: 10px; margin: 2px; }
 .tool-name { color: var(--text-2); font-weight: 500; flex: none; }
 .tool-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--muted); }
 .tool-body { display: flex; flex-direction: column; gap: 6px; padding: 4px 12px 12px; }
