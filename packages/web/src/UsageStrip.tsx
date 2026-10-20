@@ -53,11 +53,13 @@ export function UsageStrip({ sessionId, live, turnDone, cost, bufferBytes }: Pro
     return () => clearInterval(tick);
   }, []);
 
-  // A failed read never hides the last numbers; it only adds a warning.
-  const problem = usage?.error ?? (error && `Couldn't refresh usage: ${error}`);
+  // A failed read never hides the last numbers; it only adds a warning that they may be out of date.
+  const fetchedAt = usage?.fetchedAt && new Date(usage.fetchedAt).toLocaleTimeString();
+  const reason = error ? `Couldn't refresh usage: ${error}` : usage?.error;
+  const problem = reason && (fetchedAt ? `Usage may be out of date (last read ${fetchedAt}). ${reason}` : reason);
   const windows = SHOWN.flatMap((id) => usage?.windows.find((w) => w.id === id) ?? []);
   return (
-    <div className="usage-strip" title={usage ? `Usage updated ${new Date(usage.fetchedAt).toLocaleTimeString()}` : undefined}>
+    <div className="usage-strip" title={fetchedAt ? `Usage read ${fetchedAt}` : undefined}>
       {bufferBytes !== undefined && (
         <span className="usage-item" title="Memory this session's chat takes in Bentomo's server, as of the last finished turn. Tool output past 64 KB isn't kept.">
           <span>Memory</span>

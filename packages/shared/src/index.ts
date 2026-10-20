@@ -354,9 +354,10 @@ export interface AccountUsage {
   /** The subscription plan, e.g. "max" or "pro". */
   plan?: string;
   windows: UsageWindow[];
-  /** Set when usage couldn't be read; the account may still be known. */
+  /** Why the latest attempt to read usage failed; `windows` are then from the last one that worked, if any. */
   error?: string;
-  fetchedAt: string;
+  /** When `windows` were read; missing until usage has been read once. */
+  fetchedAt?: string;
 }
 
 export interface StartSessionRequest {

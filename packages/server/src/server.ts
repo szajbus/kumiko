@@ -13,7 +13,6 @@ import {
   parseSavedTabs,
   SESSION_ID_PATTERN,
   vmName,
-  type AccountUsage,
   type ApiError,
   type CreateProjectRequest,
   type CreateResponse,
@@ -48,7 +47,7 @@ import { RewindRefused, SessionEnded, SessionNotFound, SessionNotResumable, Sess
 import { SessionStore } from "./store.js";
 import { TabsStore } from "./tabs.js";
 import { serveWeb } from "./static.js";
-import { fetchAccountUsage, UsageCache } from "./usage.js";
+import { sandboxUsageSource, UsageCache, type UsageSource } from "./usage.js";
 
 export interface ServerOptions {
   provider?: SandboxProvider;
@@ -69,8 +68,8 @@ export interface ServerOptions {
   sessionsDir?: string;
   /** Makes the driver for each new agent session; defaults to Claude Code over the provider's exec. */
   driver?: () => AgentDriver;
-  /** Reads the account and usage of the Claude in a sandbox; defaults to asking Claude inside it. Cached for 30s per sandbox. */
-  usage?: (sandbox: string, env: string[]) => Promise<AccountUsage>;
+  /** Reads the account and usage of the Claude in a sandbox; defaults to asking Claude inside it. Usage is cached per account. */
+  usage?: UsageSource;
 }
 
 export interface RunningServer {
@@ -92,9 +91,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   const tabs = new TabsStore(opts.dataDir);
   const sessions = new Sessions(opts.driver ?? (() => new ClaudeDriver(provider.exec.bind(provider))), sessionStore);
   const clients = new Set<WebSocket>();
-  const readUsage = opts.usage ?? ((sandbox: string, forwarded: string[]) => fetchAccountUsage(provider.exec.bind(provider), sandbox, forwarded));
-  // The probe forwards the sandbox's variables, as sessions do, in case the login is CLAUDE_CODE_OAUTH_TOKEN.
-  const usage = new UsageCache((sandbox) => readUsage(sandbox, infos.find((i) => i.name === sandbox)?.meta?.spec.env ?? []));
+  const usage = new UsageCache(
+    opts.usage ?? sandboxUsageSource(provider.exec.bind(provider), (sandbox) => infos.find((i) => i.name === sandbox)?.meta?.spec.env ?? []),
+  );
 
   // ---- list state -------------------------------------------------------------------------
 
