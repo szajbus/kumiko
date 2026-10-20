@@ -1,7 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { LIVE_SESSION_STATUSES, type LoginAccount, type SessionInfo } from "@bentomo/shared";
 import { api, errorMessage, useSessionEvents } from "./api";
-import { applyEvent, blocksOf, emptyChat, loginCards, partialToolSummary, toolSummary, type Block, type ChatItem, type ChatState, type LoginAnswer } from "./chat";
+import { applyEvent, blocksOf, chatRows, emptyChat, loginCards, partialToolSummary, toolSummary, type Block, type ChatItem, type ChatState, type ItemRow, type LoginAnswer, type WorkRow } from "./chat";
 import { Composer } from "./Composer";
 import { Markdown } from "./Markdown";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -344,6 +344,20 @@ function Chat({ chat, running, onRewind, onFork, actions, hidden }: ChatProps) {
 
   // Tool calls after the last turn's end are still in flight while the session runs.
   const lastTurn = chat.items.findLastIndex((i) => i.type === "turn" || i.type === "ended");
+  const rows = useMemo(() => chatRows(chat.items), [chat.items]);
+  const itemRow = (row: ItemRow) =>
+    hidden?.has(row.item.key) ? null : (
+      <Item
+        key={row.from ? `${row.item.key}-${row.from}` : row.item.key}
+        item={row.item}
+        from={row.from}
+        to={row.to}
+        open={running && row.index > lastTurn}
+        onRewind={onRewind}
+        onFork={onFork}
+        actions={actions?.key === row.item.key ? actions.node : undefined}
+      />
+    );
 
   return (
     <div
@@ -357,11 +371,15 @@ function Chat({ chat, running, onRewind, onFork, actions, hidden }: ChatProps) {
       }}
     >
       <div ref={inner} className="chat-inner">
-        {chat.items.map((item, i) => (
-          hidden?.has(item.key) ? null : (
-            <Item key={item.key} item={item} open={running && i > lastTurn} onRewind={onRewind} onFork={onFork} actions={actions?.key === item.key ? actions.node : undefined} />
-          )
-        ))}
+        {rows.map((row) =>
+          row.type === "work" ? (
+            <Work key={row.key} row={row} onUnfold={() => (stick.current = false)}>
+              {row.rows.map(itemRow)}
+            </Work>
+          ) : (
+            itemRow(row)
+          ),
+        )}
         {running && chat.items.at(-1)?.type === "user" && (
           <div className="chat-waiting">
             <span className="spinner" aria-hidden="true" /> Waiting for Claude…
@@ -372,15 +390,61 @@ function Chat({ chat, running, onRewind, onFork, actions, hidden }: ChatProps) {
   );
 }
 
+/** How long a finished turn's work stays open before folding, so the reply is seen to arrive first. */
+const FOLD_DELAY_MS = 250;
+
+/**
+ * A turn's work. Open while the turn runs; once it is done it folds, with an animation if it was watched running, and
+ * shows a line summing it up that opens it again.
+ */
+function Work({ row, onUnfold, children }: { row: WorkRow; onUnfold(): void; children: ReactNode }) {
+  const [folded, setFolded] = useState(row.done);
+  const watched = useRef(!row.done);
+  useEffect(() => {
+    if (!row.done || !watched.current) return;
+    watched.current = false;
+    const t = setTimeout(() => setFolded(true), FOLD_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [row.done]);
+
+  return (
+    <div className={`work${folded ? " is-folded" : ""}`}>
+      {row.done && (
+        <button
+          type="button"
+          className="work-summary"
+          aria-expanded={!folded}
+          title={row.tools || undefined}
+          onClick={() => {
+            // Opening it grows the chat below the line; following the bottom would scroll the line away.
+            if (folded) onUnfold();
+            setFolded(!folded);
+          }}
+        >
+          {row.summary}
+        </button>
+      )}
+      <div className="work-body" inert={folded}>
+        <div className="work-clip">
+          <div className="work-items">{children}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 interface ItemProps {
   item: ChatItem;
+  /** For an assistant item, the blocks to show, when not all of them. */
+  from?: number;
+  to?: number;
   open: boolean;
   onRewind?: (item: UserItem) => void;
   onFork?: (item: UserItem) => void;
   actions?: ReactNode;
 }
 
-const Item = memo(function Item({ item, open, onRewind, onFork, actions }: ItemProps) {
+const Item = memo(function Item({ item, from, to, open, onRewind, onFork, actions }: ItemProps) {
   if (actions) return <>{actions}</>;
   switch (item.type) {
     case "user":
@@ -407,7 +471,7 @@ const Item = memo(function Item({ item, open, onRewind, onFork, actions }: ItemP
     case "assistant":
       return (
         <div className="msg-assistant">
-          {blocksOf(item).map((b, i) => (
+          {blocksOf(item).slice(from, to).map((b, i) => (
             <BlockView key={i} block={b} open={open} />
           ))}
         </div>

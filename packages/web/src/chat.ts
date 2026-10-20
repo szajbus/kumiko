@@ -44,6 +44,107 @@ export function blocksOf(item: Extract<ChatItem, { type: "assistant" }>): Block[
   return [...item.final, ...item.drafts.slice(item.final.length).filter(Boolean)];
 }
 
+/** One thing the chat renders: an item, or for an assistant item split across a turn's work and its reply, blocks `from` to `to` of it. */
+export interface ItemRow {
+  type: "item";
+  item: ChatItem;
+  index: number;
+  from?: number;
+  to?: number;
+}
+
+/**
+ * What Claude did on its way to a turn's reply: thinking, tool calls and what it said in between. Once the turn is
+ * `done` it folds away behind a line summing it up, leaving the reply below it.
+ */
+export interface WorkRow {
+  type: "work";
+  key: string;
+  rows: ItemRow[];
+  done: boolean;
+  summary: string;
+  /** Which tools ran, and how often: "Bash 3, Read 2". */
+  tools: string;
+}
+
+export type ChatRow = ItemRow | WorkRow;
+
+const isWork = (i: ChatItem) => i.type === "assistant" || i.type === "retry" || i.type === "notice";
+
+/**
+ * Lays the chat out by turn. Each prompt's run of assistant messages, retries and notices is its work; the text that
+ * ends it is the reply. Anything else, like the turn's footer or an error, shows on its own after the work. While the
+ * turn runs, all of the work shows, still in its group so nothing jumps when it folds; once it is done, the group is
+ * only kept if there is more than text in it.
+ */
+export function chatRows(items: readonly ChatItem[]): ChatRow[] {
+  const rows: ChatRow[] = [];
+  const row = (index: number, from?: number, to?: number): ItemRow => ({ type: "item", item: items[index], index, from, to });
+  let i = 0;
+  while (i < items.length) {
+    const prompt = items[i];
+    rows.push(row(i++));
+    if (prompt.type !== "user") continue;
+    const start = i;
+    while (i < items.length && isWork(items[i])) i++;
+    let end = i;
+    while (end < items.length && items[end].type !== "user") end++;
+    const done = items.slice(start, end).some((it) => it.type === "turn");
+    if (start === i) {
+      for (; i < end; i++) rows.push(row(i));
+      continue;
+    }
+
+    const work = Array.from({ length: i - start }, (_, k) => row(start + k));
+    const reply: ItemRow[] = [];
+    if (done) {
+      // Peel the text that ends the turn off the work, back to the last thing that wasn't text.
+      while (work.length) {
+        const last = work.at(-1)!;
+        if (last.item.type !== "assistant") break;
+        const blocks = blocksOf(last.item);
+        let cut = blocks.length;
+        while (cut > 0 && blocks[cut - 1].type === "text") cut--;
+        if (cut === blocks.length && cut > 0) break;
+        reply.unshift(cut === 0 ? last : row(last.index, cut, blocks.length));
+        work.pop();
+        if (cut > 0) {
+          work.push(row(last.index, 0, cut));
+          break;
+        }
+      }
+    }
+    const blocks = work.flatMap((r) => (r.item.type === "assistant" ? blocksOf(r.item).slice(r.from, r.to) : []));
+    if (done && !blocks.some((b) => b.type !== "text")) {
+      for (let k = start; k < i; k++) rows.push(row(k));
+    } else {
+      rows.push({ type: "work", key: `work-${prompt.key}`, rows: work, done, ...summarize(blocks) });
+      rows.push(...reply);
+    }
+    for (; i < end; i++) rows.push(row(i));
+  }
+  return rows;
+}
+
+const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+function summarize(blocks: Block[]): { summary: string; tools: string } {
+  const tools = blocks.filter((b) => b.type === "tool");
+  const failed = tools.filter((b) => b.result?.isError).length;
+  const thoughts = blocks.filter((b) => b.type === "thinking").length;
+  const messages = blocks.filter((b) => b.type === "text" && b.text).length;
+  const parts: string[] = [];
+  if (tools.length) parts.push(count(tools.length, "tool call") + (failed ? ` (${failed} failed)` : ""));
+  if (thoughts) parts.push(count(thoughts, "thought"));
+  if (messages) parts.push(count(messages, "message"));
+  const byName = new Map<string, number>();
+  for (const t of tools) byName.set(t.name, (byName.get(t.name) ?? 0) + 1);
+  return {
+    summary: parts.join(" · "),
+    tools: [...byName].sort((a, b) => b[1] - a[1]).map(([name, n]) => `${name} ${n}`).join(", "),
+  };
+}
+
 type Json = Record<string, unknown>;
 const obj = (v: unknown): Json => (v && typeof v === "object" ? (v as Json) : {});
 const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);

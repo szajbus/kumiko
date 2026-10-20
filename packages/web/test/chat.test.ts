@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { SessionEvent } from "@bentomo/shared";
-import { applyEvent, blocksOf, emptyChat, loginCards, partialToolSummary, toolSummary, type ChatItem, type ChatState } from "../src/chat.ts";
+import { applyEvent, blocksOf, chatRows, emptyChat, loginCards, partialToolSummary, toolSummary, type ChatItem, type ChatRow, type ChatState } from "../src/chat.ts";
 
 type NewEvent = SessionEvent extends infer E ? (E extends unknown ? Omit<E, "seq"> : never) : never;
 
@@ -166,5 +166,48 @@ describe("tool summaries", () => {
     assert.equal(partialToolSummary('{"command": "echo \\"hi\\"\\nls'), 'echo "hi"');
     assert.equal(partialToolSummary('{"command": "x\\'), "x");
     assert.equal(partialToolSummary('{"nothing": 1'), "");
+  });
+});
+
+describe("chat rows", () => {
+  const prompt = (id: string): NewEvent => ({ kind: "user_prompt", payload: { text: "go", id } });
+  const toolResult = (id: string, isError = false) =>
+    claude({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: "ok", is_error: isError }] } });
+  /** Each row as a short string: the item's type and its block range, or the work's rows in brackets. */
+  const shape = (rows: ChatRow[]): string[] =>
+    rows.map((r) => (r.type === "work" ? `work${r.done ? "" : " (open)"}[${shape(r.rows).join(" ")}]` : r.from !== undefined ? `${r.item.type}:${r.from}-${r.to}` : r.item.type));
+  const work = [
+    prompt("p1"),
+    assistant("m1", [{ type: "thinking", thinking: "hmm" }, { type: "text", text: "Looking." }, { type: "tool_use", id: "t1", name: "Read", input: {} }]),
+    toolResult("t1"),
+    assistant("m2", [{ type: "tool_use", id: "t2", name: "Bash", input: {} }, { type: "tool_use", id: "t3", name: "Read", input: {} }]),
+    toolResult("t2", true),
+    toolResult("t3"),
+    assistant("m3", [{ type: "text", text: "Here it is." }]),
+  ];
+
+  it("keeps a running turn's work in an open group", () => {
+    const rows = chatRows(fold(work).items);
+    assert.deepEqual(shape(rows), ["user", "work (open)[assistant assistant assistant]"]);
+  });
+
+  it("folds a finished turn's work, leaving the reply and the footer out of it", () => {
+    const rows = chatRows(fold([...work, result()]).items);
+    assert.deepEqual(shape(rows), ["user", "work[assistant assistant]", "assistant", "turn"]);
+    const group = rows[1] as Extract<ChatRow, { type: "work" }>;
+    assert.equal(group.summary, "3 tool calls (1 failed) · 1 thought · 1 message");
+    assert.equal(group.tools, "Read 2, Bash 1");
+  });
+
+  it("splits a message whose text ends the turn", () => {
+    const rows = chatRows(
+      fold([prompt("p1"), assistant("m1", [{ type: "tool_use", id: "t1", name: "Read", input: {} }, { type: "text", text: "Done." }]), toolResult("t1"), result()]).items,
+    );
+    assert.deepEqual(shape(rows), ["user", "work[assistant:0-1]", "assistant:1-2", "turn"]);
+  });
+
+  it("leaves a turn that only talked as it is", () => {
+    const rows = chatRows(fold([prompt("p1"), assistant("m1", [{ type: "text", text: "Hi." }]), result(), prompt("p2")]).items);
+    assert.deepEqual(shape(rows), ["user", "assistant", "turn", "user"]);
   });
 });

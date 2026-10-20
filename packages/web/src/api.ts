@@ -18,6 +18,7 @@ import type {
   RewindResponse,
   ServerEvent,
   SessionEvent,
+  SessionStreamMessage,
   SessionInfo,
   TemplatesResponse,
   WorktreesResponse,
@@ -193,16 +194,25 @@ export function useSessionEvents(id: string): SessionStream {
     setState({ events: [], connected: false, gone: false });
 
     const connect = () => {
+      // What the server replays is held back until it has caught up, then shown at once: history, not new work.
+      let backlog: SessionEvent[] | undefined = [];
       ws = new WebSocket(wsUrl(`/api/sessions/${id}/events?after=${lastSeq}`));
       ws.onopen = () => {
         retry = 0;
         setState((s) => ({ ...s, connected: true }));
       };
       ws.onmessage = (msg) => {
-        const ev = JSON.parse(String(msg.data)) as SessionEvent;
+        const ev = JSON.parse(String(msg.data)) as SessionStreamMessage;
+        if (ev.kind === "caught_up") {
+          const caught = backlog ?? [];
+          backlog = undefined;
+          if (caught.length) setState((s) => ({ ...s, events: [...s.events, ...caught] }));
+          return;
+        }
         if (ev.seq <= lastSeq) return;
         lastSeq = ev.seq;
-        setState((s) => ({ ...s, events: [...s.events, ev] }));
+        if (backlog) backlog.push(ev);
+        else setState((s) => ({ ...s, events: [...s.events, ev] }));
       };
       ws.onclose = (e) => {
         if (e.code === 4409 && !closed) {

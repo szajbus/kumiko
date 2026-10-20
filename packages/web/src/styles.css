@@ -434,6 +434,24 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 .chat-error pre { margin: 4px 0 0; padding: 8px 10px; border-radius: 6px; background: rgba(0, 0, 0, 0.3); font-size: 12px; white-space: pre-wrap; max-height: 200px; overflow: auto; }
 .chat-ended { align-self: center; padding: 4px 12px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 12.5px; }
 
+/* A turn's work: folds behind a summary line once the turn is done */
+.work { display: flex; flex-direction: column; }
+.work-summary {
+  align-self: flex-start; display: flex; align-items: center; gap: 8px; padding: 4px 10px 4px 8px; border: 1px solid var(--border-soft);
+  border-radius: 999px; background: var(--surface); color: var(--muted); font: inherit; font-size: 12.5px; cursor: pointer;
+  animation: bm-fade-in 200ms ease-out;
+}
+.work-summary:hover { color: var(--text-2); border-color: var(--border); }
+.work-summary::before { content: "▾"; color: var(--border-strong); font-size: 11px; }
+.work.is-folded .work-summary::before { content: "▸"; }
+.work-body { display: grid; grid-template-rows: 1fr; transition: grid-template-rows 360ms ease, opacity 360ms ease; }
+.work.is-folded .work-body { grid-template-rows: 0fr; opacity: 0; }
+.work-clip { min-height: 0; overflow: hidden; }
+.work-items { display: flex; flex-direction: column; gap: 12px; }
+.work-summary + .work-body .work-items { padding-top: 12px; }
+@keyframes bm-fade-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .work-body { transition: none; } .work-summary { animation: none; } }
+
 /* Claude's markdown */
 .md { line-height: 1.6; overflow-wrap: anywhere; color: #d0d4db; }
 .md > :first-child { margin-top: 0; }

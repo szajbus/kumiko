@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 import WebSocket from "ws";
-import type { ProjectView, ServerEvent, SessionEvent, SessionInfo } from "@bentomo/shared";
+import type { ProjectView, ServerEvent, SessionEvent, SessionInfo, SessionStreamMessage } from "@bentomo/shared";
 import { LimaProvider, MetadataStore, shellQuote } from "@bentomo/sandbox";
 import { startServer, type RunningServer } from "../src/index.js";
 import { makeClone } from "./repo.js";
@@ -42,15 +42,20 @@ describe("sessions", () => {
   const session = async (id: string): Promise<SessionInfo | undefined> => ((await json(await api("/api/sessions"))) as SessionInfo[]).find((s) => s.id === id);
   const sandbox = async (name: string): Promise<ProjectView> => ((await json(await api("/api/projects"))) as ProjectView[]).find((s) => s.name === name)!;
 
-  /** A socket on a session's events, collecting them. */
+  /** A socket on a session's events, collecting them; `caughtUp` is how many had come when the replay was done. */
   const listen = async (id: string, afterSeq = 0) => {
     const got: SessionEvent[] = [];
+    let caughtUp: number | undefined;
     const sock = new WebSocket(`${server.url.replace("http", "ws")}/api/sessions/${id}/events?after=${afterSeq}`);
-    sock.on("message", (m) => got.push(JSON.parse(String(m))));
+    sock.on("message", (m) => {
+      const msg = JSON.parse(String(m)) as SessionStreamMessage;
+      if (msg.kind === "caught_up") caughtUp ??= got.length;
+      else got.push(msg);
+    });
     const closed = new Promise<number>((r) => sock.once("close", (code) => r(code)));
     await new Promise((r) => sock.once("open", r));
     const results = () => got.filter((e) => e.kind === "claude" && e.payload.type === "result");
-    return { got, sock, closed, results };
+    return { got, sock, closed, results, caughtUp: () => caughtUp };
   };
 
   /** Creates a project from a fresh clone; returns the clone. */
@@ -173,6 +178,9 @@ describe("sessions", () => {
     const again = await listen(id, lastSeq);
     await waitFor(() => again.got.some((e) => e.kind === "claude" && e.payload.type === "result"));
     assert.equal(again.got[0].seq, lastSeq + 1);
+    // The replay ends with word that it has caught up, so the tab can show it as history.
+    await waitFor(() => again.caughtUp() !== undefined);
+    assert.equal(again.got.at(again.caughtUp()! - 1)?.seq, s.got.at(-1)!.seq, "everything there was came before it");
 
     // /rename shows up as the session's title.
     await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: "/rename fix-composer" }) });

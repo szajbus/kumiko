@@ -30,7 +30,7 @@ import {
   type SandboxInfo,
   type SandboxSpec,
   type ServerEvent,
-  type SessionEvent,
+  type SessionStreamMessage,
   type SessionInfo,
   type StartSessionRequest,
   type TemplatesResponse,
@@ -604,10 +604,13 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     });
   });
 
-  /** Replays a session's events after `after`, then streams new ones; closes when the session is removed or rewound. */
+  /**
+   * Replays a session's events after `after`, says it has caught up, then streams new ones; closes when the session is
+   * removed or rewound.
+   */
   const streamSession = (ws: WebSocket, id: string, after: number) => {
     sessionSockets.add(ws);
-    const send = (ev: SessionEvent) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(ev));
+    const send = (msg: SessionStreamMessage) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(msg));
     const unsubscribe = sessions.subscribe(id, after, { event: send, gone: () => ws.close(4404, "session removed"), reset: () => ws.close(4409, "session rewound") });
     const done = () => {
       unsubscribe?.();
@@ -616,6 +619,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     ws.on("close", done);
     ws.on("error", done);
     if (!unsubscribe) ws.close(4404, "no such session");
+    else send({ kind: "caught_up" });
   };
 
   const port = (server.address() as AddressInfo).port;

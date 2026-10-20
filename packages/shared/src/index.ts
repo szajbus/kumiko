@@ -303,6 +303,12 @@ export type SessionEvent =
   | { seq: number; kind: "error"; payload: { message: string; hint?: string; stderr?: string[]; signedOut?: boolean } }
   | { seq: number; kind: "ended"; payload: { reason: EndReason; code?: number } };
 
+/**
+ * What a session's event socket sends: its events, and once it has replayed the ones it already had, `caught_up`,
+ * so a tab can show the history in one go rather than as if it were happening.
+ */
+export type SessionStreamMessage = SessionEvent | { kind: "caught_up" };
+
 /** Who Claude is logged in as in a project's Claude home. */
 export interface LoginAccount {
   email?: string;
