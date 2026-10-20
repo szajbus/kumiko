@@ -18,6 +18,7 @@
     "dev:server": "tsc -b packages/server && node packages/server/dist/src/main.js --port 4317",
     "dev:web": "npm run dev -w @kumiko/web",
     "desktop": "npm run build && npm start -w @kumiko/desktop",
+    "dev:desktop": "node apps/desktop/dev.mjs",
     "dist:app": "npm run build && npm run dist:mac-arm64-app -w @kumiko/desktop",
     "roundtrip": "npm run build && node packages/sandbox/dist/scripts/roundtrip.js",
     "projects-check": "npm run build && node packages/server/dist/scripts/projects-check.js",

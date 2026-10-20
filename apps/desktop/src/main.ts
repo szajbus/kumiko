@@ -16,6 +16,12 @@ function webDir(): string {
 // macOS takes its icon from the bundle, Windows and Linux from the window; unpackaged, macOS would show Electron's in the Dock.
 const icon = (file: string) => resolve(here, "../assets/icon", file);
 
+/**
+ * Development only: the window loads the UI from this URL (Vite's dev server, see dev.mjs) and the app starts no
+ * server of its own; Vite proxies /api to one running on its own, so the UI and the server reload without the app.
+ */
+const devUrl = app.isPackaged ? undefined : process.env.KUMIKO_DEV_URL;
+
 let server: RunningServer | undefined;
 let win: BrowserWindow | undefined;
 
@@ -82,8 +88,23 @@ function createWindow(url: string) {
       win?.webContents.send("kumiko:close-tab", input.shift);
     }
   });
+  if (devUrl) logPage(win);
   win.on("closed", () => (win = undefined));
   void win.loadURL(url);
+}
+
+/** Development only: what the page logs, and its crashes and failed loads, go to the terminal, where they can be seen without DevTools. */
+function logPage(w: BrowserWindow) {
+  const page = w.webContents;
+  page.on("console-message", (e) => {
+    console.log(`[page ${e.level}] ${e.message}${e.sourceId ? ` (${e.sourceId}:${e.lineNumber})` : ""}`);
+  });
+  page.on("render-process-gone", (_e, d) => console.log(`[page] renderer gone: ${d.reason} (exit ${d.exitCode})`));
+  page.on("did-fail-load", (_e, code, desc, target) => console.log(`[page] failed to load ${target}: ${desc} (${code})`));
+  page.on("did-navigate", (_e, target, code) => console.log(`[page] loaded ${target} (${code})`));
+  page.on("did-navigate-in-page", (_e, target) => console.log(`[page] moved to ${target}`));
+  page.on("did-finish-load", () => console.log("[page] finished loading"));
+  page.on("unresponsive", () => console.log("[page] unresponsive"));
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -105,6 +126,13 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(async () => {
     if (process.platform === "darwin" && !app.isPackaged) app.dock?.setIcon(icon("macos/icon-macos-1024.png"));
+    if (devUrl) {
+      createWindow(devUrl);
+      app.on("activate", () => {
+        if (!win) createWindow(devUrl);
+      });
+      return;
+    }
     try {
       server = await startServer({ port: Number(process.env.KUMIKO_PORT ?? 0), webDir: webDir() });
     } catch (err) {

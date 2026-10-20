@@ -25,6 +25,14 @@ npm run build && npm run dist:mac -w @kumiko/desktop   # → apps/desktop/releas
 
 When the app is launched from the Dock, it reads your login shell's environment once at startup. That puts Homebrew's `limactl` on `PATH` and makes the variables you export in your shell profile available for forwarding. If you rotate a token in your profile, restart the app.
 
+### Develop in the desktop app
+
+```sh
+npm run dev:desktop
+```
+
+Runs the server on its own (port 4317, or the next free one), rebuilding and restarting it whenever its code changes, and Vite for the UI, which the app's window loads (`KUMIKO_DEV_URL`). UI changes show up at once. A server change restarts the server; the window reconnects and resumes its tabs' sessions, but the restart stops Claude, so a turn in progress is cut short: files it was changing can be left half done. Changes to the Electron main process or preload need the app restarted. Quit the app (or Ctrl+C) to stop it all. Only one Kumiko app runs at a time, so quit the regular one first.
+
 ### Develop the UI in a browser
 
 ```sh
@@ -55,6 +63,7 @@ npm run dev:server
 | `npm run drive -- --sandbox <name>` | Sessions step 1's check against a **running project's sandbox** (`<name>` is the project's): starts Claude, sends two prompts (one reads a forwarded variable), interrupts a third mid-tool-call and sends a fourth, printing every event. `--local` runs `claude` on this machine instead, for trying it from inside a sandbox. |
 | `npm run server` | Runs the server alone and serves the built UI. |
 | `npm run desktop` | Builds and launches the Electron app. |
+| `npm run dev:desktop` | Launches the Electron app with the UI hot-reloading and the server restarting as their code changes. |
 
 ## Layout
 
