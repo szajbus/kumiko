@@ -353,20 +353,36 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     if (problem) throw new HttpError(409, problem);
   };
 
-  app.post(
-    "/api/projects/:id/start",
-    action(
-      "starting",
-      async (p, _i, log) => {
-        await projects.writeManaged(p);
-        await provider.start(p.id, log);
-      },
-      async (p, i) => {
-        if (i.status === "absent") throw new HttpError(409, `${vmName(p.id)} doesn't exist. Recreate it.`);
-        await assertFolders(p);
-      },
-    ),
-  );
+  const startVm: Work = async (p, _i, log) => {
+    await projects.writeManaged(p);
+    await provider.start(p.id, log);
+  };
+  const checkStart = async (p: Project, i: SandboxInfo) => {
+    if (i.status === "absent") throw new HttpError(409, `${vmName(p.id)} doesn't exist. Recreate it.`);
+    await assertFolders(p);
+  };
+
+  app.post("/api/projects/:id/start", action("starting", startVm, checkStart));
+
+  /**
+   * As `readyProject`, but a stopped VM is started first, and an operation already running on it is waited out
+   * (a start from the Projects page, say), so a session can be asked for in any project.
+   */
+  const startedProject = async (id: string): Promise<{ workdir: string; env: string[] }> => {
+    const { project, info } = await known(id);
+    if (info.status === "stopped" && !ops.active().includes(id)) {
+      await checkStart(project, info);
+      try {
+        ops.start(id, "starting", (log) => startVm(project, info, log));
+      } catch (err) {
+        // Another request started it first; wait for that one.
+        if (!(err instanceof BusyError)) throw err;
+      }
+    }
+    const op = await ops.settled(id);
+    if (op?.op === "starting" && op.result === "error") throw new HttpError(409, `${vmName(id)} didn't start: ${op.error?.split("\n")[0]}`);
+    return readyProject(id);
+  };
   app.post("/api/projects/:id/stop", action("stopping", async (p, _i, log) => {
     await endSessions(p.id, log);
     await provider.stop(p.id, log);
@@ -463,7 +479,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     if (!prompt && !req?.attachments?.length) throw new HttpError(400, "The opening prompt is empty.");
     const model = typeof req?.model === "string" && req.model && req.model !== "default" ? req.model : undefined;
     if (model && !/^[\w.\[\]-]+$/.test(model)) throw new HttpError(400, `Not a model: ${model}`);
-    const ready = await readyProject(name);
+    const ready = await startedProject(name);
     const sent = await attachments.take(req.attachments);
     const session = sessions.start({ sandbox: name, workdir: ready.workdir, env: ready.env, prompt, model, ...sent });
     return c.json({ id: session.id }, 201);
@@ -489,7 +505,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   app.post("/api/sessions/:id/resume", async (c) => {
     const stored = await sessionStore.read(c.req.param("id"));
     if (!stored?.info.claudeSessionId) throw new HttpError(404, `No saved session ${c.req.param("id")}.`);
-    const ready = await readyProject(stored.info.sandbox);
+    const ready = await startedProject(stored.info.sandbox);
     return c.json({ id: sessions.resume(stored, ready.env).id }, 201);
   });
 

@@ -113,13 +113,22 @@ describe("sessions", () => {
     assert.equal((await post({ sandbox: "one", prompt: "  " })).status, 400);
     assert.equal((await post({ sandbox: "nope", prompt: "hi" })).status, 404);
     assert.equal((await post({ sandbox: "Bad!", prompt: "hi" })).status, 400);
-    // A VM that isn't a project's can't host a session; a project's stopped VM can't either, until it starts.
+    // A VM that isn't a project's can't host a session.
     await writeFile(join(limaDir, "km-stray.json"), JSON.stringify({ name: "km-stray", status: "Running" }));
     assert.equal((await post({ sandbox: "stray", prompt: "hi" })).status, 404);
+    assert.equal((await api("/api/sessions/abc123/prompt", { method: "POST", body: '{"text":"x"}' })).status, 404);
+  });
+
+  it("starts a stopped sandbox for a session asked for in it", async () => {
     await create("cold");
     await writeFile(join(limaDir, "km-cold.json"), JSON.stringify({ name: "km-cold", status: "Stopped" }));
-    assert.equal((await post({ sandbox: "cold", prompt: "hi" })).status, 409);
-    assert.equal((await api("/api/sessions/abc123/prompt", { method: "POST", body: '{"text":"x"}' })).status, 404);
+    await waitFor(async () => (await sandbox("cold")).status === "stopped");
+    const since = events.length;
+    // Two at once: the second waits on the start the first began.
+    const [a, b] = await Promise.all([startSession("cold", "hi"), startSession("cold", "there")]);
+    assert.equal(events.slice(since).filter((e) => "sandbox" in e && e.sandbox === "cold" && e.op === "starting" && e.type === "state").length, 1, "started once");
+    assert.equal((await sandbox("cold")).status, "running");
+    for (const id of [a, b]) await waitFor(async () => (await session(id))?.status === "idle");
   });
 
   it("holds a conversation, streams it and replays it", async () => {

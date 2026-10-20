@@ -30,6 +30,20 @@ export class Operations extends EventEmitter<{ event: [ServerEvent]; settled: [s
     return Object.fromEntries([...this.entries].map(([name, e]) => [name, e.log]));
   }
 
+  /** Resolves with the operation running for `name` once it has ended; at once, with undefined, if none is running. */
+  settled(name: string): Promise<Operation | undefined> {
+    const cur = this.get(name);
+    if (!cur || cur.endedAt) return Promise.resolve(undefined);
+    return new Promise((resolve) => {
+      const on = (n: string) => {
+        if (n !== name) return;
+        this.off("settled", on);
+        resolve(this.get(name));
+      };
+      this.on("settled", on);
+    });
+  }
+
   /** Sandboxes with an operation running right now. */
   active(): string[] {
     return [...this.entries].filter(([, e]) => !e.operation.endedAt).map(([name]) => name);
