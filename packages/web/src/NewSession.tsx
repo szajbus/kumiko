@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import type { ResumableSession } from "@kumiko/shared";
-import { api, errorMessage, useHome, type LiveState } from "./api";
+import { api, errorMessage, RequestError, useHome, type LiveState } from "./api";
 import { toInput, type ComposerFile } from "./attachments";
 import { Composer } from "./Composer";
 import { ago, sessionTitle, tilde } from "./format";
 import { Resume, Trash } from "./icons";
+import { resumableKey } from "./resumable";
 import { Select } from "./Select";
 
 interface Props {
@@ -35,17 +36,17 @@ export function NewSession({ live, project: initial, onStarted }: Props) {
   const sb = live.projects.find((s) => s.name === sandbox);
   const workdir = sb?.project.clonePath;
 
-  // Saved sessions that aren't open; re-read when a session opens or closes.
+  // Saved sessions that aren't open; re-read when a session opens or closes, or a project (and its saved sessions) goes.
   const [saved, setSaved] = useState<ResumableSession[]>([]);
   const [resuming, setResuming] = useState<string | undefined>();
-  const open = live.sessions.map((s) => s.id).join();
+  const key = resumableKey(live);
   useEffect(() => {
     let current = true;
     api.resumable().then((list) => current && setSaved(list), () => {});
     return () => {
       current = false;
     };
-  }, [open]);
+  }, [key]);
 
   const resume = async (id: string) => {
     setError(undefined);
@@ -62,7 +63,10 @@ export function NewSession({ live, project: initial, onStarted }: Props) {
   const remove = async (id: string) => {
     setError(undefined);
     try {
-      await api.deleteSavedSession(id);
+      // 404: it's gone already, e.g. with its project.
+      await api.deleteSavedSession(id).catch((err) => {
+        if (!(err instanceof RequestError && err.status === 404)) throw err;
+      });
       setSaved((list) => list.filter((r) => r.id !== id));
     } catch (err) {
       setError(errorMessage(err));
