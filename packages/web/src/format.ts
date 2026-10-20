@@ -66,6 +66,13 @@ export function formatCost(usd: number): string {
   return `$${usd.toFixed(usd < 0.01 ? 4 : 2)}`;
 }
 
+/** "812", "4.2k", "13k", "1.2M". */
+export function formatTokens(n: number): string {
+  if (n < 1000) return String(n);
+  const [value, unit] = n < 1e6 ? [n / 1e3, "k"] : [n / 1e6, "M"];
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)}${unit}`;
+}
+
 /** "4.2s" under a minute, then "2m 5s". */
 export function formatDuration(ms: number): string {
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;

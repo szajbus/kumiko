@@ -18,11 +18,17 @@ export type ChatItem =
   | { type: "user"; key: string; text: string; id?: string; replayed?: boolean; attachments?: Attachment[] }
   /** One assistant message: finished blocks, then the ones still streaming (by content index). */
   | { type: "assistant"; key: string; final: Block[]; drafts: Block[] }
-  | { type: "turn"; key: string; status: "ok" | "interrupted" | "error"; durationMs?: number; costUsd?: number; message?: string }
+  | { type: "turn"; key: string; status: "ok" | "interrupted" | "error"; durationMs?: number; costUsd?: number; tokens?: Tokens; message?: string }
   | { type: "error"; key: string; message: string; hint?: string; stderr?: string[]; signedOut?: boolean }
   | { type: "retry"; key: string; attempt?: number; max?: number }
   | { type: "notice"; key: string; text: string }
   | { type: "ended"; key: string; reason: EndReason; code?: number };
+
+/** Tokens Claude read and wrote, all models together; `cached` of them read from the prompt cache. */
+export interface Tokens {
+  total: number;
+  cached: number;
+}
 
 export interface ChatState {
   items: ChatItem[];
@@ -32,12 +38,14 @@ export interface ChatState {
   tools: Record<string, number>;
   /** Claude reports cost per session; a turn's cost is the difference. */
   totalCost: number;
+  /** Likewise for tokens. */
+  totalTokens: Tokens;
   interruptPending: boolean;
   /** Claude's guess at the next prompt, sent after a turn; gone once any prompt is sent. */
   suggestion?: string;
 }
 
-export const emptyChat = (): ChatState => ({ items: [], messages: {}, tools: {}, totalCost: 0, interruptPending: false });
+export const emptyChat = (): ChatState => ({ items: [], messages: {}, tools: {}, totalCost: 0, totalTokens: { total: 0, cached: 0 }, interruptPending: false });
 
 /** The blocks to show for an assistant item: finished ones, then drafts past them. */
 export function blocksOf(item: Extract<ChatItem, { type: "assistant" }>): Block[] {
@@ -332,19 +340,29 @@ function applyClaude(s: ChatState, m: Json & { type: string }, key: string): Cha
       const total = num(m.total_cost_usd);
       // The running total starts over when a session is resumed, so a drop means this turn's cost is all of it.
       const costUsd = total !== undefined ? (total >= s.totalCost ? total - s.totalCost : total) : undefined;
+      const usage = tokensOf(m.usage);
+      const tokens = usage && (usage.total >= s.totalTokens.total ? { total: usage.total - s.totalTokens.total, cached: Math.max(0, usage.cached - s.totalTokens.cached) } : usage);
       const ok = m.subtype === "success" && m.is_error !== true;
-      const base = { ...s, totalCost: total ?? s.totalCost, interruptPending: false };
+      const base = { ...s, totalCost: total ?? s.totalCost, totalTokens: usage ?? s.totalTokens, interruptPending: false };
       // A slash command like /model is a turn of its own with nothing to sum up.
       if (ok && m.num_turns === 0) return base;
       const status = ok ? "ok" : s.interruptPending && m.subtype === "error_during_execution" ? "interrupted" : "error";
       const errors = Array.isArray(m.errors) ? m.errors.map(String).join("\n") : undefined;
       const message = status === "error" ? str(m.result) || errors || String(m.subtype ?? "error") : undefined;
-      return { ...base, items: [...base.items, { type: "turn", key, status, durationMs: num(m.duration_ms), costUsd, message }] };
+      return { ...base, items: [...base.items, { type: "turn", key, status, durationMs: num(m.duration_ms), costUsd, tokens, message }] };
     }
 
     default:
       return s;
   }
+}
+
+/** A result's usage as tokens; like its cost, it is a running total for the session. */
+function tokensOf(raw: unknown): Tokens | undefined {
+  const u = obj(raw);
+  const [input, output, write, read] = [u.input_tokens, u.output_tokens, u.cache_creation_input_tokens, u.cache_read_input_tokens].map((v) => num(v) ?? 0);
+  const total = input + output + write + read;
+  return total > 0 ? { total, cached: read } : undefined;
 }
 
 const SUMMARY_KEYS = ["file_path", "command", "path", "pattern", "url", "query", "notebook_path", "description", "prompt"];

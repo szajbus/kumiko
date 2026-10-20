@@ -120,6 +120,12 @@ describe("chat", () => {
     assert.deepEqual(ofType(s, "turn").map((t) => t.costUsd), [0.5, 0.25, 0.1]);
   });
 
+  it("works out each turn's tokens from the running total, which restarts on resume", () => {
+    const usage = (input: number, output: number, write: number, read: number) => ({ usage: { input_tokens: input, output_tokens: output, cache_creation_input_tokens: write, cache_read_input_tokens: read } });
+    const s = fold([result(usage(10, 20, 100, 0)), result(usage(15, 50, 150, 130)), result(usage(5, 5, 0, 40)), result()]);
+    assert.deepEqual(ofType(s, "turn").map((t) => t.tokens), [{ total: 130, cached: 0 }, { total: 215, cached: 130 }, { total: 50, cached: 40 }, undefined]);
+  });
+
   it("gives a slash command no footer, and shows Stop as an interruption rather than an error", () => {
     const s = fold([
       result({ num_turns: 0 }),

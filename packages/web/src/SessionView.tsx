@@ -7,7 +7,7 @@ import { Composer } from "./Composer";
 import { Markdown } from "./Markdown";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { drafts } from "./drafts";
-import { endedText, formatCost, formatDuration, planName } from "./format";
+import { endedText, formatCost, formatDuration, formatTokens, planName } from "./format";
 import { Fork, Rewind } from "./icons";
 import { LoginDialog } from "./LoginDialog";
 import { Select } from "./Select";
@@ -519,6 +519,7 @@ function TurnFooter({ item }: { item: Extract<ChatItem, { type: "turn" }> }) {
   const parts: string[] = [];
   if (item.durationMs !== undefined) parts.push(formatDuration(item.durationMs));
   if (item.costUsd) parts.push(formatCost(item.costUsd));
+  if (item.tokens) parts.push(`${formatTokens(item.tokens.total)} tokens (${formatTokens(item.tokens.cached)} cached)`);
   if (item.status === "error") {
     return (
       <div className="chat-error" role="alert">
