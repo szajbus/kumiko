@@ -9,6 +9,7 @@ import { NewSession } from "./NewSession";
 import { ProjectList } from "./ProjectList";
 import { ProjectPage } from "./ProjectPage";
 import { SessionView } from "./SessionView";
+import { landingAfterClose } from "./landing";
 import { loadTabs, saveTabs } from "./tabs";
 
 type Route =
@@ -117,15 +118,18 @@ export function App() {
     return () => removeEventListener("hashchange", onHash);
   }, []);
 
+  // The tabs in the order the header shows them.
+  const tabs: TabId[] = ["projects", ...sessions.map((s): TabId => `session:${s.id}`), ...(newSessionOpen ? ["new-session" as const] : [])];
+
   const select = (tab: TabId) => {
     if (tab === "projects") go(projectsHash.current);
     else if (tab === "new-session") go("#/session/new");
     else go(`#/session/${tab.slice("session:".length)}`);
   };
 
-  /** After closing the active tab, fall back to the Projects tab. */
+  /** After closing the active tab, move to the tab to its left, else the left-most one left, else the Projects tab. */
   const leave = (tab: TabId) => {
-    if (tabOf(route) === tab) go(projectsHash.current);
+    if (tabOf(route) === tab) select(landingAfterClose(tabs, tab));
   };
 
   /** Closes a session's tab at once and ends it on the server; the tab comes back if the server refuses. Resolves whether it ended. */
@@ -210,7 +214,6 @@ export function App() {
       const target = sessions[action - 1];
       return target ? select(`session:${target.id}`) : undefined;
     }
-    const tabs: TabId[] = ["projects", ...sessions.map((s): TabId => `session:${s.id}`), ...(newSessionOpen ? ["new-session" as const] : [])];
     const current = tabOf(route);
     if (action === "close") return current === "projects" ? undefined : close(current);
     const i = tabs.indexOf(current);
