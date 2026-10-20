@@ -133,7 +133,7 @@ export function App() {
   useEffect(() => {
     if (!restored) return;
     // A New session tab is saved as active by its place, since keys don't outlive the window.
-    const active = route.view === "draft" ? `new-session:${newSessions.findIndex((n) => n.key === route.key)}` : tabOf(route);
+    const active: TabId = route.view === "draft" ? `new-session:${newSessions.findIndex((n) => n.key === route.key)}` : tabOf(route);
     saveTabs({ sessions: sessions.map((s) => s.id), newSessions: newSessions.map((n) => n.project ?? ""), active });
   }, [restored, sessions, newSessions, route]);
 
