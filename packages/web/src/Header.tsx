@@ -4,11 +4,17 @@ import { Logo, Plus } from "./icons";
 import { sessionTitle } from "./format";
 import { sessionState } from "./status";
 
-export type TabId = "projects" | "new-session" | `session:${string}`;
+export type TabId = "projects" | `new-session:${string}` | `session:${string}`;
+
+/** A New session tab: `key` tells it apart from the others, `project` is the one picked in it, if any. */
+export interface NewSessionTab {
+  key: string;
+  project?: string;
+}
 
 interface Props {
   sessions: SessionInfo[];
-  newSessionOpen: boolean;
+  newSessions: NewSessionTab[];
   active: TabId;
   onSelect(tab: TabId): void;
   onClose(tab: TabId): void;
@@ -16,7 +22,7 @@ interface Props {
 }
 
 /** The window's title bar: the Projects tab, a tab per session, and + to start a new one. */
-export function Header({ sessions, newSessionOpen, active, onSelect, onClose, onNewSession }: Props) {
+export function Header({ sessions, newSessions, active, onSelect, onClose, onNewSession }: Props) {
   return (
     <header className="app-header">
       <div className="tabbar">
@@ -38,7 +44,16 @@ export function Header({ sessions, newSessionOpen, active, onSelect, onClose, on
               />
             );
           })}
-          {newSessionOpen && <Tab id="new-session" active={active} onSelect={onSelect} onClose={onClose} label="New session" />}
+          {newSessions.map((n) => (
+            <Tab
+              key={n.key}
+              id={`new-session:${n.key}`}
+              active={active}
+              onSelect={onSelect}
+              onClose={onClose}
+              label={n.project ? `${n.project} · New session` : "New session"}
+            />
+          ))}
         </nav>
         <button type="button" className="tab-new" aria-label="New session" title="New session" onClick={onNewSession}>
           <Plus size={14} />

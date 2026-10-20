@@ -4,7 +4,7 @@ import { api, RequestError, useLiveState } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ProjectForm } from "./ProjectForm";
 import { sessionTitle } from "./format";
-import { Header, type TabId } from "./Header";
+import { Header, type NewSessionTab, type TabId } from "./Header";
 import { NewSession } from "./NewSession";
 import { ProjectList } from "./ProjectList";
 import { ProjectPage } from "./ProjectPage";
@@ -17,12 +17,16 @@ type Route =
   | { view: "new" }
   | { view: "project"; name: string }
   | { view: "edit"; name: string }
-  /** `project`: opened from a project's page, which it starts in. */
+  /** Opens another New session tab. `project`: opened from a project's page, which it starts in. */
   | { view: "new-session"; project?: string }
+  /** An open New session tab. */
+  | { view: "draft"; key: string }
   | { view: "session"; id: string };
 
 function parseHash(): Route {
   if (location.hash === "#/new") return { view: "new" };
+  const d = /^#\/session\/draft\/([0-9]+)$/.exec(location.hash);
+  if (d) return { view: "draft", key: d[1] };
   const n = /^#\/session\/new(?:\/([a-z0-9-]+))?$/.exec(location.hash);
   if (n) return { view: "new-session", project: n[1] };
   const s = /^#\/session\/([0-9a-f]{1,64})$/.exec(location.hash);
@@ -44,12 +48,31 @@ function Redirect({ to }: { to: string }) {
 /** Claude is working in the session, so ending it cuts a turn short. */
 const isWorking = (s: SessionInfo) => s.status === "running" || s.status === "starting";
 
-const tabOf = (r: Route): TabId => (r.view === "new-session" ? "new-session" : r.view === "session" ? `session:${r.id}` : "projects");
+const tabOf = (r: Route): TabId => (r.view === "draft" ? `new-session:${r.key}` : r.view === "session" ? `session:${r.id}` : "projects");
+
+let lastKey = 0;
+/** A key for another New session tab. */
+const nextKey = () => String(++lastKey);
+
+/** Shows a New session tab in place of the link that opened it, so going back doesn't open another. */
+const showDraft = (key: string): Route => {
+  history.replaceState(null, "", `#/session/draft/${key}`);
+  return { view: "draft", key };
+};
 
 export function App() {
   const live = useLiveState();
-  const [route, setRoute] = useState<Route>(parseHash);
-  // The New session tab is the window's own; it opens on demand and stays until started or closed.
+  // A New session tab's link at start is the last run's: its keys are gone with it.
+  const [staleLink] = useState(() => parseHash().view === "draft");
+  // New session tabs are the window's own; each opens on demand and stays until started or closed.
+  const [newSessions, setNewSessions] = useState<NewSessionTab[]>(() => {
+    const r = parseHash();
+    return r.view === "new-session" ? [{ key: nextKey(), project: r.project }] : [];
+  });
+  const [route, setRoute] = useState<Route>(() => {
+    const r = parseHash();
+    return r.view === "new-session" ? showDraft(newSessions[0].key) : r;
+  });
   // Sessions being closed leave the tabs at once, without waiting for the server to confirm.
   const [ending, setEnding] = useState<ReadonlySet<string>>(new Set());
   const sessions = useMemo(() => live.sessions.filter((s) => !ending.has(s.id)), [live.sessions, ending]);
@@ -57,15 +80,7 @@ export function App() {
   const [deleting, setDeleting] = useState<SessionInfo | undefined>();
   // The session Claude is working in whose closing is waiting for confirmation.
   const [stopping, setStopping] = useState<SessionInfo | undefined>();
-  const [newSessionOpen, setNewSessionOpen] = useState(() => parseHash().view === "new-session");
-  // The project the New session tab starts in: the one it was opened from, else the most recently active one when it opened.
-  const [newSessionProject, setNewSessionProject] = useState(() => {
-    const r = parseHash();
-    return r.view === "new-session" ? r.project : undefined;
-  });
-  const newSessionWasOpen = useRef(newSessionOpen);
-  newSessionWasOpen.current = newSessionOpen;
-  // The project whose page or session tab was last active.
+  // The project whose page or session tab was last active, which a New session tab opened from elsewhere starts in.
   const recentProject = useRef<string | undefined>(undefined);
   useEffect(() => {
     const project =
@@ -89,7 +104,10 @@ export function App() {
     const open = new Set(live.sessions.map((s) => s.id));
     void (async () => {
       const saved = await loadTabs();
-      if (!saved) return setRestored(true);
+      if (!saved) {
+        if (staleLink) go("#/");
+        return setRestored(true);
+      }
       // Sessions that are gone or can't be resumed just don't get a tab. One at a time: the server lists sessions in the
       // order they started, which is the tab order.
       const back = new Set<string>();
@@ -98,30 +116,37 @@ export function App() {
         // Its tab may open before the session list has caught up with the resume.
         started.current.add(id);
       }
-      if (saved.newSession) setNewSessionOpen(true);
+      // Keys are this window's own, so the saved active one is found by its place.
+      const drafts = saved.newSessions.map((p) => ({ key: nextKey(), project: p || undefined }));
+      setNewSessions((open) => [...drafts, ...open]);
       // A link that already points somewhere wins over the saved active tab.
-      if (!location.hash || location.hash === "#/") {
-        if (saved.active === "new-session" && saved.newSession) go("#/session/new");
+      if (!location.hash || location.hash === "#/" || staleLink) {
+        const draft = /^new-session:([0-9]+)$/.exec(saved.active);
+        if (draft && drafts[Number(draft[1])]) go(`#/session/draft/${drafts[Number(draft[1])].key}`);
         else if (saved.active.startsWith("session:") && back.has(saved.active.slice(8))) go(`#/session/${saved.active.slice(8)}`);
+        else if (staleLink) go("#/");
       }
       setRestored(true);
     })();
   }, [live.loaded, live.sessions]);
 
   useEffect(() => {
-    if (restored) saveTabs({ sessions: sessions.map((s) => s.id), newSession: newSessionOpen, active: tabOf(route) });
-  }, [restored, sessions, newSessionOpen, route]);
+    if (!restored) return;
+    // A New session tab is saved as active by its place, since keys don't outlive the window.
+    const active = route.view === "draft" ? `new-session:${newSessions.findIndex((n) => n.key === route.key)}` : tabOf(route);
+    saveTabs({ sessions: sessions.map((s) => s.id), newSessions: newSessions.map((n) => n.project ?? ""), active });
+  }, [restored, sessions, newSessions, route]);
 
   useEffect(() => {
     const onHash = () => {
-      const r = parseHash();
+      let r = parseHash();
+      if (r.view === "new-session") {
+        const opened = { key: nextKey(), project: r.project ?? recentProject.current };
+        setNewSessions((open) => [...open, opened]);
+        r = showDraft(opened.key);
+      }
       setRoute(r);
       if (tabOf(r) === "projects") projectsHash.current = location.hash || "#/";
-      if (r.view === "new-session") {
-        // Switching back to the open tab keeps its pick.
-        if (r.project || !newSessionWasOpen.current) setNewSessionProject(r.project ?? recentProject.current);
-        setNewSessionOpen(true);
-      }
       scrollTo(0, 0);
     };
     addEventListener("hashchange", onHash);
@@ -129,13 +154,27 @@ export function App() {
   }, []);
 
   // The tabs in the order the header shows them.
-  const tabs: TabId[] = ["projects", ...sessions.map((s): TabId => `session:${s.id}`), ...(newSessionOpen ? ["new-session" as const] : [])];
+  const tabs: TabId[] = [
+    "projects",
+    ...sessions.map((s): TabId => `session:${s.id}`),
+    ...newSessions.map((n): TabId => `new-session:${n.key}`),
+  ];
 
   const select = (tab: TabId) => {
     if (tab === "projects") go(projectsHash.current);
-    else if (tab === "new-session") go("#/session/new");
+    else if (tab.startsWith("new-session:")) go(`#/session/draft/${tab.slice("new-session:".length)}`);
     else go(`#/session/${tab.slice("session:".length)}`);
   };
+
+  const dropNewSession = (key: string) => setNewSessions((open) => open.filter((n) => n.key !== key));
+
+  /** Names a New session tab after the project picked in it. */
+  const pickedIn = (key: string, name: string) =>
+    setNewSessions((open) => {
+      const project = name || undefined;
+      if (!open.some((n) => n.key === key && n.project !== project)) return open;
+      return open.map((n) => (n.key === key ? { ...n, project } : n));
+    });
 
   /** After closing the active tab, move to the tab to its left, else the left-most one left, else the Projects tab. */
   const leave = (tab: TabId) => {
@@ -191,7 +230,7 @@ export function App() {
           continue;
         }
         closed.current = closed.current.filter((x) => x !== id);
-        return onSessionStarted(id, true);
+        return onSessionStarted(id);
       }
     } finally {
       reopening.current = false;
@@ -199,8 +238,8 @@ export function App() {
   };
 
   const close = (tab: TabId) => {
-    if (tab === "new-session") {
-      setNewSessionOpen(false);
+    if (tab.startsWith("new-session:")) {
+      dropNewSession(tab.slice("new-session:".length));
       return leave(tab);
     }
     const s = sessions.find((x) => `session:${x.id}` === tab);
@@ -252,7 +291,8 @@ export function App() {
     };
   }, []);
 
-  const onSessionStarted = (id: string, keepNewTab?: boolean) => {
+  /** `from`: the New session tab it was started in, which closes. */
+  const onSessionStarted = (id: string, from?: string) => {
     started.current.add(id);
     // A resumed session keeps its id, which is still marked as ending from when its tab was closed.
     setEnding((all) => {
@@ -261,7 +301,7 @@ export function App() {
       next.delete(id);
       return next;
     });
-    if (!keepNewTab) setNewSessionOpen(false);
+    if (from) dropNewSession(from);
     go(`#/session/${id}`);
   };
 
@@ -269,18 +309,18 @@ export function App() {
     <div className="app">
       <Header
         sessions={sessions}
-        newSessionOpen={newSessionOpen}
+        newSessions={newSessions}
         active={tabOf(route)}
         onSelect={select}
         onClose={close}
         onNewSession={() => go("#/session/new")}
       />
-      {/* Kept mounted while its tab is open, so a half-typed prompt survives switching tabs. */}
-      {newSessionOpen && (
-        <div hidden={route.view !== "new-session"}>
-          <NewSession live={live} project={newSessionProject} onStarted={(id) => onSessionStarted(id)} />
+      {/* Kept mounted while their tabs are open, so a half-typed prompt survives switching tabs. */}
+      {newSessions.map((n) => (
+        <div key={n.key} hidden={!(route.view === "draft" && route.key === n.key)}>
+          <NewSession live={live} project={n.project} onProject={(name) => pickedIn(n.key, name)} onStarted={(id) => onSessionStarted(id, n.key)} />
         </div>
-      )}
+      ))}
       {deleting && (
         <ConfirmDialog
           title="Delete this session?"
@@ -332,8 +372,7 @@ interface BodyProps {
   route: Route;
   live: ReturnType<typeof useLiveState>;
   started: Set<string>;
-  /** `keepNewTab` for a fork, which doesn't come from the New session tab. */
-  onSessionStarted(id: string, keepNewTab?: boolean): void;
+  onSessionStarted(id: string): void;
 }
 
 function Body({ route, live, started, onSessionStarted }: BodyProps) {
@@ -360,12 +399,13 @@ function Body({ route, live, started, onSessionStarted }: BodyProps) {
       return <ProjectForm key={`edit-${route.name}`} editing={p} onCancel={back} onCreated={back} />;
     }
     case "new-session":
-      return null; // rendered by App, which keeps it mounted
+    case "draft":
+      return null; // rendered by App, which keeps New session tabs mounted
     case "session": {
       const s = live.sessions.find((x) => x.id === route.id);
       if (!live.loaded || (!s && started.has(route.id))) return null;
       if (!s) return <Redirect to="#/" />;
-      return <SessionView key={s.id} session={s} onForked={(id) => onSessionStarted(id, true)} />;
+      return <SessionView key={s.id} session={s} onForked={(id) => onSessionStarted(id)} />;
     }
     default:
       return <ProjectList live={live} onOpen={(name) => go(`#/project/${name}`)} onNew={() => go("#/new")} />;

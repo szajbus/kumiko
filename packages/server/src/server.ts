@@ -287,8 +287,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   app.get("/api/tabs", async (c) => c.json((await tabs.read()) ?? null));
 
   app.put("/api/tabs", async (c) => {
-    const saved = parseSavedTabs(await body<unknown>(c, "Body must be JSON: { sessions, newSession, active }."));
-    if (!saved) throw new HttpError(400, "Body must be JSON: { sessions, newSession, active }.");
+    const saved = parseSavedTabs(await body<unknown>(c, "Body must be JSON: { sessions, newSessions, active }."));
+    if (!saved) throw new HttpError(400, "Body must be JSON: { sessions, newSessions, active }.");
     await tabs.write(saved);
     return c.json({ ok: true });
   });

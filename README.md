@@ -180,6 +180,7 @@ Beyond the spec:
 ### Resuming and forking
 
 - **Closing a tab closes the session** (there is no End session button). It stays on disk and can be resumed. Closing it while Claude is working asks first, since the turn stops and the reply in progress is lost. Quitting the desktop app asks the same when Claude is working in any session; closing its window on macOS leaves the app, and Claude, running.
+- **Each + (or Cmd+T, or a project's New session button) opens another New session tab**, named `<project> · New session` after the project picked in it. Starting a session in one replaces it with the session's tab.
 - **The New session tab lists saved sessions**, most recent first (20 shown), under the opening-prompt form. Resume needs the session's project's sandbox to be running. It starts `claude … --resume <claude session id>` under the same Kumiko session id, and `GET /api/sessions/resumable` and `POST /api/sessions/:id/resume` back it.
 - **Only the chat is saved**: prompts, finished assistant messages, tool results, turn footers and Stop. Deltas, `system` messages, errors and the end marker are dropped, so a resumed tab shows the conversation and nothing else. The session is `idle` at once, since Claude sends `system/init` only with the next prompt.
 - **Cost footers** after a resume: the running `total_cost_usd` starts over, and the UI treats a drop as a new total.

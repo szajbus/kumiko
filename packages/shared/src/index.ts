@@ -63,7 +63,8 @@ export function sameMounts(a: Mount[], b: Mount[]): boolean {
 export interface SavedTabs {
   /** Session ids in tab order. */
   sessions: string[];
-  newSession: boolean;
+  /** One per New session tab, in tab order: the project picked in it, or "" for none. */
+  newSessions: string[];
   /** The active tab's id, as the UI names it. */
   active: string;
 }
@@ -71,10 +72,13 @@ export interface SavedTabs {
 /** The saved tabs in `v`, or undefined if it isn't saved tabs. Session ids that can't be ids are dropped. */
 export function parseSavedTabs(v: unknown): SavedTabs | undefined {
   if (typeof v !== "object" || v === null) return undefined;
-  const { sessions, newSession, active } = v as Partial<Record<keyof SavedTabs, unknown>>;
+  const { sessions, newSessions, newSession, active } = v as Partial<Record<keyof SavedTabs | "newSession", unknown>>;
   if (!Array.isArray(sessions) || typeof active !== "string" || active.length > 100) return undefined;
   const ids = sessions.filter((x): x is string => typeof x === "string" && SESSION_ID_PATTERN.test(x));
-  return { sessions: ids.slice(0, 200), newSession: newSession === true, active };
+  // `newSession: true` is how a single New session tab was saved before there could be more.
+  const drafts = Array.isArray(newSessions) ? newSessions : newSession === true ? [""] : [];
+  const projects = drafts.filter((x): x is string => typeof x === "string").map((x) => (NAME_PATTERN.test(x) ? x : ""));
+  return { sessions: ids.slice(0, 200), newSessions: projects.slice(0, 50), active };
 }
 
 /** What the UI needs from the host. */

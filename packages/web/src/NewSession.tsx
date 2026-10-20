@@ -10,28 +10,31 @@ import { Select } from "./Select";
 
 interface Props {
   live: LiveState;
-  /** The project to start in, when the tab was opened from one. */
+  /** The project to start in, when the tab was opened from one or restored. Read once, when the tab opens. */
   project?: string;
+  /** Told the project picked, as it changes: "" when none is. */
+  onProject(name: string): void;
   onStarted(id: string): void;
 }
 
 /** Two choices start a session: a project whose VM runs, and an opening prompt. */
-export function NewSession({ live, project: initial, onStarted }: Props) {
+export function NewSession({ live, project: initial, onProject, onStarted }: Props) {
   const running = live.projects.filter((s) => s.status === "running" && !s.busy);
   const others = live.projects.filter((s) => !running.includes(s));
   const [picked, setPicked] = useState(initial ?? "");
   const [model, setModel] = useState("default");
   const [error, setError] = useState<string | undefined>();
   const home = useHome();
-  useEffect(() => {
-    if (initial) setPicked(initial);
-  }, [initial]);
 
-  // Preselect the first running project, and move off one that stops.
+  // Preselect the first running project, and move off one that stops. Not before the list has arrived, which would drop
+  // the one it opened with.
   const sandbox = running.some((s) => s.name === picked) ? picked : running[0]?.name ?? "";
   useEffect(() => {
-    if (sandbox !== picked) setPicked(sandbox);
-  }, [sandbox, picked]);
+    if (live.loaded && sandbox !== picked) setPicked(sandbox);
+  }, [live.loaded, sandbox, picked]);
+  useEffect(() => {
+    if (live.loaded) onProject(sandbox);
+  }, [live.loaded, sandbox]);
 
   const sb = live.projects.find((s) => s.name === sandbox);
   const workdir = sb?.project.clonePath;
