@@ -2,14 +2,15 @@
 //
 //   node packages/agent/dist/scripts/drive.js --sandbox <name> [--workdir /workspace] [--local]
 //
-// Sends two prompts (the second reads a forwarded variable through Bash), interrupts a third mid-tool-call,
-// then sends a fourth to show the process is still usable. Done when all of that holds.
+// Sends two prompts (the second reads a forwarded variable through Bash), then a third: once its tool call is under
+// way the driver detaches, as a server going away does, and another attaches to the same Claude and interrupts it.
+// A fourth shows the process is still usable. Done when all of that holds.
 // --local runs `claude` on this machine through the same `bash -s` preamble, for trying it from inside a VM.
 import { spawn } from "node:child_process";
 import { parseArgs } from "node:util";
 import { WORKSPACE_DIR } from "@kumiko/shared";
 import { execScript, LimaProvider, MetadataStore } from "@kumiko/sandbox";
-import { ClaudeDriver, type AgentMessage, type Exec } from "../src/index.js";
+import { ClaudeDriver, type AgentEvent, type AgentMessage, type Exec } from "../src/index.js";
 
 const { values } = parseArgs({
   options: {
@@ -41,10 +42,11 @@ if (values.local) {
   workdir ??= (await new MetadataStore().read(values.sandbox!))?.spec.workdir ?? WORKSPACE_DIR;
 }
 
-const driver = new ClaudeDriver(exec);
+let driver = new ClaudeDriver(exec);
 const results: AgentMessage[] = [];
 const messages: AgentMessage[] = [];
 let interruptSent = false;
+let reattached = false;
 let next: (() => void) | undefined;
 
 /** One line per event; stream deltas are summarised so the output stays readable. */
@@ -61,7 +63,7 @@ function show(m: AgentMessage) {
   console.log(`\x1b[36m[${m.type}${sub}]\x1b[0m ${JSON.stringify(m).slice(0, 240)}`);
 }
 
-driver.onEvent((ev) => {
+const listen = (ev: AgentEvent) => {
   if (ev.kind === "error") console.log(`\x1b[31m[error] ${ev.message}${ev.hint ? ` (${ev.hint})` : ""}\x1b[0m${ev.stderr ? `\n${ev.stderr.join("\n")}` : ""}`);
   if (ev.kind === "exit") console.log(`[exit ${ev.code}${ev.requested ? ", requested" : ""}]`);
   if (ev.kind !== "message") return;
@@ -72,15 +74,24 @@ driver.onEvent((ev) => {
     results.push(m);
     next?.();
   }
-  // Interrupt the third turn once its tool call is under way.
+  // Once the third turn's tool call is under way: let go of Claude, pick it up with another driver, and interrupt it.
   if (results.length === 2 && !interruptSent && m.type === "assistant" && JSON.stringify(m).includes('"tool_use"')) {
     interruptSent = true;
-    setTimeout(() => {
+    void (async () => {
+      await driver.detach();
+      const at = driver.position()!;
+      console.log(`\x1b[33m>>> detached at ${at.run}:${at.offset}; attaching another driver\x1b[0m`);
+      driver = new ClaudeDriver(exec);
+      driver.onEvent(listen);
+      driver.attach({ sandbox: values.sandbox ?? "local", ...at });
+      reattached = true;
+      await new Promise((r) => setTimeout(r, 1500));
       console.log("\x1b[33m>>> interrupt\x1b[0m");
       driver.interrupt();
-    }, 1500);
+    })();
   }
-});
+};
+driver.onEvent(listen);
 
 const turn = (prompt: string, first = false) =>
   new Promise<void>((resolve) => {
@@ -103,6 +114,7 @@ try {
 const toolResults = messages.filter((m) => m.type === "user").map((m) => JSON.stringify(m)).join("\n");
 checks.push(["both turns complete", results[0]?.subtype === "success" && results[1]?.subtype === "success"]);
 checks.push(["a forwarded variable is visible to Claude", toolResults.includes(token)]);
+checks.push(["another driver picks Claude up mid-turn", reattached && results.length >= 3]);
 checks.push(["the interrupt ends the third turn early", interruptSent && results[2]?.subtype !== "success"]);
 checks.push(["the process is usable after the interrupt", results[3]?.subtype === "success"]);
 console.log();

@@ -39,7 +39,7 @@ import {
   type WorktreesResponse,
 } from "@kumiko/shared";
 import { LimaProvider, validateSpec, type Log, type SandboxProvider } from "@kumiko/sandbox";
-import { ClaudeDriver, type AgentDriver } from "@kumiko/agent";
+import { ClaudeDriver, Runs, type AgentDriver } from "@kumiko/agent";
 import { AttachmentRefused, AttachmentStore } from "./attachments.js";
 import { GitError, worktreeStatuses } from "./git.js";
 import { isLocalRequest } from "./guard.js";
@@ -47,7 +47,7 @@ import { LoginFailed, Logins } from "./logins.js";
 import { BusyError, Operations } from "./operations.js";
 import { ProjectExists, ProjectRecordError, ProjectStore } from "./projects.js";
 import { RewindRefused, SessionEnded, SessionNotFound, SessionNotResumable, Sessions } from "./sessions.js";
-import { SessionStore } from "./store.js";
+import { SessionStore, type StoredSession } from "./store.js";
 import { TabsStore } from "./tabs.js";
 import { serveWeb } from "./static.js";
 import { sandboxUsageSource, UsageCache, type UsageSource } from "./usage.js";
@@ -71,6 +71,8 @@ export interface ServerOptions {
   sessionsDir?: string;
   /** Makes the driver for each new agent session; defaults to Claude Code over the provider's exec. */
   driver?: () => AgentDriver;
+  /** Finds and removes the runs agents work in, in each sandbox; defaults to the provider's exec. */
+  runs?: Pick<Runs, "list" | "remove">;
   /** Reads the account and usage of the Claude in a sandbox; defaults to asking Claude inside it. Usage is cached per account. */
   usage?: UsageSource;
 }
@@ -78,9 +80,13 @@ export interface ServerOptions {
 export interface RunningServer {
   url: string;
   port: number;
-  /** Sessions Claude is working in right now, which closing the server would cut short. */
+  /** Sessions Claude is working in right now. */
   working(): SessionInfo[];
-  close(): Promise<void>;
+  /**
+   * Stops the server. Claude keeps working in every live session, for the next server on the same data to pick up;
+   * with `endSessions`, every session ends first, as when its tab closes.
+   */
+  close(opts?: { endSessions?: boolean }): Promise<void>;
 }
 
 export async function startServer(opts: ServerOptions = {}): Promise<RunningServer> {
@@ -96,6 +102,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   await attachments.sweep((await sessionStore.readAll()).flatMap((s) => s.events));
   const tabs = new TabsStore(opts.dataDir);
   const sessions = new Sessions(opts.driver ?? (() => new ClaudeDriver(provider.exec.bind(provider))), sessionStore);
+  const runs = opts.runs ?? new Runs(provider.exec.bind(provider));
   const clients = new Set<WebSocket>();
   const usage = new UsageCache(
     opts.usage ?? sandboxUsageSource(provider.exec.bind(provider), (sandbox) => infos.find((i) => i.name === sandbox)?.meta?.spec.env ?? []),
@@ -192,8 +199,55 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     await sessions.endSandbox(name, "sandbox");
   };
 
+  /** Saves that a session's run is over, without having seen it end: the VM restarted, say. It stays resumable. */
+  const markRunDead = (stored: StoredSession) =>
+    stored.run?.live ? sessionStore.write({ ...stored, run: { ...stored.run, live: false } }) : Promise.resolve();
+
+  /** Runs in the sandbox that no saved session will attach to again; their agents are stopped and the runs deleted. */
+  const sweepRuns = async (sandbox: string, found: Map<string, unknown>) => {
+    await sessions.flush();
+    const wanted = new Set((await sessionStore.readAll()).flatMap((x) => (x.run?.live ? [x.run.id] : [])));
+    await runs.remove(sandbox, [...found.keys()].filter((id) => !wanted.has(id))).catch(() => {});
+  };
+
+  /**
+   * Picks up the sessions a server before this one left working: those whose Claude still runs, or has exited since,
+   * are open again, as they were. Those whose sandbox isn't running, or whose run is gone, are only saved, to resume.
+   * Runs nobody will pick up are removed.
+   */
+  const reopenSessions = async () => {
+    const saved = (await sessionStore.readAll()).filter((x) => x.run?.live);
+    const running = projectList.map((p) => p.id).filter((id) => infoOf(id).status === "running");
+    await Promise.all(
+      running.map(async (sandbox) => {
+        let found: Map<string, string>;
+        try {
+          found = await runs.list(sandbox);
+        } catch {
+          // Can't tell; they stay as they are, and resuming one asks again.
+          return;
+        }
+        for (const stored of saved.filter((x) => x.info.sandbox === sandbox)) {
+          const state = found.get(stored.run!.id);
+          try {
+            if (state === "alive" || state === "exited") {
+              sessions.reopen(stored);
+              continue;
+            }
+          } catch {
+            // A saved run that can't be attached to (not a run id, say) is as good as gone.
+          }
+          await markRunDead(stored);
+        }
+        await sweepRuns(sandbox, found);
+      }),
+    );
+    await Promise.all(saved.filter((x) => !running.includes(x.info.sandbox)).map(markRunDead));
+  };
+
   const timer = setInterval(() => void refresh(), opts.refreshMs ?? 5000);
   await refresh();
+  await reopenSessions();
 
   // ---- routes -----------------------------------------------------------------------------
 
@@ -355,6 +409,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   const startVm: Work = async (p, _i, log) => {
     await projects.writeManaged(p);
     await provider.start(p.id, log);
+    // Runs left from before the VM stopped have nothing running in them any more.
+    await sweepRuns(p.id, await runs.list(p.id).catch(() => new Map()));
   };
   const checkStart = async (p: Project, i: SandboxInfo) => {
     if (i.status === "absent") throw new HttpError(409, `${vmName(p.id)} doesn't exist. Recreate it.`);
@@ -522,10 +578,20 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     return c.json({ ok: true });
   });
 
+  /** Opens a saved session again: its Claude where it is still running, or a new one continuing its conversation. */
   app.post("/api/sessions/:id/resume", async (c) => {
     const stored = await sessionStore.read(c.req.param("id"));
-    if (!stored?.info.claudeSessionId) throw new HttpError(404, `No saved session ${c.req.param("id")}.`);
+    if (!stored || (!stored.info.claudeSessionId && !stored.run?.live)) throw new HttpError(404, `No saved session ${c.req.param("id")}.`);
     const ready = await startedProject(stored.info.sandbox);
+    if (stored.run?.live && !sessions.get(stored.info.id)) {
+      // Not knowing whether its Claude still runs, starting another on the same conversation could have two at once.
+      const found = await runs.list(stored.info.sandbox).catch(() => undefined);
+      if (!found) throw new HttpError(503, `Couldn't reach ${vmName(stored.info.sandbox)} to find this session's Claude. Try again.`);
+      const state = found.get(stored.run.id);
+      if (state === "alive" || state === "exited") return c.json({ id: sessions.reopen(stored).id }, 201);
+      await markRunDead(stored);
+      if (!stored.info.claudeSessionId) throw new HttpError(404, `No saved session ${c.req.param("id")}.`);
+    }
     return c.json({ id: sessions.resume(stored, ready.env).id }, 201);
   });
 
@@ -676,10 +742,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     url: `http://${host}:${port}`,
     port,
     working: () => sessions.list().filter((s) => s.status === "running" || s.status === "starting"),
-    close: async () => {
+    close: async ({ endSessions = false } = {}) => {
       clearInterval(timer);
       logins.cancelAll();
-      await sessions.endAll("quit");
+      if (endSessions) await sessions.endAll("quit");
+      else await sessions.detachAll();
       await sessions.flush();
       for (const ws of clients) ws.terminate();
       // Closed rather than terminated, so each tab still gets its session's last event.

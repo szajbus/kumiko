@@ -23,6 +23,22 @@ export interface StartOptions {
   resumeAt?: string;
   /** The model to start with (an alias such as "opus"); the agent's default when omitted. */
   model?: string;
+  /** The id of the run the agent starts in; a new one is made up when omitted. See `runs.ts`. */
+  run?: string;
+}
+
+/** Where to pick up an agent that is already running: its run, and how far into its output the caller has got. */
+export interface AttachOptions {
+  sandbox: string;
+  run: string;
+  /** Bytes of the run's output already consumed; what follows is reported as if live. */
+  offset: number;
+}
+
+/** A driver's place in its run's output: everything before `offset` has been reported. */
+export interface RunPosition {
+  run: string;
+  offset: number;
 }
 
 /** A file sent with a prompt, for the agent to read itself: an image, a PDF, or text (`text/plain`, UTF-8). */
@@ -39,7 +55,7 @@ export type AgentMessage = Record<string, unknown> & { type: string };
  * What an agent reports.
  * - `message`: one line of the agent's own protocol, parsed (for Claude, a stream-json object).
  * - `error`: something the user should see, with a hint where one exists. `signedOut` when the agent isn't logged in.
- * - `exit`: the process is gone; always the last event. `requested` is true after `stop()`.
+ * - `exit`: the process is gone; always the last event, unless the driver detaches. `requested` is true after `stop()`.
  */
 export type AgentEvent =
   | { kind: "message"; payload: AgentMessage }
@@ -51,7 +67,12 @@ export type AgentEvent =
  * (through ACP, say) can slot in without touching the server or the UI.
  */
 export interface AgentDriver {
+  /** Starts the agent in a run of its own, detached from the server, and attaches to it. */
   start(opts: StartOptions): void;
+  /** Attaches to a run started earlier (by another server, say), replaying its output from `offset`. */
+  attach(opts: AttachOptions): void;
+  /** The run and how much of its output has been reported, once started or attached. */
+  position(): RunPosition | undefined;
   /**
    * Sends a prompt; it starts a turn, or queues behind the current one. The agent tags the prompt with `id` in its
    * stream and in its history, which is what `rewindFiles` and `resumeAt` refer to. `files` go with it.
@@ -63,6 +84,8 @@ export interface AgentDriver {
   interrupt(): void;
   /** Closes stdin and kills the process if it is still alive after a grace period. Resolves once it has exited. */
   stop(): Promise<void>;
+  /** Lets go of the agent and leaves it running, to be attached to again from `position()`. Reports nothing more. */
+  detach(): Promise<void>;
   /** Returns a function that removes the listener. */
   onEvent(listener: (ev: AgentEvent) => void): () => void;
 }

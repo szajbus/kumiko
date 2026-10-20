@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { appendFile, chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 import WebSocket from "ws";
 import type { ProjectView, ServerEvent, SessionEvent, SessionInfo, SessionStreamMessage } from "@kumiko/shared";
+import { RUNS_DIR, userMessage } from "@kumiko/agent";
 import { LimaProvider, MetadataStore, shellQuote } from "@kumiko/sandbox";
-import { startServer, type RunningServer } from "../src/index.js";
+import { startServer, type RunningServer, type ServerOptions } from "../src/index.js";
+import type { StoredSession } from "../src/store.js";
 import { makeClone } from "./repo.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -23,6 +26,22 @@ describe("sessions", () => {
   let sessionsDir: string;
   const events: ServerEvent[] = [];
   let ws: WebSocket;
+  let serverOpts: ServerOptions;
+
+  /** Starts the server and listens to its events. */
+  const boot = async () => {
+    server = await startServer(serverOpts);
+    ws = new WebSocket(`${server.url.replace("http", "ws")}/api/events`);
+    ws.on("message", (m) => events.push(JSON.parse(String(m))));
+    await new Promise((r) => ws.once("open", r));
+  };
+  /** Closes the server and starts another on the same data, as a restart of the app does. */
+  const restart = async (opts?: { endSessions?: boolean }, meanwhile?: () => Promise<void>) => {
+    ws.close();
+    await server.close(opts);
+    await meanwhile?.();
+    await boot();
+  };
 
   const api = (path: string, init: RequestInit = {}) =>
     fetch(server.url + path, { ...init, headers: { "content-type": "application/json", ...init.headers } });
@@ -96,16 +115,15 @@ describe("sessions", () => {
       env,
     });
     sessionsDir = join(root, "sessions");
-    server = await startServer({ provider, port: 0, refreshMs: 200, env, home: root, dataDir: join(root, "data"), sessionsDir });
-    ws = new WebSocket(`${server.url.replace("http", "ws")}/api/events`);
-    ws.on("message", (m) => events.push(JSON.parse(String(m))));
-    await new Promise((r) => ws.once("open", r));
+    serverOpts = { provider, port: 0, refreshMs: 200, env, home: root, dataDir: join(root, "data"), sessionsDir };
+    await boot();
     workdir = await create("one");
   });
 
   after(async () => {
     ws.close();
-    await server.close();
+    // Claude would otherwise keep running in the fake sandbox, which is this machine.
+    await server.close({ endSessions: true });
   });
 
   it("refuses bad starts", async () => {
@@ -346,6 +364,9 @@ describe("sessions", () => {
     assert.deepEqual(prompts.map((p) => p.text), ["first", "second", "third"]);
     assert.ok(prompts.every((p) => p.id), "every prompt is tagged with an id");
     const rewind = (body: object, from = id) => api(`/api/sessions/${from}/rewind`, { method: "POST", body: JSON.stringify(body) });
+    const runOf = async (x: string): Promise<string | undefined> => (JSON.parse(await readFile(join(sessionsDir, `${x}.json`), "utf8")) as StoredSession).run?.id;
+    const firstRun = await runOf(id);
+    assert.match(firstRun ?? "", new RegExp(`^${id}-[0-9a-f]{8}$`));
 
     assert.equal((await rewind({})).status, 400);
     assert.equal((await rewind({ prompt: "nope" })).status, 409, "a prompt the session never sent");
@@ -368,6 +389,10 @@ describe("sessions", () => {
     assert.equal(info?.status, "idle");
     assert.equal(info?.claudeSessionId, claudeId, "Claude's new id only comes with the next turn");
     assert.equal(info?.resumeAt, firstReplyId);
+    const rewoundRun = await waitFor(async () => { const r = await runOf(id); return r !== firstRun ? r : undefined; });
+    // The new Claude has a run of its own; the old one goes with its Claude.
+    await waitFor(() => existsSync(join(limaDir, "vm-home", RUNS_DIR, rewoundRun!)) || undefined);
+    await waitFor(() => !existsSync(join(limaDir, "vm-home", RUNS_DIR, firstRun!)) || undefined);
 
     // Closed and resumed before that turn, it makes the same cut.
     await api(`/api/sessions/${id}`, { method: "DELETE" });
@@ -475,10 +500,15 @@ describe("sessions", () => {
       assert.deepEqual(await json(await post(`/api/sessions/${id}/login`)), { loggedIn: { email: "you@example.com", plan: "max" } });
 
       // Retry: a new Claude process (fresh, since no turn ever succeeded) and the failed prompt again.
+      const runsBefore = (await readdir(join(limaDir, "vm-home", RUNS_DIR))).filter((r) => r.startsWith(`${id}-`));
+      assert.equal(runsBefore.length, 1);
       assert.equal((await post(`/api/sessions/${id}/retry`)).status, 202);
       await waitFor(() => s.got.some((e) => e.kind === "claude" && JSON.stringify(e.payload).includes("You said: hello while logged out")));
       const after = await waitFor(async () => { const i = await session(id); return i?.status === "idle" && i.claudeSessionId ? i : undefined; });
       assert.notEqual(after.claudeSessionId, before);
+      // The new Claude runs in a run of its own, and the old one goes.
+      const runs = async () => (await readdir(join(limaDir, "vm-home", RUNS_DIR))).filter((r) => r.startsWith(`${id}-`));
+      assert.notDeepEqual(await waitFor(async () => { const r = await runs(); return r.length === 1 ? r : undefined; }), runsBefore);
       assert.equal(s.got.filter((e) => e.kind === "ended").length, 0, "the swap doesn't end the session");
       await api(`/api/sessions/${id}`, { method: "DELETE" });
     } finally {
@@ -540,13 +570,138 @@ describe("sessions", () => {
     await api(`/api/sessions/${id}`, { method: "DELETE" });
   });
 
-  it("ends every live session when the server closes", async () => {
-    const live = ((await json(await api("/api/sessions"))) as SessionInfo[]).filter((s) => s.status === "idle");
-    assert.ok(live.length > 0);
-    const s = await listen(live[0].id);
-    await server.close();
-    await waitFor(() => s.got.some((e) => e.kind === "ended" && e.payload.reason === "quit"));
-    // `after` closes again; make that harmless.
-    server = { ...server, close: async () => {} };
+  describe("while the server is away", () => {
+    const stored = async (id: string): Promise<StoredSession> => JSON.parse(await readFile(join(sessionsDir, `${id}.json`), "utf8"));
+    /** A file of the session's current run, in the fake sandbox. */
+    const runFile = async (id: string, file: string) => join(limaDir, "vm-home", RUNS_DIR, (await stored(id)).run!.id, file);
+    const alive = async (id: string) => {
+      try {
+        process.kill(Number(await readFile(await runFile(id, "pid"), "utf8")), 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const counting = Array.from({ length: 200 }, (_, i) => `${i + 1}`).join(" ");
+    /** The text the "slow" turn has streamed so far, from its deltas. */
+    const streamed = (got: SessionEvent[]) =>
+      got.flatMap((e) => {
+        const delta = e.kind === "claude" ? (e.payload.event as { delta?: { type?: string; text?: string } } | undefined)?.delta : undefined;
+        return delta?.type === "text_delta" ? [delta.text ?? ""] : [];
+      }).join("");
+
+    it("keeps Claude working through a restart, and its tab gets the whole turn", async () => {
+      const id = await startSession("one", "slow");
+      const s = await listen(id);
+      await waitFor(() => s.got.some((e) => e.kind === "claude" && JSON.stringify(e.payload).includes('"text":"3 "')));
+      await restart();
+      assert.equal(await s.closed, 1001);
+      assert.ok(await alive(id), "closing the server leaves Claude running");
+
+      // Open again, still working, in a buffer of its own: a tab that was open starts over.
+      assert.equal((await session(id))?.status, "running");
+      assert.equal(await (await listen(id, s.got.at(-1)!.seq, s.buffer())).closed, 4409);
+      const back = await listen(id);
+      await waitFor(() => back.results().length === 1, 20000);
+      assert.equal(streamed(back.got), counting, "every delta of the turn, once");
+      assert.deepEqual(back.got.filter((e) => e.kind === "user_prompt").map((e) => e.kind === "user_prompt" && e.payload.text), ["slow"]);
+      const info = await waitFor(async () => { const x = await session(id); return x?.status === "idle" ? x : undefined; });
+      assert.equal(info.unread, true);
+
+      // The same Claude carries on.
+      await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: "still there?" }) });
+      await waitFor(() => back.results().length === 2);
+      assert.ok(back.got.some((e) => e.kind === "claude" && e.payload.type === "result" && e.payload.result === "You said: still there?"));
+      await api(`/api/sessions/${id}`, { method: "DELETE" });
+      await waitFor(async () => !(await alive(id)) || undefined);
+    });
+
+    it("brings back a turn that ended, and Claude exiting, while it was away", async () => {
+      const done = await startSession("one", "hello");
+      const crashed = await startSession("one", "hi");
+      for (const id of [done, crashed]) await waitFor(async () => (await session(id))?.status === "idle" || undefined);
+      for (const id of [done, crashed]) await api(`/api/sessions/${id}/seen`, { method: "POST" });
+      await restart(undefined, async () => {
+        // Prompts nobody but Claude sees, as from another server.
+        await appendFile(await runFile(done, "in"), userMessage("while you were out"));
+        await appendFile(await runFile(crashed, "in"), userMessage("crash"));
+        await waitFor(async () => (await readFile(await runFile(done, "out"), "utf8")).includes("You said: while you were out") || undefined);
+        await waitFor(async () => existsSync(await runFile(crashed, "exit")) || undefined);
+      });
+
+      // Idle before and after, and waiting on the user again once the turn it missed is replayed.
+      const idle = await waitFor(async () => { const x = await session(done); return x?.unread ? x : undefined; });
+      assert.equal(idle.status, "idle");
+      assert.ok((await listen(done)).got.some((e) => e.kind === "claude" && e.payload.type === "result" && e.payload.result === "You said: while you were out"));
+
+      const failed = await waitFor(async () => { const x = await session(crashed); return x?.status === "failed" ? x : undefined; });
+      assert.equal(failed.unread, true);
+      const s = await listen(crashed);
+      const err = await waitFor(() => s.got.find((e) => e.kind === "error"));
+      assert.ok(err.kind === "error");
+      assert.deepEqual(err.payload.stderr, ["Error: something broke inside Claude"]);
+      assert.deepEqual(s.got.at(-1)?.kind === "ended" && s.got.at(-1)?.payload, { reason: "exit", code: 3 });
+      const saved = await waitFor(async () => { const x = await stored(crashed); return x.run?.live === false ? x : undefined; });
+      await waitFor(() => !existsSync(join(limaDir, "vm-home", RUNS_DIR, saved.run!.id)) || undefined);
+      for (const id of [done, crashed]) await api(`/api/sessions/${id}`, { method: "DELETE" });
+    });
+
+    it("attaches again when the connection to a run drops, losing and repeating nothing", async () => {
+      const id = await startSession("one", "slow");
+      const s = await listen(id);
+      await waitFor(() => s.got.some((e) => e.kind === "claude" && JSON.stringify(e.payload).includes('"text":"3 "')));
+      process.kill(Number(await readFile(await runFile(id, "attach.pid"), "utf8")), "SIGTERM");
+      await waitFor(() => s.results().length === 1, 20000);
+      assert.equal(streamed(s.got), counting);
+      assert.equal((await session(id))?.status, "idle");
+      await api(`/api/sessions/${id}`, { method: "DELETE" });
+    });
+
+    it("stops runs nobody will pick up, and leaves the sessions of stopped sandboxes to resume", async () => {
+      const orphan = await startSession("one", "hello");
+      const parked = await startSession("one", "hello");
+      for (const id of [orphan, parked]) await waitFor(async () => (await session(id))?.status === "idle" || undefined);
+      const orphanRun = join(limaDir, "vm-home", RUNS_DIR, (await stored(orphan)).run!.id);
+      const orphanPid = Number(await readFile(join(orphanRun, "pid"), "utf8"));
+      await restart(undefined, async () => {
+        // As if the server had gone before it could save the session.
+        await rm(join(sessionsDir, `${orphan}.json`));
+        // And the other's run is lost, as when its VM restarts: no processes, no directory.
+        const pids = await Promise.all(["pid", "hold.pid"].map(async (f) => Number(await readFile(await runFile(parked, f), "utf8"))));
+        await rm(join(limaDir, "vm-home", RUNS_DIR, (await stored(parked)).run!.id), { recursive: true });
+        for (const pid of pids) process.kill(pid);
+      });
+      assert.ok(!existsSync(orphanRun), "the orphan's run is gone");
+      await waitFor(() => {
+        try {
+          process.kill(orphanPid, 0);
+          return undefined;
+        } catch {
+          return true;
+        }
+      });
+      assert.equal(await session(parked), undefined, "a session whose run is gone isn't open");
+      assert.equal((await stored(parked)).run?.live, false);
+      assert.ok(((await json(await api("/api/sessions/resumable"))) as SessionInfo[]).some((x) => x.id === parked), "it can be resumed");
+      // Resuming it starts a Claude on its conversation, in a run of its own.
+      assert.equal((await api(`/api/sessions/${parked}/resume`, { method: "POST" })).status, 201);
+      assert.equal((await session(parked))?.status, "idle");
+      await waitFor(async () => (await stored(parked)).run?.live || undefined);
+      await api(`/api/sessions/${parked}`, { method: "DELETE" });
+      await api(`/api/sessions/saved/${parked}`, { method: "DELETE" });
+    });
+
+    it("ends every live session when the server closes with endSessions", async () => {
+      const id = await startSession("one", "hello");
+      await waitFor(async () => (await session(id))?.status === "idle" || undefined);
+      const s = await listen(id);
+      const run = join(limaDir, "vm-home", RUNS_DIR, (await stored(id)).run!.id);
+      await restart({ endSessions: true });
+      assert.ok(s.got.some((e) => e.kind === "ended" && e.payload.reason === "quit"));
+      assert.ok(!existsSync(run) || !(await alive(id)), "Claude has stopped");
+      assert.equal(await session(id), undefined, "and isn't open again");
+      assert.equal((await stored(id)).run?.live, false);
+      await api(`/api/sessions/saved/${id}`, { method: "DELETE" });
+    });
   });
 });

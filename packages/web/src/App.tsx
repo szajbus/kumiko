@@ -92,8 +92,8 @@ export function App() {
   }, [route, sessions]);
   // Sessions this window just started: their tab opens before the session list may have caught up.
   const started = useRef(new Set<string>());
-  // A snapshot after the first is a server that restarted, without the sessions it ran: the tabs' sessions it doesn't
-  // list are resumed, as at launch, and wait for it like ones just started. Any other wait is over, as the snapshot
+  // A snapshot after the first is a server that restarted. It lists the sessions whose Claude it picked up again; the
+  // tabs' sessions it doesn't list are resumed, as at launch, and wait for it like ones just started. Any other wait is over, as the snapshot
   // lists all the server has.
   const shown = useRef<string[]>([]);
   const resuming = useRef<string[]>([]);

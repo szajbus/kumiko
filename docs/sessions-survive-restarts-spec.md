@@ -90,6 +90,28 @@ Before building, a script like `npm run drive` (`packages/agent/scripts/drive.ts
 
 Record what is found under "Validated by experiment", as in `docs/projects-spec.md`.
 
+## Validated by experiment
+Run from inside a project's sandbox (Debian 12, Lima's defaults), against Claude Code there, a throwaway `sshd` on a high port, and the fakes:
+1. Claude in `-p --input-format stream-json` mode reads prompts from a FIFO with a holder, answers, doesn't notice a writer closing, and exits 0 at EOF once the holder goes. `kumiko_exit` follows its last line. `npm run drive -- --local` passes with the driver detaching during a tool call and another driver attaching to the same Claude and interrupting it.
+2. `KillUserProcesses` is unset in `logind.conf` (Debian's default, `no`) and lingering is on, so a process started with `setsid` over `ssh -T … bash -s` outlives its SSH session. Killing the SSH client with SIGKILL mid-turn left Claude working; the dropped attachment's remote half saw EOF and cleaned up after itself; the driver attached again and got every delta once. Not tried: killing the connection under a sandbox's own sshd and Lima's SSH multiplexing (`ControlMaster`), which the driver goes through on a Mac.
+3. `tail -c +N -F out` delivers an appended line in about 0.4 ms (median of 40, max 0.5 ms), on the same machine. Over Lima's SSH it adds nothing to what the pipe already cost.
+4. Not measured for a long turn or an hour of work. A delta line is about 290 bytes, so `out` grows by roughly 100 bytes per output token plus tool results: likely a few MB for a long turn and tens of MB for an hour. Only a run whose Claude has exited is deleted; no rotation. A reopen replays only what follows the last save, which is at most a turn.
+5. A 6 MB line (a few MB file as base64) written with `cat > in` arrives whole.
+6. macOS has no `setsid`. The launcher uses `perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV'` when there is none (macOS ships perl), so tests run the same script on the Mac; checked on Linux with `setsid` hidden from PATH. No shim in `fake-bin`.
+
+## The spec's model, as built
+What came out differently, or wasn't settled above:
+- **One script, three ways in** (`packages/agent/src/runs.ts`): `launch` makes the run, starts Claude detached (re-running the same script from `$BASH_EXECUTION_STRING` in `run` mode) and goes on to attach, so starting a session is still one SSH process; `attach` is the way back in. Scripts are sent each time.
+- **The run's files** are as in the table, plus `boot` (the kernel's boot id, since a pid from before a reboot means nothing) and `attach.pid`. The run id is `<session id>-<8 hex>`, random rather than counted, so it can't collide across servers.
+- **`AgentDriver`** grew `attach({ sandbox, run, offset })`, `position()` (the run and the offset) and `detach()`. `start` takes the run id in `StartOptions.run`. Listing and removing runs is a separate `Runs` class over the same `exec`, which the server takes as `ServerOptions.runs`.
+- **Stopping** runs a short command that kills the holder and sends the attachment SIGUSR1, which closes its `cat` into `in` but keeps following `out`, so the driver still sees `kumiko_exit`. After the grace period Claude gets SIGTERM, then SIGKILL; a sandbox that can't be reached is given up on after 4 s more. **Detaching** closes the attachment's stdin: EOF ends `cat`, and the attachment ends `tail` and exits.
+- **A dropped attachment** (its SSH process ends without `kumiko_exit`) is made again from the offset after 0.25, 0.5, 1, 2, then every 5 s, for as long as it takes; a sandbox that stops is noticed by the list refresh, which ends its sessions as before. The attachment checks first that the run exists (exit 75) and that its Claude is alive or has left `exit` (exit 76); either ends the session with an error.
+- **Saving** also happens when a prompt is sent, since Kumiko's `user_prompt` is nowhere in Claude's output, and when the session's Claude starts (before `system/init`), even without a Claude session id; such a copy isn't listed as resumable and is deleted if Claude exits without one. A save mid-turn keeps the deltas of the messages not finished yet, and a reopened session counts them, so they are pruned with the turn as usual.
+- **Startup** asks each running project's sandbox for its runs (one SSH command each) before the server listens, so the window's first snapshot already lists the reopened sessions. A sandbox that can't be asked is left alone; resuming one of its sessions asks again, and refuses (503) rather than start a second Claude on a conversation whose first may still be running.
+- **Orphans**: runs no saved, live session points at. They are removed at startup and after Kumiko starts a sandbox, in the server rather than in `prepareShells`, since only the server knows the saved sessions.
+- **Quitting** is as proposed: no dialog when nothing is working; otherwise "Claude keeps working in the background. Reopen Kumiko to see it." with Quit (default), Stop Claude and Quit, Cancel. `RunningServer.close({ endSessions })` picks.
+- **Two servers on one Kumiko home** would take a session's attachment from each other in turn. Killing an attachment mid-write could leave half a line in Claude's input; that is the corruption risk, not the files.
+
 ## Tests
 In `packages/server/test/sessions.test.ts`, with the fakes:
 - A "slow" turn keeps going while the server is closed and started again on the same data directory. The reopened session's tab gets the whole turn, and the session ends `idle` with its result.
@@ -115,4 +137,4 @@ Claude surviving a sandbox restart, several servers attached to one session, san
 ## Where it starts
 Everything it builds on is in `main`: the dev mode (`npm run dev:desktop`), tabs coming back after a server restart, buffer names, and the New session page starting a stopped sandbox (`startedProject` in `server.ts`).
 
-**Careful when testing with the dev mode.** A server restart stops every Claude the server runs, including a session that's doing this work in Kumiko, until this spec is built. Don't run `dev:desktop` from the worktree being changed; run it from another checkout, or test with the fakes.
+**Careful when testing with the dev mode.** Until a build with this is the one running, a server restart stops every Claude that server runs, including a session working on Kumiko itself. Don't run `dev:desktop` from the worktree being changed; run it from another checkout, or test with the fakes.

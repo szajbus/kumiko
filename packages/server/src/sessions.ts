@@ -36,6 +36,8 @@ interface Session {
   exited: Promise<void>;
   /** Saves to the store run one after another, so an older state never lands over a newer one. */
   saving: Promise<void>;
+  /** Let go of by `detachAll`: Claude carries on without this server, which reports nothing more of it. */
+  detached?: boolean;
 }
 
 export class SessionNotFound extends Error {}
@@ -124,6 +126,27 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
   }
 
   /**
+   * Opens a saved session whose Claude is still running (or has exited since) in its run in the sandbox, as a server
+   * that went away left it: the saved chat, then everything Claude said after it, as if live. A turn that was in
+   * progress comes back with its deltas and status; one that ended in the meantime leaves the session idle and unread.
+   */
+  reopen(stored: StoredSession): SessionInfo {
+    const { info: saved, run } = stored;
+    if (this.sessions.has(saved.id)) throw new SessionNotResumable("This session is already open.");
+    if (!run?.live) throw new SessionNotResumable("This session's Claude isn't running any more.");
+    const { updatedAt: _updatedAt, ...info } = saved;
+    const s = this.newSession(info, stored.events);
+    // Deltas saved mid-turn are dropped like any others once their message is finished.
+    for (const e of s.events) if (e.kind === "claude") this.countBlocks(s, e.payload);
+    this.sessions.set(info.id, s);
+    const driver = this.makeDriver();
+    this.wire(s, driver);
+    driver.attach({ sandbox: info.sandbox, run: run.id, offset: run.offset });
+    this.emit("changed");
+    return s.info;
+  }
+
+  /**
    * Starts a new session from a copy of this one's conversation, which carries on as it was. With `promptId`, the copy
    * ends with that prompt's turn.
    */
@@ -190,11 +213,10 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     const { claudeSessionId, resumeAt: _resumeAt, ...rest } = from.info;
     from.info = { ...rest, status: "idle", unread: false, bufferBytes: from.bytes, ...(kept ? { claudeSessionId, resumeAt: kept.payload.uuid } : {}) };
     const old = from.driver;
-    this.attach(from, { sandbox: from.info.sandbox, workdir: from.info.workdir, env, ...(kept ? continuing(from.info) : {}) });
+    this.startDriver(from, { sandbox: from.info.sandbox, workdir: from.info.workdir, env, ...(kept ? continuing(from.info) : {}) });
     void old.stop();
     this.emit("changed");
-    if (kept) this.save(from);
-    else this.forget(from);
+    this.save(from);
     return { text: prompt.payload.text, attachments: prompt.payload.attachments };
   }
 
@@ -231,31 +253,45 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     return id;
   }
 
-  private launch(info: SessionInfo, seed: NewEvent[], driverOpts: StartOptions): SessionInfo {
+  /** A session with `seed` in a new buffer, not yet listed and with no driver. */
+  private newSession(info: SessionInfo, seed: NewEvent[]): Session {
     const s: Session = { info, driver: undefined!, events: [], bytes: 0, seq: 0, buffer: randomBytes(6).toString("hex"), subscribers: new Set(), blocks: new Map(), exited: Promise.resolve(), saving: Promise.resolve() };
     for (const ev of seed) this.push(s, ev);
     s.info = { ...info, bufferBytes: s.bytes };
+    return s;
+  }
+
+  private launch(info: SessionInfo, seed: NewEvent[], driverOpts: StartOptions): SessionInfo {
+    const s = this.newSession(info, seed);
     this.sessions.set(info.id, s);
     try {
-      this.attach(s, driverOpts);
+      this.startDriver(s, driverOpts);
     } catch (err) {
       // Nothing started (e.g. a saved Claude id that isn't one), so there is no exit to wait for: forget it now.
       this.sessions.delete(info.id);
       throw err;
     }
     this.emit("changed");
+    // Saved with its run straight away, so a server that goes away before Claude says anything can find it again.
+    this.save(s);
     return s.info;
   }
 
-  /** Starts a Claude process for the session. Once another replaces it, nothing it says reaches the session any more. */
-  private attach(s: Session, driverOpts: StartOptions) {
+  /** Starts a Claude process for the session, in a run of its own. */
+  private startDriver(s: Session, driverOpts: StartOptions) {
     const driver = this.makeDriver();
+    this.wire(s, driver);
+    driver.start({ ...driverOpts, run: `${s.info.id}-${randomBytes(4).toString("hex")}` });
+  }
+
+  /** Makes `driver` the session's. Once another replaces it, or the session is detached, nothing it says reaches the session. */
+  private wire(s: Session, driver: AgentDriver) {
     let resolveExit!: () => void;
     s.driver = driver;
     s.exited = new Promise((r) => (resolveExit = r));
 
     driver.onEvent((ev) => {
-      if (s.driver !== driver) return;
+      if (s.driver !== driver || s.detached) return;
       switch (ev.kind) {
         case "message":
           this.push(s, { kind: "claude", payload: ev.payload });
@@ -277,7 +313,6 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
         }
       }
     });
-    driver.start(driverOpts);
   }
 
   /**
@@ -298,17 +333,30 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     s.info = { ...rest, status: "idle", unread: false, ...(resume ? {} : { claudeSessionId: undefined, resumeAt: undefined }) };
     s.ending = undefined;
     s.blocks.clear();
-    this.attach(s, { sandbox: s.info.sandbox, workdir: s.info.workdir, env, ...resume });
+    this.startDriver(s, { sandbox: s.info.sandbox, workdir: s.info.workdir, env, ...resume });
     if (live) void old.stop();
     this.emit("changed");
+    this.save(s);
     return s.info;
   }
 
-  /** Writes the session's chat to the store, once Claude has given it an id to resume by. */
+  /**
+   * Writes the session's chat to the store, with its run and how much of the run's output the chat covers: once Claude
+   * has given it an id to resume by, and while its run is live, so the next server can attach to it again.
+   */
   private save(s: Session) {
     const { store } = this;
-    if (!store || !s.info.claudeSessionId) return;
-    const stored: StoredSession = { info: { ...s.info, updatedAt: new Date().toISOString() }, events: chatEvents(s.events) };
+    if (!store) return;
+    const at = s.driver.position();
+    const live = isLive(s.info) && at !== undefined;
+    // Only its run made it worth keeping, and that has ended with nothing of Claude's to resume.
+    if (!s.info.claudeSessionId && !live) return this.forget(s);
+    const unfinished = new Set([...s.blocks].filter(([, c]) => c.finished < c.started).map(([id]) => id));
+    const stored: StoredSession = {
+      info: { ...s.info, updatedAt: new Date().toISOString() },
+      events: chatEvents(s.events, live ? unfinished : undefined),
+      ...(at ? { run: { id: at.run, offset: at.offset, live } } : {}),
+    };
     s.saving = s.saving.then(() => store.write(stored)).catch(() => {});
   }
 
@@ -324,7 +372,8 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     await Promise.all([...this.sessions.values()].map((s) => s.saving));
   }
 
-  private onMessage(s: Session, m: AgentMessage) {
+  /** Counts the content blocks a message starts (with its deltas) and finishes (whole), by message id. */
+  private countBlocks(s: Session, m: AgentMessage) {
     const count = (id: unknown, field: "started" | "finished", n: number) => {
       if (typeof id !== "string") return;
       const c = s.blocks.get(id) ?? { started: 0, finished: 0 };
@@ -336,6 +385,10 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
       const msg = m.message as { id?: unknown; content?: unknown } | undefined;
       count(msg?.id, "finished", Array.isArray(msg?.content) ? msg.content.length : 0);
     }
+  }
+
+  private onMessage(s: Session, m: AgentMessage) {
+    this.countBlocks(s, m);
 
     if (m.type === "system" && m.subtype === "init") {
       // Claude sends init at the start of every turn, so it also marks a queued prompt's turn starting.
@@ -405,6 +458,8 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     s.pendingModel = /^\/model\s+(\S+)/.exec(text)?.[1];
     s.driver.send(text, promptId, files);
     if (s.info.status === "idle") this.setInfo(s, { status: "running" });
+    // Kumiko's own record of the prompt is nowhere in Claude's output, so it is saved now.
+    this.save(s);
   }
 
   /** The user has looked at the session: it no longer waits on them. */
@@ -463,5 +518,20 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
 
   async endAll(reason: EndReason): Promise<void> {
     await Promise.all([...this.sessions.keys()].map((id) => this.end(id, reason)));
+  }
+
+  /**
+   * Lets go of every live session and leaves its Claude working, for the next server to `reopen`: each is saved with
+   * its run first. Nothing more is reported of them.
+   */
+  async detachAll(): Promise<void> {
+    const live = [...this.sessions.values()].filter((s) => isLive(s.info));
+    await Promise.all(
+      live.map(async (s) => {
+        this.save(s);
+        s.detached = true;
+        await s.driver.detach();
+      }),
+    );
   }
 }

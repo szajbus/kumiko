@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { appendFile, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { describe, it } from "node:test";
-import { CLAUDE_COMMAND, ClaudeDriver, claudeCommand, exitHint, userMessage, type AgentEvent, type AgentMessage } from "../src/index.js";
+import { CLAUDE_COMMAND, ClaudeDriver, claudeCommand, exitHint, Runs, RUNS_DIR, userMessage, type AgentEvent, type AgentMessage, type Exec } from "../src/index.js";
 import { localExec } from "./helpers.js";
 
 /** Starts a driver on the fake claude and collects its events. */
-async function drive(values: NodeJS.ProcessEnv = {}, opts: { claude?: boolean; env?: string[] } = {}) {
-  const { exec, home } = await localExec(values, opts);
+async function drive(values: NodeJS.ProcessEnv = {}, opts: { claude?: boolean; env?: string[]; exec?: { exec: Exec; home: string } } = {}) {
+  const { exec, home } = opts.exec ?? (await localExec(values, opts));
   const driver = new ClaudeDriver(exec, { graceMs: 1000 });
   const events: AgentEvent[] = [];
   driver.onEvent((e) => events.push(e));
@@ -21,7 +24,7 @@ async function drive(values: NodeJS.ProcessEnv = {}, opts: { claude?: boolean; e
     }
   };
   const start = (prompt: string) => driver.start({ sandbox: "test", workdir: home, env: opts.env ?? [], prompt });
-  return { driver, events, messages, results, waitFor, start, home };
+  return { driver, events, messages, results, waitFor, start, home, exec };
 }
 
 describe("ClaudeDriver", () => {
@@ -140,5 +143,113 @@ describe("ClaudeDriver", () => {
     await d.waitFor(() => d.results().length === 2);
     assert.deepEqual(d.results().map((r) => r.result), [`You said: hello [with image/png (${png.length} bytes)]`, "You said: again [with spec.pdf (8 bytes), notes.txt (10 bytes)]"]);
     await d.driver.stop();
+  });
+
+  describe("runs", () => {
+    /** The run's files, in the fake sandbox's home. */
+    const runFile = (home: string, run: string, file: string) => join(home, RUNS_DIR, run, file);
+    const alive = async (home: string, run: string) => {
+      const pid = Number(await readFile(runFile(home, run, "pid"), "utf8"));
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    /** The text of every delta of the "slow" turn, in order. */
+    const counted = (messages: AgentMessage[]) =>
+      messages.flatMap((m) => {
+        const delta = (m.event as { delta?: { type?: string; text?: string } } | undefined)?.delta;
+        return m.type === "stream_event" && delta?.type === "text_delta" ? [delta.text ?? ""] : [];
+      }).join("");
+
+    it("leaves Claude working when it detaches, and picks it up again from where it got to", async () => {
+      const d = await drive();
+      d.driver.start({ sandbox: "test", workdir: d.home, env: [], prompt: "slow", run: "s1-a" });
+      await d.waitFor(() => d.messages().some((m) => JSON.stringify(m).includes('"text":"3 "')));
+      await d.driver.detach();
+      const at = d.driver.position()!;
+      assert.equal(at.run, "s1-a");
+      assert.ok(!d.events.some((e) => e.kind === "exit"), "detaching reports nothing");
+      assert.ok(await alive(d.home, "s1-a"), "Claude keeps going");
+      const before = counted(d.messages());
+
+      // Another driver, as a server that has restarted would, carries on from there: nothing lost, nothing twice.
+      await new Promise((r) => setTimeout(r, 500));
+      const e = await drive({}, { exec: { exec: d.exec, home: d.home } });
+      e.driver.attach({ sandbox: "test", run: at.run, offset: at.offset });
+      const result = await e.waitFor(() => e.results()[0], 15000);
+      assert.equal(result.result, "counted");
+      assert.equal(before + counted(e.messages()), Array.from({ length: 200 }, (_, i) => `${i + 1}`).join(" "));
+
+      e.driver.send("still there?");
+      assert.equal((await e.waitFor(() => e.results()[1])).result, "You said: still there?", "the same Claude answers");
+      await e.driver.stop();
+      assert.deepEqual(e.events.at(-1), { kind: "exit", code: 0, requested: true });
+      await e.waitFor(() => !existsSync(join(e.home, RUNS_DIR, "s1-a")) || undefined);
+    });
+
+    it("attaches again when its attachment drops, without losing or repeating a line", async () => {
+      const d = await drive();
+      d.driver.start({ sandbox: "test", workdir: d.home, env: [], prompt: "slow", run: "s2-a" });
+      await d.waitFor(() => d.messages().some((m) => JSON.stringify(m).includes('"text":"3 "')));
+      // The attachment in the sandbox goes, as when the connection drops.
+      process.kill(Number(await readFile(runFile(d.home, "s2-a", "attach.pid"), "utf8")), "SIGTERM");
+      const result = await d.waitFor(() => d.results()[0], 15000);
+      assert.equal(result.result, "counted");
+      assert.equal(counted(d.messages()), Array.from({ length: 200 }, (_, i) => `${i + 1}`).join(" "));
+      d.driver.send("again");
+      assert.equal((await d.waitFor(() => d.results()[1])).result, "You said: again");
+      await d.driver.stop();
+    });
+
+    it("reports an exit that happened while nobody was attached, with the stderr tail", async () => {
+      const d = await drive();
+      d.driver.start({ sandbox: "test", workdir: d.home, env: [], prompt: "hello", run: "s3-a" });
+      await d.waitFor(() => d.results()[0]);
+      await d.driver.detach();
+      const at = d.driver.position()!;
+      // Straight into Claude's input, as nobody is attached.
+      await appendFile(runFile(d.home, "s3-a", "in"), userMessage("crash"));
+      await d.waitFor(() => existsSync(runFile(d.home, "s3-a", "exit")) || undefined);
+      const e = await drive({}, { exec: { exec: d.exec, home: d.home } });
+      e.driver.attach({ sandbox: "test", run: at.run, offset: at.offset });
+      const exit = await e.waitFor(() => e.events.find((x) => x.kind === "exit"));
+      assert.deepEqual(exit, { kind: "exit", code: 3, requested: false });
+      const err = e.events.find((x) => x.kind === "error");
+      assert.ok(err?.kind === "error");
+      assert.deepEqual(err.stderr, ["Error: something broke inside Claude"]);
+      assert.equal(e.messages().filter((m) => m.type === "result").length, 0, "the turn before isn't reported again");
+    });
+
+    it("says so when the run is gone", async () => {
+      const d = await drive();
+      d.driver.attach({ sandbox: "test", run: "nothing-here", offset: 0 });
+      const exit = await d.waitFor(() => d.events.find((e) => e.kind === "exit"));
+      assert.equal(exit.kind === "exit" && exit.code, 75);
+      const err = d.events.find((e) => e.kind === "error");
+      assert.match(err?.kind === "error" ? err.message : "", /gone/);
+    });
+
+    it("lists runs with their state, and removes them", async () => {
+      const d = await drive();
+      d.driver.start({ sandbox: "test", workdir: d.home, env: [], prompt: "hello", run: "s4-a" });
+      await d.waitFor(() => d.results()[0]);
+      await d.driver.detach();
+      const runs = new Runs(d.exec);
+      assert.deepEqual([...(await runs.list("test"))], [["s4-a", "alive"]]);
+      const pid = Number(await readFile(runFile(d.home, "s4-a", "pid"), "utf8"));
+      await runs.remove("test", ["s4-a"]);
+      assert.deepEqual([...(await runs.list("test"))], []);
+      await d.waitFor(() => {
+        try {
+          process.kill(pid, 0);
+          return undefined;
+        } catch {
+          return true;
+        }
+      });
+    });
   });
 });

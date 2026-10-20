@@ -150,7 +150,8 @@ if (!app.requestSingleInstanceLock()) {
     if (process.platform !== "darwin") app.quit();
   });
 
-  // Quitting ends every session, so a turn Claude is still working on stops: ask first.
+  // Quitting leaves Claude working in the sandboxes, and the app picks its sessions up when it opens again. When Claude
+  // is working, say so, and offer to stop it instead, as closing each tab would.
   let closing = false;
   let asking = false;
   app.on("before-quit", (e) => {
@@ -158,23 +159,24 @@ if (!app.requestSingleInstanceLock()) {
     e.preventDefault();
     if (asking) return;
     const working = server.working().length;
-    const quit = () => {
+    const quit = (endSessions: boolean) => {
       closing = true;
-      void server!.close().finally(() => app.exit(0));
+      void server!.close({ endSessions }).finally(() => app.exit(0));
     };
-    if (!working) return quit();
+    if (!working) return quit(false);
     asking = true;
     const opts: Electron.MessageBoxOptions = {
-      type: "warning",
+      type: "info",
       message: working === 1 ? "Claude is still working in a session." : `Claude is still working in ${working} sessions.`,
-      detail: "Quitting stops it, and the reply it is writing is lost. You can resume the session later.",
-      buttons: ["Quit", "Cancel"],
-      defaultId: 1,
-      cancelId: 1,
+      detail: "Claude keeps working in the background. Reopen Kumiko to see it.",
+      buttons: ["Quit", "Stop Claude and Quit", "Cancel"],
+      defaultId: 0,
+      cancelId: 2,
     };
     void (win ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts)).then(({ response }) => {
       asking = false;
-      if (response === 0) quit();
+      if (response === 0) quit(false);
+      else if (response === 1) quit(true);
     });
   });
 }
