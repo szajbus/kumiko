@@ -1,15 +1,15 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { parseSavedTabs, type SavedTabs } from "@bentomo/shared";
-import { defaultBentomoHome } from "./projects.js";
+import { parseSavedTabs, type SavedTabs } from "@kumiko/shared";
+import { defaultKumikoHome } from "./projects.js";
 
-/** The window's tabs, in `tabs.json` in Bentomo's home. One file: there is one window. */
+/** The window's tabs, in `tabs.json` in Kumiko's home. One file: there is one window. */
 export class TabsStore {
   readonly file: string;
   /** Writes go one after another, so an older save can't land over a newer one. */
   private writing: Promise<void> = Promise.resolve();
 
-  constructor(home: string = defaultBentomoHome()) {
+  constructor(home: string = defaultKumikoHome()) {
     this.file = join(home, "tabs.json");
   }
 

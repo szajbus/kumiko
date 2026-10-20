@@ -10,7 +10,7 @@ export const FAKE_SSH = join(fixtures, "fake-ssh.sh");
 
 /** A LimaProvider wired to the fake limactl and ssh, with its own temp state. */
 export async function fakeLima(env: NodeJS.ProcessEnv = {}) {
-  const root = await mkdtemp(join(tmpdir(), "bentomo-test-"));
+  const root = await mkdtemp(join(tmpdir(), "kumiko-test-"));
   const limaDir = join(root, "lima");
   const mountDir = join(root, "mount");
   await mkdir(limaDir);

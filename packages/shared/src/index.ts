@@ -1,12 +1,12 @@
 // Types shared by the sandbox adapter, the server and the web UI.
 // Nothing in here may import Node or browser APIs.
 
-export const VM_PREFIX = "bm-";
+export const VM_PREFIX = "km-";
 
 /** Short sandbox names: lowercase letters, digits and dashes, not starting or ending with a dash. */
 export const NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,28}[a-z0-9])?$/;
 
-/** Bentomo's own session ids (not Claude's): lowercase hex. Checked before an id names a file or a socket. */
+/** Kumiko's own session ids (not Claude's): lowercase hex. Checked before an id names a file or a socket. */
 export const SESSION_ID_PATTERN = /^[0-9a-f]{1,64}$/;
 
 /** Variable names that can be forwarded from the host. */
@@ -22,7 +22,7 @@ export const WORKSPACE_DIR = "/workspace";
 
 /**
  * Where a project's Claude home is mounted in its VM, and what CLAUDE_CONFIG_DIR points at there. Set on every
- * command Bentomo runs in a VM and in every shell, so Claude keeps `.claude.json` inside the mount too.
+ * command Kumiko runs in a VM and in every shell, so Claude keeps `.claude.json` inside the mount too.
  */
 export const CLAUDE_HOME_IN_VM = "~/.claude";
 
@@ -86,7 +86,7 @@ export interface DefaultsResponse {
 }
 
 export interface SandboxSpec {
-  name: string;            // short name, letters/digits/dashes; the VM is "bm-<name>"
+  name: string;            // short name, letters/digits/dashes; the VM is "km-<name>"
   template?: string;       // adapter-specific; Lima default "template:default"
   cpus: number;
   memoryGiB: number;
@@ -105,12 +105,12 @@ export interface SandboxSpec {
  */
 export type EditSpec = Partial<Pick<SandboxSpec, "cpus" | "memoryGiB" | "diskGiB" | "mounts" | "env" | "provision" | "workdir">>;
 
-/** `absent`: a project whose VM doesn't exist (its creation failed, or it was deleted outside Bentomo). */
+/** `absent`: a project whose VM doesn't exist (its creation failed, or it was deleted outside Kumiko). */
 export type SandboxStatus = "running" | "stopped" | "broken" | "unknown" | "absent";
 
 export type SetupState = "creating" | "ready" | "provision_failed";
 
-/** What Bentomo keeps on disk for each sandbox it created: ~/.bentomo/sandboxes/<name>.json */
+/** What Kumiko keeps on disk for each sandbox it created: ~/.kumiko/sandboxes/<name>.json */
 export interface SandboxMeta {
   spec: SandboxSpec;
   provider: "lima";
@@ -120,18 +120,18 @@ export interface SandboxMeta {
 }
 
 export interface SandboxInfo {
-  name: string;            // short name, without "bm-"
+  name: string;            // short name, without "km-"
   status: SandboxStatus;
   cpus?: number; memoryGiB?: number; diskGiB?: number;
-  /** Bentomo's metadata, when this sandbox was created by Bentomo. */
+  /** Kumiko's metadata, when this sandbox was created by Kumiko. */
   meta?: SandboxMeta;
-  /** Set when Bentomo has a record of this sandbox that it can't read; `meta` is then missing. */
+  /** Set when Kumiko has a record of this sandbox that it can't read; `meta` is then missing. */
   metaError?: string;
 }
 
 export type OpKind = "creating" | "starting" | "stopping" | "deleting" | "recreating" | "editing";
 
-/** How a log line is shown: a command being run, a note from Bentomo, success, or an error. */
+/** How a log line is shown: a command being run, a note from Kumiko, success, or an error. */
 export type LineKind = "cmd" | "note" | "ok" | "err";
 
 export interface LogLine {
@@ -162,8 +162,8 @@ export interface SandboxView extends SandboxInfo {
 // ---- projects -------------------------------------------------------------------------------
 
 /**
- * A local git clone with one VM and one Claude home. Its id is also its sandbox's name, so the VM is `bm-<id>`.
- * Saved in Bentomo's home as `projects/<id>.json`; nothing is written into the repo.
+ * A local git clone with one VM and one Claude home. Its id is also its sandbox's name, so the VM is `km-<id>`.
+ * Saved in Kumiko's home as `projects/<id>.json`; nothing is written into the repo.
  */
 export interface Project {
   id: string;
@@ -250,7 +250,7 @@ export const LIVE_SESSION_STATUSES: readonly SessionStatus[] = ["starting", "idl
 
 export interface SessionInfo {
   id: string;
-  /** The project's id, which is also its sandbox's short name (without "bm-"). */
+  /** The project's id, which is also its sandbox's short name (without "km-"). */
   sandbox: string;
   workdir: string;          // where Claude was started in the VM
   status: SessionStatus;
@@ -292,7 +292,7 @@ export function isWaiting(s: SessionInfo): boolean {
 export type EndReason = "user" | "sandbox" | "quit" | "exit";
 
 /**
- * One entry in a session's event buffer. `claude` carries a raw stream-json line from Claude; the rest are Bentomo's:
+ * One entry in a session's event buffer. `claude` carries a raw stream-json line from Claude; the rest are Kumiko's:
  * the prompts we sent (each tagged with an `id` that Claude knows it by, so it can be rewound to), Stop being pressed, errors (SSH, `claude` missing or signed out, a crash) and the end.
  */
 export type SessionEvent =
@@ -451,7 +451,7 @@ export interface StartSessionRequest {
   model?: string;
 }
 
-/** A session saved on disk that can be resumed: closed, or left behind when Bentomo quit. */
+/** A session saved on disk that can be resumed: closed, or left behind when Kumiko quit. */
 export type ResumableSession = SessionInfo & { claudeSessionId: string };
 
 export interface TemplatesResponse {

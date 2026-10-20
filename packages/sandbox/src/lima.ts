@@ -14,7 +14,7 @@ import {
   type SandboxMeta,
   type SandboxSpec,
   type SandboxStatus,
-} from "@bentomo/shared";
+} from "@kumiko/shared";
 import { MetadataError, MetadataStore } from "./metadata.js";
 import { eachLine, exitCode, runOk, type RunOptions } from "./proc.js";
 import { ProviderError, type Log, type SandboxProvider } from "./provider.js";
@@ -32,7 +32,7 @@ export interface LimaOptions {
   env?: () => NodeJS.ProcessEnv;
 }
 
-/** The fields Bentomo reads from `limactl list --format json`. */
+/** The fields Kumiko reads from `limactl list --format json`. */
 interface LimaInstance {
   name: string;
   status: string;
@@ -114,7 +114,7 @@ const PROVISION_PRELUDE = `exec 2>&1\nset -e\ntrap 'printf "+ %s\\n" "$BASH_COMM
  */
 export function provisionCommand(script: string): string {
   let tag: string;
-  do tag = `BENTOMO_PROVISION_${randomBytes(6).toString("hex")}`;
+  do tag = `KUMIKO_PROVISION_${randomBytes(6).toString("hex")}`;
   while (script.includes(tag));
   return `bash -c "$(cat <<'${tag}'\n${PROVISION_PRELUDE}${script}\n${tag}\n)"`;
 }
@@ -142,8 +142,8 @@ export class LimaProvider implements SandboxProvider {
   private readonly env: () => NodeJS.ProcessEnv;
 
   constructor(opts: LimaOptions = {}) {
-    this.limactl = opts.limactl ?? process.env.BENTOMO_LIMACTL ?? "limactl";
-    this.ssh = opts.ssh ?? process.env.BENTOMO_SSH ?? "ssh";
+    this.limactl = opts.limactl ?? process.env.KUMIKO_LIMACTL ?? "limactl";
+    this.ssh = opts.ssh ?? process.env.KUMIKO_SSH ?? "ssh";
     this.metadata = opts.metadata ?? new MetadataStore();
     this.env = opts.env ?? (() => process.env);
   }
@@ -166,8 +166,8 @@ export class LimaProvider implements SandboxProvider {
   }
 
   /**
-   * Bentomo's VMs, plus `absent` entries for records whose VM doesn't exist: a create that failed, or a VM deleted
-   * outside Bentomo. Those can be recreated from the record.
+   * Kumiko's VMs, plus `absent` entries for records whose VM doesn't exist: a create that failed, or a VM deleted
+   * outside Kumiko. Those can be recreated from the record.
    */
   async list(): Promise<SandboxInfo[]> {
     const [instances, { metas, errors }] = await Promise.all([this.instances(), this.metadata.readAll()]);
@@ -255,7 +255,7 @@ export class LimaProvider implements SandboxProvider {
     const vm = vmName(name);
     log(`$ limactl start --tty=false ${vm}`, "cmd");
     await this.limactlRun(["start", "--tty=false", vm], { log });
-    // An unreadable record doesn't stop the VM from starting; it is only set up as one Bentomo didn't create.
+    // An unreadable record doesn't stop the VM from starting; it is only set up as one Kumiko didn't create.
     const meta = await this.metadata.read(name).catch((err: unknown) => {
       if (!(err instanceof MetadataError)) throw err;
       log(`warning: ${err.message}`);
@@ -290,28 +290,28 @@ export class LimaProvider implements SandboxProvider {
    * Prepares the VM's shells on every start, so changes to the working directory reach them. A failure is only a warning.
    * - Creates the working directory if it's missing and hands it to the VM user if they can't write to it
    *   (Lima creates /workspace as root when mounting under it).
-   * - Puts ~/.local/bin, where Claude Code installs, on PATH for every shell: ~/.config/bentomo/env.sh is
+   * - Puts ~/.local/bin, where Claude Code installs, on PATH for every shell: ~/.config/kumiko/env.sh is
    *   sourced from the top of ~/.bashrc (before Debian's early return, so `ssh host cmd` gets it too) and from ~/.profile.
    * - Moves interactive shells that land in ~ to the working directory: without --workdir, `limactl shell` tries
    *   the host's current directory and home, which rarely exist in the VM, and falls back to ~. That one is
-   *   ~/.config/bentomo/shell.sh, sourced from the end of ~/.bashrc, which only interactive shells reach.
+   *   ~/.config/kumiko/shell.sh, sourced from the end of ~/.bashrc, which only interactive shells reach.
    */
   private async prepareShells(name: string, workdir: string, log: Log): Promise<void> {
-    const env = `# Written by Bentomo on every start: ~/.local/bin (Claude Code) on PATH, and Claude's config in the project's Claude home.\n` +
+    const env = `# Written by Kumiko on every start: ~/.local/bin (Claude Code) on PATH, and Claude's config in the project's Claude home.\n` +
       `${LOCAL_BIN_ON_PATH}\n${CLAUDE_CONFIG_EXPORT}\n`;
-    const rc = `# Written by Bentomo on every start: interactive shells that land in ~ move to the working directory.\n` +
+    const rc = `# Written by Kumiko on every start: interactive shells that land in ~ move to the working directory.\n` +
       `if [ "$PWD" = "$HOME" ]; then cd ${shellPath(workdir)} 2>/dev/null || true; fi\n`;
-    const source = (file: string) => `[ -f ~/.config/bentomo/${file} ] && . ~/.config/bentomo/${file}`;
+    const source = (file: string) => `[ -f ~/.config/kumiko/${file} ] && . ~/.config/kumiko/${file}`;
     const script = [
       `set -e`,
       `d=${shellPath(workdir)}; sudo mkdir -p "$d"; [ -w "$d" ] || sudo chown "$(id -u):$(id -g)" "$d"`,
-      `mkdir -p ~/.config/bentomo`,
-      `cat > ~/.config/bentomo/env.sh <<'BENTOMO_RC'\n${env}BENTOMO_RC`,
-      `cat > ~/.config/bentomo/shell.sh <<'BENTOMO_RC'\n${rc}BENTOMO_RC`,
+      `mkdir -p ~/.config/kumiko`,
+      `cat > ~/.config/kumiko/env.sh <<'KUMIKO_RC'\n${env}KUMIKO_RC`,
+      `cat > ~/.config/kumiko/shell.sh <<'KUMIKO_RC'\n${rc}KUMIKO_RC`,
       `touch ~/.bashrc ~/.profile`,
-      `if ! grep -qF .config/bentomo/env.sh ~/.bashrc; then { printf '# Added by Bentomo\\n%s\\n\\n' ${shellQuote(source("env.sh"))}; cat ~/.bashrc; } > ~/.bashrc.bentomo && mv ~/.bashrc.bentomo ~/.bashrc; fi`,
-      `grep -qF .config/bentomo/shell.sh ~/.bashrc || printf '\\n# Added by Bentomo\\n%s\\n' ${shellQuote(source("shell.sh"))} >> ~/.bashrc`,
-      `grep -qF .config/bentomo/env.sh ~/.profile || printf '\\n# Added by Bentomo\\n%s\\n' ${shellQuote(source("env.sh"))} >> ~/.profile`,
+      `if ! grep -qF .config/kumiko/env.sh ~/.bashrc; then { printf '# Added by Kumiko\\n%s\\n\\n' ${shellQuote(source("env.sh"))}; cat ~/.bashrc; } > ~/.bashrc.kumiko && mv ~/.bashrc.kumiko ~/.bashrc; fi`,
+      `grep -qF .config/kumiko/shell.sh ~/.bashrc || printf '\\n# Added by Kumiko\\n%s\\n' ${shellQuote(source("shell.sh"))} >> ~/.bashrc`,
+      `grep -qF .config/kumiko/env.sh ~/.profile || printf '\\n# Added by Kumiko\\n%s\\n' ${shellQuote(source("env.sh"))} >> ~/.profile`,
     ].join("\n");
     const child = this.exec(name, `bash -c ${shellQuote(script)}`, []);
     child.stdin!.end();
@@ -331,7 +331,7 @@ export class LimaProvider implements SandboxProvider {
     log("Stopped.", "ok");
   }
 
-  /** Deletes the VM and Bentomo's record of it. A VM that is already gone only has its record removed. */
+  /** Deletes the VM and Kumiko's record of it. A VM that is already gone only has its record removed. */
   async delete(name: string, log: Log): Promise<void> {
     const vm = vmName(name);
     if (!(await this.instances()).some((i) => i.name === vm)) {
@@ -381,7 +381,7 @@ export class LimaProvider implements SandboxProvider {
     }
     const inst = (await this.instances()).find((i) => i.name === vm);
     if (!meta || !inst) {
-      const why = !inst ? `${vm} does not exist.` : `${vm} was not created by Bentomo, so it can't be edited.`;
+      const why = !inst ? `${vm} does not exist.` : `${vm} was not created by Kumiko, so it can't be edited.`;
       return { errors: [why], warnings: [], spec: meta?.spec ?? ({} as SandboxSpec), limaArgs: [] };
     }
 
@@ -394,7 +394,7 @@ export class LimaProvider implements SandboxProvider {
     const errors = [...v.errors];
     if (recreate) return { errors, warnings: v.warnings, spec, limaArgs: [] };
 
-    // Compare against what Lima has now, so edits made outside Bentomo are respected.
+    // Compare against what Lima has now, so edits made outside Kumiko are respected.
     const limaArgs: string[] = [];
     if (spec.cpus !== (inst.cpus ?? meta.spec.cpus)) limaArgs.push(`--cpus=${spec.cpus}`);
     if (spec.memoryGiB * GiB !== (inst.memory ?? meta.spec.memoryGiB * GiB)) limaArgs.push(`--memory=${spec.memoryGiB}`);

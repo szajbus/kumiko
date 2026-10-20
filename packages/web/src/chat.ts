@@ -1,4 +1,4 @@
-import type { Attachment, EndReason, LoginAccount, SessionEvent } from "@bentomo/shared";
+import type { Attachment, EndReason, LoginAccount, SessionEvent } from "@kumiko/shared";
 
 // Turns a session's events into what the chat shows. Claude's stream-json is read loosely: only the fields the
 // chat needs, and anything unexpected is skipped rather than breaking the view.

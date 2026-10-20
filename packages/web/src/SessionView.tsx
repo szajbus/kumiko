@@ -1,5 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { formatBytes, LIVE_SESSION_STATUSES, type LoginAccount, type SessionInfo } from "@bentomo/shared";
+import { formatBytes, LIVE_SESSION_STATUSES, type LoginAccount, type SessionInfo } from "@kumiko/shared";
 import { api, errorMessage, useSessionEvents } from "./api";
 import { fromAttachment, toInput } from "./attachments";
 import { applyEvent, blocksOf, chatRows, emptyChat, loginCards, partialToolSummary, toolSummary, type Block, type ChatItem, type ChatState, type ItemRow, type LoginAnswer, type WorkRow } from "./chat";
@@ -15,7 +15,7 @@ import { COLORS, sessionStatus } from "./status";
 import { UsageStrip } from "./UsageStrip";
 
 const MODELS = ["default", "opus", "sonnet", "haiku"];
-/** Commands Bentomo handles itself, since Claude can't run them headless; offered alongside Claude's own. */
+/** Commands Kumiko handles itself, since Claude can't run them headless; offered alongside Claude's own. */
 const OWN_COMMANDS = ["fork", "rewind"];
 
 interface Props {
@@ -212,7 +212,7 @@ export function SessionView({ session, onForked }: Props) {
           disabled={!live || session.status === "starting"}
           onStop={session.status === "running" ? () => void call(() => api.interrupt(session.id)) : undefined}
           onSubmit={(text, files) => {
-            // Claude can't log in or fork from here, but Bentomo can.
+            // Claude can't log in or fork from here, but Kumiko can.
             if (text === "/login") return (setLoggingIn(true), Promise.resolve(true));
             if (text === "/fork") return idle ? fork() : (setError("Wait for Claude to finish, or stop it, before forking."), Promise.resolve(false));
             if (text === "/rewind") {

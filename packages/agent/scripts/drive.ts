@@ -7,8 +7,8 @@
 // --local runs `claude` on this machine through the same `bash -s` preamble, for trying it from inside a VM.
 import { spawn } from "node:child_process";
 import { parseArgs } from "node:util";
-import { WORKSPACE_DIR } from "@bentomo/shared";
-import { execScript, LimaProvider, MetadataStore } from "@bentomo/sandbox";
+import { WORKSPACE_DIR } from "@kumiko/shared";
+import { execScript, LimaProvider, MetadataStore } from "@kumiko/sandbox";
 import { ClaudeDriver, type AgentMessage, type Exec } from "../src/index.js";
 
 const { values } = parseArgs({
@@ -24,7 +24,7 @@ if (!values.sandbox && !values.local) {
 }
 
 const token = `drive-${Math.random().toString(36).slice(2)}`;
-process.env.BENTOMO_DRIVE_TOKEN = token;
+process.env.KUMIKO_DRIVE_TOKEN = token;
 
 let exec: Exec;
 let workdir = values.workdir;
@@ -86,14 +86,14 @@ const turn = (prompt: string, first = false) =>
   new Promise<void>((resolve) => {
     next = resolve;
     console.log(`\x1b[33m>>> ${prompt}\x1b[0m`);
-    if (first) driver.start({ sandbox: values.sandbox ?? "local", workdir: workdir!, env: ["BENTOMO_DRIVE_TOKEN"], prompt });
+    if (first) driver.start({ sandbox: values.sandbox ?? "local", workdir: workdir!, env: ["KUMIKO_DRIVE_TOKEN"], prompt });
     else driver.send(prompt);
   });
 
 const checks: [string, boolean][] = [];
 try {
   await turn("Say hi in three words.", true);
-  await turn("Run `echo $BENTOMO_DRIVE_TOKEN` with Bash and reply with its output only.");
+  await turn("Run `echo $KUMIKO_DRIVE_TOKEN` with Bash and reply with its output only.");
   await turn("Run `sleep 30 && echo finished` with Bash, then say done.");
   await turn("Reply with just the word ok.");
 } finally {

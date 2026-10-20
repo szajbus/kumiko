@@ -1,10 +1,10 @@
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { SESSION_ID_PATTERN, type SessionEvent, type SessionInfo } from "@bentomo/shared";
+import { SESSION_ID_PATTERN, type SessionEvent, type SessionInfo } from "@kumiko/shared";
 
 export function defaultSessionsDir(): string {
-  return join(process.env.BENTOMO_HOME ?? join(homedir(), ".bentomo"), "sessions");
+  return join(process.env.KUMIKO_HOME ?? join(homedir(), ".kumiko"), "sessions");
 }
 
 /** What is kept of a session: its info and the chat, which is all that is shown again when it is resumed. */
@@ -17,7 +17,7 @@ export interface StoredSession {
 export class SessionStore {
   constructor(readonly dir: string = defaultSessionsDir()) {}
 
-  /** Ids come from URLs, where %2F decodes to "/", so only Bentomo's own id shape may name a file. */
+  /** Ids come from URLs, where %2F decodes to "/", so only Kumiko's own id shape may name a file. */
   private file(id: string): string {
     if (!SESSION_ID_PATTERN.test(id)) throw new Error(`Not a session id: ${id}`);
     return join(this.dir, `${id}.json`);

@@ -1,4 +1,4 @@
-import type { SavedTabs as Saved } from "@bentomo/shared";
+import type { SavedTabs as Saved } from "@kumiko/shared";
 import { api } from "./api";
 import type { TabId } from "./Header";
 

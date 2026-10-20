@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 
-const MARKER = "__BENTOMO_ENV__";
+const MARKER = "__KUMIKO_ENV__";
 
 /**
  * Apps launched from the Dock or Finder get a bare environment: no Homebrew on PATH (so no limactl),

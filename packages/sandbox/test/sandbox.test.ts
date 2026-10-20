@@ -9,14 +9,14 @@ const spec = (over = {}) => ({ name: "web", cpus: 4, memoryGiB: 4, diskGiB: 100,
 
 describe("parsing", () => {
   it("reads limactl's one-object-per-line JSON and arrays", () => {
-    const a = { name: "bm-a", status: "Running" }, b = { name: "wm-b", status: "Stopped" };
+    const a = { name: "km-a", status: "Running" }, b = { name: "wm-b", status: "Stopped" };
     assert.deepEqual(parseLimaList(`${JSON.stringify(a)}\n${JSON.stringify(b)}\n`), [a, b]);
     assert.deepEqual(parseLimaList(JSON.stringify([a, b])), [a, b]);
     assert.deepEqual(parseLimaList("\n"), []);
   });
 
   it("tidies logfmt lines", () => {
-    assert.deepEqual(tidyLimaLine('time="x" level=info msg="Starting \\"bm-a\\""'), { text: 'Starting "bm-a"' });
+    assert.deepEqual(tidyLimaLine('time="x" level=info msg="Starting \\"km-a\\""'), { text: 'Starting "km-a"' });
     assert.deepEqual(tidyLimaLine('time="x" level=fatal msg="boom"'), { text: "error: boom", kind: "err" });
     assert.deepEqual(tidyLimaLine("plain"), { text: "plain" });
   });
@@ -47,7 +47,7 @@ describe("parsing", () => {
 
   it("wraps a provisioning script so it can't be read from stdin", () => {
     const cmd = provisionCommand("echo hi");
-    assert.match(cmd, /^bash -c "\$\(cat <<'BENTOMO_PROVISION_[0-9a-f]+'\n/);
+    assert.match(cmd, /^bash -c "\$\(cat <<'KUMIKO_PROVISION_[0-9a-f]+'\n/);
     assert.match(cmd, /set -e\n/);
   });
 });
@@ -116,10 +116,10 @@ describe("validateSpec", () => {
 });
 
 describe("LimaProvider against a fake limactl", () => {
-  it("lists only bm- instances", async () => {
+  it("lists only km- instances", async () => {
     const { limaDir, provider } = await fakeLima();
     await writeFile(join(limaDir, "wm-other.json"), JSON.stringify({ name: "wm-other", status: "Running" }));
-    await writeFile(join(limaDir, "bm-mine.json"), JSON.stringify({ name: "bm-mine", status: "Broken", cpus: 2, memory: 2 * 1024 ** 3 }));
+    await writeFile(join(limaDir, "km-mine.json"), JSON.stringify({ name: "km-mine", status: "Broken", cpus: 2, memory: 2 * 1024 ** 3 }));
     assert.deepEqual(await provider.list(), [
       { name: "mine", status: "broken", cpus: 2, memoryGiB: 2, diskGiB: undefined, meta: undefined },
     ]);
@@ -127,7 +127,7 @@ describe("LimaProvider against a fake limactl", () => {
 
   it("reports a record it can't read instead of treating the VM as foreign", async () => {
     const { root, limaDir, provider, log, lines } = await fakeLima();
-    await writeFile(join(limaDir, "bm-mine.json"), JSON.stringify({ name: "bm-mine", status: "Stopped" }));
+    await writeFile(join(limaDir, "km-mine.json"), JSON.stringify({ name: "km-mine", status: "Stopped" }));
     await mkdir(join(root, "sandboxes"), { recursive: true });
     await writeFile(join(root, "sandboxes", "mine.json"), "{ not json");
 
@@ -135,9 +135,9 @@ describe("LimaProvider against a fake limactl", () => {
     assert.equal(info.meta, undefined);
     assert.match(info.metaError!, /mine\.json, can't be read/);
     assert.match((await provider.validateEdit("mine", { cpus: 2 })).errors.join(), /can't be read/);
-    // It still starts, set up as a VM Bentomo didn't create.
+    // It still starts, set up as a VM Kumiko didn't create.
     await provider.start("mine", log);
-    assert.ok(lines.some((l) => l.startsWith("warning: Bentomo's record")));
+    assert.ok(lines.some((l) => l.startsWith("warning: Kumiko's record")));
   });
 
   it("creates, provisions once with forwarded variables, stops, starts and deletes", async () => {
@@ -154,7 +154,7 @@ describe("LimaProvider against a fake limactl", () => {
     const calls = (await readFile(join(limaDir, "calls.log"), "utf8")).trim().split("\n").map((l) => JSON.parse(l));
     const create = calls.find((c) => c[0] === "create");
     assert.deepEqual(create, [
-      "create", "--tty=false", "--name=bm-web", "--cpus=4", "--memory=4", "--disk=100",
+      "create", "--tty=false", "--name=km-web", "--cpus=4", "--memory=4", "--disk=100",
       `--set=.mounts = [{"location":"${mountDir}","mountPoint":"${mountDir}","writable":true}]`,
       "template:default",
     ]);
@@ -190,12 +190,12 @@ describe("LimaProvider against a fake limactl", () => {
     await provider.start("web", log);
     const home = join(limaDir, "vm-home");
     const bashrc = await readFile(join(home, ".bashrc"), "utf8");
-    assert.equal(bashrc.split(".config/bentomo/shell.sh ]").length - 1, 1, "sourced from .bashrc exactly once");
-    assert.ok(bashrc.startsWith("# Added by Bentomo\n[ -f ~/.config/bentomo/env.sh ]"), "PATH comes first in .bashrc");
-    assert.equal(bashrc.split(".config/bentomo/env.sh ]").length - 1, 1);
+    assert.equal(bashrc.split(".config/kumiko/shell.sh ]").length - 1, 1, "sourced from .bashrc exactly once");
+    assert.ok(bashrc.startsWith("# Added by Kumiko\n[ -f ~/.config/kumiko/env.sh ]"), "PATH comes first in .bashrc");
+    assert.equal(bashrc.split(".config/kumiko/env.sh ]").length - 1, 1);
     const profile = await readFile(join(home, ".profile"), "utf8");
-    assert.equal(profile.split(".config/bentomo/env.sh ]").length - 1, 1, "and from .profile once");
-    const rc = await readFile(join(home, ".config/bentomo/shell.sh"), "utf8");
+    assert.equal(profile.split(".config/kumiko/env.sh ]").length - 1, 1, "and from .profile once");
+    const rc = await readFile(join(home, ".config/kumiko/shell.sh"), "utf8");
     assert.ok(rc.includes(`cd "$HOME"/'code dir'`), rc);
 
     // An interactive shell starting in ~ ends up in the working directory; one started elsewhere stays put.
@@ -277,7 +277,7 @@ describe("LimaProvider against a fake limactl", () => {
     const { provider, log } = await fakeLima();
     await provider.create(spec(), log);
     const v = await provider.validate(spec());
-    assert.match(v.errors.join(), /bm-web already exists/);
+    assert.match(v.errors.join(), /km-web already exists/);
 
     process.env.FAKE_LIMA_FAIL_CREATE = "1";
     try {
@@ -305,7 +305,7 @@ describe("LimaProvider against a fake limactl", () => {
     assert.equal(info.meta?.spec.provision, "echo hi");
     assert.equal(info.meta?.setup, "ready", "editing doesn't change the setup state");
     v = await provider.validateEdit("web", { cpus: 4 });
-    assert.match(v.errors.join(), /Stop bm-web to change its resources or mounts/);
+    assert.match(v.errors.join(), /Stop km-web to change its resources or mounts/);
 
     await provider.stop("web", log);
     v = await provider.validateEdit("web", { diskGiB: 10 });
@@ -315,7 +315,7 @@ describe("LimaProvider against a fake limactl", () => {
     await provider.edit("web", { cpus: 4, memoryGiB: 6, diskGiB: 40, mounts: [{ hostPath: mountDir, writable: true, guestPath: "/workspace/m" }] }, log);
     const edit = (await readFile(join(limaDir, "calls.log"), "utf8")).trim().split("\n").map((l) => JSON.parse(l)).filter((c) => c[0] === "edit").pop();
     assert.deepEqual(edit, [
-      "edit", "--tty=false", "bm-web", "--cpus=4", "--memory=6", "--disk=40",
+      "edit", "--tty=false", "km-web", "--cpus=4", "--memory=6", "--disk=40",
       `--set=.mounts = [{"location":"${mountDir}","mountPoint":"/workspace/m","writable":true}]`,
     ]);
     [info] = await provider.list();
@@ -332,11 +332,11 @@ describe("LimaProvider against a fake limactl", () => {
     assert.equal(info.meta?.spec.provision, undefined);
   });
 
-  it("refuses to edit VMs Bentomo didn't create", async () => {
+  it("refuses to edit VMs Kumiko didn't create", async () => {
     const { limaDir, provider } = await fakeLima();
-    await writeFile(join(limaDir, "bm-alien.json"), JSON.stringify({ name: "bm-alien", status: "Stopped" }));
+    await writeFile(join(limaDir, "km-alien.json"), JSON.stringify({ name: "km-alien", status: "Stopped" }));
     const v = await provider.validateEdit("alien", { cpus: 2 });
-    assert.match(v.errors.join(), /was not created by Bentomo/);
+    assert.match(v.errors.join(), /was not created by Kumiko/);
   });
 
   it("offers templates with a Debian one preferred", async () => {

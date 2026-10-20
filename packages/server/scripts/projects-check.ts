@@ -3,13 +3,13 @@
 //
 //   node packages/server/dist/scripts/projects-check.js [--name projcheck] [--template template:debian-12] [--keep]
 //
-// It makes a throwaway clone (with a bare "origin") and Bentomo data under the temp folder, so nothing of yours is touched.
+// It makes a throwaway clone (with a bare "origin") and Kumiko data under the temp folder, so nothing of yours is touched.
 import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { eachLine, exitCode, LimaProvider, MetadataStore, shellQuote, type Log } from "@bentomo/sandbox";
+import { eachLine, exitCode, LimaProvider, MetadataStore, shellQuote, type Log } from "@kumiko/sandbox";
 import { worktreeStatuses } from "../src/git.js";
 import { ProjectStore } from "../src/projects.js";
 
@@ -26,11 +26,11 @@ const log: Log = (line, kind) => console.log(`${kind ? `[${kind}] ` : ""}${line}
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], {
     encoding: "utf8",
-    env: { ...process.env, GIT_AUTHOR_NAME: "Bentomo", GIT_AUTHOR_EMAIL: "check@bentomo", GIT_COMMITTER_NAME: "Bentomo", GIT_COMMITTER_EMAIL: "check@bentomo" },
+    env: { ...process.env, GIT_AUTHOR_NAME: "Kumiko", GIT_AUTHOR_EMAIL: "check@kumiko", GIT_COMMITTER_NAME: "Kumiko", GIT_COMMITTER_EMAIL: "check@kumiko" },
   });
 
-const root = await realpath(await mkdtemp(join(tmpdir(), "bentomo-projects-check-")));
-const data = join(root, "bentomo");
+const root = await realpath(await mkdtemp(join(tmpdir(), "kumiko-projects-check-")));
+const data = join(root, "kumiko");
 const provider = new LimaProvider({ metadata: new MetadataStore(join(data, "sandboxes")) });
 const projects = new ProjectStore(data);
 
@@ -78,7 +78,7 @@ try {
         `cd ${shellQuote(wt)}`,
         `echo made in the VM > vm.txt`,
         `git add vm.txt`,
-        `git -c user.name=Bentomo -c user.email=check@bentomo commit -q -m "from the VM"`,
+        `git -c user.name=Kumiko -c user.email=check@kumiko commit -q -m "from the VM"`,
         `git worktree list --porcelain`,
       ].join("\n"),
     ),
@@ -107,16 +107,16 @@ try {
 
   ok = true;
   console.log(`\nAll checks passed.`);
-  console.log(`Still to check by hand: run \`limactl shell bm-${name}\`, then \`claude\` in ${project.clonePath}, log in, and ask what it`);
-  console.log(`was told about worktrees: that shows the @bentomo.md import in ${projects.claudeHome(name)}/CLAUDE.md works,`);
+  console.log(`Still to check by hand: run \`limactl shell km-${name}\`, then \`claude\` in ${project.clonePath}, log in, and ask what it`);
+  console.log(`was told about worktrees: that shows the @kumiko.md import in ${projects.claudeHome(name)}/CLAUDE.md works,`);
   console.log(`and ${projects.claudeHome(name)}/.claude.json should appear (not on the VM's disk). Run with --keep for that.`);
 } finally {
   if (!values.keep) {
     step("delete");
-    await provider.delete(name, log).catch((err) => console.error(`couldn't delete bm-${name}: ${err instanceof Error ? err.message : err}`));
+    await provider.delete(name, log).catch((err) => console.error(`couldn't delete km-${name}: ${err instanceof Error ? err.message : err}`));
     await projects.remove(name);
   } else {
-    console.log(`\nKept bm-${name} and ${root}. Delete them with: limactl delete --force bm-${name}; rm -rf ${root}`);
+    console.log(`\nKept km-${name} and ${root}. Delete them with: limactl delete --force km-${name}; rm -rf ${root}`);
   }
 }
 process.exit(ok ? 0 : 1);

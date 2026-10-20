@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { LogLine, SandboxView } from "@bentomo/shared";
+import type { LogLine, SandboxView } from "@kumiko/shared";
 import { matchCommands } from "../src/commands.ts";
 import { ago, endedText, formatBytes, formatCost, formatDuration, planName, resetText, sessionTitle } from "../src/format.ts";
 import { COLORS, opPill, resources, statusOf } from "../src/status.ts";
@@ -53,7 +53,7 @@ describe("matchCommands", () => {
 });
 
 describe("status", () => {
-  const sb = (over: Partial<SandboxView> = {}): SandboxView => ({ name: "web", vm: "bm-web", provider: "lima", status: "running", busy: false, sessions: 0, ...over });
+  const sb = (over: Partial<SandboxView> = {}): SandboxView => ({ name: "web", vm: "km-web", provider: "lima", status: "running", busy: false, sessions: 0, ...over });
   const op = { op: "creating" as const, startedAt: "2026-10-19T12:00:00Z" };
   const meta = (setup: "creating" | "ready" | "provision_failed", provisionExitCode?: number) => ({
     spec: { name: "web", cpus: 2, memoryGiB: 4, diskGiB: 20, mounts: [], env: [] },

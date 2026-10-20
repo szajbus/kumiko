@@ -1,5 +1,5 @@
 import type { ChildProcess } from "node:child_process";
-import { eachLine } from "@bentomo/sandbox";
+import { eachLine } from "@kumiko/sandbox";
 import type { AgentDriver, AgentEvent, AgentFile, AgentMessage, Exec, StartOptions } from "./driver.js";
 
 /**

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { SessionInfo } from "@bentomo/shared";
+import type { SessionInfo } from "@kumiko/shared";
 import { Logo, Plus } from "./icons";
 import { sessionTitle } from "./format";
 import { sessionState } from "./status";
@@ -21,7 +21,7 @@ export function Header({ sessions, newSessionOpen, active, onSelect, onClose, on
     <header className="app-header">
       <div className="tabbar">
         <nav className="tabs" role="tablist" aria-label="Tabs">
-          <Tab id="projects" active={active} onSelect={onSelect} label="Projects" icon={<Logo size={14} />} home />
+          <Tab id="projects" active={active} onSelect={onSelect} label="Projects" icon={<Logo size={16} />} home />
           {sessions.map((s) => {
             const st = sessionState(s);
             return (

@@ -19,7 +19,7 @@ describe("trimMessage", () => {
     });
     const [a, b, text] = (m.message as { content: { content?: unknown; text?: string }[] }).content;
     assert.equal(a.content, truncate(big));
-    assert.match(String(a.content), /\n… 2 KB more not kept by Bentomo$/);
+    assert.match(String(a.content), /\n… 2 KB more not kept by Kumiko$/);
     assert.deepEqual(b.content, [{ type: "text", text: truncate(big) }, { type: "image", source: {} }]);
     assert.equal(text.text, big, "only tool results are cut");
   });

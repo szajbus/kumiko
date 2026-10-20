@@ -1,5 +1,5 @@
 {
-  "name": "@bentomo/server",
+  "name": "@kumiko/server",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,12 +10,12 @@
     }
   },
   "bin": {
-    "bentomo-server": "./dist/src/main.js"
+    "kumiko-server": "./dist/src/main.js"
   },
   "dependencies": {
-    "@bentomo/agent": "*",
-    "@bentomo/sandbox": "*",
-    "@bentomo/shared": "*",
+    "@kumiko/agent": "*",
+    "@kumiko/sandbox": "*",
+    "@kumiko/shared": "*",
     "@hono/node-server": "^1.19.0",
     "hono": "^4.10.0",
     "ws": "^8.18.0"

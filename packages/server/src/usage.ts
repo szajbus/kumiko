@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
-import { exitCode, eachLine, shellQuote } from "@bentomo/sandbox";
-import type { AccountUsage, UsageWindow } from "@bentomo/shared";
+import { exitCode, eachLine, shellQuote } from "@kumiko/sandbox";
+import type { AccountUsage, UsageWindow } from "@kumiko/shared";
 
 const NO_TOKEN = "---no-token---";
 const STATUS = "---status---";
@@ -87,7 +87,7 @@ export function parseUsage(output: string, failure?: string): UsageReading {
   if (status === 401) return { error: "Claude's login token has expired. It renews the next time Claude runs in this project." };
   if (status !== 200) return { error: `Claude's usage service answered with HTTP ${status}.` };
   const json = parseJson(body);
-  if (!json) return { error: "Claude returned usage in a format Bentomo doesn't know." };
+  if (!json) return { error: "Claude returned usage in a format Kumiko doesn't know." };
   const windows: UsageWindow[] = [];
   for (const [key, label] of WINDOWS) {
     const w = json[key] as { utilization?: unknown; resets_at?: unknown } | null | undefined;

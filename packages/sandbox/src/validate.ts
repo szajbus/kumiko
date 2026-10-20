@@ -1,7 +1,7 @@
 import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, normalize, posix, sep } from "node:path";
-import { ENV_NAME_PATTERN, MINIMUMS, NAME_PATTERN, WORKSPACE_DIR, type SandboxSpec } from "@bentomo/shared";
+import { ENV_NAME_PATTERN, MINIMUMS, NAME_PATTERN, WORKSPACE_DIR, type SandboxSpec } from "@kumiko/shared";
 
 export interface Validation {
   errors: string[];
@@ -36,7 +36,7 @@ export function normalizeGuestPath(p: string): string | undefined {
 
 /**
  * Checks everything that can be checked without asking the provider.
- * `env` is where forwarded variables will be read from (Bentomo's own environment).
+ * `env` is where forwarded variables will be read from (Kumiko's own environment).
  */
 export async function validateSpec(input: SandboxSpec, env: NodeJS.ProcessEnv = process.env): Promise<Validation> {
   const errors: string[] = [];
@@ -96,7 +96,7 @@ export async function validateSpec(input: SandboxSpec, env: NodeJS.ProcessEnv = 
   const envNames = [...new Set((Array.isArray(input.env) ? input.env : []).map((e) => String(e).trim()).filter(Boolean))];
   for (const e of envNames) {
     if (!ENV_NAME_PATTERN.test(e)) errors.push(`${e} is not a valid variable name.`);
-    else if (env[e] === undefined) warnings.push(`${e} is not set in Bentomo's environment; it will be skipped.`);
+    else if (env[e] === undefined) warnings.push(`${e} is not set in Kumiko's environment; it will be skipped.`);
   }
 
   const rawWorkdir = String(input.workdir ?? "").trim() || WORKSPACE_DIR;

@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@bentomo/agent";
+import type { AgentMessage } from "@kumiko/agent";
 
 /** How much of one tool result's text a session keeps. Claude's own transcript in the sandbox keeps all of it. */
 export const MAX_TOOL_RESULT_CHARS = 64 * 1024;
@@ -7,7 +7,7 @@ export const MAX_TOOL_RESULT_CHARS = 64 * 1024;
 export function truncate(text: string, max = MAX_TOOL_RESULT_CHARS): string {
   if (text.length <= max) return text;
   const dropped = text.length - max;
-  return `${text.slice(0, max)}\n… ${Math.ceil(dropped / 1024)} KB more not kept by Bentomo`;
+  return `${text.slice(0, max)}\n… ${Math.ceil(dropped / 1024)} KB more not kept by Kumiko`;
 }
 
 /**

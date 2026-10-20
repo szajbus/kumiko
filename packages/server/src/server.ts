@@ -37,15 +37,15 @@ import {
   type StartSessionRequest,
   type TemplatesResponse,
   type WorktreesResponse,
-} from "@bentomo/shared";
-import { LimaProvider, validateSpec, type Log, type SandboxProvider } from "@bentomo/sandbox";
-import { ClaudeDriver, type AgentDriver } from "@bentomo/agent";
+} from "@kumiko/shared";
+import { LimaProvider, validateSpec, type Log, type SandboxProvider } from "@kumiko/sandbox";
+import { ClaudeDriver, type AgentDriver } from "@kumiko/agent";
 import { AttachmentRefused, AttachmentStore } from "./attachments.js";
 import { GitError, worktreeStatuses } from "./git.js";
 import { isLocalRequest } from "./guard.js";
 import { LoginFailed, Logins } from "./logins.js";
 import { BusyError, Operations } from "./operations.js";
-import { ProjectExists, ProjectRecordError, ProjectStore } from "./projects.js";
+import { adoptBentomoHome, ProjectExists, ProjectRecordError, ProjectStore } from "./projects.js";
 import { RewindRefused, SessionEnded, SessionNotFound, SessionNotResumable, Sessions } from "./sessions.js";
 import { SessionStore } from "./store.js";
 import { TabsStore } from "./tabs.js";
@@ -63,11 +63,11 @@ export interface ServerOptions {
   refreshMs?: number;
   /** The host user's home; defaults to the real one. */
   home?: string;
-  /** Where projects and their Claude homes are kept; defaults to Bentomo's home (`BENTOMO_HOME` or `~/.bentomo`). */
+  /** Where projects and their Claude homes are kept; defaults to Kumiko's home (`KUMIKO_HOME` or `~/.kumiko`). */
   dataDir?: string;
   /** Where forwarded variables are looked up for the form's "set on host" dots. */
   env?: () => NodeJS.ProcessEnv;
-  /** Where sessions are saved for resuming; defaults to `sessions` in Bentomo's home (`BENTOMO_HOME` or `~/.bentomo`). */
+  /** Where sessions are saved for resuming; defaults to `sessions` in Kumiko's home (`KUMIKO_HOME` or `~/.kumiko`). */
   sessionsDir?: string;
   /** Makes the driver for each new agent session; defaults to Claude Code over the provider's exec. */
   driver?: () => AgentDriver;
@@ -84,6 +84,7 @@ export interface RunningServer {
 }
 
 export async function startServer(opts: ServerOptions = {}): Promise<RunningServer> {
+  if (!opts.dataDir) await adoptBentomoHome();
   const provider = opts.provider ?? new LimaProvider({ env: opts.env });
   const env = opts.env ?? (() => process.env);
   const host = opts.host ?? "127.0.0.1";
@@ -177,7 +178,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     pushListIfChanged();
   });
 
-  /** Sessions whose sandbox stopped or vanished outside Bentomo end too. */
+  /** Sessions whose sandbox stopped or vanished outside Kumiko end too. */
   const endOrphanedSessions = () => {
     for (const [name] of sessions.liveCounts()) {
       if (infos.find((i) => i.name === name)?.status !== "running") void sessions.endSandbox(name, "sandbox");
@@ -254,7 +255,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   };
 
   /**
-   * A project a session can start in: VM running and not busy. Refreshes Bentomo's instructions in its Claude home,
+   * A project a session can start in: VM running and not busy. Refreshes Kumiko's instructions in its Claude home,
    * so they follow the app. Returns where sessions start (the clone) and what they forward.
    */
   const readyProject = async (id: string): Promise<{ workdir: string; env: string[] }> => {
@@ -292,7 +293,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     return c.json({ ok: true });
   });
 
-  /** Which of the given variable names are set in Bentomo's environment. Never returns values. */
+  /** Which of the given variable names are set in Kumiko's environment. Never returns values. */
   app.get("/api/env", (c) => {
     const names = (c.req.query("names") ?? "").split(",").map((n) => n.trim()).filter((n) => ENV_NAME_PATTERN.test(n));
     const e = env();

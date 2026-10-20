@@ -1,5 +1,5 @@
 import type { ChildProcess } from "node:child_process";
-import type { EditSpec, LineKind, SandboxInfo, SandboxSpec } from "@bentomo/shared";
+import type { EditSpec, LineKind, SandboxInfo, SandboxSpec } from "@kumiko/shared";
 import type { Validation } from "./validate.js";
 
 /** Receives progress, one line at a time. */
@@ -7,7 +7,7 @@ export type Log = (line: string, kind?: LineKind) => void;
 
 export interface SandboxProvider {
   id: "lima";
-  list(): Promise<SandboxInfo[]>;                      // bm- instances only
+  list(): Promise<SandboxInfo[]>;                      // km- instances only
   create(spec: SandboxSpec, log: Log): Promise<void>;  // create + first start + provision
   start(name: string, log: Log): Promise<void>;
   stop(name: string, log: Log): Promise<void>;

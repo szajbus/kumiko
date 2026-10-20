@@ -1,5 +1,5 @@
 {
-  "name": "bentomo",
+  "name": "kumiko",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -11,14 +11,14 @@
     "apps/desktop"
   ],
   "scripts": {
-    "build": "tsc -b packages/shared packages/sandbox packages/agent packages/server apps/desktop && npm run build -w @bentomo/web",
-    "typecheck": "tsc -b packages/shared packages/sandbox packages/agent packages/server apps/desktop && npm run typecheck -w @bentomo/web",
+    "build": "tsc -b packages/shared packages/sandbox packages/agent packages/server apps/desktop && npm run build -w @kumiko/web",
+    "typecheck": "tsc -b packages/shared packages/sandbox packages/agent packages/server apps/desktop && npm run typecheck -w @kumiko/web",
     "test": "npm run build && node --test packages/sandbox/dist/test/*.test.js packages/agent/dist/test/*.test.js packages/server/dist/test/*.test.js packages/web/test/*.test.ts",
     "server": "node packages/server/dist/src/main.js",
     "dev:server": "tsc -b packages/server && node packages/server/dist/src/main.js --port 4317",
-    "dev:web": "npm run dev -w @bentomo/web",
-    "desktop": "npm run build && npm start -w @bentomo/desktop",
-    "dist:app": "npm run build && npm run dist:mac-arm64-app -w @bentomo/desktop",
+    "dev:web": "npm run dev -w @kumiko/web",
+    "desktop": "npm run build && npm start -w @kumiko/desktop",
+    "dist:app": "npm run build && npm run dist:mac-arm64-app -w @kumiko/desktop",
     "roundtrip": "npm run build && node packages/sandbox/dist/scripts/roundtrip.js",
     "projects-check": "npm run build && node packages/server/dist/scripts/projects-check.js",
     "drive": "npm run build && node packages/agent/dist/scripts/drive.js"

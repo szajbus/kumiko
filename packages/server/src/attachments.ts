@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ATTACHMENTS_TOTAL_LIMIT, checkAttachment, formatBytes, type Attachment, type SessionEvent } from "@bentomo/shared";
-import type { AgentFile } from "@bentomo/agent";
+import { ATTACHMENTS_TOTAL_LIMIT, checkAttachment, formatBytes, type Attachment, type SessionEvent } from "@kumiko/shared";
+import type { AgentFile } from "@kumiko/agent";
 
 const HASH = /^[0-9a-f]{64}$/;
 const MAX_NAME = 200;

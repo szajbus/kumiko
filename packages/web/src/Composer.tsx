@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { formatBytes } from "@bentomo/shared";
+import { formatBytes } from "@kumiko/shared";
 import { hasFiles, readFiles, type ComposerFile } from "./attachments";
 import { matchCommands } from "./commands";
 import { drafts } from "./drafts";

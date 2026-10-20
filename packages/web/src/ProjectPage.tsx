@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { isWaiting, projectMountRole, vmName, type LogLine, type ProjectView, type SessionInfo, type WorktreeStatus, type WorktreesResponse } from "@bentomo/shared";
+import { isWaiting, projectMountRole, vmName, type LogLine, type ProjectView, type SessionInfo, type WorktreeStatus, type WorktreesResponse } from "@kumiko/shared";
 import { SandboxActions, useActions } from "./actions";
 import { api, errorMessage, useHome, type LiveState } from "./api";
 import { Breadcrumbs } from "./Breadcrumbs";
@@ -64,13 +64,13 @@ export function ProjectPage({ id, live, onBack, onEdit, onNewSession }: Props) {
         )}
         {p?.metaError && (
           <div className="banner banner-error">
-            <strong>Bentomo's record of this project's sandbox is unreadable.</strong>
+            <strong>Kumiko's record of this project's sandbox is unreadable.</strong>
             <span className="mono">{p.metaError}</span>
           </div>
         )}
         {p?.status === "absent" && !p.busy && (
           <div className="banner banner-warn">
-            {p.vm} doesn't exist: its creation failed, or it was deleted outside Bentomo. Recreate it from the menu to use this project.
+            {p.vm} doesn't exist: its creation failed, or it was deleted outside Kumiko. Recreate it from the menu to use this project.
           </div>
         )}
 

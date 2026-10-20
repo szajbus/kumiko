@@ -5,8 +5,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 import WebSocket from "ws";
-import type { ProjectView, ServerEvent, SessionEvent, SessionInfo, SessionStreamMessage } from "@bentomo/shared";
-import { LimaProvider, MetadataStore, shellQuote } from "@bentomo/sandbox";
+import type { ProjectView, ServerEvent, SessionEvent, SessionInfo, SessionStreamMessage } from "@kumiko/shared";
+import { LimaProvider, MetadataStore, shellQuote } from "@kumiko/sandbox";
 import { startServer, type RunningServer } from "../src/index.js";
 import { makeClone } from "./repo.js";
 
@@ -75,7 +75,7 @@ describe("sessions", () => {
   };
 
   before(async () => {
-    root = await realpath(await mkdtemp(join(tmpdir(), "bentomo-sessions-test-")));
+    root = await realpath(await mkdtemp(join(tmpdir(), "kumiko-sessions-test-")));
     limaDir = join(root, "lima");
     await mkdir(limaDir);
     process.env.FAKE_LIMA_DIR = limaDir;
@@ -111,10 +111,10 @@ describe("sessions", () => {
     assert.equal((await post({ sandbox: "nope", prompt: "hi" })).status, 404);
     assert.equal((await post({ sandbox: "Bad!", prompt: "hi" })).status, 400);
     // A VM that isn't a project's can't host a session; a project's stopped VM can't either, until it starts.
-    await writeFile(join(limaDir, "bm-stray.json"), JSON.stringify({ name: "bm-stray", status: "Running" }));
+    await writeFile(join(limaDir, "km-stray.json"), JSON.stringify({ name: "km-stray", status: "Running" }));
     assert.equal((await post({ sandbox: "stray", prompt: "hi" })).status, 404);
     await create("cold");
-    await writeFile(join(limaDir, "bm-cold.json"), JSON.stringify({ name: "bm-cold", status: "Stopped" }));
+    await writeFile(join(limaDir, "km-cold.json"), JSON.stringify({ name: "km-cold", status: "Stopped" }));
     assert.equal((await post({ sandbox: "cold", prompt: "hi" })).status, 409);
     assert.equal((await api("/api/sessions/abc123/prompt", { method: "POST", body: '{"text":"x"}' })).status, 404);
   });
@@ -234,12 +234,12 @@ describe("sessions", () => {
     assert.equal((await sandbox("two")).sessions, 0);
   });
 
-  it("ends sessions whose sandbox stops outside Bentomo", async () => {
+  it("ends sessions whose sandbox stops outside Kumiko", async () => {
     await api("/api/projects/two/start", { method: "POST" });
     await waitFor(async () => { const sb = await sandbox("two"); return (sb.status === "running" && !sb.busy) || undefined; });
     const id = await startSession("two", "hello");
     await waitFor(async () => (await session(id))?.status === "idle" || undefined);
-    await writeFile(join(limaDir, "bm-two.json"), JSON.stringify({ name: "bm-two", status: "Stopped" }));
+    await writeFile(join(limaDir, "km-two.json"), JSON.stringify({ name: "km-two", status: "Stopped" }));
     await waitFor(async () => (await session(id))?.status === "ended" || undefined);
   });
 

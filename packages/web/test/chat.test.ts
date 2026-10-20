@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { SessionEvent } from "@bentomo/shared";
+import type { SessionEvent } from "@kumiko/shared";
 import { applyEvent, blocksOf, chatRows, emptyChat, loginCards, partialToolSummary, toolSummary, type ChatItem, type ChatRow, type ChatState } from "../src/chat.ts";
 
 type NewEvent = SessionEvent extends infer E ? (E extends unknown ? Omit<E, "seq"> : never) : never;

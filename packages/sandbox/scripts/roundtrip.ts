@@ -23,17 +23,17 @@ const { values } = parseArgs({
 
 const name = values.name!;
 const token = `secret-${Math.random().toString(36).slice(2)}`;
-process.env.BENTOMO_ROUNDTRIP_TOKEN = token;
+process.env.KUMIKO_ROUNDTRIP_TOKEN = token;
 
 const provider = new LimaProvider();
 const log: Log = (line, kind) => console.log(`${kind ? `[${kind}] ` : ""}${line}`);
 const step = (s: string) => console.log(`\n=== ${s} ===`);
 const status = async () => (await provider.list()).find((s) => s.name === name);
 
-const dir = await mkdtemp(join(tmpdir(), "bentomo-roundtrip-"));
+const dir = await mkdtemp(join(tmpdir(), "kumiko-roundtrip-"));
 let ok = false;
 try {
-  step(`create bm-${name} with ${dir} at /workspace/out (writable) and ~/.bentomo-ro (read-only)`);
+  step(`create km-${name} with ${dir} at /workspace/out (writable) and ~/.kumiko-ro (read-only)`);
   await provider.create(
     {
       name,
@@ -43,15 +43,15 @@ try {
       diskGiB: Number(values.disk),
       mounts: [
         { hostPath: dir, writable: true, guestPath: "/workspace/out" },
-        { hostPath: dir, writable: false, guestPath: "~/.bentomo-ro" },
+        { hostPath: dir, writable: false, guestPath: "~/.kumiko-ro" },
       ],
-      env: ["BENTOMO_ROUNDTRIP_TOKEN"],
+      env: ["KUMIKO_ROUNDTRIP_TOKEN"],
       provision: [
         `echo "provisioning as $(whoami) on $(hostname)"`,
         "sudo true",
-        "test -d ~/.bentomo-ro",
-        "! touch ~/.bentomo-ro/should-fail 2>/dev/null",
-        `printf '%s' "$BENTOMO_ROUNDTRIP_TOKEN" > /workspace/out/token`,
+        "test -d ~/.kumiko-ro",
+        "! touch ~/.kumiko-ro/should-fail 2>/dev/null",
+        `printf '%s' "$KUMIKO_ROUNDTRIP_TOKEN" > /workspace/out/token`,
       ].join("\n"),
     },
     log,

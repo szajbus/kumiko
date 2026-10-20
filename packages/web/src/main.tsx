@@ -9,10 +9,10 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { hasFiles } from "./attachments";
 
-if (window.bentomo) document.documentElement.dataset.shell = `electron-${window.bentomo.platform}`;
+if (window.kumiko) document.documentElement.dataset.shell = `electron-${window.kumiko.platform}`;
 
 // Page zoom changes the viewport size, so resize is the hook for tracking it.
-const syncZoom = () => document.documentElement.style.setProperty("--page-zoom", String(window.bentomo?.getZoomFactor?.() ?? 1));
+const syncZoom = () => document.documentElement.style.setProperty("--page-zoom", String(window.kumiko?.getZoomFactor?.() ?? 1));
 syncZoom();
 window.addEventListener("resize", syncZoom);
 

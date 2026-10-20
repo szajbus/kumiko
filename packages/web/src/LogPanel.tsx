@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef } from "react";
-import type { LogLine, SandboxView } from "@bentomo/shared";
+import type { LogLine, SandboxView } from "@kumiko/shared";
 import { opPill } from "./status";
 
 const LINE_COLORS = { cmd: "#8A93A3", note: "#8A93A3", ok: "#7FD3A6", err: "#F29B8F" } as const;
@@ -36,7 +36,7 @@ export function LogPanel({ sandbox, lines }: { sandbox?: SandboxView; lines: Log
           stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
         }}
       >
-        {lines.length === 0 && <div className="log-empty">No operation has run on this sandbox since Bentomo started.</div>}
+        {lines.length === 0 && <div className="log-empty">No operation has run on this sandbox since Kumiko started.</div>}
         {lines.map((l, i) => (
           <div key={i} className="log-line" style={l.kind ? { color: LINE_COLORS[l.kind] } : undefined}>
             {l.text || " "}

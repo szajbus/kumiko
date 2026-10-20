@@ -1,4 +1,4 @@
-import type { SandboxProvider } from "@bentomo/sandbox";
+import type { SandboxProvider } from "@kumiko/sandbox";
 
 /** How a driver runs its agent: the base provider's `exec`, so the sandbox's forwarded variables apply. */
 export type Exec = SandboxProvider["exec"];

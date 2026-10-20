@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { projectMountRole, suggestProjectId, type Project } from "@bentomo/shared";
+import { projectMountRole, suggestProjectId, type Project } from "@kumiko/shared";
 
 describe("projects", () => {
   it("suggests an id from the clone's folder name", () => {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { ResumableSession } from "@bentomo/shared";
+import type { ResumableSession } from "@kumiko/shared";
 import { api, errorMessage, useHome, type LiveState } from "./api";
 import { toInput, type ComposerFile } from "./attachments";
 import { Composer } from "./Composer";

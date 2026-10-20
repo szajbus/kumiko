@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { LIVE_SESSION_STATUSES, type Attachment, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo } from "@bentomo/shared";
-import type { AgentDriver, AgentFile, AgentMessage, StartOptions } from "@bentomo/agent";
+import { LIVE_SESSION_STATUSES, type Attachment, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo } from "@kumiko/shared";
+import type { AgentDriver, AgentFile, AgentMessage, StartOptions } from "@kumiko/agent";
 import { chatEvents, type SessionStore, type StoredSession } from "./store.js";
 import { trimMessage } from "./trim.js";
 

@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
-import { eachLine, exitCode, type SandboxProvider } from "@bentomo/sandbox";
-import type { LoginAccount, LoginStartResponse } from "@bentomo/shared";
+import { eachLine, exitCode, type SandboxProvider } from "@kumiko/sandbox";
+import type { LoginAccount, LoginStartResponse } from "@kumiko/shared";
 
 type Exec = SandboxProvider["exec"];
 

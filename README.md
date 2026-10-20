@@ -1,8 +1,8 @@
-# Bentomo
+# Kumiko
 
-A desktop app for running Claude Code on your git projects, each in a Lima sandbox of its own. A **project** is a local clone: Bentomo gives it a sandbox (`bm-<project>`) and a Claude home, and Claude works in the clone and in git worktrees beside it. Everything durable lives on the host, so a sandbox can be thrown away. See [docs/projects-spec.md](docs/projects-spec.md).
+A desktop app for running Claude Code on your git projects, each in a Lima sandbox of its own. A **project** is a local clone: Kumiko gives it a sandbox (`km-<project>`) and a Claude home, and Claude works in the clone and in git worktrees beside it. Everything durable lives on the host, so a sandbox can be thrown away. See [docs/projects-spec.md](docs/projects-spec.md).
 
-Bentomo only touches Lima instances named `bm-…`. Every other instance, workmux's `wm-…` sandboxes included, is never listed, started, stopped or deleted.
+Kumiko only touches Lima instances named `km-…`. Every other instance, workmux's `wm-…` sandboxes included, is never listed, started, stopped or deleted.
 
 ## Requirements
 
@@ -20,7 +20,7 @@ npm run desktop          # build everything and launch the Electron app
 Package a macOS app (on a Mac):
 
 ```sh
-npm run build && npm run dist:mac -w @bentomo/desktop   # → apps/desktop/release/
+npm run build && npm run dist:mac -w @kumiko/desktop   # → apps/desktop/release/
 ```
 
 When the app is launched from the Dock, it reads your login shell's environment once at startup. That puts Homebrew's `limactl` on `PATH` and makes the variables you export in your shell profile available for forwarding. If you rotate a token in your profile, restart the app.
@@ -38,9 +38,9 @@ To work without real sandboxes, point the server at the fake `limactl` used by t
 
 ```sh
 FAKE_LIMA_DIR=/tmp/fake-lima FAKE_LIMA_DELAY=1500 \
-BENTOMO_LIMACTL=$PWD/packages/sandbox/fixtures/fake-limactl.mjs \
-BENTOMO_SSH=$PWD/packages/sandbox/fixtures/fake-ssh.sh \
-BENTOMO_HOME=/tmp/fake-bentomo \
+KUMIKO_LIMACTL=$PWD/packages/sandbox/fixtures/fake-limactl.mjs \
+KUMIKO_SSH=$PWD/packages/sandbox/fixtures/fake-ssh.sh \
+KUMIKO_HOME=/tmp/fake-kumiko \
 npm run dev:server
 ```
 
@@ -50,7 +50,7 @@ npm run dev:server
 | --- | --- |
 | `npm run build` | Type-checks and builds every package, including the web UI. |
 | `npm test` | Builds, then runs the adapter and server tests against the fake `limactl`, and the web UI's tests of its chat, text and project helpers. |
-| `npm run roundtrip` | Build step 1's check against **real Lima**: creates `bm-roundtrip` (Debian 12, writable mount), provisions it with a forwarded variable, then checks exec stdin, stop, start (no re-provisioning) and delete. |
+| `npm run roundtrip` | Build step 1's check against **real Lima**: creates `km-roundtrip` (Debian 12, writable mount), provisions it with a forwarded variable, then checks exec stdin, stop, start (no re-provisioning) and delete. |
 | `npm run projects-check` | The projects spec's check against **real Lima**: a throwaway clone with same-path mounts, a worktree made in the sandbox that git on the host reads (and the reverse), and `CLAUDE_CONFIG_DIR` writing into the project's Claude home. `--keep` leaves it for checking the Claude login by hand. |
 | `npm run drive -- --sandbox <name>` | Sessions step 1's check against a **running project's sandbox** (`<name>` is the project's): starts Claude, sends two prompts (one reads a forwarded variable), interrupts a third mid-tool-call and sends a fourth, printing every event. `--local` runs `claude` on this machine instead, for trying it from inside a sandbox. |
 | `npm run server` | Runs the server alone and serves the built UI. |
@@ -59,15 +59,16 @@ npm run dev:server
 ## Layout
 
 ```
-apps/desktop/          Electron main + preload (bundled with the server by esbuild)
-packages/server/       HTTP + WS (Hono, ws), projects, host git, operations, list refresh, agent sessions
-packages/agent/        AgentDriver interface, Claude Code stream-json driver, a fake claude for tests
-packages/sandbox/      SandboxProvider interface, Lima adapter, metadata files
-packages/web/          React + Vite UI
-packages/shared/       API and event types, and the project helpers server and UI share
+apps/desktop/              Electron main + preload (bundled with the server by esbuild)
+apps/desktop/assets/icon/  The app icon pack and the script that draws it (see its README)
+packages/server/           HTTP + WS (Hono, ws), projects, host git, operations, list refresh, agent sessions
+packages/agent/            AgentDriver interface, Claude Code stream-json driver, a fake claude for tests
+packages/sandbox/          SandboxProvider interface, Lima adapter, metadata files
+packages/web/              React + Vite UI
+packages/shared/           API and event types, and the project helpers server and UI share
 ```
 
-State, all under `~/.bentomo` (`BENTOMO_HOME` overrides it; `LIMA_HOME` moves Lima's):
+State, all under `~/.kumiko` (`KUMIKO_HOME` overrides it; `LIMA_HOME` moves Lima's):
 
 | Where | What |
 | --- | --- |
@@ -78,36 +79,36 @@ State, all under `~/.bentomo` (`BENTOMO_HOME` overrides it; `LIMA_HOME` moves Li
 | `sessions/<id>.json` | Each session that has talked to Claude (its info and chat), so it can be resumed. |
 | `tabs.json` | The window's open tabs and which one is active, so they come back on the next start. |
 
-Lima owns the sandboxes (`~/.lima/bm-*`). Operation logs and live agent sessions live in server memory.
+Lima owns the sandboxes (`~/.lima/km-*`). Operation logs and live agent sessions live in server memory.
 
 If a sandbox's JSON file exists but can't be read (edited by hand, not JSON), the project shows "Record unreadable", its page says which file and why, and Edit and Recreate refuse until the file is fixed or deleted. It still starts.
 
 If a project's own file can't be used (not JSON, an `id` that isn't its file name, no clone or worktrees path), the project isn't listed. The Projects page says which file and why in a banner, requests for the project answer 409 with the same reason, and its name stays taken. Fix the file, or delete it to drop the project.
 
-There is no migration from the sandboxes of earlier versions: `bm-` sandboxes without a project aren't listed. Delete them with `limactl delete`.
+Kumiko used to be called Bentomo. On its first start it moves `~/.bentomo` to `~/.kumiko` (unless `KUMIKO_HOME` is set or `~/.kumiko` exists), and each Claude home's `CLAUDE.md` is pointed at `kumiko.md` when its sandbox or a session next starts. Sandboxes aren't carried over: Bentomo named them `bm-…`, so every project shows "No sandbox" until it is recreated. The old `bm-` sandboxes are never listed; delete them with `limactl delete`.
 
 ## Notes on projects
 
 The spec's model, as built:
 
 - **Creating a project** (`POST /api/projects`, the **New project** form) takes a **host directory** (the clone) and a name, defaulting to the folder's name. The rest of the form, under **Sandbox**, is the sandbox's settings, the same as before: template, resources, extra mounts, variables and the provisioning script.
-  - Bentomo checks the clone with git on the host. It must be the top folder of a non-bare repository's main working tree: not a subfolder, not a linked worktree. It must not already be a project, and the name must be free: of two creates racing for one name, the loser gets a 409. Its real path is used (`/tmp` on macOS is `/private/tmp`), since a worktree's `.git` file holds real paths.
-  - Then it creates `<clone>__worktrees` if it's missing, seeds the Claude home and writes the project, all before the sandbox is created. If something fails at that point (a name or mount the sandbox can't take, an unwritable parent folder), everything made so far is undone. The worktrees folder is only removed if Bentomo made it and it is still empty.
+  - Kumiko checks the clone with git on the host. It must be the top folder of a non-bare repository's main working tree: not a subfolder, not a linked worktree. It must not already be a project, and the name must be free: of two creates racing for one name, the loser gets a 409. Its real path is used (`/tmp` on macOS is `/private/tmp`), since a worktree's `.git` file holds real paths.
+  - Then it creates `<clone>__worktrees` if it's missing, seeds the Claude home and writes the project, all before the sandbox is created. If something fails at that point (a name or mount the sandbox can't take, an unwritable parent folder), everything made so far is undone. The worktrees folder is only removed if Kumiko made it and it is still empty.
   - The sandbox is then created in the background, as before.
 - **Mounts**: the clone and its worktrees folder at the **same absolute paths** as on the host, writable, and the Claude home at `~/.claude`. These three are always there: the form lists them under **Default mounts** but can't change them. **Extra mounts** default to the same path too. The sandbox works in the clone: provisioning, sessions and interactive shells start there.
 - **Claude home**:
-  - `CLAUDE_CONFIG_DIR` is set to `~/.claude` for every command Bentomo runs in the sandbox, and in every shell (`~/.config/bentomo/env.sh`). That keeps `.claude.json` inside the mount; otherwise it lands beside it, on the sandbox's disk.
+  - `CLAUDE_CONFIG_DIR` is set to `~/.claude` for every command Kumiko runs in the sandbox, and in every shell (`~/.config/kumiko/env.sh`). That keeps `.claude.json` inside the mount; otherwise it lands beside it, on the sandbox's disk.
   - The home is never the host's `~/.claude`.
-  - Its `CLAUDE.md` is copied from the template once, then it's yours. It imports `bentomo.md`, which Bentomo rewrites on every sandbox start and session start with the worktree convention and the project's real paths.
+  - Its `CLAUDE.md` is copied from the template once, then it's yours. It imports `kumiko.md`, which Kumiko rewrites on every sandbox start and session start with the worktree convention and the project's real paths.
   - Login is per project, and done from a session. When Claude answers that it isn't logged in, that turn shows as one card, "Claude isn't logged in", in place of Claude's reply and the failed turn. If the prompt was sent while the tab was open, the login dialog opens straight away; otherwise the card has **Log in**. Typing `/login`, which headless Claude can't run itself, opens it too. Once logged in, the card turns green and says who as.
-    - Only the last of these cards shows. Before it does, Bentomo asks whether the project is logged in now (`GET /api/sessions/:id/login`, `claude auth status`, given 30 seconds): if it was logged in since, from another session or before a reload, the card is green straight away. Earlier cards, and one a working turn has answered, are hidden.
-    - Bentomo runs `claude auth login` in the sandbox (`POST /api/sessions/:id/login`). It prints a sign-in link and waits for the code the sign-in page shows. The dialog opens the link and takes the code (`POST …/login/code`), which goes to the waiting login on stdin. A wrong code shows Claude's own output. A login waits 10 minutes for its code, closing the dialog cancels it, and one runs per project: a second session joins it, or hears who the project is logged in as already.
+    - Only the last of these cards shows. Before it does, Kumiko asks whether the project is logged in now (`GET /api/sessions/:id/login`, `claude auth status`, given 30 seconds): if it was logged in since, from another session or before a reload, the card is green straight away. Earlier cards, and one a working turn has answered, are hidden.
+    - Kumiko runs `claude auth login` in the sandbox (`POST /api/sessions/:id/login`). It prints a sign-in link and waits for the code the sign-in page shows. The dialog opens the link and takes the code (`POST …/login/code`), which goes to the waiting login on stdin. A wrong code shows Claude's own output. A login waits 10 minutes for its code, closing the dialog cancels it, and one runs per project: a second session joins it, or hears who the project is logged in as already.
     - The login lands in the project's Claude home, so every session of the project has it, and it survives recreating the sandbox.
     - Then the card offers **Retry** (`POST /api/sessions/:id/retry`): the session's Claude is started again, since a process that started logged out stays that way, and the failed prompt is sent again. It continues Claude's session if a turn ever worked in it, and starts afresh otherwise. The session keeps its tab and chat.
-    - Logging in from a shell in the sandbox (`limactl shell bm-<id>`, then `claude`) works too. The usage strip reads the credentials from the Claude home.
-- **Worktrees** are never stored by Bentomo.
+    - Logging in from a shell in the sandbox (`limactl shell km-<id>`, then `claude`) works too. The usage strip reads the credentials from the Claude home.
+- **Worktrees** are never stored by Kumiko.
   - `GET /api/projects/:id/worktrees` runs `git worktree list --porcelain -z` on the host, then, per worktree, `status` (uncommitted changes, untracked files included) and the commits not on its upstream (or on no remote, without one).
-  - A worktree also shows whether it is merged into the remote's default branch: `origin/HEAD`, else `origin/main` or `origin/master`. That is as of the last fetch; Bentomo never fetches. A branch still at the commit it was created from isn't counted as merged, since it has nothing in it yet; the branch's reflog says where that was.
+  - A worktree also shows whether it is merged into the remote's default branch: `origin/HEAD`, else `origin/main` or `origin/master`. That is as of the last fetch; Kumiko never fetches. A branch still at the commit it was created from isn't counted as merged, since it has nothing in it yet; the branch's reflog says where that was.
   - Squash-merged branches don't show as merged.
   - git runs with `GIT_OPTIONAL_LOCKS=0`, so reading status never takes the index lock from under an agent committing in the sandbox.
   - The project page reads worktrees every 10 seconds while it is open and the window is visible. That reads the project's file and runs git, without asking Lima.
@@ -115,7 +116,7 @@ The spec's model, as built:
   - A session waits on the user when Claude has finished a turn, or the session stopped by itself, and nobody has looked at it since (`unread` on the session).
   - Claude runs with permissions bypassed, so there are no permission prompts to wait on; a finished turn is how it asks for an answer.
   - Opening the session's tab, with the window visible, clears it (`POST /api/sessions/:id/seen`). Projects carry a `waiting` count. Tabs show waiting sessions in amber.
-- **Missing sandbox**: a project whose sandbox doesn't exist (`limactl create` failed, or it was deleted outside Bentomo) shows as "No sandbox" and can be recreated from its stored spec, or from the defaults if there is none. A failed create now keeps the stored spec for that.
+- **Missing sandbox**: a project whose sandbox doesn't exist (`limactl create` failed, or it was deleted outside Kumiko) shows as "No sandbox" and can be recreated from its stored spec, or from the defaults if there is none. A failed create now keeps the stored spec for that.
 - **Missing folders**: if the clone or the worktrees folder is gone, the project says so, and Start, Recreate and Save and recreate refuse until it's back. Lima's own error would be cryptic.
 - **Deleting a project** removes its sandbox, its Claude home and its saved sessions, after confirmation. The clone and its worktrees are never touched.
 
@@ -124,19 +125,19 @@ The spec's model, as built:
 Checked against Lima 2.2.1 (the spec's open questions):
 
 - `limactl list --format json` prints one JSON object per line, with `name`, `status`, `cpus`, `memory` and `disk` (bytes) and `sshConfigFile`.
-- `--mount-only` repeats, but it splits its values on commas and can't set a path in the sandbox. Bentomo passes mounts with `--set '.mounts = […]'` instead.
+- `--mount-only` repeats, but it splits its values on commas and can't set a path in the sandbox. Kumiko passes mounts with `--set '.mounts = […]'` instead.
 - The remote `bash -s` hands the rest of stdin to the command after `exec`. Forwarded values containing quotes, `$` and newlines arrive intact.
 
 Beyond the spec:
 
 - **Working directory** (`workdir` in the sandbox's spec): a project's is its clone. Provisioning runs in it, and `exec` takes it as `cwd` for sessions.
   - Every start creates it if it's missing, and hands it to the sandbox user if they can't write to it.
-  - Interactive shells start there too. Without `--workdir`, `limactl shell` tries the host's current directory and home, which rarely exist in the sandbox, and falls back to `~`. Each start writes `~/.config/bentomo/shell.sh`, sourced at the end of `~/.bashrc`, which moves a shell that lands in `~` to the working directory. A shell sent anywhere else stays there.
+  - Interactive shells start there too. Without `--workdir`, `limactl shell` tries the host's current directory and home, which rarely exist in the sandbox, and falls back to `~`. Each start writes `~/.config/kumiko/shell.sh`, sourced at the end of `~/.bashrc`, which moves a shell that lands in `~` to the working directory. A shell sent anywhere else stays there.
 - **Mount paths in the sandbox:** `~/…` means the sandbox user's home; it becomes Lima's `{{.Home}}`. Sandbox paths can't be `/` or `~` and can't overlap. Mounts saved without a sandbox path keep the host path.
 - **`SandboxProvider`** has more methods: `validate` and `validateEdit` (so the server can answer `400` before going async), `edit` and `templates`. There is no separate "re-run provisioning": a sandbox is provisioned once, and a changed or fixed script runs by recreating it.
 - **Claude Code is always installed**, as the first provisioning step before the user's script.
   - It uses the official native installer (`curl -fsSL https://claude.ai/install.sh | bash`), which puts it in `~/.local/bin` and needs no Node. curl is installed with apt if missing.
-  - It is linked to `/usr/local/bin/claude`, so every shell finds it: login, non-login and `limactl shell`. Every start also puts `~/.local/bin` on `PATH` for every shell, as Claude Code's own checks expect: `~/.config/bentomo/env.sh`, sourced from the top of `~/.bashrc` (so commands run over ssh get it too) and from `~/.profile`. `exec` sets it as well.
+  - It is linked to `/usr/local/bin/claude`, so every shell finds it: login, non-login and `limactl shell`. Every start also puts `~/.local/bin` on `PATH` for every shell, as Claude Code's own checks expect: `~/.config/kumiko/env.sh`, sourced from the top of `~/.bashrc` (so commands run over ssh get it too) and from `~/.profile`. `exec` sets it as well.
   - If the install fails, provisioning fails (`provision_failed`), as for the script.
   - Every later start checks for it and reinstalls only if it is missing. A failure there is a warning.
 - **Provisioning output:**
@@ -148,10 +149,10 @@ Beyond the spec:
 - **Project page** (`#/project/<id>`). Clicking a row opens it, and so does creating a project. It shows the sandbox's status and actions, a **New session** button, the project's sessions (waiting ones first) and worktrees side by side, then resources, template, setup state, creation time, mounts, forwarded variables, the provisioning script, and the sandbox's log at full width.
 - **Editing after creation** (`PATCH /api/projects/:id`, **Edit** on the project page). Clone, name and template are fixed, and so are the project's own mounts: `mounts` in the request are the extra ones. The form has two ways to save:
   - **Save and recreate sandbox** (the default, `?recreate=1`) deletes the sandbox and creates it again from the changed spec, provisioning included. It works whether the sandbox runs or not, and the disk can shrink.
-  - **Save** keeps the sandbox. CPUs, memory, disk and mounts go through `limactl edit`; they need the sandbox stopped, apply on its next start, and the disk can only grow. Forwarded variables and the provisioning script live only in Bentomo's metadata, so they can change while the sandbox runs, but a new script only runs on a recreate.
+  - **Save** keeps the sandbox. CPUs, memory, disk and mounts go through `limactl edit`; they need the sandbox stopped, apply on its next start, and the disk can only grow. Forwarded variables and the provisioning script live only in Kumiko's metadata, so they can change while the sandbox runs, but a new script only runs on a recreate.
 - **Recreate sandbox** (in the row menu) deletes the sandbox and creates it again from its stored spec: `POST /api/projects/:id/recreate`. The Claude home and saved sessions stay.
 - **`GET /api/env?names=A,B`** backs the form's "set on host" dots. It answers `true`/`false`, never values.
-- **Request guard:** the server listens on `127.0.0.1` only. It also refuses requests whose `Host` or `Origin` isn't local, so a web page open in your browser can't drive it (DNS rebinding, CSRF). Session ids from URLs must be Bentomo's own hex ids before they name a file or a socket, since route parameters decode `%2F`.
+- **Request guard:** the server listens on `127.0.0.1` only. It also refuses requests whose `Host` or `Origin` isn't local, so a web page open in your browser can't drive it (DNS rebinding, CSRF). Session ids from URLs must be Kumiko's own hex ids before they name a file or a socket, since route parameters decode `%2F`.
 - **Errors are JSON** (`{ error, details? }`) with a fitting status, including unexpected ones (500), so the UI can always show the message.
 - **limactl runs in the temp directory**, because `limactl edit` saves a config it rejects as `lima.REJECTED.yaml` in the current one.
 - **Links in the desktop app:** only `http(s)` and `mailto` links open in the browser; chat text comes from Claude, and a `file:` or custom-scheme link could open or run things on the host. Anything else is ignored.
@@ -172,21 +173,21 @@ Beyond the spec:
 - **Deltas are pruned** when a turn ends, for every message whose blocks all finished; the final `assistant` messages carry the same content. A message cut short by Stop keeps its deltas, since they are all there is of it.
 - **Large tool output is cut** to 64 KB per tool result, with a note saying how much went, and `tool_use_result` (the same output again, structured) is dropped. Claude's transcript in the project's Claude home keeps everything. The session header shows how much memory the session's buffer takes, as of the last finished turn.
 - **Session status changes** go out on `/api/events` as `{ type: "sessions", sessions }`, and the snapshot carries them, so tab dots stay current. Project views carry a live `sessions` count and a `waiting` count.
-- **Stop asks first** when the project has live sessions. Delete project, Recreate sandbox and Save and recreate sandbox say how many sessions will end. Sessions also end when the list notices their sandbox stopped outside Bentomo.
+- **Stop asks first** when the project has live sessions. Delete project, Recreate sandbox and Save and recreate sandbox say how many sessions will end. Sessions also end when the list notices their sandbox stopped outside Kumiko.
 - **Subagent messages** (`parent_tool_use_id` set) are kept in the buffer but not shown; the subagent's own tool call shows as one line.
 - An unknown session's socket is accepted and closed with code `4404`, which a browser can see, rather than refused with an HTTP 404. A rewind rewrites the buffer and closes the session's sockets with `4409`; the tab drops its chat and subscribes again from the start.
 
 ### Resuming and forking
 
 - **Closing a tab closes the session** (there is no End session button). It stays on disk and can be resumed. Closing it while Claude is working asks first, since the turn stops and the reply in progress is lost. Quitting the desktop app asks the same when Claude is working in any session; closing its window on macOS leaves the app, and Claude, running.
-- **The New session tab lists saved sessions**, most recent first (20 shown), under the opening-prompt form. Resume needs the session's project's sandbox to be running. It starts `claude … --resume <claude session id>` under the same Bentomo session id, and `GET /api/sessions/resumable` and `POST /api/sessions/:id/resume` back it.
+- **The New session tab lists saved sessions**, most recent first (20 shown), under the opening-prompt form. Resume needs the session's project's sandbox to be running. It starts `claude … --resume <claude session id>` under the same Kumiko session id, and `GET /api/sessions/resumable` and `POST /api/sessions/:id/resume` back it.
 - **Only the chat is saved**: prompts, finished assistant messages, tool results, turn footers and Stop. Deltas, `system` messages, errors and the end marker are dropped, so a resumed tab shows the conversation and nothing else. The session is `idle` at once, since Claude sends `system/init` only with the next prompt.
 - **Cost footers** after a resume: the running `total_cost_usd` starts over, and the UI treats a drop as a new total.
 - **Saved sessions are deleted** with the trash icon on a row of the New session tab (`DELETE /api/sessions/saved/:id`; 409 while the session is open), and automatically when their project is deleted. Recreating or stopping the sandbox keeps them, since Claude's transcripts are in the project's Claude home on the host.
 - **Fork** (beside a message you sent, `POST /api/sessions/:id/fork` with `{ prompt }`) opens a new tab with a copy of the chat up to the end of that message's turn, continuing from the same Claude session with `--fork-session`, cut with `--resume-session-at` after the turn unless it is the last. Typing `/fork` forks the whole conversation (no `prompt`). The original is untouched. It needs the first turn to have finished, and is disabled while a turn runs.
-- **Rewind** (the arrow beside a message you sent, `POST /api/sessions/:id/rewind`) takes the session back, in place, to just before that message, and puts the message back in the box to edit. What came after is dropped from the chat, and the session's Claude is swapped for `claude … --resume <id> --fork-session --resume-session-at <last message before the prompt>`. Claude reports the cut history's new id only with the next turn, so until then the session keeps the cut point (`resumeAt`) and a resume or relaunch makes the same cut. Rewinding to the first message starts Claude afresh and deletes the saved copy, which has nothing to resume yet. The checkbox "also put back the files" asks Claude to restore its file checkpoints (`rewind_files`) first, and nothing changes if it can't. Only messages Claude has echoed back can be rewound to or forked from (`--replay-user-messages`; Bentomo tags each prompt with its own `uuid`), so slash commands that make no history, like `/model`, have no arrow. It is disabled while a turn runs.
+- **Rewind** (the arrow beside a message you sent, `POST /api/sessions/:id/rewind`) takes the session back, in place, to just before that message, and puts the message back in the box to edit. What came after is dropped from the chat, and the session's Claude is swapped for `claude … --resume <id> --fork-session --resume-session-at <last message before the prompt>`. Claude reports the cut history's new id only with the next turn, so until then the session keeps the cut point (`resumeAt`) and a resume or relaunch makes the same cut. Rewinding to the first message starts Claude afresh and deletes the saved copy, which has nothing to resume yet. The checkbox "also put back the files" asks Claude to restore its file checkpoints (`rewind_files`) first, and nothing changes if it can't. Only messages Claude has echoed back can be rewound to or forked from (`--replay-user-messages`; Kumiko tags each prompt with its own `uuid`), so slash commands that make no history, like `/model`, have no arrow. It is disabled while a turn runs.
 - Claude session and message ids are checked against the UUID shape before they reach the shell command.
 
 ### Slash commands
 
-Typing `/` in a prompt offers the commands Claude lists in `system/init` (`slash_commands`), kept on the session, so custom commands and skills show up too. Choosing one sends it as an ordinary prompt: in headless mode Claude runs custom commands, skills and many built-ins (`/compact`, `/clear`, `/model`, `/context`, `/usage`, `/config`, `/mcp`, `/effort`…). Ones it can't run headless (`/help`…) aren't in the list. Bentomo handles a few itself and offers them too: `/login`, `/fork` (forks the whole conversation) and `/rewind` (asks to rewind to just before your last message, as its arrow does; older messages have their own arrows).
+Typing `/` in a prompt offers the commands Claude lists in `system/init` (`slash_commands`), kept on the session, so custom commands and skills show up too. Choosing one sends it as an ordinary prompt: in headless mode Claude runs custom commands, skills and many built-ins (`/compact`, `/clear`, `/model`, `/context`, `/usage`, `/config`, `/mcp`, `/effort`…). Ones it can't run headless (`/help`…) aren't in the list. Kumiko handles a few itself and offers them too: `/login`, `/fork` (forks the whole conversation) and `/rewind` (asks to rewind to just before your last message, as its arrow does; older messages have their own arrows).

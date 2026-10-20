@@ -5,8 +5,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 import WebSocket from "ws";
-import type { ProjectView, ServerEvent, WorktreesResponse } from "@bentomo/shared";
-import { LimaProvider, MetadataStore } from "@bentomo/sandbox";
+import type { ProjectView, ServerEvent, WorktreesResponse } from "@kumiko/shared";
+import { LimaProvider, MetadataStore } from "@kumiko/sandbox";
 import { startServer, type RunningServer } from "../src/index.js";
 import { makeClone, sh } from "./repo.js";
 
@@ -23,7 +23,7 @@ describe("server", () => {
   let ws: WebSocket;
 
   before(async () => {
-    root = await realpath(await mkdtemp(join(tmpdir(), "bentomo-server-test-")));
+    root = await realpath(await mkdtemp(join(tmpdir(), "kumiko-server-test-")));
     limaDir = join(root, "lima");
     mountDir = join(root, "mount");
     dataDir = join(root, "data");
@@ -103,7 +103,7 @@ describe("server", () => {
     assert.deepEqual(await json(await api("/api/defaults")), { home, claudeHomes: join(dataDir, "claude") });
   });
 
-  it("keeps the window's tabs in Bentomo's home, refusing what isn't tabs", async () => {
+  it("keeps the window's tabs in Kumiko's home, refusing what isn't tabs", async () => {
     assert.equal(await json(await api("/api/tabs")), null);
     const tabs = { sessions: ["ab12", "../x", 3, "cd34"], newSession: true, active: "session:ab12" };
     assert.equal((await api("/api/tabs", { method: "PUT", body: JSON.stringify(tabs) })).status, 200);
@@ -138,7 +138,7 @@ describe("server", () => {
     await rm(clone + "__worktrees");
     // An extra mount that can't be checked until the project's own mounts exist: everything made is undone.
     await refuse({ name: "x", clonePath: clone, mounts: [{ hostPath: mountDir, guestPath: "~/.claude", writable: false }] }, /overlap/);
-    assert.equal(await exists(clone + "__worktrees"), false, "the worktrees folder Bentomo made is gone again");
+    assert.equal(await exists(clone + "__worktrees"), false, "the worktrees folder Kumiko made is gone again");
     assert.equal(await exists(join(dataDir, "claude", "x")), false);
     assert.deepEqual(await projects(), []);
   });
@@ -157,12 +157,12 @@ describe("server", () => {
     assert.equal(listed?.projects.find((s) => s.name === "web")!.operation?.op, "creating");
 
     const p = (await project("web"))!;
-    assert.deepEqual([p.status, p.meta?.setup, p.vm, p.project.clonePath, p.project.worktreesPath], ["running", "ready", "bm-web", clone, clone + "__worktrees"]);
+    assert.deepEqual([p.status, p.meta?.setup, p.vm, p.project.clonePath, p.project.worktreesPath], ["running", "ready", "km-web", clone, clone + "__worktrees"]);
     assert.ok((await stat(clone + "__worktrees")).isDirectory());
 
     // The clone and its worktrees at the same paths in the VM, the Claude home at ~/.claude, then the extra mount.
     const claudeHome = join(dataDir, "claude", "web");
-    const createCall = (await readFile(join(limaDir, "calls.log"), "utf8")).split("\n").filter(Boolean).map((l) => JSON.parse(l) as string[]).find((a) => a[0] === "create" && a.includes("--name=bm-web"))!;
+    const createCall = (await readFile(join(limaDir, "calls.log"), "utf8")).split("\n").filter(Boolean).map((l) => JSON.parse(l) as string[]).find((a) => a[0] === "create" && a.includes("--name=km-web"))!;
     const mounts = JSON.parse(createCall.find((a) => a.startsWith("--set=.mounts = "))!.slice("--set=.mounts = ".length));
     assert.deepEqual(mounts, [
       { location: clone, mountPoint: clone, writable: true },
@@ -174,10 +174,10 @@ describe("server", () => {
     assert.equal((await readFile(join(mountDir, "where"), "utf8")).trim(), clone);
     assert.equal((await readFile(join(mountDir, "out"), "utf8")).trim(), "token=abc");
 
-    // The Claude home: the user's CLAUDE.md from the app-level template, importing Bentomo's own file.
-    assert.match(await readFile(join(claudeHome, "CLAUDE.md"), "utf8"), /^@bentomo\.md\n/);
-    assert.match(await readFile(join(dataDir, "claude-template", "CLAUDE.md"), "utf8"), /^@bentomo\.md\n/);
-    const managed = await readFile(join(claudeHome, "bentomo.md"), "utf8");
+    // The Claude home: the user's CLAUDE.md from the app-level template, importing Kumiko's own file.
+    assert.match(await readFile(join(claudeHome, "CLAUDE.md"), "utf8"), /^@kumiko\.md\n/);
+    assert.match(await readFile(join(dataDir, "claude-template", "CLAUDE.md"), "utf8"), /^@kumiko\.md\n/);
+    const managed = await readFile(join(claudeHome, "kumiko.md"), "utf8");
     assert.ok(managed.includes(`git worktree add "${clone}__worktrees/<branch>" -b <branch>`), managed);
 
     // The same clone can't be a second project, nor the same name.
@@ -196,13 +196,13 @@ describe("server", () => {
     ws2.close();
     assert.ok(snap.type === "snapshot" && snap.logs.web.some((l) => l.text === "Stopped."));
 
-    // Bentomo's file is rewritten on start; the user's CLAUDE.md is theirs.
+    // Kumiko's file is rewritten on start; the user's CLAUDE.md is theirs.
     await writeFile(join(claudeHome, "CLAUDE.md"), "mine\n");
-    await writeFile(join(claudeHome, "bentomo.md"), "stale\n");
+    await writeFile(join(claudeHome, "kumiko.md"), "stale\n");
     s2 = events.length;
     assert.equal((await api("/api/projects/web/start", { method: "POST" })).status, 202);
     assert.equal((await finished("web", "starting", s2)).type, "done");
-    assert.equal(await readFile(join(claudeHome, "bentomo.md"), "utf8"), managed);
+    assert.equal(await readFile(join(claudeHome, "kumiko.md"), "utf8"), managed);
     assert.equal(await readFile(join(claudeHome, "CLAUDE.md"), "utf8"), "mine\n");
 
     // Deleting removes the VM and the Claude home; the clone and its worktrees stay.
@@ -239,7 +239,7 @@ describe("server", () => {
     const { clone } = await create("ed");
     const running = await api("/api/projects/ed", { method: "PATCH", body: JSON.stringify({ cpus: 2 }) });
     assert.equal(running.status, 400);
-    assert.match((await json(running)).details.join(), /Stop bm-ed/);
+    assert.match((await json(running)).details.join(), /Stop km-ed/);
 
     let since = events.length;
     assert.equal((await api("/api/projects/ed", { method: "PATCH", body: JSON.stringify({ env: ["TOKEN"], workdir: "/elsewhere" }) })).status, 202);
@@ -374,11 +374,11 @@ describe("server", () => {
     await new Promise<void>((r) => bad.once("error", () => r()));
   });
 
-  it("notices a project's VM changing outside Bentomo, and ignores VMs that aren't projects'", async () => {
+  it("notices a project's VM changing outside Kumiko, and ignores VMs that aren't projects'", async () => {
     await create("outside");
-    await writeFile(join(limaDir, "bm-stray.json"), JSON.stringify({ name: "bm-stray", status: "Running" }));
+    await writeFile(join(limaDir, "km-stray.json"), JSON.stringify({ name: "km-stray", status: "Running" }));
     const since = events.length;
-    await writeFile(join(limaDir, "bm-outside.json"), JSON.stringify({ name: "bm-outside", status: "Stopped" }));
+    await writeFile(join(limaDir, "km-outside.json"), JSON.stringify({ name: "km-outside", status: "Stopped" }));
     await waitFor(() => events.slice(since).find((e) => e.type === "list" && e.projects.some((s) => s.name === "outside" && s.status === "stopped")));
     assert.ok(!(await projects()).some((p) => p.name === "stray"));
     await remove("outside");
@@ -389,7 +389,7 @@ describe("server errors", () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const json = (r: Response): Promise<any> => r.json();
   it("answers in JSON when a route fails unexpectedly or gets a bad body", async () => {
-    const root = await mkdtemp(join(tmpdir(), "bentomo-server-errors-"));
+    const root = await mkdtemp(join(tmpdir(), "kumiko-server-errors-"));
     const provider = new LimaProvider({ limactl: join(fixtures, "fake-limactl.mjs"), metadata: new MetadataStore(join(root, "sandboxes")) });
     provider.templates = async () => {
       throw new Error("limactl exploded");
@@ -413,7 +413,7 @@ describe("server errors", () => {
 
 describe("web UI", () => {
   it("serves files, falls back to index.html, and 404s malformed paths", async () => {
-    const root = await mkdtemp(join(tmpdir(), "bentomo-web-"));
+    const root = await mkdtemp(join(tmpdir(), "kumiko-web-"));
     const web = join(root, "web");
     await mkdir(join(web, "assets"), { recursive: true });
     await writeFile(join(web, "index.html"), "<p>app</p>");

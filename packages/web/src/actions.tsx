@@ -1,6 +1,6 @@
 import { useState } from "react";
 import * as Menu from "@radix-ui/react-dropdown-menu";
-import type { ProjectView } from "@bentomo/shared";
+import type { ProjectView } from "@kumiko/shared";
 import { api, errorMessage } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Dots, Play, Redo, Square, Trash } from "./icons";

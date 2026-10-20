@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { execScript, shellQuote } from "@bentomo/sandbox";
+import { execScript, shellQuote } from "@kumiko/sandbox";
 import type { Exec } from "../src/index.js";
 
 export const FAKE_CLAUDE = resolve(dirname(fileURLToPath(import.meta.url)), "../../fixtures/fake-claude.mjs");
@@ -21,7 +21,7 @@ export async function installFakeClaude(home: string): Promise<void> {
  * preamble. HOME is a temp dir and PATH is minimal, so only a `claude` installed there is found.
  */
 export async function localExec(values: NodeJS.ProcessEnv = {}, opts: { claude?: boolean } = {}): Promise<{ exec: Exec; home: string }> {
-  const home = await mkdtemp(join(tmpdir(), "bentomo-agent-test-"));
+  const home = await mkdtemp(join(tmpdir(), "kumiko-agent-test-"));
   if (opts.claude !== false) await installFakeClaude(home);
   const exec: Exec = (_sandbox, cmd, env, o = {}) => {
     const child = spawn("bash", ["-s"], { stdio: ["pipe", "pipe", "pipe"], env: { HOME: home, PATH: "/usr/bin:/bin" } });

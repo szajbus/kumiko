@@ -14,7 +14,7 @@ import {
   type Mount,
   type ProjectView,
   type TemplatesResponse,
-} from "@bentomo/shared";
+} from "@kumiko/shared";
 import { api, errorMessage, RequestError, useDefaults } from "./api";
 import { sessionsNote } from "./actions";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -58,7 +58,7 @@ interface EnvRow {
 }
 
 let nextId = 1;
-const hasPicker = () => typeof window.bentomo?.pickFolder === "function";
+const hasPicker = () => typeof window.kumiko?.pickFolder === "function";
 
 export function ProjectForm({ editing, onCancel, onCreated }: Props) {
   const was = editing?.meta?.spec;
@@ -71,7 +71,7 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
   const [templates, setTemplates] = useState<TemplatesResponse | undefined>();
   const [templatesError, setTemplatesError] = useState<string | undefined>();
   const [template, setTemplate] = useState(was ? was.template || "template:default" : "");
-  // Lima's current values win over the stored spec, in case the VM was edited outside Bentomo.
+  // Lima's current values win over the stored spec, in case the VM was edited outside Kumiko.
   const [cpus, setCpus] = useState(String(editing?.cpus ?? was?.cpus ?? DEFAULTS.cpus));
   const [memory, setMemory] = useState(String(editing?.memoryGiB ?? was?.memoryGiB ?? DEFAULTS.memoryGiB));
   const [disk, setDisk] = useState(String(editing?.diskGiB ?? was?.diskGiB ?? DEFAULTS.diskGiB));
@@ -127,20 +127,20 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
     setNameEdited(v.trim() !== "");
   };
   const pickClone = async () => {
-    const path = await window.bentomo!.pickFolder();
+    const path = await window.kumiko!.pickFolder();
     if (path) setClone(path);
   };
 
   const addFolder = async () => {
     if (hasPicker()) {
-      const path = await window.bentomo!.pickFolder();
+      const path = await window.kumiko!.pickFolder();
       if (path) setMounts((all) => [...all, { id: nextId++, hostPath: path, guestPath: "", writable: false }]);
     } else {
       setMounts((all) => [...all, { id: nextId++, hostPath: "", guestPath: "", writable: false }]);
     }
   };
   const changeFolder = async (id: number) => {
-    const path = await window.bentomo!.pickFolder();
+    const path = await window.kumiko!.pickFolder();
     if (path) patchMount(id, { hostPath: path });
   };
   const patchMount = (id: number, patch: Partial<MountRow>) => setMounts((all) => all.map((r) => (r.id === id ? { ...r, ...patch } : r)));
@@ -512,7 +512,7 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
           id="sec-prov"
           description={
             <>
-              Bentomo first installs Claude Code, on <code className="mono">PATH</code> as <code className="mono">claude</code>. Then your script runs
+              Kumiko first installs Claude Code, on <code className="mono">PATH</code> as <code className="mono">claude</code>. Then your script runs
               once, as the sandbox user, in the clone, with the forwarded variables set. <code className="mono">sudo</code> is available. Stops at the first
               failing command.
               {editing && " A new script runs when you save and recreate the sandbox."}

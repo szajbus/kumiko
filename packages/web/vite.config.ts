@@ -13,13 +13,13 @@ function commitSha(): string {
   }
 }
 
-const server = process.env.BENTOMO_SERVER ?? "http://127.0.0.1:4317";
+const server = process.env.KUMIKO_SERVER ?? "http://127.0.0.1:4317";
 
 export default defineConfig({
   plugins: [react()],
   define: { __COMMIT_SHA__: JSON.stringify(commitSha()) },
   resolve: {
-    alias: { "@bentomo/shared": fileURLToPath(new URL("../shared/src/index.ts", import.meta.url)) },
+    alias: { "@kumiko/shared": fileURLToPath(new URL("../shared/src/index.ts", import.meta.url)) },
   },
   server: {
     proxy: { "/api": { target: server, ws: true } },

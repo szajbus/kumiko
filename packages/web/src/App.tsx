@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { SessionInfo } from "@bentomo/shared";
+import type { SessionInfo } from "@kumiko/shared";
 import { api, RequestError, useLiveState } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ProjectForm } from "./ProjectForm";
@@ -235,7 +235,7 @@ export function App() {
     };
     addEventListener("keydown", onKey);
     // Electron's menu claims Cmd+W for closing the window, so the shell forwards it instead.
-    const offClose = window.bentomo?.onCloseTab?.((deleteToo) => shortcut.current(deleteToo ? "delete" : "close"));
+    const offClose = window.kumiko?.onCloseTab?.((deleteToo) => shortcut.current(deleteToo ? "delete" : "close"));
     return () => {
       removeEventListener("keydown", onKey);
       offClose?.();

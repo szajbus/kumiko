@@ -52,7 +52,7 @@ Answers one question in three seconds: **what needs my attention?**
 ## Not validated
 - That the host sees VM-created worktrees at identical paths (needs a host-side test). `npm run projects-check` checks it, and the reverse, against real Lima.
 - git-on-virtiofs performance for large repos. Worktree status runs with git on the host, so the project view doesn't depend on it; the agent's own git in the VM still does.
-- That the `@bentomo.md` import in the Claude home's `CLAUDE.md` is followed by headless Claude. `npm run projects-check -- --keep` leaves a VM to try it in.
+- That the `@kumiko.md` import in the Claude home's `CLAUDE.md` is followed by headless Claude. `npm run projects-check -- --keep` leaves a VM to try it in.
 
 ## Out of scope for v1
 Multiple VMs per project, clone from URL, app-level credentials, session-to-worktree linking, per-worktree bootstrap hooks, enforced read-only question sessions, migration of existing sessions and VMs (no backward compatibility).

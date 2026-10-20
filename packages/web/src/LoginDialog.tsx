@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { LoginAccount } from "@bentomo/shared";
+import type { LoginAccount } from "@kumiko/shared";
 import { api, errorMessage, RequestError } from "./api";
 
 interface Props {

@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
-import { startServer, type RunningServer } from "@bentomo/server";
+import { startServer, type RunningServer } from "@kumiko/server";
 import { adoptLoginShellEnv } from "./shell-env.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -12,6 +12,9 @@ function webDir(): string {
   if (app.isPackaged && existsSync(packaged)) return packaged;
   return resolve(here, "../../../packages/web/dist");
 }
+
+// macOS takes its icon from the bundle, Windows and Linux from the window; unpackaged, macOS would show Electron's in the Dock.
+const icon = (file: string) => resolve(here, "../assets/icon", file);
 
 let server: RunningServer | undefined;
 let win: BrowserWindow | undefined;
@@ -44,8 +47,9 @@ function createWindow(url: string) {
     height: 800,
     minWidth: 760,
     minHeight: 520,
-    title: "Bentomo",
+    title: "Kumiko",
     backgroundColor: "#0F1115",
+    ...(process.platform === "darwin" ? {} : { icon: icon("png/512x512.png") }),
     // On macOS the app header doubles as the title bar: 40px tall, the traffic lights (12px) centred in it.
     ...(process.platform === "darwin" ? { titleBarStyle: "hidden" as const, trafficLightPosition: { x: 14, y: 14 } } : {}),
     show: false,
@@ -75,7 +79,7 @@ function createWindow(url: string) {
   win.webContents.on("before-input-event", (e, input) => {
     if (input.type === "keyDown" && (input.meta || input.control) && !input.alt && input.code === "KeyW") {
       e.preventDefault();
-      win?.webContents.send("bentomo:close-tab", input.shift);
+      win?.webContents.send("kumiko:close-tab", input.shift);
     }
   });
   win.on("closed", () => (win = undefined));
@@ -92,7 +96,7 @@ if (!app.requestSingleInstanceLock()) {
 
   adoptLoginShellEnv();
 
-  ipcMain.handle("bentomo:pick-folder", async (e) => {
+  ipcMain.handle("kumiko:pick-folder", async (e) => {
     const owner = BrowserWindow.fromWebContents(e.sender) ?? undefined;
     const opts: Electron.OpenDialogOptions = { title: "Choose a folder", properties: ["openDirectory", "createDirectory"] };
     const res = owner ? await dialog.showOpenDialog(owner, opts) : await dialog.showOpenDialog(opts);
@@ -100,10 +104,11 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(async () => {
+    if (process.platform === "darwin" && !app.isPackaged) app.dock?.setIcon(icon("macos/icon-macos-1024.png"));
     try {
-      server = await startServer({ port: Number(process.env.BENTOMO_PORT ?? 0), webDir: webDir() });
+      server = await startServer({ port: Number(process.env.KUMIKO_PORT ?? 0), webDir: webDir() });
     } catch (err) {
-      dialog.showErrorBox("Bentomo couldn't start its server", err instanceof Error ? err.message : String(err));
+      dialog.showErrorBox("Kumiko couldn't start its server", err instanceof Error ? err.message : String(err));
       app.quit();
       return;
     }

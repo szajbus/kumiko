@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { AccountUsage, UsageWindow } from "@bentomo/shared";
+import type { AccountUsage, UsageWindow } from "@kumiko/shared";
 import { api, errorMessage } from "./api";
 import { formatBytes, formatCost, planName, resetText } from "./format";
 
@@ -61,7 +61,7 @@ export function UsageStrip({ sessionId, live, turnDone, cost, bufferBytes }: Pro
   return (
     <div className="usage-strip" title={fetchedAt ? `Usage read ${fetchedAt}` : undefined}>
       {bufferBytes !== undefined && (
-        <span className="usage-item" title="Memory this session's chat takes in Bentomo's server, as of the last finished turn. Tool output past 64 KB isn't kept.">
+        <span className="usage-item" title="Memory this session's chat takes in Kumiko's server, as of the last finished turn. Tool output past 64 KB isn't kept.">
           <span>Memory</span>
           <span className="mono">{formatBytes(bufferBytes)}</span>
         </span>

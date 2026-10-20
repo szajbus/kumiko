@@ -11,7 +11,7 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "types": ["vite/client"],
-    "paths": { "@bentomo/shared": ["../shared/src/index.ts"] }
+    "paths": { "@kumiko/shared": ["../shared/src/index.ts"] }
   },
   "include": ["src", "vite.config.ts"]
 }

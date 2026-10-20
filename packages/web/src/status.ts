@@ -1,4 +1,4 @@
-import { isWaiting, type LogLine, type OpKind, type SandboxView, type SessionInfo, type SessionStatus } from "@bentomo/shared";
+import { isWaiting, type LogLine, type OpKind, type SandboxView, type SessionInfo, type SessionStatus } from "@kumiko/shared";
 
 export const COLORS = {
   running: "#4CC38A",

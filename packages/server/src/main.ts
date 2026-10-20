@@ -9,7 +9,7 @@ import { startServer } from "./server.js";
 
 const { values } = parseArgs({
   options: {
-    port: { type: "string", default: process.env.BENTOMO_PORT ?? "4317" },
+    port: { type: "string", default: process.env.KUMIKO_PORT ?? "4317" },
     web: { type: "string" },
   },
 });
@@ -19,7 +19,7 @@ const builtWeb = resolve(here, "../../../web/dist");
 const webDir = values.web ? resolve(values.web) : existsSync(join(builtWeb, "index.html")) ? builtWeb : undefined;
 
 const server = await startServer({ port: Number(values.port), webDir });
-console.log(`Bentomo server on ${server.url}${webDir ? "" : " (API only; web UI not built)"}`);
+console.log(`Kumiko server on ${server.url}${webDir ? "" : " (API only; web UI not built)"}`);
 
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => void server.close().then(() => process.exit(0)));

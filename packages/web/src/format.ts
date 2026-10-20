@@ -1,4 +1,4 @@
-import type { EndReason, SessionInfo } from "@bentomo/shared";
+import type { EndReason, SessionInfo } from "@kumiko/shared";
 
 // Text the UI shows for numbers, times and sessions. Plain functions, so they can be tested without a browser.
 
@@ -48,7 +48,7 @@ export function endedText(reason: EndReason, code?: number): string {
     case "sandbox":
       return "Session ended: its sandbox stopped.";
     case "quit":
-      return "Session ended: Bentomo quit.";
+      return "Session ended: Kumiko quit.";
     default:
       return code ? `Session ended: Claude exited with code ${code}.` : "Session ended: Claude exited.";
   }

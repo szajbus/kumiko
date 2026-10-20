@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
-import { vmName, type LineKind, type LogLine, type OpKind, type Operation, type SandboxInfo, type SandboxView, type ServerEvent } from "@bentomo/shared";
-import type { Log } from "@bentomo/sandbox";
+import { vmName, type LineKind, type LogLine, type OpKind, type Operation, type SandboxInfo, type SandboxView, type ServerEvent } from "@kumiko/shared";
+import type { Log } from "@kumiko/sandbox";
 
 const MAX_LOG_LINES = 5000;
 

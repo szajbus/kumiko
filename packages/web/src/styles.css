@@ -130,9 +130,9 @@ code, .mono { font-family: var(--mono); }
 .dot-small { width: 8px; height: 8px; }
 .spinner {
   width: 12px; height: 12px; border-radius: 50%; border: 2px solid #2e3850; border-top-color: var(--accent);
-  animation: bm-spin 0.9s linear infinite; flex: none;
+  animation: km-spin 0.9s linear infinite; flex: none;
 }
-@keyframes bm-spin { to { transform: rotate(360deg); } }
+@keyframes km-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
 
 /* Row menu (Radix DropdownMenu) */
@@ -374,8 +374,8 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
   border: 0; border-radius: 4px; background: none; color: var(--muted); cursor: pointer;
 }
 .tab-close:hover { background: rgba(255, 255, 255, 0.08); color: var(--text); }
-.dot-pulse { animation: bm-pulse 1.4s ease-in-out infinite; }
-@keyframes bm-pulse { 50% { opacity: 0.35; } }
+.dot-pulse { animation: km-pulse 1.4s ease-in-out infinite; }
+@keyframes km-pulse { 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) { .dot-pulse { animation: none; } }
 .tab-new {
   flex: none; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin-left: 4px; padding: 0;
@@ -442,7 +442,7 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 .work-summary {
   align-self: flex-start; display: flex; align-items: center; gap: 8px; padding: 4px 10px 4px 8px; border: 1px solid var(--border-soft);
   border-radius: 999px; background: var(--surface); color: var(--muted); font: inherit; font-size: 12.5px; cursor: pointer;
-  animation: bm-fade-in 200ms ease-out;
+  animation: km-fade-in 200ms ease-out;
 }
 .work-summary:hover { color: var(--text-2); border-color: var(--border); }
 .work-summary::before { content: "▾"; color: var(--border-strong); font-size: 11px; }
@@ -452,7 +452,7 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 .work-clip { min-height: 0; overflow: hidden; }
 .work-items { display: flex; flex-direction: column; gap: 12px; }
 .work-summary + .work-body .work-items { padding-top: 12px; }
-@keyframes bm-fade-in { from { opacity: 0; } }
+@keyframes km-fade-in { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .work-body { transition: none; } .work-summary { animation: none; } }
 
 /* Claude's markdown */

@@ -1,5 +1,5 @@
 {
-  "name": "@bentomo/web",
+  "name": "@kumiko/web",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -20,7 +20,7 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
-    "@bentomo/shared": "*",
+    "@kumiko/shared": "*",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^5.0.0",

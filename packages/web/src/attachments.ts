@@ -1,4 +1,4 @@
-import { ATTACHMENTS_TOTAL_LIMIT, checkAttachment, formatBytes, type Attachment, type AttachmentInput, type AttachmentKind } from "@bentomo/shared";
+import { ATTACHMENTS_TOTAL_LIMIT, checkAttachment, formatBytes, type Attachment, type AttachmentInput, type AttachmentKind } from "@kumiko/shared";
 
 /**
  * A file in the composer, to go with the message: read here (`data`, in base64), or one the server has already, which

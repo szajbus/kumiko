@@ -25,12 +25,12 @@ import type {
   StartSessionRequest,
   TemplatesResponse,
   WorktreesResponse,
-} from "@bentomo/shared";
+} from "@kumiko/shared";
 
 declare global {
   interface Window {
     /** Exposed by the Electron preload; absent in a plain browser. */
-    bentomo?: { pickFolder(): Promise<string | null>; platform: string; getZoomFactor?(): number; onCloseTab?(cb: (deleteToo: boolean) => void): () => void };
+    kumiko?: { pickFolder(): Promise<string | null>; platform: string; getZoomFactor?(): number; onCloseTab?(cb: (deleteToo: boolean) => void): () => void };
   }
 }
 

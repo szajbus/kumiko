@@ -1,12 +1,20 @@
 // Icons from the design, drawn at their native sizes.
 
+const HEX = "50,10 84.64,30 84.64,70 50,90 15.36,70 15.36,30";
+const SPOKES = "M50 50L50 10M50 50L84.64 30M50 50L84.64 70M50 50L50 90M50 50L15.36 70M50 50L15.36 30";
+const LEAVES =
+  "M61.55 30L50 50M61.55 30L50 10M61.55 30L84.64 30M73.09 50L50 50M73.09 50L84.64 30M73.09 50L84.64 70" +
+  "M61.55 70L50 50M61.55 70L84.64 70M61.55 70L50 90M38.45 70L50 50M38.45 70L50 90M38.45 70L15.36 70" +
+  "M26.91 50L50 50M26.91 50L15.36 70M26.91 50L15.36 30M38.45 30L50 50M38.45 30L15.36 30M38.45 30L50 10";
+
+/** The asanoha kumiko mark in hinoki wood. At 32px and below it takes the heavier strokes, as the regular ones blur. */
 export function Logo({ size = 28 }: { size?: number }) {
+  const [outer, spoke, leaf] = size <= 32 ? [6, 3.6, 3] : [3.2, 1.8, 1.4];
   return (
-    <svg width={size} height={size} viewBox="0 0 28 28" aria-hidden="true">
-      <rect x="1" y="1" width="26" height="26" rx="6" fill="none" stroke="#E6E8EC" strokeWidth="2" />
-      <line x1="14" y1="2" x2="14" y2="26" stroke="#E6E8EC" strokeWidth="2" />
-      <line x1="14" y1="14" x2="26" y2="14" stroke="#E6E8EC" strokeWidth="2" />
-      <circle cx="7.5" cy="14" r="2.5" fill="#8FA6F0" />
+    <svg width={size} height={size} viewBox="12 8 76 84" fill="none" stroke="#D9B98C" strokeLinecap="round" aria-hidden="true">
+      <polygon points={HEX} strokeWidth={outer} strokeLinejoin="round" />
+      <path d={SPOKES} strokeWidth={spoke} />
+      <path d={LEAVES} strokeWidth={leaf} />
     </svg>
   );
 }

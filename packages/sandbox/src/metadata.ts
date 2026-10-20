@@ -1,23 +1,23 @@
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { SandboxMeta } from "@bentomo/shared";
+import type { SandboxMeta } from "@kumiko/shared";
 
 export function defaultMetadataDir(): string {
-  return process.env.BENTOMO_HOME
-    ? join(process.env.BENTOMO_HOME, "sandboxes")
-    : join(homedir(), ".bentomo", "sandboxes");
+  return process.env.KUMIKO_HOME
+    ? join(process.env.KUMIKO_HOME, "sandboxes")
+    : join(homedir(), ".kumiko", "sandboxes");
 }
 
-/** Bentomo's record of a sandbox is there but can't be used: not JSON, edited by hand, or unreadable. */
+/** Kumiko's record of a sandbox is there but can't be used: not JSON, edited by hand, or unreadable. */
 export class MetadataError extends Error {
   constructor(readonly file: string, why: string) {
-    super(`Bentomo's record of this sandbox, ${file}, can't be read (${why}). Fix the file, or delete it to treat the sandbox as one Bentomo didn't create.`);
+    super(`Kumiko's record of this sandbox, ${file}, can't be read (${why}). Fix the file, or delete it to treat the sandbox as one Kumiko didn't create.`);
     this.name = "MetadataError";
   }
 }
 
-/** One JSON file per sandbox Bentomo created. Holds variable names only, never values. */
+/** One JSON file per sandbox Kumiko created. Holds variable names only, never values. */
 export class MetadataStore {
   constructor(readonly dir: string = defaultMetadataDir()) {}
 

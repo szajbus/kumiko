@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import type { WorktreeStatus, WorktreesResponse } from "@bentomo/shared";
+import type { WorktreeStatus, WorktreesResponse } from "@kumiko/shared";
 
 const TIMEOUT_MS = 10_000;
 
