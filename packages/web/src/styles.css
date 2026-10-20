@@ -352,18 +352,33 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 
 /* Tabs, in the title bar: pills centred in it */
 .tabbar { flex: 1; min-width: 0; height: 100%; display: flex; align-items: center; }
-.tabs { flex: 0 1 auto; min-width: 0; height: 100%; display: flex; align-items: center; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+/* Projects: always first, never closes or moves, tinted with the accent to set it apart from the session tabs. */
+.home-button {
+  flex: none; height: 28px; display: flex; align-items: center; gap: 7px; margin-right: 1px; padding: 0 10px;
+  border: 1px solid transparent; border-radius: 7px; background: rgba(143, 166, 240, 0.08); color: var(--accent);
+  font-size: 12.5px; font-weight: 500; cursor: pointer;
+}
+.home-button:hover { background: rgba(143, 166, 240, 0.14); color: var(--accent-hover); }
+.home-button.is-active { background: rgba(143, 166, 240, 0.2); border-color: rgba(143, 166, 240, 0.35); color: #dfe6fc; }
+/* The side padding keeps the drop marker beside the first and last tab inside the scrolling strip. */
+.tabs {
+  flex: 0 1 auto; min-width: 0; height: 100%; display: flex; align-items: center; gap: 4px; padding: 0 3px;
+  overflow-x: auto; scrollbar-width: none;
+}
 .tabs::-webkit-scrollbar { display: none; }
 .tab {
-  flex: 0 1 auto; width: 220px; min-width: 96px; height: 28px; display: flex; align-items: center;
+  position: relative; flex: 0 1 auto; width: 220px; min-width: 96px; height: 28px; display: flex; align-items: center;
   border: 1px solid transparent; border-radius: 7px; color: var(--muted);
 }
 .tab:hover { background: var(--surface-2); color: var(--text-2); }
 .tab.is-active { background: #262b35; border-color: var(--border-strong); color: var(--text); }
-/* Sandboxes: always first, never closes, tinted with the accent to set it apart from sessions. */
-.tab-home { flex: none; width: auto; min-width: 0; background: rgba(143, 166, 240, 0.08); color: var(--accent); }
-.tab-home:hover { background: rgba(143, 166, 240, 0.14); color: var(--accent-hover); }
-.tab-home.is-active { background: rgba(143, 166, 240, 0.2); border-color: rgba(143, 166, 240, 0.35); color: #dfe6fc; }
+/* Dragging a tab: it fades, and a bar in the gap shows where it would land. */
+.tab.is-dragging { opacity: 0.45; }
+.tab:is(.drop-before, .drop-after)::before {
+  content: ""; position: absolute; top: 4px; bottom: 4px; width: 2px; border-radius: 1px; background: var(--accent); pointer-events: none;
+}
+.tab.drop-before::before { left: -4px; }
+.tab.drop-after::before { right: -4px; }
 .tab-main {
   flex: 1; min-width: 0; height: 100%; display: flex; align-items: center; gap: 7px; padding: 0 10px;
   border: 0; background: none; color: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer; text-align: left;

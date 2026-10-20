@@ -67,18 +67,21 @@ export interface SavedTabs {
   newSessions: string[];
   /** The active tab's id, as the UI names it. */
   active: string;
+  /** The tabs after Projects in the order they were dragged into, named as `active` is; empty if never saved. */
+  order: string[];
 }
 
 /** The saved tabs in `v`, or undefined if it isn't saved tabs. Session ids that can't be ids are dropped. */
 export function parseSavedTabs(v: unknown): SavedTabs | undefined {
   if (typeof v !== "object" || v === null) return undefined;
-  const { sessions, newSessions, newSession, active } = v as Partial<Record<keyof SavedTabs | "newSession", unknown>>;
+  const { sessions, newSessions, newSession, active, order } = v as Partial<Record<keyof SavedTabs | "newSession", unknown>>;
   if (!Array.isArray(sessions) || typeof active !== "string" || active.length > 100) return undefined;
   const ids = sessions.filter((x): x is string => typeof x === "string" && SESSION_ID_PATTERN.test(x));
   // `newSession: true` is how a single New session tab was saved before there could be more.
   const drafts = Array.isArray(newSessions) ? newSessions : newSession === true ? [""] : [];
   const projects = drafts.filter((x): x is string => typeof x === "string").map((x) => (NAME_PATTERN.test(x) ? x : ""));
-  return { sessions: ids.slice(0, 200), newSessions: projects.slice(0, 50), active };
+  const tabs = Array.isArray(order) ? order.filter((x): x is string => typeof x === "string" && x.length <= 100) : [];
+  return { sessions: ids.slice(0, 200), newSessions: projects.slice(0, 50), active, order: tabs.slice(0, 250) };
 }
 
 /** What the UI needs from the host. */

@@ -10,6 +10,7 @@ import { ProjectList } from "./ProjectList";
 import { ProjectPage } from "./ProjectPage";
 import { SessionView } from "./SessionView";
 import { landingAfterClose } from "./landing";
+import { arrange, moveTab, replaceTab } from "./order";
 import { loadTabs, saveTabs } from "./tabs";
 
 type Route =
@@ -76,6 +77,8 @@ export function App() {
   // Sessions being closed leave the tabs at once, without waiting for the server to confirm.
   const [ending, setEnding] = useState<ReadonlySet<string>>(new Set());
   const sessions = useMemo(() => live.sessions.filter((s) => !ending.has(s.id)), [live.sessions, ending]);
+  // The order the tabs were dragged into. Tabs it doesn't name yet follow, sessions then New session tabs.
+  const [order, setOrder] = useState<TabId[]>([]);
   // The session whose Cmd+Shift+W is waiting for confirmation.
   const [deleting, setDeleting] = useState<SessionInfo | undefined>();
   // The session Claude is working in whose closing is waiting for confirmation.
@@ -119,6 +122,11 @@ export function App() {
       // Keys are this window's own, so the saved active one is found by its place.
       const drafts = saved.newSessions.map((p) => ({ key: nextKey(), project: p || undefined }));
       setNewSessions((open) => [...drafts, ...open]);
+      const draftAt = (tab: string) => drafts[Number(/^new-session:([0-9]+)$/.exec(tab)?.[1] ?? NaN)];
+      const savedOrder = saved.order.flatMap((t): TabId[] =>
+        t.startsWith("session:") ? [t as TabId] : draftAt(t) ? [`new-session:${draftAt(t).key}`] : [],
+      );
+      setOrder((o) => [...savedOrder, ...o]);
       // A link that already points somewhere wins over the saved active tab.
       if (!location.hash || location.hash === "#/" || staleLink) {
         const draft = /^new-session:([0-9]+)$/.exec(saved.active);
@@ -133,9 +141,15 @@ export function App() {
   useEffect(() => {
     if (!restored) return;
     // A New session tab is saved as active by its place, since keys don't outlive the window.
-    const active: TabId = route.view === "draft" ? `new-session:${newSessions.findIndex((n) => n.key === route.key)}` : tabOf(route);
-    saveTabs({ sessions: sessions.map((s) => s.id), newSessions: newSessions.map((n) => n.project ?? ""), active });
-  }, [restored, sessions, newSessions, route]);
+    const byPlace = (tab: TabId): TabId =>
+      tab.startsWith("new-session:") ? `new-session:${newSessions.findIndex((n) => `new-session:${n.key}` === tab)}` : tab;
+    saveTabs({
+      sessions: sessions.map((s) => s.id),
+      newSessions: newSessions.map((n) => n.project ?? ""),
+      active: byPlace(tabOf(route)),
+      order: open.map(byPlace),
+    });
+  }, [restored, sessions, newSessions, order, route]);
 
   useEffect(() => {
     const onHash = () => {
@@ -153,12 +167,12 @@ export function App() {
     return () => removeEventListener("hashchange", onHash);
   }, []);
 
-  // The tabs in the order the header shows them.
-  const tabs: TabId[] = [
-    "projects",
+  // The tabs in the order the header shows them: Projects, then the rest.
+  const open = arrange(order, [
     ...sessions.map((s): TabId => `session:${s.id}`),
     ...newSessions.map((n): TabId => `new-session:${n.key}`),
-  ];
+  ]);
+  const tabs: TabId[] = ["projects", ...open];
 
   const select = (tab: TabId) => {
     if (tab === "projects") go(projectsHash.current);
@@ -258,10 +272,10 @@ export function App() {
     }
     if (action === "new") return go("#/session/new");
     if (action === "reopen") return void reopen();
-    // Cmd+1..9 jump to the nth session tab.
+    // Cmd+1..9 jump to the nth tab after Projects.
     if (typeof action === "number") {
-      const target = sessions[action - 1];
-      return target ? select(`session:${target.id}`) : undefined;
+      const target = open[action - 1];
+      return target ? select(target) : undefined;
     }
     const current = tabOf(route);
     if (action === "close") return current === "projects" ? undefined : close(current);
@@ -302,6 +316,8 @@ export function App() {
       return next;
     });
     if (from) dropNewSession(from);
+    // It takes the place of the New session tab it was started in; one reopened goes last.
+    setOrder((o) => replaceTab<TabId>(arrange(o, open), from ? `new-session:${from}` : undefined, `session:${id}`));
     go(`#/session/${id}`);
   };
 
@@ -310,9 +326,11 @@ export function App() {
       <Header
         sessions={sessions}
         newSessions={newSessions}
+        order={open}
         active={tabOf(route)}
         onSelect={select}
         onClose={close}
+        onMove={(tab, target, after) => setOrder(moveTab(open, tab, target, after))}
         onNewSession={() => go("#/session/new")}
       />
       {/* Kept mounted while their tabs are open, so a half-typed prompt survives switching tabs. */}
