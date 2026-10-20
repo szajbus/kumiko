@@ -117,11 +117,13 @@ export interface LiveState {
   connected: boolean;
   /** True once the first snapshot has arrived. */
   loaded: boolean;
+  /** How many snapshots have arrived: one per connection, so it goes up when the server restarts. */
+  snapshots: number;
 }
 
 /** Keeps the project list, sessions and operation logs in sync over /api/events, reconnecting when the server restarts. */
 export function useLiveState(): LiveState {
-  const [state, setState] = useState<LiveState>({ projects: [], unreadable: [], logs: {}, sessions: [], connected: false, loaded: false });
+  const [state, setState] = useState<LiveState>({ projects: [], unreadable: [], logs: {}, sessions: [], connected: false, loaded: false, snapshots: 0 });
   const retry = useRef(0);
 
   useEffect(() => {
@@ -159,7 +161,7 @@ export function useLiveState(): LiveState {
 function apply(s: LiveState, ev: ServerEvent): LiveState {
   switch (ev.type) {
     case "snapshot":
-      return { projects: ev.projects, unreadable: ev.unreadable, logs: ev.logs, sessions: ev.sessions, listError: ev.error, connected: true, loaded: true };
+      return { projects: ev.projects, unreadable: ev.unreadable, logs: ev.logs, sessions: ev.sessions, listError: ev.error, connected: true, loaded: true, snapshots: s.snapshots + 1 };
     case "list":
       return { ...s, projects: ev.projects, unreadable: ev.unreadable, listError: ev.error };
     case "sessions":

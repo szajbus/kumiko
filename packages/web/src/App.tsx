@@ -92,6 +92,30 @@ export function App() {
   }, [route, sessions]);
   // Sessions this window just started: their tab opens before the session list may have caught up.
   const started = useRef(new Set<string>());
+  // A snapshot after the first is a server that restarted, without the sessions it ran: the tabs' sessions it doesn't
+  // list are resumed, as at launch, and wait for it like ones just started. Any other wait is over, as the snapshot
+  // lists all the server has.
+  const shown = useRef<string[]>([]);
+  const resuming = useRef<string[]>([]);
+  const snapshotSeen = useRef(live.snapshots);
+  if (snapshotSeen.current !== live.snapshots) {
+    const restarted = snapshotSeen.current > 0;
+    snapshotSeen.current = live.snapshots;
+    resuming.current = restarted ? shown.current.filter((id) => !live.sessions.some((s) => s.id === id)) : [];
+    started.current = new Set(resuming.current);
+  }
+  shown.current = [...new Set([...sessions.map((s) => s.id), ...started.current])];
+  const [resumed, setResumed] = useState(0);
+  useEffect(() => {
+    const ids = resuming.current;
+    if (!ids.length) return;
+    void (async () => {
+      for (const id of ids) if (!(await api.resumeSession(id).then(() => true, () => false))) started.current.delete(id);
+      resuming.current = [];
+      // Tabs whose session couldn't come back stop waiting, and the tabs are saved again.
+      setResumed((n) => n + 1);
+    })();
+  }, [live.snapshots]);
   // Sessions whose tabs were closed, most recent last, for Cmd+Shift+T to bring back. Deleted ones are dropped.
   const closed = useRef<string[]>([]);
   const reopening = useRef(false);
@@ -115,9 +139,12 @@ export function App() {
       // order they started, which is the tab order.
       const back = new Set<string>();
       for (const id of saved.sessions) {
-        if (open.has(id) || (await api.resumeSession(id).then(() => true, () => false))) back.add(id);
-        // Its tab may open before the session list has caught up with the resume.
-        started.current.add(id);
+        if (open.has(id)) back.add(id);
+        else if (await api.resumeSession(id).then(() => true, () => false)) {
+          back.add(id);
+          // Its tab may open before the session list has caught up with the resume.
+          started.current.add(id);
+        }
       }
       // Keys are this window's own, so the saved active one is found by its place.
       const drafts = saved.newSessions.map((p) => ({ key: nextKey(), project: p || undefined }));
@@ -139,7 +166,8 @@ export function App() {
   }, [live.loaded, live.sessions]);
 
   useEffect(() => {
-    if (!restored) return;
+    // Not while the server is away or its sessions are coming back, which would save the tabs without them.
+    if (!restored || !live.connected || resuming.current.length) return;
     // A New session tab is saved as active by its place, since keys don't outlive the window.
     const byPlace = (tab: TabId): TabId =>
       tab.startsWith("new-session:") ? `new-session:${newSessions.findIndex((n) => `new-session:${n.key}` === tab)}` : tab;
@@ -149,7 +177,7 @@ export function App() {
       active: byPlace(tabOf(route)),
       order: open.map(byPlace),
     });
-  }, [restored, sessions, newSessions, order, route]);
+  }, [restored, live.connected, resumed, sessions, newSessions, order, route]);
 
   useEffect(() => {
     const onHash = () => {
