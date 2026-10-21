@@ -381,6 +381,11 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 }
 .tab.drop-before::before { left: -4px; }
 .tab.drop-after::before { right: -4px; }
+/* Closing a tab: it fades and shrinks to nothing, gap included, and the tabs beside it close in. */
+.tab.is-closing { overflow: hidden; pointer-events: none; animation: km-tab-close 160ms ease-in forwards; }
+@keyframes km-tab-close { to { width: 0; min-width: 0; margin-right: -4px; border-width: 0; opacity: 0; } }
+/* Still an animation, so the closed tab is still taken away when it ends. */
+@media (prefers-reduced-motion: reduce) { .tab.is-closing { animation-duration: 1ms; } }
 .tab-main {
   flex: 1; min-width: 0; height: 100%; display: flex; align-items: center; gap: 7px; padding: 0 10px;
   border: 0; background: none; color: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer; text-align: left;
