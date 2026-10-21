@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { AccountUsage, UsageWindow } from "@kumiko/shared";
 import { api, errorMessage } from "./api";
+import { Corner } from "./Corner";
 import { formatBytes, formatCost, planName, resetText } from "./format";
 
 /** How often the numbers are re-read while the session is open, plus up to JITTER_MS so sessions don't all ask at once. */
@@ -22,7 +23,10 @@ interface Props {
   bufferBytes?: number;
 }
 
-/** The session's memory and cost, how much of each subscription limit is used, and the Claude account it runs as. */
+/**
+ * In the title bar's corner: how much of each subscription limit is used, as two bars. Clicked, it opens into the
+ * details: the Claude account and plan the session runs as, when the limits reset, and the session's memory and cost.
+ */
 export function UsageStrip({ sessionId, live, turnDone, cost, bufferBytes }: Props) {
   const [usage, setUsage] = useState<AccountUsage | undefined>();
   const [error, setError] = useState<string | undefined>();
@@ -57,52 +61,89 @@ export function UsageStrip({ sessionId, live, turnDone, cost, bufferBytes }: Pro
   const fetchedAt = usage?.fetchedAt && new Date(usage.fetchedAt).toLocaleTimeString();
   const reason = error ? `Couldn't refresh usage: ${error}` : usage?.error;
   const problem = reason && (fetchedAt ? `Usage may be out of date (last read ${fetchedAt}). ${reason}` : reason);
-  const windows = SHOWN.flatMap((id) => usage?.windows.find((w) => w.id === id) ?? []);
+  const shown = SHOWN.map((id) => ({ id, w: usage?.windows.find((w) => w.id === id) }));
+  const windows = shown.flatMap(({ w }) => w ?? []);
+  const summary = windows.map((w) => `${w.label}: ${Math.round(w.usedPercent)}% used`).join(" · ");
   return (
-    <div className="usage-strip" title={fetchedAt ? `Usage read ${fetchedAt}` : undefined}>
-      {bufferBytes !== undefined && (
-        <span className="usage-item" title="Memory this session's chat takes in Kumiko's server, as of the last finished turn. Tool output past 64 KB isn't kept.">
-          <span>Memory</span>
-          <span className="mono">{formatBytes(bufferBytes)}</span>
-        </span>
-      )}
-      {cost > 0 && (
-        <span className="usage-item" title="Total cost of this session">
-          <span>Cost</span>
-          <span className="mono">{formatCost(cost)}</span>
-        </span>
-      )}
-      {windows.map((w) => (
-        <Window key={w.id} w={w} now={now} />
-      ))}
-      {problem && (
-        <span className="usage-warning" role="img" aria-label="Usage warning" title={problem}>
-          ⚠
-        </span>
-      )}
+    <Corner
+      label="Session details"
+      title={[summary || "Session details", problem && `⚠ ${problem}`].filter(Boolean).join("\n")}
+      summary={
+        <>
+          <span className="usage-bars">
+            {shown.map(({ id, w }) => (
+              <Bar key={id} w={w} />
+            ))}
+          </span>
+          {problem && (
+            <span className="usage-warning" aria-hidden="true">
+              ⚠
+            </span>
+          )}
+        </>
+      }
+    >
       {usage && (usage.email || usage.plan) && (
-        <span className="usage-account" title="Claude account this project is logged in to">
+        <div className="usage-account" title="Claude account this project is logged in to">
           <span className="usage-email">{usage.email ?? "Logged in"}</span>
           {usage.plan && <span className="badge">{planName(usage.plan)}</span>}
-        </span>
+        </div>
       )}
-    </div>
+      <dl className="corner-list">
+        {windows.map((w) => (
+          <Window key={w.id} w={w} now={now} />
+        ))}
+        {bufferBytes !== undefined && (
+          <>
+            <dt title="Memory this session's chat takes in Kumiko's server, as of the last finished turn. Tool output past 64 KB isn't kept.">Memory</dt>
+            <dd className="mono">{formatBytes(bufferBytes)}</dd>
+          </>
+        )}
+        {cost > 0 && (
+          <>
+            <dt title="Total cost of this session">Cost</dt>
+            <dd className="mono">{formatCost(cost)}</dd>
+          </>
+        )}
+      </dl>
+      {problem && <p className="usage-problem">⚠ {problem}</p>}
+    </Corner>
+  );
+}
+
+function level(used: number): string {
+  return used >= 90 ? " is-high" : used >= 70 ? " is-warn" : "";
+}
+
+/** One window's bar in the title bar: an empty track until its numbers are in. */
+function Bar({ w }: { w?: UsageWindow }) {
+  const used = w ? Math.round(w.usedPercent) : 0;
+  return (
+    <span className={`usage-bar${level(used)}`}>
+      <span style={{ width: `${used}%` }} />
+    </span>
   );
 }
 
 function Window({ w, now }: { w: UsageWindow; now: number }) {
   const used = Math.round(w.usedPercent);
-  const left = 100 - used;
-  const level = used >= 90 ? " is-high" : used >= 70 ? " is-warn" : "";
   const reset = w.resetsAt ? resetText(Date.parse(w.resetsAt) - now) : undefined;
-  const when = w.resetsAt ? `${reset ?? "resets"} (${new Date(w.resetsAt).toLocaleString()})` : undefined;
   return (
-    <span className={`usage-window${level}`} title={`${w.label}: ${used}% used, ${left}% left${when ? `; ${when}` : ""}`}>
-      <span>{w.label}</span>
-      <span className="usage-bar" role="meter" aria-label={`${w.label} used`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={used}>
-        <span style={{ width: `${used}%` }} />
-      </span>
-      <span className="mono usage-left">{used}% used</span>
-    </span>
+    <>
+      <dt>{w.label}</dt>
+      <dd className={`usage-window${level(used)}`}>
+        <span className="usage-line">
+          <span className="usage-bar" role="meter" aria-label={`${w.label} used`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={used}>
+            <span style={{ width: `${used}%` }} />
+          </span>
+          <span className="mono usage-left">{used}% used</span>
+        </span>
+        {w.resetsAt && (
+          <span className="usage-reset" title={new Date(w.resetsAt).toLocaleString()}>
+            {reset ?? "resets"}
+          </span>
+        )}
+      </dd>
+    </>
   );
 }

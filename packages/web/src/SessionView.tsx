@@ -1,9 +1,11 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { formatBytes, LIVE_SESSION_STATUSES, type LoginAccount, type SessionInfo } from "@kumiko/shared";
 import { api, errorMessage, useSessionEvents } from "./api";
 import { fromAttachment, toInput } from "./attachments";
 import { applyEvent, blocksOf, chatRows, emptyChat, loginCards, partialToolSummary, toolSummary, type Block, type ChatItem, type ChatState, type ItemRow, type LoginAnswer, type WorkRow } from "./chat";
 import { Composer, type ComposerHandle } from "./Composer";
+import { HeaderCorner } from "./Corner";
 import { Markdown } from "./Markdown";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { drafts } from "./drafts";
@@ -12,7 +14,7 @@ import { Fork, Rewind } from "./icons";
 import { LoginDialog } from "./LoginDialog";
 import { QuoteButton } from "./QuoteButton";
 import { Select } from "./Select";
-import { COLORS, sessionStatus } from "./status";
+import { COLORS } from "./status";
 import { UsageStrip } from "./UsageStrip";
 
 const MODELS = ["default", "opus", "sonnet", "haiku"];
@@ -42,9 +44,10 @@ function useMarkSeen(session: SessionInfo) {
   }, [id, unread]);
 }
 
-/** One session: header, the chat streamed from its events, and the composer. */
+/** One session: its usage in the title bar's corner, the chat streamed from its events, and the composer. */
 export function SessionView({ session, onForked }: Props) {
   const stream = useSessionEvents(session.id);
+  const corner = useContext(HeaderCorner);
   useMarkSeen(session);
   const chat = useChat(stream.events);
   const totalCost = useMemo(() => chat.items.reduce((sum, i) => sum + (i.type === "turn" ? (i.costUsd ?? 0) : 0), 0), [chat.items]);
@@ -70,7 +73,6 @@ export function SessionView({ session, onForked }: Props) {
   // Once Claude reports the model in use, that replaces what was picked.
   // A pick Claude didn't accept is dropped when the turn ends.
   useEffect(() => setModel(""), [reported, idle]);
-  const status = sessionStatus(session.status);
   const live = LIVE_SESSION_STATUSES.includes(session.status);
   const busy = live && !idle;
 
@@ -115,20 +117,7 @@ export function SessionView({ session, onForked }: Props) {
 
   return (
     <div className="session">
-      <div className="session-head">
-        <div className="session-where">
-          <a className="badge mono" href={`#/project/${session.sandbox}`} title="Open the project">
-            {session.sandbox}
-          </a>
-          <span className="row-status session-status" style={{ color: status.color }}>
-            {busy ? <span className="spinner" aria-hidden="true" /> : <span className="dot dot-small" style={{ background: status.color }} aria-hidden="true" />}
-            {status.text}
-          </span>
-        </div>
-        <div className="session-controls">
-          <UsageStrip sessionId={session.id} live={live} turnDone={idle} cost={totalCost} bufferBytes={session.bufferBytes} />
-        </div>
-      </div>
+      {corner && createPortal(<UsageStrip sessionId={session.id} live={live} turnDone={idle} cost={totalCost} bufferBytes={session.bufferBytes} />, corner)}
 
       <Chat
         chat={chat}

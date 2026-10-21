@@ -56,7 +56,7 @@ follows mostly from the sandbox provider.
 | Slash commands | `slash_commands` from `system/init` |
 | Model picker | `--model` and `/model` |
 | Login | `claude auth status`, `claude auth login` |
-| Usage strip | the subscription usage endpoint, with the agent home's credentials |
+| Usage in the title bar | the subscription usage endpoint, with the agent home's credentials |
 
 ## Adding another
 
@@ -86,7 +86,7 @@ reads lines on stdin and writes them on stdout, so `attach`, `position` and `det
 
 - session events carry Claude Code's stream-json as-is (`kind: "claude"`), and both the server (`sessions.ts`) and the
   UI (`chat.ts`) read its message shapes,
-- login (`logins.ts`) and the usage strip (`usage.ts`) run `claude` commands directly,
+- login (`logins.ts`) and the usage check (`usage.ts`) run `claude` commands directly,
 - installing the agent is part of the Lima provider's provisioning,
 - the agent home is mounted at `~/.claude` and pointed to by `CLAUDE_CONFIG_DIR`.
 

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { SessionInfo } from "@kumiko/shared";
 import { api, RequestError, useLiveState } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { HeaderCorner } from "./Corner";
 import { ProjectForm } from "./ProjectForm";
 import { sessionTitle } from "./format";
 import { Header, type NewSessionTab, type TabId } from "./Header";
@@ -83,6 +84,8 @@ export function App() {
   const [deleting, setDeleting] = useState<SessionInfo | undefined>();
   // The session Claude is working in whose closing is waiting for confirmation.
   const [stopping, setStopping] = useState<SessionInfo | undefined>();
+  // The title bar's corner, where the open session shows its usage.
+  const [corner, setCorner] = useState<HTMLDivElement | null>(null);
   // The project whose page or session tab was last active, which a New session tab opened from elsewhere starts in.
   const recentProject = useRef<string | undefined>(undefined);
   useEffect(() => {
@@ -360,6 +363,7 @@ export function App() {
         onClose={close}
         onMove={(tab, target, after) => setOrder(moveTab(open, tab, target, after))}
         onNewSession={() => go("#/session/new")}
+        cornerRef={setCorner}
       />
       {/* Kept mounted while their tabs are open, so a half-typed prompt survives switching tabs. */}
       {newSessions.map((n) => (
@@ -404,12 +408,14 @@ export function App() {
           </p>
         </ConfirmDialog>
       )}
-      <Body
-        route={route}
-        live={live}
-        started={started.current}
-        onSessionStarted={onSessionStarted}
-      />
+      <HeaderCorner.Provider value={corner}>
+        <Body
+          route={route}
+          live={live}
+          started={started.current}
+          onSessionStarted={onSessionStarted}
+        />
+      </HeaderCorner.Provider>
     </div>
   );
 }

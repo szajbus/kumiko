@@ -1,5 +1,6 @@
 import { useRef, useState, type AnimationEvent, type DragEvent } from "react";
 import type { SessionInfo } from "@kumiko/shared";
+import { Corner } from "./Corner";
 import { Logo, Plus } from "./icons";
 import { sessionTitle } from "./format";
 import { sessionState } from "./status";
@@ -23,6 +24,8 @@ interface Props {
   /** `tab` was dragged to just before `target`, or just after it with `after`. */
   onMove(tab: TabId, target: TabId, after: boolean): void;
   onNewSession(): void;
+  /** Where the open session's usage goes. */
+  cornerRef(el: HTMLDivElement | null): void;
 }
 
 /** Where a dragged tab would land if dropped now. */
@@ -31,8 +34,9 @@ interface DropAt {
   after: boolean;
 }
 
-/** The window's title bar: the Projects button, a tab per session, which drag to reorder, and + to start a new one. */
-export function Header({ sessions, newSessions, order, active, onSelect, onClose, onMove, onNewSession }: Props) {
+/** The window's title bar: the Projects button, a tab per session, which drag to reorder, and + to start a new one;
+ * in the corner, the open session's usage. */
+export function Header({ sessions, newSessions, order, active, onSelect, onClose, onMove, onNewSession, cornerRef }: Props) {
   const [dragging, setDragging] = useState<TabId | undefined>();
   const [dropAt, setDropAt] = useState<DropAt | undefined>();
 
@@ -138,7 +142,9 @@ export function Header({ sessions, newSessions, order, active, onSelect, onClose
           <Plus size={14} />
         </button>
       </div>
-      <span className="build-sha" title="Build commit">{__COMMIT_SHA__}</span>
+      {/* The open session puts its usage here; elsewhere there is only the build to show. */}
+      <div className="header-corner" ref={cornerRef} />
+      {!active.startsWith("session:") && <Corner label="Build" summary={<span className="corner-dots" aria-hidden="true">···</span>} />}
     </header>
   );
 }

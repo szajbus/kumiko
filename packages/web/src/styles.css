@@ -51,7 +51,30 @@ code, .mono { font-family: var(--mono); }
 [data-shell="electron-darwin"] .app-header { -webkit-app-region: drag; padding-left: 84px; zoom: calc(1 / var(--page-zoom, 1)); }
 [data-shell="electron-darwin"] .app-header :is(a, button) { -webkit-app-region: no-drag; }
 
-.build-sha { flex: none; margin-left: 12px; font: 11px var(--mono); color: var(--muted); user-select: text; }
+/* The corner: a compact summary that opens a box of details below it. */
+.header-corner:empty { display: none; }
+.corner { position: relative; flex: none; margin-left: 12px; }
+.corner-button {
+  height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 8px;
+  border: 1px solid transparent; border-radius: 7px; background: none; color: var(--muted); cursor: pointer;
+}
+.corner-button:hover, .corner-button.is-open { background: var(--surface-2); color: var(--text-2); }
+.corner-button.is-open { border-color: var(--border-strong); }
+.corner-dots { font-size: 14px; letter-spacing: 1px; line-height: 1; }
+.corner-details {
+  position: absolute; top: calc(100% + 12px); right: 0; z-index: 20; width: 280px; padding: 12px;
+  display: grid; grid-template-columns: auto 1fr; gap: 10px 14px;
+  background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  font-size: 12.5px; color: var(--text-2); cursor: default; user-select: text; -webkit-app-region: no-drag;
+}
+/* Its parts span the box; the lists in it share one pair of columns, so their values line up. */
+.corner-details > * { grid-column: 1 / -1; }
+.corner-list { margin: 0; display: grid; grid-template-columns: subgrid; row-gap: 8px; align-items: baseline; }
+.corner-list:empty { display: none; }
+.corner-list dt { color: var(--muted); white-space: nowrap; }
+.corner-list dd { margin: 0; min-width: 0; }
+.corner-build { padding-top: 10px; border-top: 1px solid var(--border); }
+.corner-details > :first-child.corner-build { padding-top: 0; border-top: 0; }
 
 /* Buttons */
 .btn {
@@ -406,27 +429,23 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 .tab-new:hover { background: var(--surface-2); color: var(--text); }
 [data-shell="electron-darwin"] .tab { -webkit-app-region: no-drag; }
 
-/* Session tab: header, chat that scrolls, composer at the bottom */
+/* Session tab: chat that scrolls, composer at the bottom */
 .session { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.session-head {
-  flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px;
-  padding: 10px 20px; border-bottom: 1px solid var(--border-soft);
-}
-.session-where { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.session-status { font-size: 13px; white-space: nowrap; }
-.session-status .spinner { width: 10px; height: 10px; }
-.session-controls { display: flex; align-items: center; gap: 10px; }
-.usage-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 20px; font-size: 12.5px; color: var(--text-2); }
-.usage-item { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
-.usage-warning { color: #e0a96d; cursor: help; }
-.usage-account { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.usage-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.usage-window { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
-.usage-bar { width: 64px; height: 6px; border-radius: 3px; background: #2e3850; overflow: hidden; flex: none; }
+/* Its usage, in the title bar's corner: a bar per limit, one above the other, and the plan. */
+.usage-bars { display: flex; flex-direction: column; gap: 3px; }
+.usage-bars .usage-bar { width: 48px; height: 4px; border-radius: 2px; }
+.usage-bar { width: 96px; height: 6px; border-radius: 3px; background: #2e3850; overflow: hidden; flex: none; }
 .usage-bar > span { display: block; height: 100%; background: var(--accent); }
-.usage-window.is-warn .usage-bar > span { background: #e0a96d; }
-.usage-window.is-high .usage-bar > span { background: #e5645a; }
+.usage-bar.is-warn > span, .usage-window.is-warn .usage-bar > span { background: #e0a96d; }
+.usage-bar.is-high > span, .usage-window.is-high .usage-bar > span { background: #e5645a; }
 .usage-window.is-high .usage-left { color: #e5645a; }
+.usage-warning { color: #e0a96d; }
+.usage-account { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; color: var(--text); }
+.usage-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-window { display: flex; flex-direction: column; gap: 2px; }
+.usage-line { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.usage-reset { color: var(--muted); font-size: 11.5px; }
+.usage-problem { margin: 0; color: #f0cf96; }
 /* A stable gutter on both edges keeps the messages centred on the same axis as the composer below. */
 .chat { flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable both-edges; }
 .chat-inner { max-width: 860px; margin: 0 auto; padding: 20px 24px 12px; display: flex; flex-direction: column; gap: 12px; }
