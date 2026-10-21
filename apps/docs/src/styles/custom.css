@@ -1,0 +1,38 @@
+/* The app's own palette and type (packages/web/src/styles.css), with the icon's gold as the accent. */
+:root {
+  --sl-font: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --sl-font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+:root[data-theme="dark"] {
+  --sl-color-accent-low: #3a2f1f;
+  --sl-color-accent: #b8956a;
+  --sl-color-accent-high: #e8d2b0;
+  --sl-color-black: #0f1115;
+  --sl-color-gray-6: #171a20;
+  --sl-color-gray-5: #2a2f38;
+}
+
+:root[data-theme="light"] {
+  --sl-color-accent-low: #f1e6d4;
+  --sl-color-accent: #8a6a3c;
+  --sl-color-accent-high: #4a3820;
+}
+
+.site-title img {
+  height: 1.6rem;
+}
+
+.hero > img {
+  max-width: 14rem;
+}
+
+/* Wide diagrams scroll instead of shrinking. */
+pre.mermaid,
+.mermaid {
+  overflow-x: auto;
+}
+
+pre.mermaid svg[aria-roledescription="sequence"] {
+  max-width: none !important;
+}

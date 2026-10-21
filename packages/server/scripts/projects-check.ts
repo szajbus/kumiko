@@ -1,5 +1,5 @@
-// The projects spec's checks against real Lima: same-path mounts of a clone and its worktrees folder, a worktree made
-// in the VM that git on the host can read (the spec's "not validated" item), and the Claude home behind CLAUDE_CONFIG_DIR.
+// Checks projects against real Lima: same-path mounts of a clone and its worktrees folder, a worktree made in the VM
+// that git on the host can read, and the Claude home behind CLAUDE_CONFIG_DIR.
 //
 //   node packages/server/dist/scripts/projects-check.js [--name projcheck] [--template template:debian-12] [--keep]
 //

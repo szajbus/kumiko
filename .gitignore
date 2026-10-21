@@ -6,3 +6,4 @@ apps/desktop/release/
 .DS_Store
 # Written by `limactl edit` when it rejects a config
 lima.REJECTED.yaml
+apps/docs/.astro/

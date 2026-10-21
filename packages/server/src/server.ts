@@ -45,7 +45,7 @@ import { GitError, worktreeStatuses } from "./git.js";
 import { isLocalRequest } from "./guard.js";
 import { LoginFailed, Logins } from "./logins.js";
 import { BusyError, Operations } from "./operations.js";
-import { adoptBentomoHome, ProjectExists, ProjectRecordError, ProjectStore } from "./projects.js";
+import { ProjectExists, ProjectRecordError, ProjectStore } from "./projects.js";
 import { RewindRefused, SessionEnded, SessionNotFound, SessionNotResumable, Sessions } from "./sessions.js";
 import { SessionStore } from "./store.js";
 import { TabsStore } from "./tabs.js";
@@ -84,7 +84,6 @@ export interface RunningServer {
 }
 
 export async function startServer(opts: ServerOptions = {}): Promise<RunningServer> {
-  if (!opts.dataDir) await adoptBentomoHome();
   const provider = opts.provider ?? new LimaProvider({ env: opts.env });
   const env = opts.env ?? (() => process.env);
   const host = opts.host ?? "127.0.0.1";

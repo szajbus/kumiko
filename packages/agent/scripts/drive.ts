@@ -1,4 +1,4 @@
-// Build step 1 check: start Claude in a sandbox, hold a conversation over stream-json and print every event.
+// Checks the Claude driver against a real sandbox: holds a conversation with Claude over stream-json and prints every event.
 //
 //   node packages/agent/dist/scripts/drive.js --sandbox <name> [--workdir /workspace] [--local]
 //

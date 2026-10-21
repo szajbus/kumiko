@@ -1,4 +1,4 @@
-// Build step 1 check: create, provision, stop, start and delete one sandbox against real Lima.
+// Checks the Lima provider against real Lima: creates, provisions, stops, starts and deletes one sandbox.
 //
 //   node packages/sandbox/dist/scripts/roundtrip.js [--name rt] [--template template:debian-12] [--keep]
 //

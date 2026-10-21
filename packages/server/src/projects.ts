@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { access, cp, lstat, mkdir, readdir, readFile, realpath, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
+import { access, cp, lstat, mkdir, readdir, readFile, realpath, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, normalize } from "node:path";
 import { CLAUDE_HOME_IN_VM, NAME_PATTERN, projectMountRole, WORKTREES_SUFFIX, type Mount, type Project, type SandboxSpec } from "@kumiko/shared";
@@ -9,23 +9,8 @@ export function defaultKumikoHome(): string {
   return process.env.KUMIKO_HOME ?? join(homedir(), ".kumiko");
 }
 
-/**
- * Kumiko was called Bentomo, and kept its state in ~/.bentomo. Moves that to ~/.kumiko, once, unless KUMIKO_HOME
- * points elsewhere or ~/.kumiko is there already.
- */
-export async function adoptBentomoHome(): Promise<void> {
-  if (process.env.KUMIKO_HOME) return;
-  const old = join(homedir(), ".bentomo"), home = defaultKumikoHome();
-  if (!(await exists(old)) || (await exists(home))) return;
-  await rename(old, home);
-}
-
-const exists = (path: string) => lstat(path).then(() => true, () => false);
-
 /** The file Kumiko owns in each Claude home, imported by CLAUDE.md. Rewritten whenever the VM or a session starts. */
 export const MANAGED_FILE = "kumiko.md";
-/** What the managed file was called when Kumiko was Bentomo. */
-const OLD_MANAGED_FILE = "bentomo.md";
 
 /** What a new app-level template's CLAUDE.md says. The import is what brings in Kumiko's instructions. */
 const TEMPLATE_CLAUDE_MD = `@${MANAGED_FILE}
@@ -232,7 +217,7 @@ export class ProjectStore {
 
   /** Makes the app-level template the first time it is needed, so the user can find and change it. */
   private async ensureTemplate(): Promise<void> {
-    if (await stat(this.templateDir).then(() => true, () => false)) return renameImport(this.templateDir);
+    if (await stat(this.templateDir).then(() => true, () => false)) return;
     await mkdir(this.templateDir, { recursive: true });
     await writeFile(join(this.templateDir, "CLAUDE.md"), TEMPLATE_CLAUDE_MD, { flag: "wx" }).catch(() => {});
   }
@@ -251,7 +236,6 @@ export class ProjectStore {
     const home = this.claudeHome(p.id);
     await mkdir(home, { recursive: true });
     await writeFile(join(home, MANAGED_FILE), managedInstructions(p));
-    await renameImport(home);
   }
 
   /** Deletes the project's record and its Claude home, which holds its login and Claude's session history. */
@@ -290,13 +274,4 @@ export class ProjectStore {
   spec(p: Project, base: Omit<SandboxSpec, "name" | "workdir">): SandboxSpec {
     return { ...base, name: p.id, mounts: this.mounts(p, base.mounts), workdir: p.clonePath };
   }
-}
-
-/** Points a CLAUDE.md written when Kumiko was Bentomo at the renamed managed file, and drops the old one. */
-async function renameImport(home: string): Promise<void> {
-  const file = join(home, "CLAUDE.md");
-  const text = await readFile(file, "utf8").catch(() => undefined);
-  const renamed = text?.replace(/^@bentomo\.md$/m, `@${MANAGED_FILE}`);
-  if (renamed !== text) await writeFile(file, renamed!);
-  await rm(join(home, OLD_MANAGED_FILE), { force: true });
 }

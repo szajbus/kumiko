@@ -1,0 +1,86 @@
+---
+title: Supported sandboxes and agents
+description: Which sandbox providers and coding agents Kumiko works with today, the versions they were checked against, and what adding another takes.
+sidebar:
+  order: 0
+---
+
+Kumiko is a desktop app built around two seams: a **sandbox provider**, which gives each project an isolated
+environment, and an **agent**, which works inside it. Today there is one of each. Which host platforms it runs on
+follows mostly from the sandbox provider.
+
+## Host platforms
+
+| Platform | Status | Notes |
+| --- | --- | --- |
+| macOS | Supported | What Kumiko is built and used on. `dist:mac` packages it for Apple silicon and Intel. |
+| Linux | Possible, untested | Lima runs on Linux, and `dist:linux` makes an unpacked build, but it gets little use. |
+| Windows | Not supported | The desktop app has a Windows build config, but Lima only has experimental support there (through WSL2). |
+
+## Sandbox providers
+
+| Provider | Status | Isolation | Checked against | Hosts |
+| --- | --- | --- | --- | --- |
+| [Lima](https://lima-vm.io) | Supported, the default | A virtual machine per project | Lima 2.2.1 | macOS, Linux |
+
+**Lima notes:**
+
+- Sandboxes are Lima instances named `km-<project>`, kept in `~/.lima` (or `LIMA_HOME`). Kumiko never touches other
+  instances.
+- Any Lima template can be chosen; Debian 12 is preselected. Installing the agent uses `curl`, and installs it with
+  `apt-get` if it's missing, so a template without `curl` must be Debian- or Ubuntu-based.
+- Kumiko drives it with `limactl` and with `ssh` using the instance's generated config.
+
+## Agents
+
+| Agent | Status | Checked against | How Kumiko runs it |
+| --- | --- | --- | --- |
+| [Claude Code](https://claude.com/claude-code) | Supported, the only agent | Claude Code 2.1.303 | `claude -p` in stream-json mode, permissions bypassed |
+
+**Claude Code notes:**
+
+- Kumiko installs it in every sandbox with its native installer; you don't need it on the host.
+- Each project has its own agent home, Claude Code's `~/.claude`, kept on the host in `~/.kumiko/claude/<project>/`.
+- Every session feature is available with it:
+
+| Feature | Uses |
+| --- | --- |
+| Streaming replies, tool calls, cost and tokens | stream-json output with partial messages |
+| Stop | an interrupt control request |
+| Resume, fork | `--resume`, `--fork-session`, `--resume-session-at` |
+| Rewind, and putting files back | `--replay-user-messages` and file checkpoints (`rewind_files`) |
+| Slash commands | `slash_commands` from `system/init` |
+| Model picker | `--model` and `/model` |
+| Login | `claude auth status`, `claude auth login` |
+| Usage strip | the subscription usage endpoint, with the agent home's credentials |
+
+## Adding another
+
+Both seams are TypeScript interfaces, so a new provider or agent is mostly one new class. What else it needs today:
+
+### A sandbox provider
+
+Implement `SandboxProvider` (`packages/sandbox/src/provider.ts`): `list`, `create`, `start`, `stop`, `delete`, `edit`,
+`validate`, `validateEdit`, `templates`, and `exec`, which runs a command inside with stdio piped. Everything else in
+Kumiko runs commands through `exec`.
+
+It also has to honour what the rest of Kumiko assumes:
+
+- the clone and its worktrees folder are mounted at the **same absolute paths** inside,
+- the agent home is mounted where the agent looks for it,
+- forwarded variables reach commands run with `exec`, without being written to disk.
+
+Today the provider is chosen in code (`LimaProvider`), not per project, and its `id` type only allows `"lima"`.
+
+### An agent
+
+Implement `AgentDriver` (`packages/agent/src/driver.ts`): `start`, `send`, `interrupt`, `rewindFiles`, `stop` and
+`onEvent`. That covers running sessions. The rest is still specific to Claude Code and would need generalizing:
+
+- session events carry Claude Code's stream-json as-is (`kind: "claude"`), and both the server (`sessions.ts`) and the
+  UI (`chat.ts`) read its message shapes,
+- login (`logins.ts`) and the usage strip (`usage.ts`) run `claude` commands directly,
+- installing the agent is part of the Lima provider's provisioning,
+- the agent home is mounted at `~/.claude` and pointed to by `CLAUDE_CONFIG_DIR`.
+
+If you're planning either, read [Decisions and trade-offs](/architecture/decisions/) first.
