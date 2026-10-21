@@ -17,3 +17,17 @@ answer that once, when you set up the project.
 
 Because nothing you care about lives only in the sandbox, it's disposable. If it breaks, or you want a fresh one,
 throw it away and build a new one.
+
+## Kumiko is mission control, not the engine
+
+Mission control watches every flight, sends instructions and calls for help when something needs a person. The
+spacecraft don't need it to keep flying. Kumiko works the same way. It starts agents, gives them their work, shows you
+what each one is doing and tells you which ones need you. But the work is the agent's, and it happens in the sandbox,
+not in Kumiko.
+
+So an agent doesn't depend on Kumiko being there. Quit the app, let your Mac sleep, restart Kumiko while you work on it:
+the agent carries on with its turn. A command it started finishes, and a file it was writing gets written. When Kumiko
+comes back, it catches up on what happened and shows it as if it had been watching all along.
+
+What ends an agent's work is a decision about that work: closing its session, or stopping, rebuilding or deleting the
+sandbox it lives in. Never just Kumiko going away.

@@ -16,6 +16,8 @@ see at a glance what each one is doing and which ones need you.
   step on each other.
 - **An overview of the work.** See which sessions are working and which are waiting on you, and where each worktree
   stands: uncommitted, unpushed or merged.
+- **Agents that don't need Kumiko running.** Quit the app or restart it, and the agents keep working. When it's back,
+  you see everything they did meanwhile.
 - **Nothing to lose.** Your code and the agent's history live on your machine. A sandbox can be thrown away and
   rebuilt at any time.
 
