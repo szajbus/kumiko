@@ -46,6 +46,7 @@ follows mostly from the sandbox provider.
 | Feature | Uses |
 | --- | --- |
 | Streaming replies, tool calls, cost and tokens | stream-json output with partial messages |
+| Working on while Kumiko is away | stream-json input read from a FIFO, which only ends when Kumiko closes it |
 | Stop | an interrupt control request |
 | Resume, fork | `--resume`, `--fork-session`, `--resume-session-at` |
 | Rewind, and putting files back | `--replay-user-messages` and file checkpoints (`rewind_files`) |
@@ -68,14 +69,17 @@ It also has to honour what the rest of Kumiko assumes:
 
 - the clone and its worktrees folder are mounted at the **same absolute paths** inside,
 - the agent home is mounted where the agent looks for it,
-- forwarded variables reach commands run with `exec`, without being written to disk.
+- forwarded variables reach commands run with `exec`, without being written to disk,
+- a process started through `exec` with `setsid` (or `perl`'s) outlives the connection, and `bash`, `mkfifo` and
+  `tail -F` are there: agents run detached in runs in the sandbox (`packages/agent/src/runs.ts`).
 
 Today the provider is chosen in code (`LimaProvider`), not per project, and its `id` type only allows `"lima"`.
 
 ### An agent
 
-Implement `AgentDriver` (`packages/agent/src/driver.ts`): `start`, `send`, `interrupt`, `rewindFiles`, `stop` and
-`onEvent`. That covers running sessions. The rest is still specific to Claude Code and would need generalizing:
+Implement `AgentDriver` (`packages/agent/src/driver.ts`): `start`, `attach`, `position`, `send`, `interrupt`,
+`rewindFiles`, `stop`, `detach` and `onEvent`. That covers running sessions. Runs (`runs.ts`) work for any agent that
+reads lines on stdin and writes them on stdout, so `attach`, `position` and `detach` can follow `ClaudeDriver`. The rest is still specific to Claude Code and would need generalizing:
 
 - session events carry Claude Code's stream-json as-is (`kind: "claude"`), and both the server (`sessions.ts`) and the
   UI (`chat.ts`) read its message shapes,

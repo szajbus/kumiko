@@ -31,7 +31,7 @@ npm test                 # builds, then runs every test against fake limactl, ss
 npm run dev:desktop      # the app, with the UI hot-reloading and the server restarting on changes
 ```
 
-`dev:desktop` restarts the server when its code changes, which stops the agent in every session. If you use Kumiko to work on Kumiko, edit server code in a different worktree from the one `dev:desktop` runs in. Changes to the Electron main process or preload need the app restarted. Only one Kumiko app runs at a time.
+`dev:desktop` restarts the server when its code changes. The agents keep working through it, and the restarted server opens their sessions again where they got to. Changes to the Electron main process or preload need the app restarted. Only one Kumiko app runs at a time, and only one server per Kumiko home: `dev:desktop` refuses to start while the regular app uses `~/.kumiko`, unless you give it its own `KUMIKO_HOME`.
 
 To work on the UI in a browser, or without real sandboxes:
 
@@ -57,7 +57,7 @@ The fakes only copy what the real tools do. When a change depends on how they re
 | --- | --- |
 | `npm run roundtrip` | The Lima provider: create, provision, exec, stop, start, delete. |
 | `npm run projects-check` | Same-path mounts and worktrees seen from both sides. |
-| `npm run drive -- --sandbox <project>` | The Claude Code driver: prompts, forwarded variables, interrupts. |
+| `npm run drive -- --sandbox <project>` | The Claude Code driver: prompts, forwarded variables, interrupts, and another driver picking the agent up mid-turn. |
 
 ### Layout
 

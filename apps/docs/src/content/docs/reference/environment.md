@@ -9,7 +9,7 @@ sidebar:
 
 | Variable | Default | Does |
 | --- | --- | --- |
-| `KUMIKO_HOME` | `~/.kumiko` | Where Kumiko keeps projects, sandbox records, agent homes and sessions. |
+| `KUMIKO_HOME` | `~/.kumiko` | Where Kumiko keeps projects, sandbox records, agent homes and sessions. Only one server runs per home; give a second Kumiko (a development one, say) a home of its own. |
 | `KUMIKO_PORT` | a free port (app), `4317` (server alone) | The server's port. |
 
 ## Sandbox provider: Lima

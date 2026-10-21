@@ -33,7 +33,7 @@ homes are copied from.
 The window is a web page served by a server in the Electron main process, so the UI also runs in a plain browser during
 development.
 
-**Costs:** every request must be checked for a local origin, and a server restart stops every agent.
+**Costs:** every request must be checked for a local origin.
 
 ## Shelling out to the real tools
 
@@ -49,11 +49,23 @@ One JSON file per project, sandbox and saved session.
 
 **Costs:** no transactions. One operation per sandbox at a time, and saves per session are serialized.
 
+## Agents that outlive the server
+
+Each agent runs detached in a run in its sandbox, with a FIFO for its input and a file for its output, and the server
+attaches to it over SSH, following the output from a byte offset. A server restart, a quit or a dropped connection
+doesn't stop the agent; the next server attaches again where the saved chat ends.
+
+**Costs:** the output file grows with every streamed token until the agent exits (no rotation). The run is a few
+shell scripts sent with each command, which assume `bash`, `tail -F` and `setsid` (or `perl`) in the sandbox. Only
+one server may use a Kumiko home at a time, and runs are tagged with their home so servers on different homes can
+share sandboxes. A request in flight when the server goes (a prompt, a stop) is lost with it.
+
 ## Live sessions in memory, only the chat on disk
 
-A live session's full event stream is kept in memory for tabs to replay. Only the chat is saved.
+A live session's full event stream is kept in memory for tabs to replay. Only the chat is saved, with the deltas of a
+message still in progress.
 
-**Costs:** a server restart ends every agent, and a resumed session shows less than the live one did.
+**Costs:** a resumed session shows less than the live one did.
 
 ## Worktrees read from git, never fetched
 

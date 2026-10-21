@@ -29,7 +29,7 @@ flowchart TB
   server --> data
   git --> clone
   provider -- "create · start · stop · delete" --> sb
-  server -- "exec (ssh)" --> agent
+  server -- "attach (ssh)" --> agent
   clone -. "mounted at the same paths" .-> sb
   data -. "agent home mounted" .-> sb
 ```
@@ -42,7 +42,9 @@ flowchart TB
   sessions) is in memory; durable state is JSON files under `~/.kumiko`.
 - **The UI** (`packages/web`) is a React single-page app with hash routes.
 - **The sandbox provider** creates and runs one sandbox per project, and runs commands inside it.
-- **The agent** runs in the sandbox, one process per session, alive between turns.
+- **The agent** runs in the sandbox, one process per session, alive between turns. It runs detached, in a run of its
+  own (a FIFO for its input, a file for its output), so it outlives the server; the server attaches to it over SSH
+  and attaches again after a restart. See [Decisions](/architecture/decisions/#agents-that-outlive-the-server).
 
 ## Packages
 

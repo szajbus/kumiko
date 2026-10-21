@@ -6,7 +6,7 @@ sidebar:
 ---
 
 A session is one conversation with the agent, in one tab. The agent runs in the project's sandbox, starting in the
-clone, and keeps running between your messages until you close the tab. <kbd>Cmd</kbd>+<kbd>T</kbd> opens a new one.
+clone, and keeps running between your messages until you close the tab, even while Kumiko itself isn't running. <kbd>Cmd</kbd>+<kbd>T</kbd> opens a new one.
 
 ![A session: the first turn's tool calls folded into one line, the agent's reply, and the turn's time, cost and tokens.](../../../assets/screenshots/session.png)
 
@@ -15,13 +15,28 @@ clone, and keeps running between your messages until you close the tab. <kbd>Cmd
 - **Closing a tab closes the session.** It stays saved and can be resumed. If the agent is working, Kumiko asks first,
   since the turn stops and the reply in progress is lost.
 - <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> closes the tab and deletes the saved session, after asking.
-- **Quitting the app** asks the same when the agent is working in any session. On macOS, closing the window leaves the
-  app, and the agent, running.
-- **Stopping the sandbox** ends its sessions. So does the sandbox stopping outside Kumiko.
+- **Quitting the app** leaves the agent working. If it is working in any session, Kumiko says so, and offers **Stop
+  Claude and Quit** instead, which ends every session as closing its tab would. On macOS, closing the window leaves the
+  app running.
+- **Stopping, restarting, recreating or deleting the sandbox** ends its sessions. So does the sandbox stopping outside
+  Kumiko.
 
 An ended session's tab stays open, with its transcript, until you close it.
 
+## When Kumiko goes away
+
+The agent doesn't depend on Kumiko: it keeps working when you quit the app, when Kumiko's server restarts or crashes,
+and when the connection to the sandbox drops (your Mac going to sleep, say). Nothing it does meanwhile is lost. When
+Kumiko is back, each session is open again where the agent got to:
+
+- a turn still going carries on in its tab, with what the agent wrote while Kumiko was away,
+- a turn that finished meanwhile shows in full, and the session waits on you,
+- an agent that exited meanwhile shows its session as ended, with the error if it failed.
+
+A session whose sandbox stopped or restarted meanwhile isn't open again, but stays saved, to resume.
+
 ## Tabs across restarts
 
-The open tabs and the active one are saved, and come back the next time the app starts, with their sessions resumed.
-The same happens when Kumiko's server restarts under an open window.
+The open tabs and the active one are saved, and come back the next time the app starts. Their sessions are open again
+as above, or resumed from the saved chat if their agent has gone. The same happens when Kumiko's server restarts under
+an open window.

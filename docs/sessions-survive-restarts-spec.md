@@ -88,7 +88,7 @@ Before building, a script like `npm run drive` (`packages/agent/scripts/drive.ts
 5. A file attachment of a few MB written through `cat > in` arrives whole.
 6. macOS: `setsid` isn't on the Mac, but the fake SSH runs the launcher on the host in tests. Add a shim to `packages/sandbox/fixtures/fake-bin` (where the fake `sudo` and `curl` are), or start the detached process another way that works on both.
 
-Record what is found under "Validated by experiment", as in `docs/projects-spec.md`.
+Record what is found under "Validated by experiment".
 
 ## Validated by experiment
 Run from inside a project's sandbox (Debian 12, Lima's defaults), against Claude Code there, a throwaway `sshd` on a high port, and the fakes:
@@ -125,7 +125,7 @@ In `packages/server/test/sessions.test.ts`, with the fakes:
 - The existing tests keep passing; "ends every live session when the server closes" becomes "detaches…", plus one for stopping on quit.
 
 ## Docs
-Update the README's "Notes on agent sessions" (closing a tab, quitting, resuming), and the dev mode paragraph under "Develop in the desktop app", which currently warns that a server restart stops Claude. Add a "The spec's model, as built" section like the projects one, for what came out differently.
+Update the docs site (`apps/docs`): the sessions guide (closing a tab, quitting, resuming), state on disk, the decisions and overview pages, and the supported agents' and providers' requirements. Update the README's development paragraph, which warns that a server restart stops Claude. Add a "The spec's model, as built" section, for what came out differently.
 
 ## Open questions
 - **Quitting:** keep Claude working by default, as proposed, or ask every time? Should the window's close on macOS (which already leaves the app running) stay as it is?
