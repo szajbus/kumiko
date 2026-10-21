@@ -577,6 +577,8 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 }
 .composer-icon:not(:disabled):hover { color: var(--text); }
 .composer-icon:disabled { opacity: 0.35; cursor: default; }
+/* Attach and send sit side by side: their padded boxes already space the icons apart. */
+.composer-icon + .composer-icon { margin-left: -8px; }
 /* New session: the projects to pick from, then the same composer as a session's. */
 .project-picks { display: flex; flex-direction: column; gap: 8px; }
 .project-pick {
