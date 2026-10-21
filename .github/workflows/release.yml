@@ -1,0 +1,58 @@
+name: Release
+
+# Builds the Mac app for a version tag pushed by `npm run release`, and uploads it to a draft GitHub release.
+# Nothing is public until the draft is published by hand.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Check the tag matches the app's version
+        run: |
+          version=$(node -p "require('./apps/desktop/package.json').version")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match the app's version $version"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - run: npm ci
+      - run: npm test
+      - name: Build the app
+        # Unsigned unless the signing secrets are set. With CSC_LINK and CSC_KEY_PASSWORD electron-builder signs the
+        # app, and with the APPLE_ ones it notarizes it too.
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          # Unset secrets arrive as empty strings, which electron-builder would try to use.
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            [ -n "${!name}" ] || unset "$name"
+          done
+          [ -n "${CSC_LINK:-}" ] || export CSC_IDENTITY_AUTO_DISCOVERY=false
+          npm run dist:mac -w @kumiko/desktop
+      - name: Upload to a draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The notes are this version's section of the changelog, up to the next heading.
+          awk -v v="$VERSION" '/^## / { if (p) exit; p = ($2 == v); next } p' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for $VERSION"
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" --draft --title "Kumiko $VERSION" --notes-file notes.md \
+            apps/desktop/release/*.dmg apps/desktop/release/*.zip

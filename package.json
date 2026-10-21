@@ -21,6 +21,7 @@
     "desktop": "npm run build && npm start -w @kumiko/desktop",
     "dev:desktop": "node apps/desktop/dev.mjs",
     "dist:app": "npm run build && npm run dist:mac-arm64-app -w @kumiko/desktop",
+    "release": "node scripts/release.mjs",
     "roundtrip": "npm run build && node packages/sandbox/dist/scripts/roundtrip.js",
     "projects-check": "npm run build && node packages/server/dist/scripts/projects-check.js",
     "drive": "npm run build && node packages/agent/dist/scripts/drive.js",

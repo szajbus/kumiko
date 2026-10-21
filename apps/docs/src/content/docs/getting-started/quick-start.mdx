@@ -1,6 +1,6 @@
 ---
 title: Quick start
-description: From a clone of Kumiko to an agent working on one of your projects, in about five minutes.
+description: From downloading Kumiko to an agent working on one of your projects, in about five minutes.
 ---
 
 import { Steps, Aside } from "@astrojs/starlight/components";
@@ -8,40 +8,59 @@ import { Steps, Aside } from "@astrojs/starlight/components";
 By the end of this page an agent will be working on one of your projects, in a sandbox of its own. It takes about five
 minutes, plus a few more while the first sandbox downloads its system image.
 
-**You need:** a Mac, [Node 24+](https://nodejs.org), git, a git repository to work on, and a Claude account. This page
+**You need:** a Mac, [Homebrew](https://brew.sh), git, a git repository to work on, and a Claude account. This page
 sets up today's sandbox provider, [Lima](https://lima-vm.io), and agent, [Claude Code](https://claude.com/claude-code);
 Kumiko installs the agent for you.
 
 <Steps>
 
-1. **Install Lima, then build and launch Kumiko.**
+1. **Install Lima.**
 
    ```sh
    brew install lima
-   git clone <kumiko repo> && cd kumiko
-   npm install
-   npm run desktop
    ```
 
-2. **Create a project.** Choose **New project**, enter the path of your repository, and choose **Create project**. The
+2. **Install Kumiko.** Download the newest `.dmg` from the Releases page of the Kumiko repository on GitHub:
+   `Kumiko-<version>-arm64.dmg` for Apple silicon, `Kumiko-<version>-x64.dmg` for an Intel Mac. Open it and drag
+   **Kumiko** into **Applications**.
+
+3. **Open Kumiko.** Kumiko isn't signed by Apple yet, so the first time you open it macOS says it can't check the app
+   for malicious software, and offers only **Done** and **Move to Trash**. Choose **Done**, then open **System
+   Settings → Privacy & Security**, scroll to **Security**, choose **Open Anyway** beside the message about Kumiko, and
+   confirm with your password. After that it opens like any other app.
+
+   Or clear the download's quarantine in Terminal, and open it as usual:
+
+   ```sh
+   xattr -dr com.apple.quarantine /Applications/Kumiko.app
+   ```
+
+   Each new version you download asks again.
+
+4. **Create a project.** Choose **New project**, enter the path of your repository, and choose **Create project**. The
    defaults are fine for a first try.
 
    ![The New project form: the repository's folder and a name, then the sandbox's settings.](../../../assets/screenshots/new-project.png)
 
    The project page shows the sandbox being built. Wait for it to say **Running**.
 
-3. **Start a session.** Choose **New session**, say what you want done, and press <kbd>Enter</kbd>:
+5. **Start a session.** Choose **New session**, say what you want done, and press <kbd>Enter</kbd>:
 
    ```text
    Read the README and tell me how to run the tests
    ```
 
-4. **Log the agent in.** The first time, the reply is a card saying **Claude isn't logged in**, and a login dialog
+6. **Log the agent in.** The first time, the reply is a card saying **Claude isn't logged in**, and a login dialog
    opens. Follow its link, sign in, paste the code into the dialog, and choose **Retry**. The agent gets to work.
 
 </Steps>
 
 <Aside type="tip">You log in once per project. The login is kept even if you rebuild the sandbox.</Aside>
+
+<Aside>
+To run Kumiko from source instead, with [Node 24+](https://nodejs.org): clone the repository, then `npm install` and
+`npm run desktop`.
+</Aside>
 
 ## Next
 

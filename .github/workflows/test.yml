@@ -2,6 +2,8 @@ name: Test
 
 on:
   push:
+    # Tags are tested by the Release workflow.
+    branches: ["**"]
   pull_request:
 
 concurrency:

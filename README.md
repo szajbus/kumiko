@@ -6,7 +6,7 @@ Today the sandboxes are Lima VMs and the agent is Claude Code.
 
 ## Quick start
 
-You need a Mac, Node 24+, git and [Lima](https://lima-vm.io).
+To use Kumiko, download it from Releases and follow the [quick start](apps/docs/src/content/docs/getting-started/quick-start.mdx). To run it from source you need a Mac, Node 24+, git and [Lima](https://lima-vm.io).
 
 ```sh
 brew install lima
@@ -58,6 +58,17 @@ The fakes only copy what the real tools do. When a change depends on how they re
 | `npm run roundtrip` | The Lima provider: create, provision, exec, stop, start, delete. |
 | `npm run projects-check` | Same-path mounts and worktrees seen from both sides. |
 | `npm run drive -- --sandbox <project>` | The Claude Code driver: prompts, forwarded variables, interrupts, and another driver picking the agent up mid-turn. |
+
+### Releasing
+
+Releases are cut by hand, and built by CI:
+
+1. Write what changed for users under a new `## <version>` heading at the top of [`CHANGELOG.md`](CHANGELOG.md), and commit it to `main`. `git log --format=%s v<last>..` lists the commits to start from; leave out docs, tests and fixes to things that never shipped.
+2. `npm run release <version>` dates that heading, sets the app's version, commits and tags `v<version>`, and pushes both.
+3. The tag starts the Release workflow: it runs the tests, builds the `.dmg` and `.zip` for Apple silicon and Intel, and uploads them to a **draft** GitHub release with the changelog section as its notes.
+4. Download the draft's `.dmg`, install it and try it. Publish the draft when it works. When it doesn't, delete the draft and the tag (`git push --delete origin v<version>`, `git tag -d v<version>`), fix it, and release again.
+
+The app isn't signed. When the `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` secrets are set, the workflow signs and notarizes it with no other changes; then take the Open Anyway step out of the quick start.
 
 ### Layout
 
