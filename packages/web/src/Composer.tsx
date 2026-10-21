@@ -28,6 +28,8 @@ interface Props {
   commands?: string[];
   /** A guess at the next message, shown dimmed while the box is empty: Tab takes it into the box, Backspace drops it. */
   suggestion?: string;
+  /** Messages sent before, oldest first: Up at the start of the box brings back the one before, Down the one after, as in a shell. */
+  history?: string[];
   /** Keeps the unsent message in `drafts` under this key, and starts from what is there, with the cursor at its end. */
   draftKey?: string;
   /** Shown at the left of the line under the box, opposite the key hint. */
@@ -44,7 +46,7 @@ const MAX_SUGGESTIONS = 8;
  * same text again right after a label opens it up into the text, and Backspace takes the label out whole.
  * Files dropped on it, pasted, or picked with the paperclip go with the message; they are listed above the text.
  */
-export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder, autoFocus, label, commands, suggestion, draftKey, footer, ref }: Props) {
+export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder, autoFocus, label, commands, suggestion, history = [], draftKey, footer, ref }: Props) {
   const [text, setText] = useState(() => (draftKey && drafts.get(draftKey)?.text) || "");
   // Kept until the message is sent, even once a label is deleted, so undo can bring the label back.
   const [pastes, setPastes] = useState<Pastes>(() => (draftKey && drafts.get(draftKey)?.pastes) || {});
@@ -67,6 +69,9 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
   // The suggestion Backspace dropped; a new one is a different text, so it shows again.
   const [dropped, setDropped] = useState<string>();
   const ghost = !text && suggestion && suggestion !== dropped ? suggestion : undefined;
+  // Which of `history` is in the box while going through it, and what was being written before that, for Down to come back to.
+  const [recalled, setRecalled] = useState<number>();
+  const stash = useRef("");
   const box = useRef<HTMLTextAreaElement>(null);
   const marks = useRef<HTMLDivElement>(null);
 
@@ -140,6 +145,7 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
         setFresh(undefined);
         setFiles([]);
         setRefused(undefined);
+        setRecalled(undefined);
       }
     } finally {
       setSending(false);
@@ -304,6 +310,23 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
                 if (e.key === "Escape") {
                   e.preventDefault();
                   setDismissed(true);
+                  return;
+                }
+              }
+              // History: from the very start (or end) of the box, or anywhere on the first (or last) line of a message brought back and left as it was.
+              if ((e.key === "ArrowUp" || e.key === "ArrowDown") && el.selectionStart === el.selectionEnd && !e.nativeEvent.isComposing && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
+                const up = e.key === "ArrowUp";
+                const at = el.selectionStart;
+                const untouched = recalled !== undefined && text === history[recalled];
+                const edge = up ? at === 0 || (untouched && !text.slice(0, at).includes("\n")) : at === text.length || (untouched && !text.slice(at).includes("\n"));
+                const from = recalled ?? history.length;
+                const to = from + (up ? -1 : 1);
+                if (edge && to >= 0 && to <= history.length && from !== to) {
+                  e.preventDefault();
+                  if (recalled === undefined) stash.current = text;
+                  setRecalled(to < history.length ? to : undefined);
+                  // As an edit, so undo can bring back what was there.
+                  replace(0, text.length, to < history.length ? history[to]! : stash.current);
                   return;
                 }
               }

@@ -51,6 +51,11 @@ export function SessionView({ session, onForked }: Props) {
   useMarkSeen(session);
   const chat = useChat(stream.events);
   const totalCost = useMemo(() => chat.items.reduce((sum, i) => sum + (i.type === "turn" ? (i.costUsd ?? 0) : 0), 0), [chat.items]);
+  // What was sent so far, for Up in the composer; a message sent again right after itself is there once.
+  const history = useMemo(
+    () => chat.items.flatMap((i) => (i.type === "user" ? [i.text] : [])).filter((t, n, all) => t && t !== all[n - 1]),
+    [chat.items],
+  );
   const [error, setError] = useState<string | undefined>();
   const [model, setModel] = useState("");
   // The message a rewind was asked for, until it is confirmed or dropped.
@@ -195,6 +200,7 @@ export function SessionView({ session, onForked }: Props) {
           label="Message Claude"
           commands={session.commands && [...session.commands, ...OWN_COMMANDS.filter((c) => !session.commands!.includes(c))]}
           suggestion={chat.suggestion}
+          history={history}
           draftKey={session.id}
           submitLabel="Send"
           placeholder={live ? "Message Claude…" : "This session has ended."}
