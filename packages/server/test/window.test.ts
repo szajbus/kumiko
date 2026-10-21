@@ -7,7 +7,7 @@ import { after, before, describe, it } from "node:test";
 import { CHAT, slotIds, WindowError, type SessionEvent, type WindowOp } from "@kumiko/shared";
 import type { AgentDriver, AgentEvent, AgentMessage, StartOptions } from "@kumiko/agent";
 import { Sessions } from "../src/sessions.js";
-import { SessionStore } from "../src/store.js";
+import { chatEvents, SessionStore } from "../src/store.js";
 
 /** A driver that says only what a test makes it say. */
 class StubDriver implements AgentDriver {
@@ -154,6 +154,18 @@ describe("session windows", () => {
     const again = new Sessions(() => new StubDriver(), store);
     again.resume(stored, []);
     assert.deepEqual(again.window(id), w);
+  });
+
+  it("keeps events of kinds it doesn't know when saving, as a newer Kumiko's", () => {
+    const newer = { seq: 2, kind: "board", payload: {} } as unknown as SessionEvent;
+    const events: SessionEvent[] = [
+      { seq: 1, kind: "user_prompt", payload: { text: "hi" } },
+      newer,
+      { seq: 3, kind: "window", payload: { op: add("w2") } },
+      { seq: 4, kind: "error", payload: { message: "gone" } },
+      { seq: 5, kind: "claude", payload: { type: "system", subtype: "init" } },
+    ];
+    assert.deepEqual(chatEvents(events).map((e) => e.seq), [1, 2, 3]);
   });
 
   it("changes the window of live sessions only", async () => {

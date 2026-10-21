@@ -73,11 +73,12 @@ export class SessionStore {
 /**
  * The events worth keeping: the chat. Deltas, init and the like are dropped, and a resumed chat looks the same. The
  * deltas of the messages in `unfinished` are kept: in a turn still going, they are all there is of those messages yet.
+ * Kinds this build doesn't know are kept: a newer Kumiko saved them, and saving the session again mustn't lose them.
  */
 export function chatEvents(events: SessionEvent[], unfinished?: ReadonlySet<string>): SessionEvent[] {
   return events.filter((e) => {
-    if (e.kind === "user_prompt" || e.kind === "interrupt" || e.kind === "window") return true;
-    if (e.kind !== "claude") return false;
+    if (e.kind === "error" || e.kind === "ended") return false;
+    if (e.kind !== "claude") return true;
     if (e.payload.type === "stream_event") return Boolean(unfinished?.has(String(e.payload.api_message_id)));
     return e.payload.type === "assistant" || e.payload.type === "user" || e.payload.type === "result";
   });
