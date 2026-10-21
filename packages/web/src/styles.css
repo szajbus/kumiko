@@ -595,7 +595,10 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 .resume-item:first-child { border-top: 0; }
 .resume-actions { display: flex; align-items: center; gap: 8px; }
 .resume-what { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.resume-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.resume-item-live { cursor: pointer; }
+.resume-item-live:hover .resume-title { color: var(--accent-hover); }
+.resume-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.resume-project { font-weight: 500; }
 .resume-when { font-size: 12px; }
 
 @media (max-width: 640px) {

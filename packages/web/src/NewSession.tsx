@@ -3,7 +3,7 @@ import type { ProjectView, ResumableSession } from "@kumiko/shared";
 import { api, errorMessage, RequestError, useHome, type LiveState } from "./api";
 import { toInput, type ComposerFile } from "./attachments";
 import { Composer } from "./Composer";
-import { ago, sessionTitle, tilde } from "./format";
+import { ago, tilde } from "./format";
 import { Resume, Trash } from "./icons";
 import { resumableKey } from "./resumable";
 import { Select } from "./Select";
@@ -152,14 +152,18 @@ export function NewSession({ live, project: initial, onProject, onStarted }: Pro
               const p = live.projects.find((x) => x.name === r.sandbox);
               const can = p !== undefined && canStart(p);
               return (
-                <li key={r.id} className="resume-item">
+                <li
+                  key={r.id}
+                  className={`resume-item${can && resuming === undefined ? " resume-item-live" : ""}`}
+                  onClick={() => can && resuming === undefined && void resume(r.id)}
+                >
                   <div className="resume-what">
-                    <span className="resume-title" title={r.prompt}>
-                      {sessionTitle(r)}
+                    <span className="resume-title" title={r.title ?? r.prompt}>
+                      <span className="resume-project">{r.sandbox}</span> · {r.title ?? r.prompt}
                     </span>
                     <span className="dim resume-when">{can ? ago(r.updatedAt ?? r.startedAt) : `${ago(r.updatedAt ?? r.startedAt)} · sandbox can't start`}</span>
                   </div>
-                  <div className="resume-actions">
+                  <div className="resume-actions" onClick={(e) => e.stopPropagation()}>
                     <button type="button" className="btn btn-secondary btn-compact" disabled={!can || resuming !== undefined} onClick={() => void resume(r.id)}>
                       <Resume />
                       Resume
