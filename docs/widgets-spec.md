@@ -77,6 +77,9 @@ Window changes are session events:
 
 The window's state is also kept folded on the server (`Sessions` holds the latest `WindowState` per session) for the tools to work on.
 
+### Content is kept apart, by hash
+An artifact's state doesn't hold its file's content, only its SHA-256 (`content`). The server keeps each version once in `sessions/artifacts/<hash>` (`ArtifactContent`, like the prompts' attachments) and serves it at `GET /api/artifacts/:hash`: as `text/plain`, or as an image when `?as=` names one of `IMAGE_TYPES`, with `nosniff` and a sandboxing CSP so nothing served there runs. The pane fetches the text (cached by hash), and an image loads straight from that URL. So a session's events stay a few kilobytes however large its artifacts are, and replaying them to a tab is quick. A rewind writes files back from the versions the window names; a fork names the same ones. At startup the versions no saved session names are deleted. Sessions saved before this have the content inline in `text` (an image's in base64); the pane still shows it, and the next read of the file replaces it with a hash.
+
 ### Claude's tools
 **Transport.** Kumiko hosts the tools itself, as an MCP server that Claude reaches over the stream-json control protocol (the spike below proved it). Nothing is installed in the sandbox and nothing in the VM talks to the host over the network.
 - Claude starts with `--mcp-config '{"mcpServers":{"kumiko":{"type":"sdk","name":"kumiko"}}}'`.
@@ -156,7 +159,7 @@ An artifact's state has a `type`, from its file's extension (`artifactTypeOf`), 
 | `markdown` | `.md`, `.markdown` | Markdown; ```` ```mermaid ```` blocks drawn as diagrams (in artifacts only, not the chat, where they would redraw at every delta) |
 | `mermaid` | `.mmd`, `.mermaid` | The diagram; one that doesn't parse shows its source and Mermaid's error |
 | `svg` | `.svg` | An `<img>` of it, on a white card, as most SVG is drawn for a white page |
-| `image` | `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp` | An `<img>`; the server keeps the bytes in base64, whole, up to 2 MB (`MAX_IMAGE_BYTES`), and none of a larger one |
+| `image` | `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp` | An `<img>` of the server's copy; the server keeps the bytes whole, up to 2 MB (`MAX_IMAGE_BYTES`), and none of a larger one |
 
 - **Safety:** SVG and diagrams are shown as images (data URLs in `<img>`), so nothing in them runs or loads; Mermaid runs in `strict` mode with its labels as SVG text. A script in an SVG artifact doesn't run (checked).
 - **Mermaid** is loaded on demand, in its own chunk (about 680 KB), the first time a diagram is drawn. It was in the lockfile already, for the docs site.
@@ -201,7 +204,7 @@ An artifact pane shows one artifact at a time and switches between all of the wi
 
 ### Removing artifacts
 - **The `remove` op** takes a widget out of the window for good, closing its slot if one shows it; the chat stays. A `sync` lists the widgets `removed` in its run, so compaction keeps removals.
-- **`artifact_remove({ artifact })`**, deferred, takes an artifact by its id or its file's path, and the switcher has an × on each entry (`POST /api/sessions/:id/window/remove`). Both go through `Widgets.remove`: `removeArtifact`'s ops (see "What a pane showed before"), then the file is deleted, as an artifact is the session's own and only files in its folder are artifacts. A preview or a website has no file and only leaves the window. Rewinding to before the removal brings the artifact back, file and all: the write-back after a rewind writes an image's bytes, not the base64 the window keeps it in. In the switcher a file artifact has a trash icon ("Delete"), a page an ×.
+- **`artifact_remove({ artifact })`**, deferred, takes an artifact by its id or its file's path, and the switcher has an × on each entry (`POST /api/sessions/:id/window/remove`). Both go through `Widgets.remove`: `removeArtifact`'s ops (see "What a pane showed before"), then the file is deleted, as an artifact is the session's own and only files in its folder are artifacts. A preview or a website has no file and only leaves the window. Rewinding to before the removal brings the artifact back, file and all: the write-back after a rewind takes each file's version from the server's copies. In the switcher a file artifact has a trash icon ("Delete"), a page an ×.
 - **The tool names the session's folder.** `artifact_open`'s description says where this session's artifacts go (`toolsFor(folder)`), so Claude doesn't depend on the system prompt for it; a session resumed after an upgrade showed it may not see the prompt's line.
 
 ### Arranging panes by hand

@@ -15,6 +15,7 @@ import {
   parseSavedTabs,
   SESSION_ID_PATTERN,
   artifactsOf,
+  IMAGE_TYPES,
   nextId,
   slotOf,
   urlOrigin,
@@ -50,6 +51,7 @@ import {
 import { LimaProvider, validateSpec, type Log, type SandboxProvider } from "@kumiko/sandbox";
 import { ClaudeDriver, execOutput, Runs, type AgentDriver } from "@kumiko/agent";
 import { AttachmentRefused, AttachmentStore } from "./attachments.js";
+import { ArtifactContent } from "./content.js";
 import { GitError, worktreeStatuses } from "./git.js";
 import { isLocalRequest } from "./guard.js";
 import { LoginFailed, Logins } from "./logins.js";
@@ -125,10 +127,15 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   const sessionStore = new SessionStore(opts.sessionsDir);
   // Files sent with prompts are kept as long as a saved session names them.
   const attachments = new AttachmentStore(join(sessionStore.dir, "attachments"));
-  await attachments.sweep((await sessionStore.readAll()).flatMap((s) => s.events));
+  const saved = (await sessionStore.readAll()).flatMap((s) => s.events);
+  await attachments.sweep(saved);
+  // What windows showed of their artifacts, likewise.
+  const content = new ArtifactContent(join(sessionStore.dir, "artifacts"));
+  await content.sweep(saved);
   const tabs = new TabsStore(opts.dataDir);
   // Windows' widgets map the paths Claude names in its VM to the host: the project's mounts, and the VM user's home.
   const widgets = new Widgets({
+    content,
     home: (sandbox) => {
       const p = projectList.find((x) => x.id === sandbox);
       return p && { claudeHome: projects.claudeHome(p.id), roots: [p.clonePath, p.worktreesPath] };
@@ -735,6 +742,24 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     sessions.relaunch(id, ready.env);
     if (last?.kind === "user_prompt") sessions.prompt(id, last.payload.text, last.payload.attachments, files);
     return c.json({ ok: true }, 202);
+  });
+
+  /**
+   * What a window shows of an artifact's file, by its hash. Text as text, an image as `as` says, if it is one: nothing
+   * served here runs, even opened as a page.
+   */
+  app.get("/api/artifacts/:hash", async (c) => {
+    const data = await content.get(c.req.param("hash"));
+    if (!data) return c.json(fail("No such content."), 404);
+    const as = c.req.query("as") ?? "";
+    const type = Object.values(IMAGE_TYPES).includes(as) ? as : "text/plain; charset=utf-8";
+    return c.body(new Uint8Array(data), 200, {
+      "content-type": type,
+      "x-content-type-options": "nosniff",
+      "content-security-policy": "sandbox; default-src 'none'",
+      // The same hash is always the same content.
+      "cache-control": "private, max-age=31536000, immutable",
+    });
   });
 
   /** Starts the session's Claude again, carrying on its conversation: for Kumiko's tools as they are now. */

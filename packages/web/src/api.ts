@@ -98,6 +98,14 @@ export const api = {
   /** Finishes the login with the code the sign-in page shows. */
   loginCode: (id: string, code: string) => request<LoginAccount>("POST", `/api/sessions/${id}/login/code`, { code }),
   cancelLogin: (id: string) => request("DELETE", `/api/sessions/${id}/login`),
+  /** Where an artifact's content is, by its hash, as an image of `type`. */
+  artifactUrl: (hash: string, type: string) => `/api/artifacts/${hash}?as=${encodeURIComponent(type)}`,
+  /** An artifact's content, by its hash, as text. */
+  artifactText: async (hash: string) => {
+    const res = await fetch(`/api/artifacts/${hash}`);
+    if (!res.ok) throw new RequestError(`It isn't on the server (${res.status}).`, res.status);
+    return res.text();
+  },
   /** Starts the session's Claude again, for Kumiko's tools as they are now; the conversation carries on. */
   restartClaude: (id: string) => request<SessionInfo>("POST", `/api/sessions/${id}/restart`),
   /** Starts the session's Claude again and resends the prompt that failed. */

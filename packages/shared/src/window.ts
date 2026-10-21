@@ -255,9 +255,15 @@ export interface ArtifactState {
   path: string;
   type: ArtifactType;
   title: string;
-  /** The file's text, or its first MAX_ARTIFACT_BYTES; for an image, its bytes in base64, if under MAX_IMAGE_BYTES. */
-  text: string;
-  /** The file is longer than `text`. */
+  /**
+   * What is shown of the file, named by its SHA-256: its first MAX_ARTIFACT_BYTES, or an image whole if under
+   * MAX_IMAGE_BYTES. The server keeps it and serves it to the window, so the window's events stay small. Unset for a
+   * page, or a file never read.
+   */
+  content?: string;
+  /** Sessions saved before the content was kept apart have it here: the text, or an image's bytes in base64. */
+  text?: string;
+  /** The file is longer than what is shown. */
   truncated?: boolean;
   /** The file wasn't there when it was last read. */
   missing?: boolean;
@@ -265,8 +271,8 @@ export interface ArtifactState {
   approved?: boolean;
 }
 
-/** What changed in an artifact: its text as read again, or its title. */
-export type ArtifactOp = Partial<Pick<ArtifactState, "title" | "text" | "truncated" | "missing" | "approved">>;
+/** What changed in an artifact: its content as read again, or its title. */
+export type ArtifactOp = Partial<Pick<ArtifactState, "title" | "content" | "text" | "truncated" | "missing" | "approved">>;
 
 /** How much of an artifact's file a window keeps and shows. A safety limit, not one on what Claude writes. */
 export const MAX_ARTIFACT_BYTES = 256 * 1024;

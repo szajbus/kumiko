@@ -8,6 +8,7 @@ import { PaneGrip } from "./PaneGrip";
 import { QuoteButton } from "./QuoteButton";
 import { COLORS } from "./status";
 import { withPolicy } from "./htmlPolicy";
+import { api } from "./api";
 import { WindowContext, type ArtifactEntry, type WindowApi } from "./windowContext";
 
 /** How long "Updated" shows after the text changes. */
@@ -41,8 +42,13 @@ export function ArtifactView({ widget, slot, doc, writing }: Props) {
   const [width, setWidth] = useState<(typeof WIDTHS)[number]["id"]>("full");
   const [reloads, setReloads] = useState(0);
   const body = useRef<HTMLDivElement>(null);
-  const text = writing ?? doc.text;
-  const updated = useUpdated(doc.text);
+  const shown = useContent(doc);
+  // What Claude wrote stays until the version the window has of it has come, rather than the one before it.
+  const wrote = useRef<string | undefined>(undefined);
+  if (writing !== undefined) wrote.current = writing;
+  else if (!shown.stale) wrote.current = undefined;
+  const text = writing ?? wrote.current ?? shown.text;
+  const updated = useUpdated(doc.content ?? doc.text ?? "");
   const [copied, setCopied] = useState(false);
   // While Claude writes, the pane follows the end of the text, as long as the reader is there.
   const follow = useRef(false);
@@ -53,7 +59,7 @@ export function ArtifactView({ widget, slot, doc, writing }: Props) {
   }, [writing]);
 
   const copy = () => {
-    void navigator.clipboard.writeText(doc.text).then(() => {
+    void navigator.clipboard.writeText(shown.text).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });
@@ -125,6 +131,7 @@ export function ArtifactView({ widget, slot, doc, writing }: Props) {
           ) : (
             <Rendered key={reloads} doc={doc} text={text} writing={writing !== undefined} />
           )}
+          {shown.failed && writing === undefined && <p className="artifact-note">Couldn't get it from Kumiko: {shown.failed}</p>}
           {doc.truncated && writing === undefined && (
             <p className="artifact-note">
               {doc.type === "image"
@@ -282,8 +289,11 @@ function Rendered({ doc, text, writing }: { doc: ArtifactState; text: string; wr
       return writing ? <pre className="mono artifact-source">{text}</pre> : <img className="artifact-image is-svg" src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(text)}`} alt={doc.title} />;
     case "mermaid":
       return writing ? <pre className="mono artifact-source">{text}</pre> : <Diagram source={text} />;
-    case "image":
-      return doc.truncated ? null : <img className="artifact-image" src={`data:${imageTypeOf(doc.path)};base64,${text}`} alt={doc.title} />;
+    case "image": {
+      // Older sessions have the image in the window, in base64.
+      const src = doc.content ? api.artifactUrl(doc.content, imageTypeOf(doc.path)) : doc.text && `data:${imageTypeOf(doc.path)};base64,${doc.text}`;
+      return doc.truncated || !src ? null : <img className="artifact-image" src={src} alt={doc.title} />;
+    }
     case "html":
       // Written in pieces, a page would load again at every one; its source shows until it's written.
       return writing ? <pre className="mono artifact-source">{text}</pre> : <HtmlFrame html={text} title={doc.title} />;
@@ -443,6 +453,43 @@ function SiteApproval({ doc, live, onAnswer }: { doc: ArtifactState; live: boole
 }
 
 /** Whether `text` changed in the last few seconds; not when the widget first shows. */
+/** Versions of artifacts fetched lately, by hash, so switching back and forth doesn't fetch them again. */
+const fetched = new Map<string, Promise<string>>();
+const FETCHED_MAX = 64;
+
+function fetchContent(hash: string): Promise<string> {
+  let p = fetched.get(hash);
+  if (!p) {
+    p = api.artifactText(hash);
+    p.catch(() => fetched.delete(hash));
+    fetched.set(hash, p);
+    if (fetched.size > FETCHED_MAX) fetched.delete(fetched.keys().next().value!);
+  }
+  return p;
+}
+
+/**
+ * The text of the artifact as the window has it: the server keeps it, and the window names it by hash. The version
+ * shown stays until the next has come, so the pane doesn't flash empty. An image isn't fetched as text: it loads itself.
+ */
+function useContent(doc: ArtifactState): { text: string; stale?: boolean; failed?: string } {
+  const [got, setGot] = useState<{ hash?: string; text: string; failed?: string }>({ text: "" });
+  const hash = doc.type === "image" ? undefined : doc.content;
+  useEffect(() => {
+    if (!hash) return;
+    let live = true;
+    fetchContent(hash).then(
+      (text) => live && setGot({ hash, text }),
+      (err: unknown) => live && setGot((g) => ({ ...g, failed: err instanceof Error ? err.message : String(err) })),
+    );
+    return () => {
+      live = false;
+    };
+  }, [hash]);
+  if (!hash) return { text: doc.text ?? "" };
+  return { ...got, stale: got.hash !== hash };
+}
+
 function useUpdated(text: string): boolean {
   const first = useRef(text);
   const [updated, setUpdated] = useState(false);

@@ -15,8 +15,9 @@ sandbox provider.
 | `claude/<id>/` | The project's agent home: login, settings, history. |
 | `claude/<id>/kumiko/artifacts/<session id>/` | The session's [artifacts](/guide/artifacts/), which the agent writes. |
 | `claude-template/` | What new agent homes are copied from. |
-| `sessions/<id>.json` | Saved chats, for resuming, with the window's panes and the artifacts' text as last read, and where the session's agent runs: its run, how much of the run's output the chat covers, and any calls to Kumiko's tools the agent is waiting on. |
+| `sessions/<id>.json` | Saved chats, for resuming, with the window's panes and which version of each artifact they showed, and where the session's agent runs: its run, how much of the run's output the chat covers, and any calls to Kumiko's tools the agent is waiting on. |
 | `sessions/attachments/` | Files sent with prompts. |
+| `sessions/artifacts/` | Every version of an artifact a window showed, named by its SHA-256, for the window to show and a rewind to put back. Those no saved session names any more are deleted when Kumiko starts. |
 | `tabs.json` | The window's open tabs. |
 | `home-id` | This home's id, which tags the runs its server starts. |
 | `server.lock` | The running server's pid and port. One server per home: a second refuses to start. |

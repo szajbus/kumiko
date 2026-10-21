@@ -33,7 +33,8 @@ anyway, and doesn't follow a link that leads out of it, so the agent can't use a
 already. Kumiko writes and deletes only artifacts in that folder: when a rewind puts them back, and when one is
 deleted. SVG
 artifacts and Mermaid diagrams are shown as images, so nothing in them runs or loads, and Mermaid draws in its strict
-mode.
+mode. The window gets an artifact's content from Kumiko's server as plain text, or as a picture for an image: never
+as a page, so opening that address runs nothing.
 
 Pages run code from the sandbox on your Mac, so they're contained:
 

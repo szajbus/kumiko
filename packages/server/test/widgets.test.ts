@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -8,7 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 import WebSocket from "ws";
-import { artifactsOf, slotIds, windowState, type ServerEvent, type SessionEvent, type SessionInfo, type SessionStreamMessage } from "@kumiko/shared";
+import { artifactsOf, slotIds, windowState, type ArtifactState, type ServerEvent, type SessionEvent, type SessionInfo, type SessionStreamMessage } from "@kumiko/shared";
 import { LimaProvider, MetadataStore, shellQuote } from "@kumiko/sandbox";
 import { startServer, type RunningServer, type ServerOptions } from "../src/index.js";
 import { makeClone } from "./repo.js";
@@ -26,6 +26,8 @@ describe("widgets", () => {
   /** Project "one"'s Claude home on the host, which the fake VM sees as ~/.claude. */
   let claudeHome: string;
   let serverOpts: ServerOptions;
+  /** What the window shows of an artifact, as the server keeps it. */
+  const textOf = (a: ArtifactState | undefined) => (a?.content ? readFileSync(join(root, "sessions", "artifacts", a.content), "utf8") : "");
   const events: ServerEvent[] = [];
   let ws: WebSocket;
 
@@ -131,20 +133,26 @@ describe("widgets", () => {
     assert.deepEqual(slotIds(w.layout), ["chat", "s2"]);
     const [[, doc]] = artifactsOf(w);
     assert.equal(doc.title, "The plan");
-    assert.equal(doc.text, "# The plan\n\nStep one.\n");
+    assert.equal(textOf(doc), "# The plan\n\nStep one.\n");
+    assert.equal(doc.text, undefined, "the window names the content, rather than having it");
+    // The window fetches it, as text, whatever the file.
+    const served = await api(`/api/artifacts/${doc.content}`);
+    assert.equal(served.headers.get("content-type"), "text/plain; charset=utf-8");
+    assert.equal(await served.text(), "# The plan\n\nStep one.\n");
+    assert.equal((await api(`/api/artifacts/${doc.content}?as=text/html`)).headers.get("content-type"), "text/plain; charset=utf-8");
     const call = s.events().find((e) => e.kind === "window");
     assert.match(String(call?.kind === "window" && call.payload.toolUseId), /^toolu_/, "the op names the tool call that made it");
 
     // Claude edits it: the pane follows once the tool has run, and the chat doesn't keep the text again.
     await ask(s, id, write(path, "# The plan\n\nStep one.\nStep two.\n"));
-    await waitFor(() => artifactsOf(s.window())[0][1].text.includes("Step two."));
+    await waitFor(() => textOf(artifactsOf(s.window())[0][1]).includes("Step two."));
     const writes = s.events().filter((e) => e.kind === "claude" && e.payload.type === "assistant" && JSON.stringify(e.payload).includes('"Write"'));
     assert.ok(JSON.stringify(writes.at(-1)).includes("bytes, shown in the artifact's pane"));
     assert.ok(JSON.stringify(writes[0]).includes("Step one."), "a Write before the artifact was shown is kept as it was");
 
     // The user edits it on the host, between turns.
     await writeFile(join(claudeHome, "kumiko", "artifacts", id, "plan.md"), "# The plan\n\nEdited by hand.\n");
-    await waitFor(() => artifactsOf(s.window())[0][1].text.includes("Edited by hand."));
+    await waitFor(() => textOf(artifactsOf(s.window())[0][1]).includes("Edited by hand."));
 
     assert.match(await ask(s, id, widget("window_list", {})), /side by side: \[chat \(the chat\), s2 \(artifact w2 "The plan"/);
     s.close();
@@ -358,7 +366,7 @@ describe("widgets", () => {
     await writeFile(secret, "top secret");
     await symlink(secret, join(dir, "link.md"));
     assert.match(await ask(s, id, widget("artifact_open", { path: docPath(id, "link.md") })), /links to a file outside/);
-    // Other types: an image is kept whole, in base64; one over 2 MB isn't kept at all.
+    // Other types: an image is kept whole; one over 2 MB isn't kept at all.
     const png = Buffer.from("89504e470d0a1a0a0000000d4948445200000001000000010806000000", "hex");
     await writeFile(join(dir, "chart.png"), png);
     await writeFile(join(dir, "flow.mmd"), "graph TD\n  A --> B\n");
@@ -367,9 +375,12 @@ describe("widgets", () => {
     await ask(s, id, widget("artifact_open", { path: docPath(id, "flow.mmd") }));
     assert.match(await ask(s, id, widget("artifact_open", { path: docPath(id, "big.png") })), /larger than 2 MB, so it isn't shown/);
     const byPath = new Map(artifactsOf(s.window()).map(([, a]) => [a.path.split("/").pop(), a]));
-    assert.deepEqual([byPath.get("chart.png")?.type, byPath.get("chart.png")?.text], ["image", png.toString("base64")]);
+    assert.equal(byPath.get("chart.png")?.type, "image");
+    const image = await api(`/api/artifacts/${byPath.get("chart.png")?.content}?as=image/png`);
+    assert.equal(image.headers.get("content-type"), "image/png");
+    assert.ok(Buffer.from(await image.arrayBuffer()).equals(png));
     assert.deepEqual([byPath.get("flow.mmd")?.type, byPath.get("flow.mmd")?.title], ["mermaid", "flow.mmd"]);
-    assert.deepEqual([byPath.get("big.png")?.text, byPath.get("big.png")?.truncated], ["", true]);
+    assert.deepEqual([byPath.get("big.png")?.content, byPath.get("big.png")?.truncated], [undefined, true]);
     assert.match(await ask(s, id, widget("artifact_open", { path: docPath(id, "flow.mmd"), place: { split: "sideways" } })), /place\.split must be/);
     s.close();
   });
@@ -384,7 +395,6 @@ describe("widgets", () => {
     assert.equal(existsSync(join(dir, "chart.png")), false);
     const prompt = s.events().flatMap((e) => (e.kind === "user_prompt" && e.payload.text.includes("artifact_remove") ? [e.payload.id!] : []))[0];
     assert.equal((await api(`/api/sessions/${id}/rewind`, { method: "POST", body: JSON.stringify({ prompt }) })).status, 200);
-    // The image's bytes, not the base64 the window keeps them in.
     await waitFor(async () => existsSync(join(dir, "chart.png")) && (await readFile(join(dir, "chart.png"))).equals(png) || undefined);
     s.close();
   });
@@ -395,7 +405,7 @@ describe("widgets", () => {
     await ask(s, id, write(path, "# V1\n"));
     await ask(s, id, widget("artifact_open", { path }));
     await ask(s, id, write(path, "# V2\n"));
-    await waitFor(() => artifactsOf(s.window())[0][1].text === "# V2\n");
+    await waitFor(() => textOf(artifactsOf(s.window())[0][1]) === "# V2\n");
 
     const fork = await json(await api(`/api/sessions/${id}/fork`, { method: "POST", body: "{}" }));
     const f = await listen(fork.id);
@@ -410,7 +420,7 @@ describe("widgets", () => {
     const second = prompts.find((p) => p.text.includes("# V2"))!;
     assert.equal((await api(`/api/sessions/${id}/rewind`, { method: "POST", body: JSON.stringify({ prompt: second.id }) })).status, 200);
     const r = await listen(id);
-    await waitFor(() => artifactsOf(r.window())[0]?.[1].text === "# V1\n" || undefined);
+    await waitFor(() => textOf(artifactsOf(r.window())[0]?.[1]) === "# V1\n" || undefined);
     await waitFor(async () => (await readFile(join(claudeHome, "kumiko", "artifacts", id, "plan.md"), "utf8")) === "# V1\n" || undefined);
     r.close();
   });
@@ -427,6 +437,8 @@ describe("widgets", () => {
     const again = await listen(id);
     await waitFor(() => artifactsOf(again.window()).length === 1 || undefined);
     assert.deepEqual(slotIds(again.window().layout), ["chat", "s2"]);
+    // What it showed is still there, as the window's saved events name it.
+    assert.equal(textOf(artifactsOf(again.window())[0][1]), "# Kept\n");
     // Its Claude was picked up, tools and all.
     assert.match(await ask(again, id, widget("window_list", {})), /s2 \(artifact w2 "Kept"/);
     again.close();

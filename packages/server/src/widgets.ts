@@ -29,6 +29,7 @@ import {
   type WindowState,
 } from "@kumiko/shared";
 import type { AgentMessage, ToolHost, ToolResult, ToolSpec } from "@kumiko/agent";
+import { contentHash, type ArtifactContent } from "./content.js";
 import type { SessionWidgets, Sessions } from "./sessions.js";
 
 /** Where a project's files are, for mapping the paths Claude names in its VM to the host. */
@@ -46,6 +47,8 @@ export interface PaneAnswer {
 }
 
 export interface WidgetsOptions {
+  /** Where what windows show of their artifacts' files is kept. */
+  content: ArtifactContent;
   /** The project's folders, or undefined for a project that isn't known. */
   home(sandbox: string): WidgetHome | undefined;
   /** The VM user's home, absolute, as `~` is in the VM. */
@@ -71,6 +74,17 @@ const within = (path: string, root: string) => path === root || path.startsWith(
 const hostWithin = (path: string, root: string) => path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
 
 class ToolError extends Error {}
+
+/** An artifact's file as read: what is shown of it and its hash, and its text, for a title. */
+interface Read {
+  data: Buffer;
+  hash: string;
+  text: string;
+  truncated: boolean;
+  missing: boolean;
+  /** Its size and time, to tell whether it changed since. */
+  stamp: string;
+}
 
 /** The longest Claude can ask the window to wait before a picture. */
 const MAX_WAIT_MS = 10_000;
@@ -221,7 +235,7 @@ export class Widgets implements SessionWidgets {
       widget = existing[0];
       const changed: Partial<ArtifactState> = {};
       if (title && title !== existing[1].title) changed.title = title;
-      if (read.text !== existing[1].text || read.truncated !== existing[1].truncated) Object.assign(changed, { text: read.text, truncated: read.truncated, missing: false });
+      if (read.hash !== existing[1].content || read.truncated !== Boolean(existing[1].truncated) || existing[1].missing) Object.assign(changed, { content: await this.keepContent(read), truncated: read.truncated, missing: false });
       if (Object.keys(changed).length) ops.push({ type: "update", widget, op: changed });
       // Shown already, and not asked to go anywhere else: nothing moves.
       const slot = slotOf(w, widget);
@@ -232,7 +246,7 @@ export class Widgets implements SessionWidgets {
     } else {
       if (docs.length >= MAX_ARTIFACTS) throw new ToolError(`A window has at most ${MAX_ARTIFACTS} artifacts.`);
       widget = nextId(w, "w");
-      const state: ArtifactState = { path, type, title: title || titleOf(path, type, read.text), text: read.text, ...(read.truncated ? { truncated: true } : {}) };
+      const state: ArtifactState = { path, type, title: title || titleOf(path, type, read.text), content: await this.keepContent(read), ...(read.truncated ? { truncated: true } : {}) };
       ops.push({ type: "add", widget, kind: "artifact", state });
     }
     // By default in the artifact pane used last, so artifacts don't each take a pane; a new one only when there is none.
@@ -338,7 +352,7 @@ export class Widgets implements SessionWidgets {
       if (artifactsOf(w).length >= MAX_ARTIFACTS) throw new ToolError(`A window has at most ${MAX_ARTIFACTS} artifacts.`);
       widget = nextId(w, "w");
       const where = url.replace(/^https?:\/\//, "");
-      const state: ArtifactState = { path: url, type, title: title || (type === "preview" ? `Preview of ${where}` : urlHost(url)!), text: "", ...(type === "web" ? { approved: allowed } : {}) };
+      const state: ArtifactState = { path: url, type, title: title || (type === "preview" ? `Preview of ${where}` : urlHost(url)!), ...(type === "web" ? { approved: allowed } : {}) };
       ops.push({ type: "add", widget, kind: "artifact", state });
     }
     const pending = type === "web" && !(existing ? existing[1].approved : allowed);
@@ -385,10 +399,13 @@ export class Widgets implements SessionWidgets {
     return root ? { path: vmPath, root } : undefined;
   }
 
-  /** An artifact's file as it is now: its first MAX_ARTIFACT_BYTES, read on the host. A link out of its folder isn't followed. */
-  private async read(info: SessionInfo, vmPath: string, type: ArtifactType): Promise<{ text: string; truncated: boolean; missing: boolean; stamp: string }> {
+  /**
+   * An artifact's file as it is now: what is shown of it (its first MAX_ARTIFACT_BYTES, or an image whole), with its
+   * hash, read on the host. A link out of its folder isn't followed. `text` is the shown part as text, for titles.
+   */
+  private async read(info: SessionInfo, vmPath: string, type: ArtifactType): Promise<Read> {
     const at = this.hostPath(info, vmPath);
-    const gone = { text: "", truncated: false, missing: true, stamp: "missing" };
+    const gone: Read = { data: Buffer.alloc(0), hash: "", text: "", truncated: false, missing: true, stamp: "missing" };
     if (!at) return gone;
     try {
       const real = await realpath(at.path);
@@ -397,15 +414,19 @@ export class Widgets implements SessionWidgets {
       if (!st.isFile()) throw new ToolError(`${vmPath} isn't a file.`);
       const stamp = `${st.size}:${st.mtimeMs}`;
       // An image is all or nothing: a cut one can't be shown.
-      if (type === "image" && st.size > MAX_IMAGE_BYTES) return { text: "", truncated: true, missing: false, stamp };
+      if (type === "image" && st.size > MAX_IMAGE_BYTES) return { ...gone, missing: false, truncated: true, stamp };
       const fh = await open(real, "r");
       try {
-        if (type === "image") return { text: (await fh.readFile()).toString("base64"), truncated: false, missing: false, stamp };
+        if (type === "image") {
+          const data = await fh.readFile();
+          return { data, hash: contentHash(data), text: "", truncated: false, missing: false, stamp };
+        }
         const buf = Buffer.alloc(Math.min(st.size, MAX_ARTIFACT_BYTES));
         const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
         // Cut at a character, not in the middle of one.
-        const text = new TextDecoder().decode(buf.subarray(0, bytesRead)).replace(/�$/, "");
-        return { text, truncated: st.size > MAX_ARTIFACT_BYTES, missing: false, stamp };
+        const text = new TextDecoder().decode(buf.subarray(0, bytesRead)).replace(/\uFFFD$/, "");
+        const data = Buffer.from(text);
+        return { data, hash: contentHash(data), text, truncated: st.size > MAX_ARTIFACT_BYTES, missing: false, stamp };
       } finally {
         await fh.close();
       }
@@ -413,6 +434,12 @@ export class Widgets implements SessionWidgets {
       if (err instanceof ToolError) throw err;
       return gone;
     }
+  }
+
+  /** Keeps what is shown of a file, for the window to fetch; its hash, or undefined for nothing to show. */
+  private async keepContent(read: Read): Promise<string | undefined> {
+    if (read.missing || (read.truncated && !read.data.length)) return undefined;
+    return this.opts.content.put(read.data);
   }
 
   /** One of Claude's messages: once a tool has run, or the turn has ended, the artifacts may have changed. */
@@ -454,9 +481,13 @@ export class Widgets implements SessionWidgets {
       const key = `${id}:${widget}`;
       if (this.seen.get(key) === read.stamp) continue;
       this.seen.set(key, read.stamp);
-      if (read.text === doc.text && read.missing === Boolean(doc.missing) && read.truncated === Boolean(doc.truncated)) continue;
+      // A file that is gone keeps showing what it was.
+      if (read.missing) {
+        if (doc.missing) continue;
+      } else if (read.hash === (doc.content ?? "") && !doc.missing && read.truncated === Boolean(doc.truncated)) continue;
       try {
-        this.sessions.changeWindow(id, { type: "update", widget, op: { text: read.text, truncated: read.truncated, missing: read.missing } });
+        const op = read.missing ? { missing: true } : { content: await this.keepContent(read), truncated: read.truncated, missing: false };
+        this.sessions.changeWindow(id, { type: "update", widget, op });
       } catch {
         // The session ended meanwhile.
       }
@@ -529,6 +560,10 @@ export class Widgets implements SessionWidgets {
 
   /** After a rewind, the artifacts in the session's own folder are put back as the window has them. */
   rewound(info: SessionInfo, w: WindowState): void {
+    void this.putBack(info, w);
+  }
+
+  private async putBack(info: SessionInfo, w: WindowState): Promise<void> {
     const dir = this.hostDocs(info);
     const home = this.homes.get(info.sandbox);
     if (!dir || !home) return;
@@ -536,8 +571,9 @@ export class Widgets implements SessionWidgets {
     for (const [widget, d] of artifactsOf(w)) {
       if (d.truncated || d.missing || d.type === "preview" || d.type === "web" || !within(d.path, vmDir)) continue;
       this.seen.delete(`${info.id}:${widget}`);
-      // An image is kept in base64; its file is the bytes.
-      void writeFile(join(dir, relative(vmDir, d.path)), d.type === "image" ? Buffer.from(d.text, "base64") : d.text).catch(() => {});
+      // Older sessions kept the content in the window, an image's in base64.
+      const data = d.content ? await this.opts.content.get(d.content) : d.text !== undefined ? Buffer.from(d.text, d.type === "image" ? "base64" : "utf8") : undefined;
+      if (data) await writeFile(join(dir, relative(vmDir, d.path)), data).catch(() => {});
     }
   }
 
