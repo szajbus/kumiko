@@ -168,6 +168,21 @@ describe("session windows", () => {
     assert.deepEqual(chatEvents(events).map((e) => e.seq), [1, 2, 3]);
   });
 
+  it("says a Claude started with other tools is outdated, until it is restarted", async () => {
+    const id = setup();
+    turn(drivers[0]);
+    const started = sessions.get(id)!;
+    assert.ok(started.toolsVersion);
+    assert.equal(started.toolsOutdated, undefined);
+    const stored = { info: { ...started, toolsVersion: "older" }, events: [...sessions.events(id)], run: { id: "r", offset: 0, live: true } };
+    await sessions.remove(id);
+    const again = new Sessions(() => new StubDriver(), store);
+    assert.equal(again.reopen(stored).toolsOutdated, true);
+    const restarted = again.relaunch(id, []);
+    assert.equal(restarted.toolsOutdated, undefined);
+    assert.equal(restarted.toolsVersion, started.toolsVersion);
+  });
+
   it("changes the window of live sessions only", async () => {
     const id = setup();
     await sessions.end(id, "user");

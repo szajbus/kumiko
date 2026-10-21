@@ -201,6 +201,14 @@ export function SessionView({ session, stream, onForked, composerRef }: Props) {
           <div className="banner banner-warn">Lost connection to the session. Reconnecting…</div>
         )}
         {error && <div className="banner banner-error">{error}</div>}
+        {session.toolsOutdated && live && (
+          <div className="banner banner-warn">
+            <span className="banner-text">Kumiko's tools for Claude have changed since this session's Claude started. Restart it to get them; the conversation carries on.</span>
+            <button type="button" className="btn btn-compact" disabled={!idle} title={idle ? undefined : "Once Claude has finished"} onClick={() => void call(() => api.restartClaude(session.id))}>
+              Restart Claude
+            </button>
+          </div>
+        )}
         <Composer
           key={composerKey}
           ref={composer}

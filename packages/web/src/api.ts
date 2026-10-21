@@ -98,6 +98,8 @@ export const api = {
   /** Finishes the login with the code the sign-in page shows. */
   loginCode: (id: string, code: string) => request<LoginAccount>("POST", `/api/sessions/${id}/login/code`, { code }),
   cancelLogin: (id: string) => request("DELETE", `/api/sessions/${id}/login`),
+  /** Starts the session's Claude again, for Kumiko's tools as they are now; the conversation carries on. */
+  restartClaude: (id: string) => request<SessionInfo>("POST", `/api/sessions/${id}/restart`),
   /** Starts the session's Claude again and resends the prompt that failed. */
   retry: (id: string) => request("POST", `/api/sessions/${id}/retry`),
   prompt: (id: string, text: string, attachments?: AttachmentInput[]) => request("POST", `/api/sessions/${id}/prompt`, { text, attachments } satisfies PromptRequest),

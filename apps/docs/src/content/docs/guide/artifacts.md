@@ -93,3 +93,9 @@ it should read the file again.
 
 A pane shows up to 256 KB of a text artifact; a longer file shows its start, with a note. An image over 2 MB isn't
 shown. While the agent writes a diagram or an SVG, its source shows, and it is drawn once written.
+
+## After updating Kumiko
+
+The agent gets its tools for artifacts when its session starts, and keeps those. A session that was running while you
+updated Kumiko carries on with the old ones, so the chat says so and offers **Restart Claude**, which starts the agent
+again on the same conversation with the new tools.

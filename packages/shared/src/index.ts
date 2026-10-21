@@ -288,6 +288,10 @@ export interface SessionInfo {
   bufferBytes?: number;
   /** Claude finished a turn, or the session ended by itself, since the user last looked at it. */
   unread?: boolean;
+  /** What Kumiko's tools were (a hash of them) when the session's Claude was started; its tools are fixed from then. */
+  toolsVersion?: string;
+  /** The session's Claude was started with other tools than Kumiko has now, so restarting it would bring the new ones. */
+  toolsOutdated?: boolean;
 }
 
 /**

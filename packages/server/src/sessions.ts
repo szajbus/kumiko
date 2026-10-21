@@ -1,7 +1,7 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { applyWindowOp, chatWindow, compactWindow, LIVE_SESSION_STATUSES, windowState, type Attachment, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo, type WindowOp, type WindowState } from "@kumiko/shared";
-import type { AgentDriver, AgentFile, AgentMessage, StartOptions, ToolHost } from "@kumiko/agent";
+import { TOOL_TIMEOUT_MS, type AgentDriver, type AgentFile, type AgentMessage, type StartOptions, type ToolHost } from "@kumiko/agent";
 import { chatEvents, type SessionStore, type StoredSession } from "./store.js";
 import { trimMessage } from "./trim.js";
 
@@ -78,6 +78,13 @@ const isLive = (s: SessionInfo) => LIVE_SESSION_STATUSES.includes(s.status);
 /** How to start Claude on the session's history: as it is, or cut where a rewind left it. */
 const continuing = (info: SessionInfo): Pick<StartOptions, "resume" | "fork" | "resumeAt"> =>
   info.resumeAt ? { resume: info.claudeSessionId, fork: true, resumeAt: info.resumeAt } : { resume: info.claudeSessionId };
+
+/** A hash of what Claude is given of Kumiko's: its tools, what it is told of them, and how long it waits for them. */
+const toolsVersion = (given: { tools: ToolHost; appendSystemPrompt?: string } | undefined) =>
+  createHash("sha256")
+    .update(JSON.stringify([given?.tools.list() ?? [], given?.appendSystemPrompt ?? "", TOOL_TIMEOUT_MS]))
+    .digest("hex")
+    .slice(0, 12);
 
 const sizeOf = (e: SessionEvent) => Buffer.byteLength(JSON.stringify(e));
 
@@ -160,7 +167,9 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     const { info: saved, run } = stored;
     if (this.sessions.has(saved.id)) throw new SessionNotResumable("This session is already open.");
     if (!run?.live) throw new SessionNotResumable("This session's Claude isn't running any more.");
-    const { updatedAt: _updatedAt, ...info } = saved;
+    const { updatedAt: _updatedAt, toolsOutdated: _outdated, ...rest } = saved;
+    // The Claude it attaches to keeps the tools it started with, which this Kumiko may have changed since.
+    const info: SessionInfo = { ...rest, ...(saved.toolsVersion !== toolsVersion(this.widgets?.tools(saved)) ? { toolsOutdated: true } : {}) };
     const s = this.newSession(info, stored.events);
     // Deltas saved mid-turn are dropped like any others once their message is finished.
     for (const e of s.events) if (e.kind === "claude") this.countBlocks(s, e.payload);
@@ -313,6 +322,8 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     const driver = this.makeDriver();
     this.wire(s, driver);
     const widgets = this.widgets?.tools(s.info);
+    const { toolsOutdated: _outdated, ...info } = s.info;
+    s.info = { ...info, toolsVersion: toolsVersion(widgets) };
     driver.start({ ...driverOpts, run: `${s.info.id}-${randomBytes(4).toString("hex")}`, ...widgets });
   }
 

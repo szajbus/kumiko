@@ -737,6 +737,13 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     return c.json({ ok: true }, 202);
   });
 
+  /** Starts the session's Claude again, carrying on its conversation: for Kumiko's tools as they are now. */
+  app.post("/api/sessions/:id/restart", async (c) => {
+    const { id, sandbox } = sessionOf(c);
+    const ready = await readyProject(sandbox);
+    return c.json(sessions.relaunch(id, ready.env));
+  });
+
   /** The user is looking at the session, so it no longer waits on them. */
   app.post("/api/sessions/:id/seen", (c) => {
     sessions.markSeen(sessionOf(c).id);
