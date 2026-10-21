@@ -23,6 +23,9 @@
 /* Icons are drawn at fixed sizes; as flex items they would otherwise shrink when the text beside them runs long. */
 svg { flex: none; }
 html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 var(--sans); }
+/* Scrollbars are out of sight until something scrolls (main.tsx marks it), keeping their room so nothing shifts. */
+* { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+.is-scrolling { scrollbar-color: rgba(255, 255, 255, 0.28) transparent; }
 a { color: var(--accent); }
 a:hover { color: var(--accent-hover); }
 button, input, select, textarea { font: inherit; color: inherit; }
@@ -36,8 +39,8 @@ code, .mono { font-family: var(--mono); }
 .align-right { text-align: right; }
 
 .app { min-height: 100vh; display: flex; flex-direction: column; }
-/* A session fills the window exactly: the chat scrolls and the composer stays at the bottom. */
-.app:has(> .session) { height: 100vh; overflow: hidden; }
+/* A session's window fills the app's exactly: the chat scrolls and the composer stays at the bottom. */
+.app:has(> .window) { height: 100vh; overflow: hidden; }
 
 /* Header */
 .app-header {
@@ -434,7 +437,109 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 .tab-new:hover { background: var(--surface-2); color: var(--text); }
 [data-shell="electron-darwin"] .tab { -webkit-app-region: no-drag; }
 
-/* Session tab: chat that scrolls, composer at the bottom */
+/* A session's window: slots placed by its layout, side by side, each showing a widget. */
+.window { flex: 1; min-height: 0; position: relative; }
+.window-slot { position: absolute; display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 0 solid var(--border-soft); }
+.window-slot.is-dragged { opacity: 0.45; }
+.window.is-dragging { user-select: none; }
+.window-divider { position: absolute; z-index: 3; }
+.window-divider.is-row { cursor: col-resize; }
+.window-divider.is-column { cursor: row-resize; }
+.window-divider:hover, .window-divider:active { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+.window-drop { position: absolute; inset: 0; z-index: 4; cursor: grabbing; }
+.window-drop-preview {
+  position: absolute; box-sizing: border-box; border: 2px solid var(--accent); border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent); transition: all 80ms ease-out;
+}
+/* A pane's handle: in an artifact's header, and floating in the chat's corner, clearer while the pane is hovered. */
+.pane-grip {
+  flex: none; display: flex; align-items: center; justify-content: center; width: 18px; height: 24px; margin-left: -10px;
+  border-radius: 4px; color: var(--muted); cursor: grab; touch-action: none;
+}
+.pane-grip:hover { background: var(--surface-2); color: var(--text); }
+.pane-grip.is-floating { position: absolute; top: 8px; left: 10px; margin: 0; z-index: 2; opacity: 0.35; transition: opacity 120ms; }
+.window-slot:hover > .pane-grip.is-floating { opacity: 1; }
+
+/* The artifact widget: a header with its title and controls, and the markdown, which scrolls */
+.artifact { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.artifact-head {
+  flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 9px 12px 9px 20px; border-bottom: 1px solid var(--border-soft);
+}
+.artifact-where { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.artifact-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.artifact-switch {
+  display: flex; align-items: center; gap: 6px; min-width: 0; margin: -3px -8px; padding: 3px 8px;
+  border: 0; border-radius: 6px; background: none; color: var(--text); font: inherit; cursor: pointer;
+}
+.artifact-switch:hover, .artifact-switch[data-state="open"] { background: var(--surface-2); }
+.artifact-switch svg { flex: none; color: var(--muted); }
+.artifact-unread { flex: none; background: var(--accent); }
+.artifact-menu { min-width: 240px; max-width: 360px; max-height: 60vh; overflow-y: auto; }
+.artifact-menu-item { gap: 8px; }
+.artifact-menu-check { flex: none; width: 12px; color: var(--accent); }
+.artifact-menu-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu-item .artifact-type { flex: none; color: var(--muted); }
+.artifact-menu-item.is-current .artifact-menu-title { font-weight: 600; }
+.artifact-menu-split {
+  flex: none; display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; margin-right: -4px; padding: 0;
+  border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer;
+}
+.artifact-menu-split:hover:not(:disabled) { background: var(--surface); color: var(--text); }
+.artifact-menu-split:disabled { opacity: 0.4; cursor: default; }
+.artifact-menu-split svg { color: inherit; }
+.artifact-menu-remove {
+  flex: none; display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; margin-right: -4px; padding: 0;
+  border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; opacity: 0;
+}
+.artifact-menu-item[data-highlighted] .artifact-menu-remove, .artifact-menu-remove:focus-visible { opacity: 1; }
+.artifact-menu-remove:hover { background: var(--surface); color: var(--text); }
+.menu-item .artifact-menu-remove svg { color: inherit; }
+.artifact-path { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.artifact-controls { flex: none; display: flex; align-items: center; gap: 8px; }
+.artifact-state { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+.artifact-copy {
+  padding: 1px 9px; border: 1px solid var(--border); border-radius: 6px;
+  background: none; color: var(--text-2); font: inherit; font-size: 12.5px; cursor: pointer;
+}
+.artifact-copy:hover { background: var(--surface-2); color: var(--text); }
+.artifact-close {
+  display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0;
+  border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer;
+}
+.artifact-close:hover { background: var(--surface-2); color: var(--text); }
+.artifact-banner { margin: 10px 20px 0; }
+.artifact-body { flex: 1; min-height: 0; overflow-y: auto; }
+.artifact-inner { max-width: 760px; margin: 0 auto; padding: 20px 24px 32px; }
+.artifact-note { color: var(--muted); font-size: 12.5px; font-style: italic; }
+/* A page fills the pane, at the width chosen, centred, on a white ground as most pages assume one. */
+.artifact-body.is-page { display: flex; overflow: auto; background: var(--surface-2); }
+.artifact-body.is-page .artifact-inner { flex: none; width: 100%; max-width: none; height: 100%; margin: 0 auto; padding: 0; display: flex; }
+.artifact-frame { flex: 1; width: 100%; height: 100%; border: 0; background: #fff; }
+.artifact-width {
+  padding: 1px 4px; border: 1px solid var(--border); border-radius: 6px;
+  background: none; color: var(--text-2); font: inherit; font-size: 12.5px;
+}
+a.artifact-copy { text-decoration: none; }
+/* Asking before an external site loads. */
+.artifact-ask { margin: auto; max-width: 440px; padding: 24px; display: flex; flex-direction: column; gap: 10px; color: var(--text-2); font-size: 13.5px; line-height: 1.5; }
+.artifact-ask p { margin: 0; }
+.artifact-ask-title { color: var(--text); font-weight: 600; font-size: 15px; }
+.artifact-ask-url { color: var(--text); overflow-wrap: anywhere; font-size: 12.5px; padding: 8px 10px; border-radius: 6px; background: var(--surface); }
+.artifact-ask-actions { display: flex; gap: 8px; margin-top: 6px; }
+.artifact-body.is-page:has(.artifact-ask) { background: var(--bg); }
+/* Over a page that didn't load, where its frame would be blank. */
+.artifact-body.is-page .artifact-inner { position: relative; }
+.artifact-failed { position: absolute; inset: 0; justify-content: center; max-width: none; padding: 24px 15%; background: var(--bg); }
+/* Pictures fit the pane's width. SVG goes on a light card, as most are drawn for a white page; diagrams are drawn dark. */
+.artifact-image, .diagram { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.artifact-image.is-svg { padding: 16px; border-radius: 8px; background: #fff; }
+.artifact-source { white-space: pre-wrap; font-size: 12.5px; color: var(--text-2); }
+.diagram { margin: 12px auto; }
+.diagram-wait { color: var(--muted); font-size: 12.5px; font-style: italic; padding: 8px 0; }
+.diagram-error pre { white-space: pre-wrap; font-size: 12.5px; color: var(--text-2); }
+
+/* The chat widget: chat that scrolls, composer at the bottom */
 .session { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 /* Its usage, in the title bar's corner: a bar per limit, one above the other, and the plan. */
 .usage-bars { display: flex; flex-direction: column; gap: 3px; }
@@ -539,6 +644,13 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 .tool summary .spinner { width: 10px; height: 10px; margin: 2px; }
 .tool-name { color: var(--text-2); font-weight: 500; flex: none; }
 .tool-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--muted); }
+.tool-widget .tool-name { color: var(--text); }
+.tool-title { font-family: inherit; font-size: 13px; color: var(--text-2); }
+.tool-show {
+  flex: none; margin-left: auto; padding: 1px 8px; border: 1px solid var(--border); border-radius: 6px;
+  background: none; color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer;
+}
+.tool-show:hover { background: var(--surface-2); color: var(--text); }
 .tool-body { display: flex; flex-direction: column; gap: 6px; padding: 4px 12px 12px; }
 .tool-body pre {
   margin: 0 0 6px; padding: 10px 12px; border-radius: 6px; background: var(--code-bg); color: #d6dae1;

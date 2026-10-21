@@ -1,6 +1,9 @@
 // Types shared by the sandbox adapter, the server and the web UI.
 // Nothing in here may import Node or browser APIs.
 
+export * from "./window.js";
+import type { WindowOp } from "./window.js";
+
 export const VM_PREFIX = "km-";
 
 /** Short sandbox names: lowercase letters, digits and dashes, not starting or ending with a dash. */
@@ -308,7 +311,9 @@ export type SessionEvent =
   | { seq: number; kind: "interrupt"; payload: Record<string, never> }
   /** `signedOut`: Claude isn't logged in, so the UI offers to log in instead of only showing the message. */
   | { seq: number; kind: "error"; payload: { message: string; hint?: string; stderr?: string[]; signedOut?: boolean } }
-  | { seq: number; kind: "ended"; payload: { reason: EndReason; code?: number } };
+  | { seq: number; kind: "ended"; payload: { reason: EndReason; code?: number } }
+  /** A change to the session's window. `toolUseId`: the tool call of Claude's that made it, if one did. */
+  | { seq: number; kind: "window"; payload: { op: WindowOp; toolUseId?: string } };
 
 /**
  * What a session's event socket sends: its events, and once it has replayed the ones it already had, `caught_up`,
@@ -486,6 +491,12 @@ export type ServerEvent =
   | { type: "list"; projects: ProjectView[]; unreadable: string[]; error?: string }
   /** Sent whenever a session starts, changes status or ends. */
   | { type: "sessions"; sessions: SessionInfo[] }
+  /**
+   * Asks the window showing session `session`, for Claude, to load the page in slot `slot` again (`reload`, waiting for
+   * it to load), then to take a picture of the slot as it is on screen (`capture`), `wait` ms later, and to answer
+   * `POST /api/sessions/:session/window/answer` with `request`: the picture, or nothing, or why it couldn't.
+   */
+  | { type: "pane"; session: string; slot: string; request: string; reload: boolean; capture: boolean; wait: number }
   | { sandbox: string; op: OpKind; type: "state"; data: Operation }
   | { sandbox: string; op: OpKind; type: "log"; data: LogLine }
   | { sandbox: string; op: OpKind; type: "done"; data: Operation }

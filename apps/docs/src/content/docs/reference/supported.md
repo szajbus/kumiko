@@ -81,7 +81,9 @@ Today the provider is chosen in code (`LimaProvider`), not per project, and its 
 ### An agent
 
 Implement `AgentDriver` (`packages/agent/src/driver.ts`): `start`, `attach`, `position`, `send`, `interrupt`,
-`rewindFiles`, `stop`, `detach` and `onEvent`. That covers running sessions. Runs (`runs.ts`) work for any agent that
+`rewindFiles`, `stop`, `detach`, `pendingCalls` and `onEvent`. That covers running sessions. The tools Kumiko gives the
+agent come as a `ToolHost` in `start` and `attach` (`tools.ts`); Claude Code reaches them as an MCP server over its
+control protocol, and another agent needs some way to call them. Runs (`runs.ts`) work for any agent that
 reads lines on stdin and writes them on stdout, so `attach`, `position` and `detach` can follow `ClaudeDriver`. The rest is still specific to Claude Code and would need generalizing:
 
 - session events carry Claude Code's stream-json as-is (`kind: "claude"`), and both the server (`sessions.ts`) and the

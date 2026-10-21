@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { LIVE_SESSION_STATUSES, type Attachment, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo } from "@kumiko/shared";
-import type { AgentDriver, AgentFile, AgentMessage, StartOptions } from "@kumiko/agent";
+import { applyWindowOp, chatWindow, compactWindow, LIVE_SESSION_STATUSES, windowState, type Attachment, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo, type WindowOp, type WindowState } from "@kumiko/shared";
+import type { AgentDriver, AgentFile, AgentMessage, StartOptions, ToolHost } from "@kumiko/agent";
 import { chatEvents, type SessionStore, type StoredSession } from "./store.js";
 import { trimMessage } from "./trim.js";
 
@@ -38,6 +38,26 @@ interface Session {
   saving: Promise<void>;
   /** Let go of by `detachAll`: Claude carries on without this server, which reports nothing more of it. */
   detached?: boolean;
+  /** The session's window, as its `window` events leave it. */
+  window: WindowState;
+}
+
+/** What sessions' windows need beyond the window itself: the tools Claude changes them with, and the files they show. */
+export interface SessionWidgets {
+  /** The tools for the session's Claude, and what to add to its system prompt. */
+  tools(info: SessionInfo): { tools: ToolHost; appendSystemPrompt?: string };
+  /** One of Claude's messages, after the session has taken it in. */
+  message(info: SessionInfo, m: AgentMessage): void;
+  /** What the session keeps of one of Claude's messages. */
+  keep(info: SessionInfo, m: AgentMessage): AgentMessage;
+  /** The events a fork starts with, from the original's. */
+  forked(from: SessionInfo, to: SessionInfo, events: SessionEvent[]): SessionEvent[];
+  /** The session was rewound; its window is as it was then. */
+  rewound(info: SessionInfo, window: WindowState): void;
+  /** A saved session was deleted for good. */
+  deleted(info: SessionInfo): void;
+  /** The session is no longer open. */
+  closed(id: string): void;
 }
 
 export class SessionNotFound extends Error {}
@@ -72,6 +92,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
   constructor(
     private readonly makeDriver: () => AgentDriver,
     private readonly store?: SessionStore,
+    private readonly widgets?: SessionWidgets,
   ) {
     super();
   }
@@ -92,6 +113,11 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
   /** The session's event buffer, as it stands. */
   events(id: string): readonly SessionEvent[] {
     return this.sessions.get(id)?.events ?? [];
+  }
+
+  /** The session's window, as it stands. */
+  window(id: string): WindowState | undefined {
+    return this.sessions.get(id)?.window;
   }
 
   /** How many sessions are live in each sandbox. */
@@ -141,7 +167,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     this.sessions.set(info.id, s);
     const driver = this.makeDriver();
     this.wire(s, driver);
-    driver.attach({ sandbox: info.sandbox, run: run.id, offset: run.offset });
+    driver.attach({ sandbox: info.sandbox, run: run.id, offset: run.offset, tools: this.widgets?.tools(s.info).tools, pending: run.pending });
     this.emit("changed");
     return s.info;
   }
@@ -170,7 +196,8 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
       }
     }
     const info: SessionInfo = { id: this.newId(), sandbox, workdir, prompt, model, status: "idle", startedAt: new Date().toISOString() };
-    return this.launch(info, chatEvents(events), { sandbox, workdir, env, resume: claudeSessionId, fork: true, ...(resumeAt ? { resumeAt } : {}) });
+    const seed = this.widgets ? this.widgets.forked(from.info, info, chatEvents(events)) : chatEvents(events);
+    return this.launch(info, seed, { sandbox, workdir, env, resume: claudeSessionId, fork: true, ...(resumeAt ? { resumeAt } : {}) });
   }
 
   /**
@@ -207,12 +234,14 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     from.bytes = 0;
     from.blocks.clear();
     from.pendingModel = undefined;
+    from.window = chatWindow();
     for (const ev of chatEvents(before)) this.push(from, ev);
 
     // Rewound to the first prompt, there is nothing of Claude's to keep: it starts afresh and gets a new id.
     const { claudeSessionId, resumeAt: _resumeAt, ...rest } = from.info;
     from.info = { ...rest, status: "idle", unread: false, bufferBytes: from.bytes, ...(kept ? { claudeSessionId, resumeAt: kept.payload.uuid } : {}) };
     const old = from.driver;
+    this.widgets?.rewound(from.info, from.window);
     this.startDriver(from, { sandbox: from.info.sandbox, workdir: from.info.workdir, env, ...(kept ? continuing(from.info) : {}) });
     void old.stop();
     this.emit("changed");
@@ -233,8 +262,10 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
   /** Deletes a saved session for good. An open one can't be: close its tab first. */
   async deleteSaved(id: string): Promise<boolean> {
     if (this.sessions.has(id)) throw new SessionNotResumable("This session is open; close its tab first.");
-    if (!(await this.store?.read(id))) return false;
+    const stored = await this.store?.read(id);
+    if (!stored) return false;
     await this.store!.remove(id);
+    this.widgets?.deleted(stored.info);
     return true;
   }
 
@@ -255,7 +286,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
 
   /** A session with `seed` in a new buffer, not yet listed and with no driver. */
   private newSession(info: SessionInfo, seed: NewEvent[]): Session {
-    const s: Session = { info, driver: undefined!, events: [], bytes: 0, seq: 0, buffer: randomBytes(6).toString("hex"), subscribers: new Set(), blocks: new Map(), exited: Promise.resolve(), saving: Promise.resolve() };
+    const s: Session = { info, driver: undefined!, events: [], bytes: 0, seq: 0, buffer: randomBytes(6).toString("hex"), subscribers: new Set(), blocks: new Map(), exited: Promise.resolve(), saving: Promise.resolve(), window: chatWindow() };
     for (const ev of seed) this.push(s, ev);
     s.info = { ...info, bufferBytes: s.bytes };
     return s;
@@ -281,7 +312,8 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
   private startDriver(s: Session, driverOpts: StartOptions) {
     const driver = this.makeDriver();
     this.wire(s, driver);
-    driver.start({ ...driverOpts, run: `${s.info.id}-${randomBytes(4).toString("hex")}` });
+    const widgets = this.widgets?.tools(s.info);
+    driver.start({ ...driverOpts, run: `${s.info.id}-${randomBytes(4).toString("hex")}`, ...widgets });
   }
 
   /** Makes `driver` the session's. Once another replaces it, or the session is detached, nothing it says reaches the session. */
@@ -296,6 +328,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
         case "message":
           this.push(s, { kind: "claude", payload: ev.payload });
           this.onMessage(s, ev.payload);
+          this.widgets?.message(s.info, ev.payload);
           break;
         case "error":
           this.push(s, { kind: "error", payload: { message: ev.message, hint: ev.hint, stderr: ev.stderr, ...(ev.signedOut ? { signedOut: true } : {}) } });
@@ -355,7 +388,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     const stored: StoredSession = {
       info: { ...s.info, updatedAt: new Date().toISOString() },
       events: chatEvents(s.events, live ? unfinished : undefined),
-      ...(at ? { run: { id: at.run, offset: at.offset, live } } : {}),
+      ...(at ? { run: { id: at.run, offset: at.offset, live, ...(live && s.driver.pendingCalls().length ? { pending: s.driver.pendingCalls() } : {}) } } : {}),
     };
     s.saving = s.saving.then(() => store.write(stored)).catch(() => {});
   }
@@ -417,6 +450,8 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
       // a message cut short by Stop are all there is of it, so those stay.
       const done = new Set([...s.blocks].filter(([, c]) => c.finished >= c.started).map(([id]) => id));
       s.events = s.events.filter((e) => !(e.kind === "claude" && e.payload.type === "stream_event" && done.has(String(e.payload.api_message_id))));
+      // The turn's changes to the window come down to the state they left it in.
+      s.events = compactWindow(s.events);
       s.bytes = s.events.reduce((n, e) => n + sizeOf(e), 0);
       s.blocks.clear();
       const switched = s.pendingModel && typeof m.result === "string" && m.result.startsWith("Set model to");
@@ -436,8 +471,10 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
 
   private push(s: Session, ev: NewEvent) {
     // Large tool output is cut before it is kept; Claude's own transcript in the sandbox has all of it.
-    const kept = ev.kind === "claude" ? { ...ev, payload: trimMessage(ev.payload) } : ev;
+    const trimmed = (p: AgentMessage) => (this.widgets ? this.widgets.keep(s.info, trimMessage(p)) : trimMessage(p));
+    const kept = ev.kind === "claude" ? { ...ev, payload: trimmed(ev.payload) } : ev;
     const full = { ...kept, seq: ++s.seq } as SessionEvent;
+    if (full.kind === "window") s.window = windowState([full], s.window);
     s.events.push(full);
     s.bytes += sizeOf(full);
     for (const sub of s.subscribers) sub.event(full);
@@ -460,6 +497,19 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     if (s.info.status === "idle") this.setInfo(s, { status: "running" });
     // Kumiko's own record of the prompt is nowhere in Claude's output, so it is saved now.
     this.save(s);
+  }
+
+  /**
+   * Changes the session's window, from Claude's tool call `toolUseId` or from the user; returns the window as it is
+   * now. Throws WindowError, changing nothing, if the change doesn't fit the window. Live sessions only, like a prompt.
+   */
+  changeWindow(id: string, op: WindowOp, toolUseId?: string): WindowState {
+    const s = this.live(id);
+    applyWindowOp(s.window, op);
+    this.push(s, { kind: "window", payload: toolUseId ? { op, toolUseId } : { op } });
+    // A turn's changes are saved with its result; one between turns has nothing else to be saved with.
+    if (s.info.status === "idle") this.save(s);
+    return s.window;
   }
 
   /** The user has looked at the session: it no longer waits on them. */
@@ -506,6 +556,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     for (const sub of s.subscribers) sub.gone();
     s.subscribers.clear();
     this.sessions.delete(id);
+    this.widgets?.closed(id);
     this.emit("changed");
   }
 
@@ -522,15 +573,16 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
 
   /**
    * Lets go of every live session and leaves its Claude working, for the next server to `reopen`: each is saved with
-   * its run first. Nothing more is reported of them.
+   * its run once let go of. Nothing more is reported of them.
    */
   async detachAll(): Promise<void> {
     const live = [...this.sessions.values()].filter((s) => isLive(s.info));
     await Promise.all(
       live.map(async (s) => {
-        this.save(s);
+        // Saved once let go of, with where its output was read to and the calls it leaves pending, as they end up.
         s.detached = true;
         await s.driver.detach();
+        this.save(s);
       }),
     );
   }

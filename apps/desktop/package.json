@@ -15,7 +15,8 @@
     "dist:linux": "node build.mjs && electron-builder --linux dir --publish never"
   },
   "dependencies": {
-    "@kumiko/server": "*"
+    "@kumiko/server": "*",
+    "@kumiko/shared": "*"
   },
   "devDependencies": {
     "electron": "44.9.0",

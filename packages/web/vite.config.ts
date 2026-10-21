@@ -22,7 +22,23 @@ export default defineConfig({
     alias: { "@kumiko/shared": fileURLToPath(new URL("../shared/src/index.ts", import.meta.url)) },
   },
   server: {
-    proxy: { "/api": { target: server, ws: true } },
+    proxy: {
+      "/api": {
+        target: server,
+        ws: true,
+        changeOrigin: true,
+        // The server takes browser requests from its own origin only. This page's, and only this page's, are passed on
+        // as if from there; any other page's keep their origin and are refused.
+        configure: (proxy) => {
+          const ownPage = (req: { headers: Record<string, string | string[] | undefined> }) => {
+            const origin = req.headers.origin;
+            return typeof origin === "string" && URL.canParse(origin) && new URL(origin).host === req.headers.host;
+          };
+          proxy.on("proxyReq", (out, req) => ownPage(req) && out.setHeader("origin", server));
+          proxy.on("proxyReqWs", (out, req) => ownPage(req) && out.setHeader("origin", server));
+        },
+      },
+    },
   },
   build: { outDir: "dist", emptyOutDir: true },
 });

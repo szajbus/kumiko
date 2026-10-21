@@ -1,7 +1,7 @@
-import { memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { formatBytes, LIVE_SESSION_STATUSES, type LoginAccount, type SessionInfo } from "@kumiko/shared";
-import { api, errorMessage, useSessionEvents } from "./api";
+import { api, errorMessage, type SessionStream } from "./api";
 import { fromAttachment, toInput } from "./attachments";
 import { applyEvent, blocksOf, chatRows, emptyChat, loginCards, partialToolSummary, toolSummary, type Block, type ChatItem, type ChatState, type ItemRow, type LoginAnswer, type WorkRow } from "./chat";
 import { Composer, type ComposerHandle } from "./Composer";
@@ -16,6 +16,8 @@ import { QuoteButton } from "./QuoteButton";
 import { Select } from "./Select";
 import { COLORS } from "./status";
 import { UsageStrip } from "./UsageStrip";
+import { widgetLine } from "./widgets";
+import { WindowContext } from "./windowContext";
 
 const MODELS = ["default", "opus", "sonnet", "haiku"];
 /** Commands Kumiko handles itself, since Claude can't run them headless; offered alongside Claude's own. */
@@ -23,6 +25,10 @@ const OWN_COMMANDS = ["fork", "rewind"];
 
 interface Props {
   session: SessionInfo;
+  /** The session's events, which its window streams. */
+  stream: SessionStream;
+  /** The composer, for the window's other widgets to quote into. */
+  composerRef?: RefObject<ComposerHandle | null>;
   /** A fork was started; opens its tab. */
   onForked(id: string): void;
 }
@@ -44,9 +50,8 @@ function useMarkSeen(session: SessionInfo) {
   }, [id, unread]);
 }
 
-/** One session: its usage in the title bar's corner, the chat streamed from its events, and the composer. */
-export function SessionView({ session, onForked }: Props) {
-  const stream = useSessionEvents(session.id);
+/** The chat widget: its usage in the title bar's corner, the chat folded from its events, and the composer. */
+export function SessionView({ session, stream, onForked, composerRef }: Props) {
   const corner = useContext(HeaderCorner);
   useMarkSeen(session);
   const chat = useChat(stream.events);
@@ -65,7 +70,8 @@ export function SessionView({ session, onForked }: Props) {
   // Bumped by a rewind, so the composer starts again from the draft it left.
   const [composerKey, setComposerKey] = useState(0);
   const [loggingIn, setLoggingIn] = useState(false);
-  const composer = useRef<ComposerHandle>(null);
+  const ownComposer = useRef<ComposerHandle>(null);
+  const composer = composerRef ?? ownComposer;
   // What is known about the login behind the last logged-out card; `loginCards` decides what that shows.
   const [answer, setAnswer] = useState<LoginAnswer | undefined>();
   const idle = session.status === "idle";
@@ -247,7 +253,7 @@ export function SessionView({ session, onForked }: Props) {
 }
 
 /** Folds events into the chat incrementally: only new events are applied, and unchanged items keep their identity. */
-function useChat(events: ReturnType<typeof useSessionEvents>["events"]): ChatState {
+function useChat(events: SessionStream["events"]): ChatState {
   const ref = useRef<{ state: ChatState; count: number; last?: unknown }>({ state: emptyChat(), count: 0 });
   return useMemo(() => {
     // The stream only grows; if the last event applied isn't where it was, the stream was reset (a rewind), so start over.
@@ -260,6 +266,7 @@ function useChat(events: ReturnType<typeof useSessionEvents>["events"]): ChatSta
 }
 
 type UserItem = Extract<ChatItem, { type: "user" }>;
+
 
 /** In place of the last logged-out card, while the project still isn't logged in. */
 function LoggedOutCard({ project, onLogIn }: { project: string; onLogIn(): void }) {
@@ -557,14 +564,31 @@ function BlockView({ block, open }: { block: Block; open: boolean }) {
 }
 
 function ToolLine({ block, open }: { block: Extract<Block, { type: "tool" }>; open: boolean }) {
+  const ctx = useContext(WindowContext);
+  // A call that opened, changed or closed something in the window says so in words, with a way back to a closed artifact.
+  const line = ctx && widgetLine(block.name, block.input, ctx.window);
+  const hidden = line?.widget && !Object.values(ctx!.window.slots).includes(line.widget);
   const summary = toolSummary(block.input) || partialToolSummary(block.partialInput ?? "");
   const state = block.result ? (block.result.isError ? "error" : "ok") : open ? "running" : "stopped";
   return (
-    <details className={`tool tool-${state}`}>
+    <details className={`tool tool-${state}${line ? " tool-widget" : ""}`}>
       <summary>
         <ToolIcon state={state} />
-        <span className="tool-name">{block.name}</span>
-        <span className="mono tool-summary">{summary}</span>
+        <span className="tool-name">{line?.label ?? block.name}</span>
+        {line ? <span className="tool-summary tool-title">{line.title}</span> : <span className="mono tool-summary">{summary}</span>}
+        {hidden && ctx!.live && (
+          <button
+            type="button"
+            className="tool-show"
+            onClick={(e) => {
+              // Not the summary's own click, which would open the details.
+              e.preventDefault();
+              ctx!.show(line!.widget!);
+            }}
+          >
+            Show
+          </button>
+        )}
       </summary>
       <div className="tool-body">
         <div className="eyebrow">Input</div>

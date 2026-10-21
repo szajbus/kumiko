@@ -395,6 +395,17 @@ describe("server", () => {
     assert.equal(res.status, 403);
     const bad = new WebSocket(`${server.url.replace("http", "ws")}/api/events`, { origin: "https://evil.example" });
     await new Promise<void>((r) => bad.once("error", () => r()));
+
+    // Pages served from this machine on another port, such as a project's dev server in a preview pane, too.
+    const port = new URL(server.url).port;
+    assert.equal((await api("/api/projects", { headers: { origin: "http://localhost:5173" } })).status, 403);
+    assert.equal((await api("/api/projects", { headers: { origin: "http://127.0.0.1:5173" } })).status, 403);
+    assert.equal((await api("/api/projects", { headers: { origin: "null" } })).status, 403);
+    const local = new WebSocket(`${server.url.replace("http", "ws")}/api/events`, { origin: "http://localhost:5173" });
+    await new Promise<void>((r) => local.once("error", () => r()));
+    // Its own pages, from either name for this machine.
+    assert.equal((await api("/api/projects", { headers: { origin: `http://localhost:${port}` } })).status, 200);
+    assert.equal((await api("/api/projects", { headers: { origin: `http://127.0.0.1:${port}` } })).status, 200);
   });
 
   it("notices a project's VM changing outside Kumiko, and ignores VMs that aren't projects'", async () => {

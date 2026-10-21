@@ -1,7 +1,10 @@
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
+import { app, BrowserWindow, dialog, ipcMain, session, shell, webContents, type NativeImage, type Session } from "electron";
+import { isExternalUrl, isPreviewUrl, isPrivateHost } from "@kumiko/shared";
 import { startServer, type RunningServer } from "@kumiko/server";
 import { adoptLoginShellEnv } from "./shell-env.js";
 
@@ -64,7 +67,20 @@ function createWindow(url: string) {
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
+      // For previews of pages the sandboxes serve; locked down as each one attaches, below.
+      webviewTag: true,
     },
+  });
+  // A page in a pane runs code that isn't the app's: no preload, no Node, sandboxed, and storage by what it shows, set
+  // here from its URL whatever the page asked for: previews of this machine's pages, or external sites (km-web).
+  win.webContents.on("will-attach-webview", (e, prefs, params) => {
+    delete prefs.preload;
+    prefs.nodeIntegration = false;
+    prefs.contextIsolation = true;
+    prefs.sandbox = true;
+    if (isPreviewUrl(params.src)) prefs.partition = PREVIEWS;
+    else if (isExternalUrl(params.src)) prefs.partition = SITES;
+    else e.preventDefault();
   });
   win.once("ready-to-show", () => win?.show());
   // Keep the window on the app; anything else opens in the browser.
@@ -93,6 +109,59 @@ function createWindow(url: string) {
   void win.loadURL(url);
 }
 
+/** The storage of pages in panes: previews of this machine's pages, and external sites, kept apart; in memory only. */
+const PREVIEWS = "km-preview";
+const SITES = "km-web";
+
+/** Pages in panes get no permissions (camera, microphone, location, notifications…) and can't download. */
+function guardPages(s: Session) {
+  s.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+  s.setPermissionCheckHandler(() => false);
+  s.on("will-download", (e) => e.preventDefault());
+}
+
+/** Whether a host name resolves to an address on this machine or a private network, remembered for a minute. */
+const resolved = new Map<string, { at: number; private: Promise<boolean> }>();
+function resolvesPrivate(host: string): Promise<boolean> {
+  const known = resolved.get(host);
+  if (known && Date.now() - known.at < 60_000) return known.private;
+  const answer = lookup(host, { all: true }).then(
+    (addresses) => addresses.some((a) => isPrivateHost(a.address)),
+    // Unresolvable: the request fails by itself.
+    () => false,
+  );
+  resolved.set(host, { at: Date.now(), private: answer });
+  return answer;
+}
+
+/**
+ * External sites can't reach this machine or its networks: a request to a private address, or to a name that resolves
+ * to one (DNS rebinding), is cancelled. Otherwise a site Claude opens could read the intranet for it, by a picture.
+ */
+function guardPrivateNetwork(s: Session) {
+  s.webRequest.onBeforeRequest({ urls: ["<all_urls>"] }, (details, callback) => {
+    let url: URL;
+    try {
+      url = new URL(details.url);
+    } catch {
+      return callback({ cancel: true });
+    }
+    if (["data:", "blob:", "about:"].includes(url.protocol)) return callback({});
+    if (!["http:", "https:", "ws:", "wss:"].includes(url.protocol)) return callback({ cancel: true });
+    const host = url.hostname.replace(/^\[|\]$/g, "");
+    // A page blocked whole goes away without a word from Chromium, so the pane showing it is told.
+    const block = () => {
+      if (details.resourceType === "mainFrame" && details.webContentsId !== undefined) {
+        webContents.fromId(details.webContentsId)?.hostWebContents?.send("kumiko:page-blocked", details.webContentsId, details.url);
+      }
+      callback({ cancel: true });
+    };
+    if (isPrivateHost(host)) return block();
+    if (isIP(host)) return callback({});
+    void resolvesPrivate(host).then((isPrivate) => (isPrivate ? block() : callback({})));
+  });
+}
+
 /** Development only: what the page logs, and its crashes and failed loads, go to the terminal, where they can be seen without DevTools. */
 function logPage(w: BrowserWindow) {
   const page = w.webContents;
@@ -117,6 +186,49 @@ if (!app.requestSingleInstanceLock()) {
 
   adoptLoginShellEnv();
 
+  // Inside a preview, links stay on this machine's pages; inside an external site, on external sites. Others, and new
+  // windows, open in the browser.
+  app.on("web-contents-created", (_e, contents) => {
+    if (contents.getType() !== "webview") return;
+    const stays = contents.session === session.fromPartition(SITES) ? isExternalUrl : isPreviewUrl;
+    contents.setWindowOpenHandler(({ url: target }) => {
+      openOutside(target);
+      return { action: "deny" };
+    });
+    contents.on("will-navigate", (e, target) => {
+      if (stays(target)) return;
+      e.preventDefault();
+      openOutside(target);
+    });
+  });
+
+  // Pictures of panes for Claude, as PNGs in base64, no wider than it needs to see them.
+  const png = (image: NativeImage) => (image.getSize().width > 1600 ? image.resize({ width: 1600 }) : image).toPNG().toString("base64");
+  // The whole page, cropped here to `rect` (in page pixels): a picture never shows more than the pane it is of.
+  ipcMain.handle("kumiko:capture", async (e, rect: Electron.Rectangle) => {
+    if (e.sender !== win?.webContents) throw new Error("Not the app's window.");
+    const full = await e.sender.capturePage();
+    const scale = full.getSize().width / win.getContentBounds().width;
+    const size = full.getSize();
+    const crop = {
+      x: Math.max(0, Math.round(rect.x * scale)),
+      y: Math.max(0, Math.round(rect.y * scale)),
+      width: Math.round(rect.width * scale),
+      height: Math.round(rect.height * scale),
+    };
+    crop.width = Math.min(crop.width, size.width - crop.x);
+    crop.height = Math.min(crop.height, size.height - crop.y);
+    if (crop.width <= 0 || crop.height <= 0) throw new Error("The pane isn't on screen.");
+    return png(full.crop(crop));
+  });
+  ipcMain.handle("kumiko:capture-webview", async (e, id: number) => {
+    const guest = webContents.fromId(id);
+    if (!guest || guest.hostWebContents !== e.sender) throw new Error("Not a preview in the app's window.");
+    // No page loaded, nothing of its own to show: the pane is captured instead.
+    if (!guest.getURL() || guest.getURL() === "about:blank") throw new Error("No page loaded.");
+    return png(await guest.capturePage());
+  });
+
   ipcMain.handle("kumiko:pick-folder", async (e) => {
     const owner = BrowserWindow.fromWebContents(e.sender) ?? undefined;
     const opts: Electron.OpenDialogOptions = { title: "Choose a folder", properties: ["openDirectory", "createDirectory"] };
@@ -125,6 +237,9 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(async () => {
+    guardPages(session.fromPartition(PREVIEWS));
+    guardPages(session.fromPartition(SITES));
+    guardPrivateNetwork(session.fromPartition(SITES));
     if (process.platform === "darwin" && !app.isPackaged) app.dock?.setIcon(icon("macos/icon-macos-1024.png"));
     if (devUrl) {
       createWindow(devUrl);

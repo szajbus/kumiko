@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { appendFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { CLAUDE_COMMAND, ClaudeDriver, claudeCommand, exitHint, Runs, RUNS_DIR, userMessage, type AgentEvent, type AgentMessage, type Exec } from "../src/index.js";
+import { CLAUDE_COMMAND, ClaudeDriver, claudeCommand, exitHint, mcpConfig, Runs, RUNS_DIR, userMessage, type AgentEvent, type AgentMessage, type Exec, type ToolCallContext, type ToolHost } from "../src/index.js";
 import { localExec } from "./helpers.js";
 
 /** Starts a driver on the fake claude and collects its events. */
@@ -250,6 +250,105 @@ describe("ClaudeDriver", () => {
           return true;
         }
       });
+    });
+  });
+
+  describe("tools it hosts for Claude", () => {
+    /** An `echo` tool always loaded, a deferred `wait` that answers once let go of, and calls kept to look at. */
+    function host() {
+      const calls: { name: string; args: Record<string, unknown>; ctx: ToolCallContext }[] = [];
+      let release: (() => void) | undefined;
+      const tools: ToolHost = {
+        list: () => [
+          { name: "echo", description: "Echoes.", inputSchema: { type: "object", properties: { text: { type: "string" } } }, alwaysLoad: true },
+          { name: "wait", description: "Waits.", inputSchema: { type: "object" } },
+          { name: "boom", description: "Fails.", inputSchema: { type: "object" } },
+          { name: "slow", description: "Answers after a moment.", inputSchema: { type: "object" } },
+        ],
+        async call(name, args, ctx) {
+          calls.push({ name, args, ctx });
+          if (name === "boom") throw new Error("it broke");
+          if (name === "slow") await new Promise((r) => setTimeout(r, 300));
+          if (name === "wait") await new Promise<void>((r) => ((release = r), ctx.signal.addEventListener("abort", () => r())));
+          return { text: `${name}: ${String(args.text ?? "done")}` };
+        },
+      };
+      return { tools, calls, release: () => release?.() };
+    }
+
+    it("lists them, with which are deferred, and answers calls", async () => {
+      const d = await drive();
+      const h = host();
+      d.driver.start({ sandbox: "test", workdir: d.home, env: [], prompt: "tools", tools: h.tools, appendSystemPrompt: "You're in Kumiko." });
+      const listed = JSON.parse(String((await d.waitFor(() => d.results()[0])).result)) as { name: string; _meta: Record<string, boolean> }[];
+      assert.deepEqual(listed.map((t) => [t.name, t._meta["anthropic/alwaysLoad"]]), [["echo", true], ["wait", false], ["boom", false], ["slow", false]]);
+      const init = d.messages().find((m) => m.type === "system" && m.subtype === "init");
+      assert.ok((init?.tools as string[]).includes("mcp__kumiko__echo"));
+      assert.ok(!d.messages().some((m) => m.type === "control_request"), "Claude's MCP messages aren't passed on");
+
+      d.driver.send(`widget echo {"text":"hi"}`);
+      assert.equal((await d.waitFor(() => d.results()[1])).result, "echo: hi");
+      assert.match(String(h.calls[0].ctx.toolUseId), /^toolu_/);
+      d.driver.send("widget boom {}");
+      assert.equal((await d.waitFor(() => d.results()[2])).result, "it broke");
+      d.driver.send("widget nope {}");
+      assert.equal((await d.waitFor(() => d.results()[3])).result, "There is no tool nope.");
+      d.driver.send("system prompt");
+      assert.equal((await d.waitFor(() => d.results()[4])).result, "You're in Kumiko.");
+      await d.driver.stop();
+    });
+
+    it("lets go of a call Claude cancels", async () => {
+      const d = await drive();
+      const h = host();
+      d.driver.start({ sandbox: "test", workdir: d.home, env: [], prompt: "widget wait {}", tools: h.tools });
+      await d.waitFor(() => h.calls.length === 1);
+      d.driver.interrupt();
+      assert.equal((await d.waitFor(() => d.results()[0])).subtype, "error_during_execution");
+      assert.ok(h.calls[0].ctx.signal.aborted);
+      await d.driver.stop();
+    });
+
+    it("leaves a call it hasn't answered for the next driver to answer", async () => {
+      const d = await drive();
+      const h = host();
+      d.driver.start({ sandbox: "test", workdir: d.home, env: [], prompt: "widget wait {}", tools: h.tools, run: "t3-a" });
+      await d.waitFor(() => h.calls.length === 1);
+      await d.driver.detach();
+      const pending = d.driver.pendingCalls();
+      assert.equal(pending.length, 1);
+      assert.equal(pending[0].message.method, "tools/call");
+      h.release();
+
+      const e = await drive({}, { exec: { exec: d.exec, home: d.home } });
+      const h2 = host();
+      e.driver.attach({ sandbox: "test", ...d.driver.position()!, tools: h2.tools, pending });
+      await e.waitFor(() => h2.calls.length === 1);
+      h2.release();
+      assert.equal((await e.waitFor(() => e.results()[0])).result, "wait: done");
+      await e.driver.stop();
+    });
+
+    it("answers the calls under way before letting go, and hands on only what follows", async () => {
+      const d = await drive();
+      const h = host();
+      d.driver.start({ sandbox: "test", workdir: d.home, env: [], prompt: `widget slow {"text":"drained"}`, tools: h.tools, run: "t4-a" });
+      await d.waitFor(() => h.calls.length === 1);
+      // Let go while the call is under way: it is answered first, so nothing is left for the next driver.
+      await d.driver.detach();
+      assert.deepEqual(d.driver.pendingCalls(), []);
+      const e = await drive({}, { exec: { exec: d.exec, home: d.home } });
+      e.driver.attach({ sandbox: "test", ...d.driver.position()!, tools: host().tools });
+      // The answer reached Claude, which finished the turn while no driver was attached.
+      assert.equal((await e.waitFor(() => e.results()[0])).result, "slow: drained");
+      await e.driver.stop();
+    });
+
+    it("puts the config and the system prompt in the command, quoted", () => {
+      const cmd = claudeCommand(undefined, undefined, undefined, undefined, { tools: true, appendSystemPrompt: "It's here." });
+      assert.ok(cmd.includes(`--mcp-config '${mcpConfig()}'`));
+      assert.ok(cmd.includes(`--append-system-prompt 'It'\\''s here.'`));
+      assert.equal(claudeCommand(undefined, undefined, undefined, undefined, {}), CLAUDE_COMMAND);
     });
   });
 });

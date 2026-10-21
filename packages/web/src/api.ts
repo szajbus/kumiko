@@ -24,13 +24,25 @@ import type {
   SessionInfo,
   StartSessionRequest,
   TemplatesResponse,
+  WindowState,
   WorktreesResponse,
 } from "@kumiko/shared";
 
 declare global {
   interface Window {
     /** Exposed by the Electron preload; absent in a plain browser. */
-    kumiko?: { pickFolder(): Promise<string | null>; platform: string; getZoomFactor?(): number; onCloseTab?(cb: (deleteToo: boolean) => void): () => void };
+    kumiko?: {
+      pickFolder(): Promise<string | null>;
+      platform: string;
+      getZoomFactor?(): number;
+      onCloseTab?(cb: (deleteToo: boolean) => void): () => void;
+      /** A PNG, in base64, of part of the window, in page coordinates. */
+      capture?(rect: { x: number; y: number; width: number; height: number }): Promise<string>;
+      /** A PNG, in base64, of what a <webview> in the window shows, by its web contents' id. */
+      captureWebview?(id: number): Promise<string>;
+      /** Calls back when the app blocks a page a <webview> was to show; returns a function that stops listening. */
+      onPageBlocked?(cb: (webContentsId: number, url: string) => void): () => void;
+    };
   }
 }
 
@@ -92,6 +104,25 @@ export const api = {
   /** The Claude account behind a session and how much of its subscription is used. */
   usage: (id: string) => request<AccountUsage>("GET", `/api/sessions/${id}/usage`),
   interrupt: (id: string) => request("POST", `/api/sessions/${id}/interrupt`),
+  /** Closes one of the session window's slots; its widget stays, hidden. */
+  closeSlot: (id: string, slot: string) => request<WindowState>("POST", `/api/sessions/${id}/window/close`, { slot }),
+  /**
+   * Shows a widget in `slot`, swapping with the slot that shows it now, or with `split`, in a new slot split off `slot`
+   * that way; with neither, where a new artifact would go.
+   */
+  showWidget: (id: string, widget: string, slot?: string, split?: "right" | "below") =>
+    request<WindowState>("POST", `/api/sessions/${id}/window/show`, { widget, slot, split }),
+  /** Moves a slot to a side of another, or swaps the two. */
+  moveSlot: (id: string, slot: string, to: string, side: string) => request<WindowState>("POST", `/api/sessions/${id}/window/move`, { slot, to, side }),
+  /** Answers a pane request: with a picture, with nothing once done, or with why it couldn't be done. */
+  answerPane: (id: string, answer: { request: string; data?: string; mimeType?: string; error?: string; note?: string }) =>
+    request("POST", `/api/sessions/${id}/window/answer`, answer),
+  /** Allows an external site Claude opened, which then loads, or denies it, which takes it out of the window. */
+  approveSite: (id: string, widget: string, allow: boolean) => request<WindowState>("POST", `/api/sessions/${id}/window/approve`, { widget, allow }),
+  /** Takes a widget out of the window; a pane showing it shows another artifact, or closes. */
+  removeWidget: (id: string, widget: string) => request<WindowState>("POST", `/api/sessions/${id}/window/remove`, { widget }),
+  /** Sets the share of the first side of the split at `path`. */
+  resizeSplit: (id: string, path: string, ratio: number) => request<WindowState>("POST", `/api/sessions/${id}/window/resize`, { path, ratio }),
   /** Saved sessions that aren't open, most recent first. */
   resumable: () => request<ResumableSession[]>("GET", "/api/sessions/resumable"),
   /** Reopens a saved session with its chat; returns the same id. */
@@ -142,7 +173,8 @@ export function useLiveState(): LiveState {
       };
       ws.onmessage = (msg) => {
         const ev = JSON.parse(String(msg.data)) as ServerEvent;
-        setState((s) => apply(s, ev));
+        if (ev.type === "pane") for (const l of paneListeners) l(ev);
+        else setState((s) => apply(s, ev));
       };
       ws.onclose = () => {
         setState((s) => ({ ...s, connected: false }));
@@ -160,6 +192,15 @@ export function useLiveState(): LiveState {
   }, []);
 
   return state;
+}
+
+export type PaneRequest = Extract<ServerEvent, { type: "pane" }>;
+const paneListeners = new Set<(ev: PaneRequest) => void>();
+
+/** Listens for the server asking, for Claude, to reload or capture a pane; returns a function that stops listening. */
+export function onPaneRequest(listener: (ev: PaneRequest) => void): () => void {
+  paneListeners.add(listener);
+  return () => paneListeners.delete(listener);
 }
 
 function apply(s: LiveState, ev: ServerEvent): LiveState {

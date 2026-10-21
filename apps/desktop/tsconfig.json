@@ -8,5 +8,5 @@
     "declaration": true
   },
   "include": ["src"],
-  "references": [{ "path": "../../packages/server" }]
+  "references": [{ "path": "../../packages/server" }, { "path": "../../packages/shared" }]
 }

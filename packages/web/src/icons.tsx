@@ -1,5 +1,7 @@
 // Icons from the design, drawn at their native sizes.
 
+import type { ArtifactType } from "@kumiko/shared";
+
 const HEX = "50,10 84.64,30 84.64,70 50,90 15.36,70 15.36,30";
 const SPOKES = "M50 50L50 10M50 50L84.64 30M50 50L84.64 70M50 50L50 90M50 50L15.36 70M50 50L15.36 30";
 const LEAVES =
@@ -159,3 +161,36 @@ export const Quote = () => (
     <path d="M3.5 3.5v9M6.5 5.5h6M6.5 8h6M6.5 10.5h4" {...stroke} />
   </svg>
 );
+
+/** What kind of artifact an entry is. SVG and images share the picture: to the user, both are pictures. */
+export function ArtifactIcon({ type }: { type: ArtifactType }) {
+  const path = {
+    // A page with lines of text.
+    markdown: "M4.5 2.5h5l2.5 2.5v8.5h-7.5zM9.5 2.5V5H12M6.5 8h3.5M6.5 10.5h3.5",
+    // Boxes joined by lines.
+    mermaid: "M2.5 3h4v3h-4zM9.5 10h4v3h-4zM4.5 6v5.5h5M11.5 6V3.5h-5",
+    // A frame with a hill and a sun.
+    svg: "M2.5 3.5h11v9h-11zM2.5 11l3.5-3.5 3 3 2-2 2.5 2.5M10.5 6.25a.75.75 0 1 0 0-.01",
+    image: "M2.5 3.5h11v9h-11zM2.5 11l3.5-3.5 3 3 2-2 2.5 2.5M10.5 6.25a.75.75 0 1 0 0-.01",
+    // Angle brackets and a slash.
+    html: "M5.5 4.5L2.5 8l3 3.5M10.5 4.5l3 3.5-3 3.5M9 3.5l-2 9",
+    // A screen on a stand: a page running on this machine.
+    preview: "M2.5 3h11v7.5h-11zM6 13.5h4M8 10.5v3",
+    // A globe.
+    web: "M8 2.5a5.5 5.5 0 1 0 0 11a5.5 5.5 0 1 0 0-11M2.5 8h11M8 2.5c-2 2-2 9 0 11M8 2.5c2 2 2 9 0 11",
+  }[type];
+  return (
+    <svg className="artifact-type" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <path d={path} {...stroke} />
+    </svg>
+  );
+}
+
+/** A box with an arrow out of its corner: open in a new window, here a new pane. */
+export const OpenNew = () => (
+  <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M12.5 9v3a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 12V5A1.5 1.5 0 0 1 4 3.5h3" {...stroke} />
+    <path d="M9.5 2.5h4v4M13.5 2.5L7.5 8.5" {...stroke} />
+  </svg>
+);
+

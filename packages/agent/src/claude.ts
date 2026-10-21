@@ -1,7 +1,8 @@
 import type { ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { eachLine } from "@kumiko/sandbox";
+import { eachLine, shellQuote } from "@kumiko/sandbox";
 import type { AgentDriver, AgentEvent, AgentFile, AgentMessage, AttachOptions, Exec, RunPosition, StartOptions } from "./driver.js";
+import { mcpConfig, ToolBridge, type PendingCall } from "./tools.js";
 import { ATTACHED, attachCommand, closeInputCommand, execOutput, launchCommand, removeCommand, RUN_EXIT_TYPE, RUN_GONE, RUN_LOST, signalCommand, stderrCommand } from "./runs.js";
 
 /**
@@ -24,11 +25,14 @@ const SESSION_ID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
 /**
  * The command that starts Claude, continuing session `resume` (as a copy, with `fork`) when given. With `resumeAt`
- * (the id of one of that session's messages) the conversation is cut after that message.
+ * (the id of one of that session's messages) the conversation is cut after that message. With `tools`, Claude reaches
+ * the tools the driver hosts; `appendSystemPrompt` is added to its system prompt.
  */
-export function claudeCommand(resume?: string, fork?: boolean, resumeAt?: string, model?: string): string {
+export function claudeCommand(resume?: string, fork?: boolean, resumeAt?: string, model?: string, extra: { tools?: boolean; appendSystemPrompt?: string } = {}): string {
   if (model !== undefined && !MODEL_ALIAS.test(model)) throw new Error(`Not a model: ${model}`);
-  const base = model ? `${CLAUDE_COMMAND} --model ${model}` : CLAUDE_COMMAND;
+  let base = model ? `${CLAUDE_COMMAND} --model ${model}` : CLAUDE_COMMAND;
+  if (extra.tools) base += ` --mcp-config ${shellQuote(mcpConfig())}`;
+  if (extra.appendSystemPrompt) base += ` --append-system-prompt ${shellQuote(extra.appendSystemPrompt)}`;
   if (resume === undefined) return base;
   if (!SESSION_ID.test(resume)) throw new Error(`Not a Claude session id: ${resume}`);
   if (resumeAt !== undefined && !SESSION_ID.test(resumeAt)) throw new Error(`Not a Claude message id: ${resumeAt}`);
@@ -39,6 +43,8 @@ const STDERR_TAIL = 20;
 const REQUEST_TIMEOUT_MS = 15_000;
 /** Waits between attempts to attach again after an attachment drops, in ms; the last repeats. */
 const REATTACH_MS = [250, 500, 1000, 2000, 5000];
+/** How long a detach waits for calls under way to be answered before leaving them pending, in ms. */
+const DRAIN_MS = 5000;
 /** How long a stop or a detach waits for the sandbox before giving up on it, after the grace period, in ms. */
 const GIVE_UP_MS = 4000;
 
@@ -100,6 +106,8 @@ export class ClaudeDriver implements AgentDriver {
   private detaching = false;
   /** Nothing more will be reported: Claude exited, or the driver detached. */
   private done = false;
+  /** Letting go: nothing more of Claude's output is read, so the position stands for the next driver. */
+  private frozen = false;
   private exited?: Promise<void>;
   private resolveExited!: () => void;
   private retry?: NodeJS.Timeout;
@@ -109,6 +117,8 @@ export class ClaudeDriver implements AgentDriver {
   private requests = 0;
   /** Control requests waiting for Claude's answer, by request id. */
   private pending = new Map<string, { resolve(): void; reject(err: Error): void }>();
+  /** Answers Claude's calls to the caller's tools, if it was given any. */
+  private tools?: ToolBridge;
   private readonly graceMs: number;
   private readonly owner?: string;
 
@@ -135,20 +145,27 @@ export class ClaudeDriver implements AgentDriver {
     return this.run ? { run: this.run, offset: this.offset } : undefined;
   }
 
-  start({ sandbox, workdir, env, prompt, promptId, files, resume, fork, resumeAt, model, run }: StartOptions): void {
+  start({ sandbox, workdir, env, prompt, promptId, files, resume, fork, resumeAt, model, run, tools, appendSystemPrompt }: StartOptions): void {
     if (this.sandbox) throw new Error("This driver has already started.");
     const runId = run ?? `run-${randomBytes(6).toString("hex")}`;
-    const command = launchCommand(runId, claudeCommand(resume, fork, resumeAt, model), this.owner);
+    const command = launchCommand(runId, claudeCommand(resume, fork, resumeAt, model, { tools: Boolean(tools), appendSystemPrompt }), this.owner);
+    if (tools) this.tools = new ToolBridge(tools, (line) => this.write(line));
     this.begin(sandbox, runId, 0);
     this.connect(this.exec(sandbox, command, env, { cwd: workdir }), true);
     if (prompt !== undefined) this.send(prompt, promptId, files);
   }
 
-  attach({ sandbox, run, offset }: AttachOptions): void {
+  attach({ sandbox, run, offset, tools, pending }: AttachOptions): void {
     if (this.sandbox) throw new Error("This driver has already started.");
     const command = attachCommand(run, offset);
+    if (tools) this.tools = new ToolBridge(tools, (line) => this.write(line));
     this.begin(sandbox, run, offset);
     this.connect(this.exec(sandbox, command, []), false);
+    if (pending?.length) this.tools?.rerun(pending);
+  }
+
+  pendingCalls(): PendingCall[] {
+    return this.tools?.pending() ?? [];
   }
 
   private begin(sandbox: string, run: string, offset: number) {
@@ -173,7 +190,7 @@ export class ClaudeDriver implements AgentDriver {
     child.stdout!.on("data", (chunk: Buffer) => {
       buf = buf.length ? Buffer.concat([buf, chunk]) : chunk;
       let i: number;
-      while (this.child === child && !this.done && (i = buf.indexOf(10)) >= 0) {
+      while (this.child === child && !this.done && !this.frozen && (i = buf.indexOf(10)) >= 0) {
         const line = buf.subarray(0, i).toString("utf8");
         buf = buf.subarray(i + 1);
         this.offset += i + 1;
@@ -235,6 +252,7 @@ export class ClaudeDriver implements AgentDriver {
       return;
     }
     if (payload.type === "control_response" && this.answer(payload)) return;
+    if (this.tools?.handle(payload)) return;
     this.emit({ kind: "message", payload });
     // Signed out, Claude still answers each turn, with an error result rather than an exit.
     if (payload.type === "result" && payload.is_error === true && SIGNED_OUT.test(String(payload.result ?? ""))) {
@@ -275,6 +293,8 @@ export class ClaudeDriver implements AgentDriver {
   /** Nothing answers a request once the driver is done; `stop()` and `detach()` resolve. */
   private settle() {
     this.done = true;
+    if (this.detaching) this.tools?.release();
+    else this.tools?.close();
     for (const p of this.pending.values()) p.reject(new Error(this.detaching ? "Detached from Claude." : "Claude exited."));
     this.pending.clear();
     this.resolveExited();
@@ -351,15 +371,29 @@ export class ClaudeDriver implements AgentDriver {
     await this.removed;
   }
 
+  /**
+   * Lets go of Claude, handing over exactly: nothing more of its output is read, so the position stands and whatever
+   * follows it (calls too) is the next driver's; calls under way are answered (for up to DRAIN_MS; the rest stay
+   * pending); then Claude's input is closed, and the attachment's exit says everything written reached it. Only if the
+   * attachment has to be killed, or there is none, may answers have been lost: those calls are handed on too.
+   */
   async detach(): Promise<void> {
     if (!this.exited || this.done) return this.exited;
+    this.frozen = true;
+    await this.tools?.drain(DRAIN_MS);
     this.detaching = true;
     clearTimeout(this.retry);
     const child = this.child;
-    if (!child) return this.settle();
+    if (!child) {
+      if (this.outbox.length) this.tools?.answersMayBeLost();
+      return this.settle();
+    }
     // EOF ends the attachment in the sandbox; Claude, holding its own input open, doesn't notice.
     child.stdin!.end();
-    const kill = setTimeout(() => child.kill("SIGKILL"), GIVE_UP_MS);
+    const kill = setTimeout(() => {
+      this.tools?.answersMayBeLost();
+      child.kill("SIGKILL");
+    }, GIVE_UP_MS);
     try {
       await this.exited;
     } finally {

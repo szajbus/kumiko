@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -13,7 +14,12 @@ import {
   NAME_PATTERN,
   parseSavedTabs,
   SESSION_ID_PATTERN,
+  artifactsOf,
+  nextId,
+  slotOf,
+  urlOrigin,
   vmName,
+  WindowError,
   type ApiError,
   type CreateProjectRequest,
   type CreateResponse,
@@ -36,10 +42,13 @@ import {
   type SessionInfo,
   type StartSessionRequest,
   type TemplatesResponse,
+  type ArtifactState,
+  type Side,
+  type WindowOp,
   type WorktreesResponse,
 } from "@kumiko/shared";
 import { LimaProvider, validateSpec, type Log, type SandboxProvider } from "@kumiko/sandbox";
-import { ClaudeDriver, Runs, type AgentDriver } from "@kumiko/agent";
+import { ClaudeDriver, execOutput, Runs, type AgentDriver } from "@kumiko/agent";
 import { AttachmentRefused, AttachmentStore } from "./attachments.js";
 import { GitError, worktreeStatuses } from "./git.js";
 import { isLocalRequest } from "./guard.js";
@@ -48,6 +57,7 @@ import { BusyError, Operations } from "./operations.js";
 import { homeId, lockHome } from "./home.js";
 import { defaultKumikoHome, ProjectExists, ProjectRecordError, ProjectStore } from "./projects.js";
 import { RewindRefused, SessionEnded, SessionNotFound, SessionNotResumable, Sessions } from "./sessions.js";
+import { docSlotTarget, Widgets, type PaneAnswer } from "./widgets.js";
 import { SessionStore, type StoredSession } from "./store.js";
 import { TabsStore } from "./tabs.js";
 import { serveWeb } from "./static.js";
@@ -117,7 +127,42 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   const attachments = new AttachmentStore(join(sessionStore.dir, "attachments"));
   await attachments.sweep((await sessionStore.readAll()).flatMap((s) => s.events));
   const tabs = new TabsStore(opts.dataDir);
-  const sessions = new Sessions(opts.driver ?? (() => new ClaudeDriver(provider.exec.bind(provider), { owner })), sessionStore);
+  // Windows' widgets map the paths Claude names in its VM to the host: the project's mounts, and the VM user's home.
+  const widgets = new Widgets({
+    home: (sandbox) => {
+      const p = projectList.find((x) => x.id === sandbox);
+      return p && { claudeHome: projects.claudeHome(p.id), roots: [p.clonePath, p.worktreesPath] };
+    },
+    vmHome: (sandbox) => execOutput(provider.exec.bind(provider), sandbox, `printf %s "$HOME"`, 10_000),
+    pane: (session, slot, what) => askPane(session, slot, what),
+    reachable: async (url) => {
+      try {
+        await fetch(url, { method: "GET", signal: AbortSignal.timeout(3000), redirect: "manual" });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  });
+  // What Claude asked of the windows' panes (a reload, a picture), by request id, until one answers.
+  const paneRequests = new Map<string, { resolve(answer: PaneAnswer): void; reject(err: Error): void }>();
+  /** How long the server waits for a window's answer: a reload and a wait of up to 10 s each, and the picture. */
+  const PANE_MS = 30_000;
+  const askPane = (session: string, slot: string, what: { reload: boolean; capture: boolean; wait: number }) =>
+    new Promise<PaneAnswer>((resolve, reject) => {
+      const request = randomUUID();
+      const timer = setTimeout(() => {
+        paneRequests.delete(request);
+        reject(new Error("No window answered: the user needs this session's tab open and on screen in the Kumiko app. Ask them to look at it, then try again."));
+      }, PANE_MS);
+      paneRequests.set(request, {
+        resolve: (answer) => (clearTimeout(timer), paneRequests.delete(request), resolve(answer)),
+        reject: (err) => (clearTimeout(timer), paneRequests.delete(request), reject(err)),
+      });
+      broadcast({ type: "pane", session, slot, request, ...what });
+    });
+  const sessions = new Sessions(opts.driver ?? (() => new ClaudeDriver(provider.exec.bind(provider), { owner })), sessionStore, widgets);
+  widgets.sessions = sessions;
   const runs = opts.runs ?? new Runs(provider.exec.bind(provider), owner);
   const clients = new Set<WebSocket>();
   const usage = new UsageCache(
@@ -279,7 +324,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
 
   app.onError((err, c) => {
     if (err instanceof HttpError) return c.json(fail(err.message, err.details), err.status);
-    if (err instanceof AttachmentRefused) return c.json(fail(err.message), 400);
+    if (err instanceof AttachmentRefused || err instanceof WindowError) return c.json(fail(err.message), 400);
     if (err instanceof LoginFailed) return c.json(fail(err.message, err.output), 422);
     if (err instanceof BusyError || err instanceof ProjectExists || err instanceof ProjectRecordError) return c.json(fail(err.message), 409);
     if (err instanceof SessionNotFound) return c.json(fail(err.message), 404);
@@ -288,8 +333,11 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     return c.json(fail(err instanceof Error ? err.message : String(err)), 500);
   });
 
+  /** The port the server listens on, which a browser's requests must come from (see `isLocalRequest`). */
+  const ownPort = () => (server.address() as AddressInfo).port;
+
   app.use("/api/*", async (c, next) => {
-    if (!isLocalRequest(c.req.raw.headers)) return c.json(fail("Forbidden: not a local request."), 403);
+    if (!isLocalRequest(c.req.raw.headers, ownPort())) return c.json(fail("Forbidden: not a local request."), 403);
     await next();
   });
 
@@ -332,6 +380,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     if (info.status !== "running") throw new HttpError(409, `${vmName(id)} is not running. Start it first.`);
     assertIdle(id);
     await projects.writeManaged(project);
+    await widgets.prepare(id);
     return { workdir: project.clonePath, env: info.meta?.spec.env ?? [] };
   };
 
@@ -694,6 +743,99 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     return c.json({ ok: true });
   });
 
+  // The user closing one of the window's slots, or showing a widget again. Claude's tools change the window too, but
+  // not through here. Either may change which files are watched, and a widget shown again may have changed while hidden.
+  app.post("/api/sessions/:id/window/close", async (c) => {
+    const req = await c.req.json<{ slot?: unknown }>().catch(() => ({}) as { slot?: unknown });
+    if (typeof req.slot !== "string" || !req.slot) throw new HttpError(400, "Which slot to close?");
+    const { id } = sessionOf(c);
+    const w = sessions.changeWindow(id, { type: "close", slot: req.slot });
+    void widgets.refresh(id);
+    return c.json(w);
+  });
+
+  // The user rearranging the window: a slot to a side of another, or swapped with it; and a split dragged to a new size.
+  const SIDES = ["left", "right", "above", "below", "swap"];
+  app.post("/api/sessions/:id/window/move", async (c) => {
+    const req = await c.req.json<{ slot?: unknown; to?: unknown; side?: unknown }>().catch(() => ({}) as { slot?: unknown; to?: unknown; side?: unknown });
+    if (typeof req.slot !== "string" || typeof req.to !== "string" || typeof req.side !== "string" || !SIDES.includes(req.side)) {
+      throw new HttpError(400, `Body must be JSON: { slot, to, side }, side one of ${SIDES.join(", ")}.`);
+    }
+    return c.json(sessions.changeWindow(sessionOf(c).id, { type: "move", slot: req.slot, to: req.to, side: req.side as Side | "swap" }));
+  });
+
+  // A window answering a pane request: the picture, nothing (a reload alone), or why it couldn't. The first answer wins.
+  app.post("/api/sessions/:id/window/answer", async (c) => {
+    type Answer = { request?: unknown; data?: unknown; mimeType?: unknown; error?: unknown; note?: unknown };
+    const req = await c.req.json<Answer>().catch(() => ({}) as Answer);
+    const waiting = typeof req.request === "string" ? paneRequests.get(req.request) : undefined;
+    if (!waiting) return c.json({ ok: false }, 404);
+    const note = typeof req.note === "string" ? req.note.slice(0, 2000) : undefined;
+    if (typeof req.error === "string") waiting.reject(new Error(req.error));
+    else if (typeof req.data === "string" && typeof req.mimeType === "string" && /^image\/(png|jpeg)$/.test(req.mimeType)) waiting.resolve({ image: { data: req.data, mimeType: req.mimeType }, note });
+    else waiting.resolve({ note });
+    return c.json({ ok: true });
+  });
+
+  // The user allowing an external site Claude opened, which then loads, along with any other page of the same site
+  // waiting; or denying it, which takes the page out of the window.
+  app.post("/api/sessions/:id/window/approve", async (c) => {
+    const req = await c.req.json<{ widget?: unknown; allow?: unknown }>().catch(() => ({}) as { widget?: unknown; allow?: unknown });
+    if (typeof req.widget !== "string" || typeof req.allow !== "boolean") throw new HttpError(400, "Body must be JSON: { widget, allow }.");
+    const { id } = sessionOf(c);
+    const w = sessions.window(id)!;
+    const site = w.widgets[req.widget]?.state as ArtifactState | undefined;
+    if (w.widgets[req.widget]?.kind !== "artifact" || site?.type !== "web") throw new HttpError(400, `${req.widget} isn't a website waiting to be allowed.`);
+    let after = w;
+    // Denied, it's as if it never opened: its pane goes back to what it showed, or closes.
+    if (!req.allow) after = (await widgets.remove(id, req.widget, "close")).window;
+    else {
+      const origin = urlOrigin(site.path);
+      for (const [widget, a] of artifactsOf(w)) {
+        if (a.type === "web" && !a.approved && urlOrigin(a.path) === origin) after = sessions.changeWindow(id, { type: "update", widget, op: { approved: true } });
+      }
+    }
+    return c.json(after);
+  });
+
+  // The user taking an artifact out of the window; a pane showing it shows another instead, or closes.
+  app.post("/api/sessions/:id/window/remove", async (c) => {
+    const req = await c.req.json<{ widget?: unknown }>().catch(() => ({}) as { widget?: unknown });
+    if (typeof req.widget !== "string" || !req.widget) throw new HttpError(400, "Which widget to remove?");
+    const { id } = sessionOf(c);
+    const w = sessions.window(id)!;
+    if (!w.widgets[req.widget]) throw new HttpError(400, `There is no widget ${req.widget}.`);
+    const { window: after } = await widgets.remove(id, req.widget, "another");
+    return c.json(after);
+  });
+
+  app.post("/api/sessions/:id/window/resize", async (c) => {
+    const req = await c.req.json<{ path?: unknown; ratio?: unknown }>().catch(() => ({}) as { path?: unknown; ratio?: unknown });
+    if (typeof req.path !== "string" || typeof req.ratio !== "number") throw new HttpError(400, "Body must be JSON: { path, ratio }.");
+    return c.json(sessions.changeWindow(sessionOf(c).id, { type: "resize", path: req.path, ratio: req.ratio }));
+  });
+
+  // In `slot`, swapping with the slot that shows it now, if any; with `split`, in a new slot split off `slot` that way;
+  // without either, where Claude's artifact_open would put it.
+  app.post("/api/sessions/:id/window/show", async (c) => {
+    type ShowRequest = { widget?: unknown; slot?: unknown; split?: unknown };
+    const req = await c.req.json<ShowRequest>().catch(() => ({}) as ShowRequest);
+    if (typeof req.widget !== "string" || !req.widget) throw new HttpError(400, "Which widget to show?");
+    if (req.slot !== undefined && (typeof req.slot !== "string" || !req.slot)) throw new HttpError(400, "Which slot to show it in?");
+    if (req.split !== undefined && req.split !== "right" && req.split !== "below") throw new HttpError(400, 'split is "right" or "below".');
+    const { id } = sessionOf(c);
+    const w = sessions.window(id)!;
+    if (!req.slot && !req.split && slotOf(w, req.widget)) return c.json(w);
+    const target = req.split ? undefined : req.slot ? { slot: req.slot } : docSlotTarget(w);
+    const op: WindowOp =
+      target && "slot" in target
+        ? { type: "show", slot: target.slot, widget: req.widget }
+        : { type: "split", place: { split: req.split === "below" ? "below" : "right", ...(req.split && req.slot ? { of: req.slot } : {}) }, slot: nextId(w, "s"), widget: req.widget };
+    const shown = sessions.changeWindow(id, op);
+    void widgets.refresh(id);
+    return c.json(shown);
+  });
+
   app.post("/api/sessions/:id/interrupt", (c) => {
     sessions.interrupt(sessionOf(c).id);
     return c.json({ ok: true }, 202);
@@ -719,7 +861,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     const url = new URL(req.url ?? "/", "http://localhost");
     const sessionId = /^\/api\/sessions\/([^/]+)\/events$/.exec(url.pathname)?.[1];
     // An unknown session is accepted and closed with 4404, which a browser can see; an HTTP 404 would look like a network error.
-    if ((url.pathname !== "/api/events" && !(sessionId && SESSION_ID_PATTERN.test(sessionId))) || !isLocalRequest(req.headers)) {
+    if ((url.pathname !== "/api/events" && !(sessionId && SESSION_ID_PATTERN.test(sessionId))) || !isLocalRequest(req.headers, ownPort())) {
       socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
       socket.destroy();
       return;
@@ -753,7 +895,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     else send({ kind: "caught_up", buffer: current! });
   };
 
-  const port = (server.address() as AddressInfo).port;
+  const port = ownPort();
   await lock.setPort(port);
   return {
     url: `http://${host}:${port}`,
@@ -765,6 +907,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       if (endSessions) await sessions.endAll("quit");
       else await sessions.detachAll();
       await sessions.flush();
+      widgets.close();
       for (const ws of clients) ws.terminate();
       // Closed rather than terminated, so each tab still gets its session's last event.
       for (const ws of sessionSockets) ws.close(1001, "server closing");

@@ -9,7 +9,7 @@ import { Header, type NewSessionTab, type TabId } from "./Header";
 import { NewSession } from "./NewSession";
 import { ProjectList } from "./ProjectList";
 import { ProjectPage } from "./ProjectPage";
-import { SessionView } from "./SessionView";
+import { Window } from "./Window";
 import { landingAfterClose } from "./landing";
 import { arrange, moveTab, replaceTab } from "./order";
 import { loadTabs, saveTabs } from "./tabs";
@@ -457,7 +457,7 @@ function Body({ route, live, started, onSessionStarted }: BodyProps) {
       const s = live.sessions.find((x) => x.id === route.id);
       if (!live.loaded || (!s && started.has(route.id))) return null;
       if (!s) return <Redirect to="#/" />;
-      return <SessionView key={s.id} session={s} onForked={(id) => onSessionStarted(id)} />;
+      return <Window key={s.id} session={s} onForked={(id) => onSessionStarted(id)} />;
     }
     default:
       return <ProjectList live={live} onOpen={(name) => go(`#/project/${name}`)} onNew={() => go("#/new")} />;

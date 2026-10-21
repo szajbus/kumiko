@@ -1,4 +1,5 @@
 import type { SandboxProvider } from "@kumiko/sandbox";
+import type { PendingCall, ToolHost } from "./tools.js";
 
 /** How a driver runs its agent: the base provider's `exec`, so the sandbox's forwarded variables apply. */
 export type Exec = SandboxProvider["exec"];
@@ -25,6 +26,10 @@ export interface StartOptions {
   model?: string;
   /** The id of the run the agent starts in; a new one is made up when omitted. See `runs.ts`. */
   run?: string;
+  /** Tools the caller hosts for the agent; see `tools.ts`. */
+  tools?: ToolHost;
+  /** Added to the agent's system prompt. */
+  appendSystemPrompt?: string;
 }
 
 /** Where to pick up an agent that is already running: its run, and how far into its output the caller has got. */
@@ -33,6 +38,10 @@ export interface AttachOptions {
   run: string;
   /** Bytes of the run's output already consumed; what follows is reported as if live. */
   offset: number;
+  /** The tools the agent was started with, which it may call again. */
+  tools?: ToolHost;
+  /** Calls to them the driver that detached left unanswered, to answer now. */
+  pending?: PendingCall[];
 }
 
 /** A driver's place in its run's output: everything before `offset` has been reported. */
@@ -86,6 +95,8 @@ export interface AgentDriver {
   stop(): Promise<void>;
   /** Lets go of the agent and leaves it running, to be attached to again from `position()`. Reports nothing more. */
   detach(): Promise<void>;
+  /** Calls to the caller's tools the agent is waiting on; after a detach, the ones the next driver should answer. */
+  pendingCalls(): PendingCall[];
   /** Returns a function that removes the listener. */
   onEvent(listener: (ev: AgentEvent) => void): () => void;
 }
