@@ -14,9 +14,10 @@ export interface SandboxProvider {
   delete(name: string, log: Log): Promise<void>;
   /**
    * Checks an edit before `edit`: errors block it (e.g. resources changed while running), warnings don't.
-   * With `recreate`, the VM is rebuilt from the result, so only the spec itself has to be valid.
+   * With `recreate`, the VM is rebuilt from the result, so only the spec itself has to be valid. With `restart`, the VM
+   * is stopped before the edit, so resources and mounts can change while it runs.
    */
-  validateEdit(name: string, patch: EditSpec, opts?: { recreate?: boolean }): Promise<Validation>;
+  validateEdit(name: string, patch: EditSpec, opts?: { recreate?: boolean; restart?: boolean }): Promise<Validation>;
   /** Applies an edit: `limactl edit` for resources and mounts, then the stored spec. */
   edit(name: string, patch: EditSpec, log: Log): Promise<void>;
   /** Runs `cmd` in the VM with stdio piped; sessions pass the sandbox's working directory as `cwd`. */

@@ -14,6 +14,7 @@ const OP_LABEL: Record<OpKind, string> = {
   stopping: "Stopping",
   deleting: "Deleting",
   recreating: "Recreating",
+  restarting: "Restarting",
   editing: "Saving changes",
 };
 
@@ -23,6 +24,7 @@ const OP_DONE: Record<OpKind, string> = {
   stopping: "Stopped",
   deleting: "Deleted",
   recreating: "Recreated",
+  restarting: "Restarted",
   editing: "Saved",
 };
 
@@ -32,6 +34,7 @@ const OP_FAILED: Record<OpKind, string> = {
   stopping: "Stop failed",
   deleting: "Delete failed",
   recreating: "Recreate failed",
+  restarting: "Restart failed",
   editing: "Save failed",
 };
 

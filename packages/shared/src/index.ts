@@ -136,7 +136,7 @@ export interface SandboxInfo {
   metaError?: string;
 }
 
-export type OpKind = "creating" | "starting" | "stopping" | "deleting" | "recreating" | "editing";
+export type OpKind = "creating" | "starting" | "stopping" | "deleting" | "recreating" | "restarting" | "editing";
 
 /** How a log line is shown: a command being run, a note from Kumiko, success, or an error. */
 export type LineKind = "cmd" | "note" | "ok" | "err";

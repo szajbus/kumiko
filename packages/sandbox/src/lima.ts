@@ -345,8 +345,8 @@ export class LimaProvider implements SandboxProvider {
     log("Deleted.", "ok");
   }
 
-  async validateEdit(name: string, patch: EditSpec, opts: { recreate?: boolean } = {}): Promise<Validation> {
-    const { errors, warnings, spec } = await this.planEdit(name, patch, opts.recreate);
+  async validateEdit(name: string, patch: EditSpec, opts: { recreate?: boolean; restart?: boolean } = {}): Promise<Validation> {
+    const { errors, warnings, spec } = await this.planEdit(name, patch, opts);
     return { errors, warnings, spec };
   }
 
@@ -369,7 +369,7 @@ export class LimaProvider implements SandboxProvider {
   private async planEdit(
     name: string,
     patch: EditSpec,
-    recreate = false,
+    { recreate = false, restart = false }: { recreate?: boolean; restart?: boolean } = {},
   ): Promise<Validation & { limaArgs: string[]; prepareShells?: boolean }> {
     const vm = vmName(name);
     let meta: SandboxMeta | undefined;
@@ -403,8 +403,8 @@ export class LimaProvider implements SandboxProvider {
     else if (spec.diskGiB * GiB > diskNow) limaArgs.push(`--disk=${spec.diskGiB}`);
     if (!sameMounts(spec.mounts, meta.spec.mounts)) limaArgs.push(spec.mounts.length ? `--set=${mountsExpression(spec.mounts)}` : "--mount-none");
 
-    if (limaArgs.length && toStatus(inst.status) !== "stopped") {
-      errors.push(`Stop ${vm} to change its resources or mounts. Variables and the provisioning script can change while it runs.`);
+    if (limaArgs.length && !restart && toStatus(inst.status) !== "stopped") {
+      errors.push(`Stop ${vm} to change its resources or mounts, or save and restart it. Variables and the provisioning script can change while it runs.`);
     }
     // A stopped VM gets its new working directory on the next start; a running one right after saving.
     const prepareShells = spec.workdir !== (meta.spec.workdir ?? WORKSPACE_DIR) && toStatus(inst.status) === "running";

@@ -387,6 +387,19 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     await provider.stop(p.id, log);
   }));
 
+  /**
+   * Stops the VM (ending its sessions) and starts it again, running `between` while it is stopped. Lima reads its
+   * config on start, so resource and mount changes apply; the disk and what provisioning installed stay.
+   */
+  const restart = async (p: Project, i: SandboxInfo, log: Log, between?: () => Promise<void>) => {
+    await endSessions(p.id, log);
+    if (i.status !== "stopped") await provider.stop(p.id, log);
+    await between?.();
+    await startVm(p, i, log);
+  };
+
+  app.post("/api/projects/:id/restart", action("restarting", (p, i, log) => restart(p, i, log), checkStart));
+
   /** Deletes the project: its VM, its Claude home (login and Claude's history) and its saved sessions. The clone and worktrees stay. */
   app.delete("/api/projects/:id", action("deleting", async (p, _i, log) => {
     await endSessions(p.id, log);
@@ -409,7 +422,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
 
   /**
    * Change resources, extra mounts (VM stopped), forwarded variables or the provisioning script. `mounts` are the extra
-   * ones; the project's own are added back. With `?recreate=1`, delete the VM and create it again from the changed spec.
+   * ones; the project's own are added back. With `?recreate=1`, delete the VM and create it again from the changed spec;
+   * with `?restart=1`, stop it, save, and start it again, so resources and mounts can change while it runs.
    */
   app.patch("/api/projects/:id", async (c) => {
     const id = c.req.param("id");
@@ -419,7 +433,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     const { workdir: _workdir, ...edit } = (raw ?? {}) as EditSpec;
     const patch: EditSpec = Array.isArray(edit.mounts) ? { ...edit, mounts: projects.mounts(project, edit.mounts) } : edit;
     const again = c.req.query("recreate") === "1";
-    if (again) await assertFolders(project);
+    const restarting = !again && c.req.query("restart") === "1";
+    if (again || restarting) await assertFolders(project);
     if (again && info.status === "absent") {
       // Nothing to edit in place: build the VM from the stored spec with the changes.
       const v = await validateSpec({ ...vmSpec(project, info), ...patch, name: id, workdir: project.clonePath }, env());
@@ -427,10 +442,16 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
       ops.start(id, "recreating", (log) => recreate(project, v.spec, log));
       return c.json({ name: id, op: "recreating", warnings: v.warnings }, 202);
     }
-    const v = await provider.validateEdit(id, patch, { recreate: again });
+    const v = await provider.validateEdit(id, patch, { recreate: again, restart: restarting });
     if (v.errors.length) throw new HttpError(400, "Can't apply these changes.", v.errors);
-    const op: OpKind = again ? "recreating" : "editing";
-    ops.start(id, op, (log) => (again ? recreate(project, projects.spec(project, v.spec), log) : provider.edit(id, patch, log)));
+    const op: OpKind = again ? "recreating" : restarting ? "restarting" : "editing";
+    ops.start(id, op, (log) =>
+      again
+        ? recreate(project, projects.spec(project, v.spec), log)
+        : restarting
+          ? restart(project, info, log, () => provider.edit(id, patch, log))
+          : provider.edit(id, patch, log),
+    );
     return c.json({ name: id, op, warnings: v.warnings }, 202);
   });
 

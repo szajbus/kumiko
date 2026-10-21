@@ -65,10 +65,14 @@ export const api = {
   start: (id: string) => request("POST", `/api/projects/${id}/start`),
   stop: (id: string) => request("POST", `/api/projects/${id}/stop`),
   recreate: (id: string) => request("POST", `/api/projects/${id}/recreate`),
+  restart: (id: string) => request("POST", `/api/projects/${id}/restart`),
   remove: (id: string) => request("DELETE", `/api/projects/${id}`),
-  /** Saves in place, or with `recreate` deletes the VM and creates it again from the changed spec. */
-  edit: (id: string, patch: ProjectEdit, recreate = false) =>
-    request<{ warnings: string[] }>("PATCH", `/api/projects/${id}${recreate ? "?recreate=1" : ""}`, patch),
+  /**
+   * Saves in place; with `restart`, stops the VM, saves and starts it again; with `recreate`, deletes the VM and creates it
+   * again from the changed spec.
+   */
+  edit: (id: string, patch: ProjectEdit, how?: "restart" | "recreate") =>
+    request<{ warnings: string[] }>("PATCH", `/api/projects/${id}${how ? `?${how}=1` : ""}`, patch),
   /** The clone's worktrees, as git on the host sees them. */
   worktrees: (id: string) => request<WorktreesResponse>("GET", `/api/projects/${id}/worktrees`),
   startSession: (project: string, prompt: string, model?: string, attachments?: AttachmentInput[]) =>

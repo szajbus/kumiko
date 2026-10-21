@@ -3,18 +3,19 @@ import * as Menu from "@radix-ui/react-dropdown-menu";
 import type { ProjectView } from "@kumiko/shared";
 import { api, errorMessage } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { Dots, Play, Redo, Square, Trash } from "./icons";
+import { Dots, Play, Redo, Restart, Square, Trash } from "./icons";
 import { plural } from "./status";
 
-type Pending = { kind: "delete" | "recreate" | "stop"; sandbox: ProjectView };
+type Pending = { kind: "delete" | "recreate" | "restart" | "stop"; sandbox: ProjectView };
 
 /** What each dialog asks about: deleting takes the whole project, the others only its VM. */
 const TITLES = {
   delete: (p: ProjectView) => `Delete project ${p.name}?`,
   recreate: (p: ProjectView) => `Recreate ${p.vm}?`,
+  restart: (p: ProjectView) => `Restart ${p.vm}?`,
   stop: (p: ProjectView) => `Stop ${p.vm}?`,
 } as const;
-const LABELS = { delete: "Delete project", recreate: "Recreate sandbox", stop: "Stop sandbox" } as const;
+const LABELS = { delete: "Delete project", recreate: "Recreate sandbox", restart: "Restart sandbox", stop: "Stop sandbox" } as const;
 
 /** The line a confirm dialog adds when the project has live agent sessions. */
 export function sessionsNote(sb: ProjectView) {
@@ -25,6 +26,8 @@ export interface Actions {
   start(name: string): void;
   /** Stops at once, or asks first when the project has live sessions. */
   stop(sb: ProjectView): void;
+  /** Restarts at once, or asks first when the project has live sessions. */
+  restart(sb: ProjectView): void;
   askRecreate(sb: ProjectView): void;
   askDelete(sb: ProjectView): void;
   /** The confirm dialog and the error toast; render once per page. */
@@ -53,13 +56,14 @@ export function useActions({ onDeleted }: { onDeleted?(name: string): void } = {
         <ConfirmDialog
           title={TITLES[confirm.kind](confirm.sandbox)}
           confirmLabel={LABELS[confirm.kind]}
-          danger={confirm.kind !== "stop"}
+          danger={confirm.kind === "delete" || confirm.kind === "recreate"}
           onCancel={() => setConfirm(undefined)}
           onConfirm={() => {
             const { kind, sandbox } = confirm;
             setConfirm(undefined);
             if (kind === "recreate") void run(sandbox.name, api.recreate);
             else if (kind === "stop") void run(sandbox.name, api.stop);
+            else if (kind === "restart") void run(sandbox.name, api.restart);
             else void run(sandbox.name, api.remove).then((ok) => ok && onDeleted?.(sandbox.name));
           }}
         >
@@ -78,6 +82,7 @@ export function useActions({ onDeleted }: { onDeleted?(name: string): void } = {
             </p>
           )}
           {confirm.kind === "stop" && <p>The sandbox shuts down. Saved sessions can be resumed once it runs again.</p>}
+          {confirm.kind === "restart" && <p>The sandbox shuts down and starts again, with its disk as it was. Saved sessions can be resumed once it runs.</p>}
           {sessionsNote(confirm.sandbox)}
         </ConfirmDialog>
       )}
@@ -98,13 +103,14 @@ export function useActions({ onDeleted }: { onDeleted?(name: string): void } = {
   return {
     start: (n) => void run(n, api.start),
     stop: (sandbox) => (sandbox.sessions > 0 ? setConfirm({ kind: "stop", sandbox }) : void run(sandbox.name, api.stop)),
+    restart: (sandbox) => (sandbox.sessions > 0 ? setConfirm({ kind: "restart", sandbox }) : void run(sandbox.name, api.restart)),
     askRecreate: (sandbox) => setConfirm({ kind: "recreate", sandbox }),
     askDelete: (sandbox) => setConfirm({ kind: "delete", sandbox }),
     overlay,
   };
 }
 
-/** Start or Stop the VM, plus a menu with Recreate and Delete. `labeled` shows text on the main button. */
+/** Start or Stop the VM, plus a menu with Restart, Recreate and Delete. `labeled` shows text on the main button. */
 export function SandboxActions({ sb, actions, labeled }: { sb: ProjectView; actions: Actions; labeled?: boolean }) {
   const running = sb.status === "running";
   const main = running
@@ -129,6 +135,10 @@ export function SandboxActions({ sb, actions, labeled }: { sb: ProjectView; acti
         </Menu.Trigger>
         <Menu.Portal>
           <Menu.Content className="menu" align="end" sideOffset={6} collisionPadding={8} aria-label={`Actions for ${sb.vm}`}>
+            <Menu.Item className="menu-item" disabled={!running || Boolean(sb.problem)} onSelect={() => actions.restart(sb)}>
+              <Restart />
+              Restart sandbox
+            </Menu.Item>
             <Menu.Item className="menu-item" disabled={Boolean(sb.metaError || sb.problem)} onSelect={() => actions.askRecreate(sb)}>
               <Redo />
               Recreate sandbox

@@ -52,6 +52,14 @@ export const Redo = () => (
   </svg>
 );
 
+/** A circle of arrows: the VM goes down and comes back. */
+export const Restart = () => (
+  <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+    <path d="M11.8 6A5 5 0 0 0 2.6 4.6M2.2 8a5 5 0 0 0 9.2 1.4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    <path d="M2.4 1.8v2.9h2.9M11.6 12.2V9.3H8.7" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
 export const Trash = () => (
   <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
     <path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />

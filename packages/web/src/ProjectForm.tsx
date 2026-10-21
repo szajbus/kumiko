@@ -20,7 +20,7 @@ import { sessionsNote } from "./actions";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { tilde } from "./format";
-import { Cross, Folder, Plus, Redo, Save, Close } from "./icons";
+import { Cross, Folder, Plus, Redo, Restart, Save, Close } from "./icons";
 import { Select, type SelectGroup } from "./Select";
 import { COLORS } from "./status";
 
@@ -84,6 +84,7 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
   const [provision, setProvision] = useState(was?.provision ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [confirmRecreate, setConfirmRecreate] = useState(false);
+  const [confirmRestart, setConfirmRestart] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const [touched, setTouched] = useState(false);
 
@@ -162,22 +163,26 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
     provision: provision.trim() ? provision : undefined,
   });
 
-  /**
-   * Why saving in place won't work, if it won't. Resources and mounts go through `limactl edit`,
-   * which needs the VM stopped and can't shrink the disk; recreating has neither limit.
-   */
-  const inPlaceBlocked = (() => {
-    if (!editing) return undefined;
-    if (editing.status === "absent") return `${editing.vm} doesn't exist, so it can only be created again.`;
+  const diskNow = Math.ceil(editing?.diskGiB ?? was?.diskGiB ?? 0);
+  /** Resources and mounts go through `limactl edit`, which needs the VM stopped: a running one is restarted to save them. */
+  const vmChanged = (() => {
+    if (!editing) return false;
     const s = request();
-    const diskNow = Math.ceil(editing.diskGiB ?? was?.diskGiB ?? 0);
-    const vmChanged =
+    return (
       s.cpus !== (editing.cpus ?? was?.cpus) ||
       s.memoryGiB !== (editing.memoryGiB ?? was?.memoryGiB) ||
       s.diskGiB !== diskNow ||
-      !sameMounts(s.mounts, extraWas);
-    if (s.diskGiB < diskNow) return `Disk can only shrink by recreating; it is ${diskNow} GiB now.`;
-    if (vmChanged && editing.status !== "stopped") return `Stop ${editing.vm} to save resource or mount changes without recreating it.`;
+      !sameMounts(s.mounts, extraWas)
+    );
+  })();
+  const needsRestart = vmChanged && editing?.status === "running";
+
+  /** Why saving in place won't work, if it won't. `limactl edit` can't shrink the disk; recreating has no such limit. */
+  const inPlaceBlocked = (() => {
+    if (!editing) return undefined;
+    if (editing.status === "absent") return `${editing.vm} doesn't exist, so it can only be created again.`;
+    if (Number(disk) < diskNow) return `Disk can only shrink by recreating; it is ${diskNow} GiB now.`;
+    if (vmChanged && !needsRestart && editing.status !== "stopped") return `Stop ${editing.vm} to save resource or mount changes without recreating it.`;
     return undefined;
   })();
 
@@ -198,13 +203,13 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
     else void save();
   };
 
-  const save = async (recreate = false) => {
+  const save = async (how?: "restart" | "recreate") => {
     setSubmitting(true);
     setErrors([]);
     try {
       if (editing) {
         const { cpus, memoryGiB, diskGiB, mounts, env, provision } = request();
-        await api.edit(editing.name, { cpus, memoryGiB, diskGiB, mounts, env, provision: provision ?? "" }, recreate);
+        await api.edit(editing.name, { cpus, memoryGiB, diskGiB, mounts, env, provision: provision ?? "" }, how);
         onCreated(editing.name);
       } else {
         const res = await api.create(request());
@@ -553,8 +558,8 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
                 {/* What the two save buttons do, beside them. */}
                 {editing && (
                   <p className="muted form-note">
-                    <strong>Save</strong> keeps the sandbox: resource and mount changes need it stopped and apply on its next start, and disk can only
-                    grow. <strong>Save and recreate sandbox</strong> deletes the sandbox and builds it again from these settings, provisioning included;
+                    <strong>Save</strong> keeps the sandbox: resource and mount changes apply on its next start, so a running sandbox is restarted
+                    for them, and disk can only grow. <strong>Save and recreate sandbox</strong> deletes the sandbox and builds it again from these settings, provisioning included;
                     Claude's login and history stay.
                   </p>
                 )}
@@ -574,11 +579,13 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
               title={inPlaceBlocked}
               onClick={() => {
                 setTouched(true);
-                void save();
+                if (!needsRestart) void save();
+                else if (editing.sessions > 0) setConfirmRestart(true);
+                else void save("restart");
               }}
             >
-              <Save />
-              Save
+              {needsRestart ? <Restart /> : <Save />}
+              {needsRestart ? "Save and restart sandbox" : "Save"}
             </button>
           )}
           <button type="submit" className="btn btn-primary" disabled={submitting}>
@@ -595,13 +602,27 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
             onCancel={() => setConfirmRecreate(false)}
             onConfirm={() => {
               setConfirmRecreate(false);
-              void save(true);
+              void save("recreate");
             }}
           >
             <p>
               The sandbox and its disk are deleted, then created again from these settings and provisioned from scratch. The clone, its worktrees and the
               project's Claude home are not touched.
             </p>
+            {sessionsNote(editing)}
+          </ConfirmDialog>
+        )}
+        {confirmRestart && editing && (
+          <ConfirmDialog
+            title={`Restart ${editing.vm}?`}
+            confirmLabel="Save and restart sandbox"
+            onCancel={() => setConfirmRestart(false)}
+            onConfirm={() => {
+              setConfirmRestart(false);
+              void save("restart");
+            }}
+          >
+            <p>The sandbox shuts down, takes the new resources and mounts, and starts again with its disk as it was.</p>
             {sessionsNote(editing)}
           </ConfirmDialog>
         )}

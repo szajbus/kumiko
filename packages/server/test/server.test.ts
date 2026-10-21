@@ -266,6 +266,25 @@ describe("server", () => {
     await remove("ed");
   });
 
+  it("restarts a project's VM, saving resources and mounts while it is down", async () => {
+    await create("rs");
+    let since = events.length;
+    assert.equal((await api("/api/projects/rs/restart", { method: "POST" })).status, 202);
+    assert.equal((await finished("rs", "restarting", since)).type, "done");
+    assert.equal((await project("rs"))?.status, "running");
+
+    // A running VM can't take new resources in place, but a restart can, and it comes back running with them.
+    since = events.length;
+    const patch = JSON.stringify({ cpus: 3, mounts: [{ hostPath: mountDir, guestPath: "/data", writable: false }] });
+    assert.equal((await api("/api/projects/rs?restart=1", { method: "PATCH", body: patch })).status, 202);
+    assert.equal((await finished("rs", "restarting", since)).type, "done");
+    const p = (await project("rs"))!;
+    assert.deepEqual([p.status, p.cpus, p.meta?.spec.mounts.at(-1)?.guestPath], ["running", 3, "/data"]);
+    // Disk still can't shrink.
+    assert.equal((await api("/api/projects/rs?restart=1", { method: "PATCH", body: JSON.stringify({ diskGiB: 1 }) })).status, 400);
+    await remove("rs");
+  });
+
   it("shows a project whose VM is missing, and recreates it", async () => {
     process.env.FAKE_LIMA_FAIL_CREATE = "1";
     let created;
