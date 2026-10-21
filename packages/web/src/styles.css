@@ -455,9 +455,10 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 /* A pane's handle: in an artifact's header, and floating in the chat's corner, clearer while the pane is hovered. */
 .pane-grip {
   flex: none; display: flex; align-items: center; justify-content: center; width: 18px; height: 24px; margin-left: -10px;
-  border-radius: 4px; color: var(--muted); cursor: grab; touch-action: none;
+  padding: 0; border: 0; border-radius: 4px; background: none; color: var(--muted); cursor: grab; touch-action: none;
 }
-.pane-grip:hover { background: var(--surface-2); color: var(--text); }
+.pane-grip:hover, .pane-grip[data-state="open"] { background: var(--surface-2); color: var(--text); }
+.window-slot > .pane-grip.is-floating[data-state="open"] { opacity: 1; }
 .pane-grip.is-floating { position: absolute; top: 8px; left: 10px; margin: 0; z-index: 2; opacity: 0.35; transition: opacity 120ms; }
 .window-slot:hover > .pane-grip.is-floating { opacity: 1; }
 

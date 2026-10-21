@@ -1,4 +1,4 @@
-import { artifactsOf, type Layout, type SessionEvent, type Side, type SlotId, type SplitPath, type WidgetId, type WindowState } from "@kumiko/shared";
+import { artifactsOf, WINDOW, type Layout, type SessionEvent, type Side, type SlotId, type SplitPath, type WidgetId, type WindowState } from "@kumiko/shared";
 
 /**
  * The string value of `key` in JSON that may still be streaming in, as far as it has got: `complete` once its closing
@@ -197,6 +197,30 @@ export function windowEdge(x: number, y: number, width: number, height: number):
   const edges: [Side, number][] = [["left", x * width], ["right", (1 - x) * width], ["above", y * height], ["below", (1 - y) * height]];
   const [side, d] = edges.reduce((best, e) => (e[1] < best[1] ? e : best));
   return d < EDGE_PX ? side : undefined;
+}
+
+/**
+ * Where moving `slot` one step towards `side` takes it, as the handle's menu does: past the pane next to it on that
+ * side (the one sharing the most of that edge), or, with none, to that side of the window, unless it spans that
+ * whole side already (undefined: it can't go further).
+ */
+export function stepTowards(rects: ReadonlyMap<SlotId, SlotRect>, slot: SlotId, side: Side): { to: SlotId; side: Side } | undefined {
+  const r = rects.get(slot);
+  if (!r) return undefined;
+  const near = (a: number, b: number) => Math.abs(a - b) < 1e-6;
+  const overlap = (a0: number, a1: number, b0: number, b1: number) => Math.min(a1, b1) - Math.max(a0, b0);
+  let best: { to: SlotId; shared: number } | undefined;
+  for (const [id, o] of rects) {
+    if (id === slot) continue;
+    const touches =
+      side === "left" ? near(o.x + o.w, r.x) : side === "right" ? near(r.x + r.w, o.x) : side === "above" ? near(o.y + o.h, r.y) : near(r.y + r.h, o.y);
+    if (!touches) continue;
+    const shared = side === "left" || side === "right" ? overlap(r.y, r.y + r.h, o.y, o.y + o.h) : overlap(r.x, r.x + r.w, o.x, o.x + o.w);
+    if (shared > 1e-6 && (!best || shared > best.shared)) best = { to: id, shared };
+  }
+  if (best) return { to: best.to, side };
+  const spans = side === "left" ? near(r.x, 0) && near(r.h, 1) : side === "right" ? near(r.x + r.w, 1) && near(r.h, 1) : side === "above" ? near(r.y, 0) && near(r.w, 1) : near(r.y + r.h, 1) && near(r.w, 1);
+  return spans ? undefined : { to: WINDOW, side };
 }
 
 /** A boundary between a split's two sides, which can be dragged to resize it. */

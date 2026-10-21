@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { addWidget, chatWindow, split, type Layout, type SessionEvent } from "@kumiko/shared";
-import { columns, dividers, dropPreview, dropZone, lastChanges, normalize, partialJsonString, slotRects, streamingWrites, widgetLine, windowEdge } from "../src/widgets.ts";
+import { columns, dividers, dropPreview, dropZone, lastChanges, normalize, partialJsonString, slotRects, streamingWrites, widgetLine, windowEdge, stepTowards } from "../src/widgets.ts";
 
 describe("partial JSON strings", () => {
   it("reads a value as far as it has streamed", () => {
@@ -83,6 +83,28 @@ describe("the window's edges", () => {
     assert.equal(windowEdge(0.5, 0.99, 1000, 600), "below");
     assert.equal(windowEdge(0.03, 0.5, 1000, 600), undefined, "30 px in is the pane's, not the window's");
     assert.equal(windowEdge(0.005, 0.02, 1000, 600), "left");
+  });
+});
+
+describe("stepping a pane", () => {
+  // chat | (s2 / s3)
+  const rects = new Map([
+    ["chat", { x: 0, y: 0, w: 0.6, h: 1 }],
+    ["s2", { x: 0.6, y: 0, w: 0.4, h: 0.5 }],
+    ["s3", { x: 0.6, y: 0.5, w: 0.4, h: 0.5 }],
+  ]);
+
+  it("goes past the pane next to it on that side", () => {
+    assert.deepEqual(stepTowards(rects, "s3", "left"), { to: "chat", side: "left" });
+    assert.deepEqual(stepTowards(rects, "s3", "above"), { to: "s2", side: "above" });
+    assert.deepEqual(stepTowards(rects, "chat", "right"), { to: "s2", side: "right" });
+  });
+
+  it("goes along the window's side when nothing is there, unless it spans that side already", () => {
+    assert.deepEqual(stepTowards(rects, "s3", "below"), { to: "window", side: "below" });
+    assert.deepEqual(stepTowards(rects, "s2", "right"), { to: "window", side: "right" });
+    assert.equal(stepTowards(rects, "chat", "left"), undefined);
+    assert.deepEqual(stepTowards(rects, "chat", "above"), { to: "window", side: "above" });
   });
 });
 

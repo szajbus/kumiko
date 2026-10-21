@@ -56,6 +56,8 @@ export function Window({ session, onForked }: Props) {
       quote: (text) => composer.current?.insertQuote(text),
       arrange,
       startDrag: (slot, e) => startDrag(slot, e, rects),
+      rects,
+      move: (slot, to, side) => void api.moveSlot(session.id, slot, to, side).catch((err) => console.error(err)),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [win, artifacts, live, session.id, arrange, JSON.stringify([...rects])],

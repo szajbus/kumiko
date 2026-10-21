@@ -1,5 +1,6 @@
 import { createContext, type PointerEvent } from "react";
-import type { ArtifactType, SlotId, WidgetId, WindowState } from "@kumiko/shared";
+import type { ArtifactType, Side, SlotId, WidgetId, WindowState } from "@kumiko/shared";
+import type { SlotRect } from "./widgets";
 
 /** One of the window's artifacts, as an artifact pane's switcher lists it. */
 export interface ArtifactEntry {
@@ -39,6 +40,10 @@ export interface WindowApi {
   arrange: boolean;
   /** Starts dragging a slot's pane by its handle. */
   startDrag(slot: SlotId, e: PointerEvent): void;
+  /** Where each slot is, as fractions of the window. */
+  rects: ReadonlyMap<SlotId, SlotRect>;
+  /** Moves a slot beside another (or the window, WINDOW), or swaps the two. */
+  move(slot: SlotId, to: SlotId, side: Side | "swap"): void;
 }
 
 export const WindowContext = createContext<WindowApi | undefined>(undefined);
