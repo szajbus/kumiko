@@ -73,6 +73,8 @@ the chat's corner. Drag a pane by it onto another:
   to the pane beside it.
 - **In the middle**, the two swap places.
 - **Back over itself**, the whole pane is highlighted, and letting go there leaves it where it was.
+- **At the window's own edge**, within a finger's width of it, it goes along the whole of that side: under all the
+  others, say, across the window's full width.
 
 While you drag, the place it would land is highlighted. <kbd>Esc</kbd> cancels. Drag the line between two panes to
 resize them; a pane doesn't get narrower than about 240 pixels. When the window is too narrow for its panes side by

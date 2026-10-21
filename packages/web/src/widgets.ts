@@ -170,20 +170,33 @@ export function dropZone(rect: SlotRect, x: number, y: number): DropZone {
 }
 
 /** Where a pane dropped in `zone` of `rect` ends up: the half on that side, or the whole of it for a swap. */
-export function dropPreview(rect: SlotRect, zone: DropZone): SlotRect {
+export function dropPreview(rect: SlotRect, zone: DropZone, share = 0.5): SlotRect {
   const { x, y, w, h } = rect;
   switch (zone) {
     case "left":
-      return { x, y, w: w / 2, h };
+      return { x, y, w: w * share, h };
     case "right":
-      return { x: x + w / 2, y, w: w / 2, h };
+      return { x: x + w * (1 - share), y, w: w * share, h };
     case "above":
-      return { x, y, w, h: h / 2 };
+      return { x, y, w, h: h * share };
     case "below":
-      return { x, y: y + h / 2, w, h: h / 2 };
+      return { x, y: y + h * (1 - share), w, h: h * share };
     case "swap":
       return rect;
   }
+}
+
+/** How close to the window's border, in pixels, the pointer has to be for a pane to go to the window's edge. */
+export const EDGE_PX = 20;
+
+/**
+ * The side of the window whose edge point (`x`, `y`) is on, in fractions of the window, which is `width` by `height`
+ * pixels; undefined away from the edges. In a corner, the nearer edge.
+ */
+export function windowEdge(x: number, y: number, width: number, height: number): Side | undefined {
+  const edges: [Side, number][] = [["left", x * width], ["right", (1 - x) * width], ["above", y * height], ["below", (1 - y) * height]];
+  const [side, d] = edges.reduce((best, e) => (e[1] < best[1] ? e : best));
+  return d < EDGE_PX ? side : undefined;
 }
 
 /** A boundary between a split's two sides, which can be dragged to resize it. */

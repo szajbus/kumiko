@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { addWidget, applyWindowOp, artifactTypeOf, imageTypeOf, isExternalUrl, isPrivateHost, urlHost, urlOrigin, CHAT, chatWindow, close, move, remove, resize, show, compactWindow, nextId, slotIds, slotOf, split, windowState, WindowError, type SessionEvent, type WindowOp, type WindowState } from "@kumiko/shared";
+import { addWidget, applyWindowOp, artifactTypeOf, imageTypeOf, isExternalUrl, isPrivateHost, urlHost, urlOrigin, CHAT, chatWindow, close, move, remove, resize, show, compactWindow, nextId, slotIds, slotOf, split, windowState, WINDOW, WindowError, type SessionEvent, type WindowOp, type WindowState } from "@kumiko/shared";
 
 /** A window with an artifact widget per id, none shown. */
 const withDocs = (...ids: string[]): WindowState => ids.reduce((w, id) => addWidget(w, id, { kind: "artifact" }), chatWindow());
@@ -101,6 +101,27 @@ describe("windows", () => {
     assert.deepEqual(slotIds(move(w, CHAT, "s3", "below").layout), ["s2", "s3", CHAT]);
     assert.equal(move(w, "s2", "s2", "left"), w);
     assert.throws(() => move(w, "s9", CHAT, "left"), WindowError);
+  });
+
+  it("moves a slot to a side of the window, along the whole of it", () => {
+    // chat | (s2 / s3)
+    let w = split(withDocs("w2", "w3"), { split: "right" }, "s2", "w2");
+    w = split(w, { split: "below", of: "s2" }, "s3", "w3");
+    // s3 under both: a third of the window's height, as each of three would have.
+    const moved = move(w, "s3", WINDOW, "below");
+    assert.deepEqual(moved.layout, {
+      kind: "split", dir: "column", ratio: 1 - 1 / 3,
+      a: { kind: "split", dir: "row", ratio: 0.5, a: { kind: "slot", id: CHAT }, b: { kind: "slot", id: "s2" } },
+      b: { kind: "slot", id: "s3" },
+    });
+    // The chat along the whole left side.
+    const left = move(w, CHAT, WINDOW, "left").layout;
+    assert.deepEqual(left.kind === "split" && left.a, { kind: "slot", id: CHAT });
+    assert.throws(() => move(w, "s3", WINDOW, "swap"), WindowError);
+    assert.throws(() => move(w, "s9", WINDOW, "left"), WindowError);
+    // Two slots: half each.
+    const two = split(withDocs("w2"), { split: "right" }, "s2", "w2");
+    assert.deepEqual(move(two, "s2", WINDOW, "above").layout, { kind: "split", dir: "column", ratio: 0.5, a: { kind: "slot", id: "s2" }, b: { kind: "slot", id: CHAT } });
   });
 
   it("swaps two slots' places", () => {

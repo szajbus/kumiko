@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { addWidget, chatWindow, split, type Layout, type SessionEvent } from "@kumiko/shared";
-import { columns, dividers, dropPreview, dropZone, lastChanges, normalize, partialJsonString, slotRects, streamingWrites, widgetLine } from "../src/widgets.ts";
+import { columns, dividers, dropPreview, dropZone, lastChanges, normalize, partialJsonString, slotRects, streamingWrites, widgetLine, windowEdge } from "../src/widgets.ts";
 
 describe("partial JSON strings", () => {
   it("reads a value as far as it has streamed", () => {
@@ -76,6 +76,16 @@ describe("the chat's lines for widget tools", () => {
   });
 });
 
+describe("the window's edges", () => {
+  it("are a strip along its border, the nearer one in a corner", () => {
+    assert.equal(windowEdge(0.5, 0.5, 1000, 600), undefined);
+    assert.equal(windowEdge(0.01, 0.5, 1000, 600), "left");
+    assert.equal(windowEdge(0.5, 0.99, 1000, 600), "below");
+    assert.equal(windowEdge(0.03, 0.5, 1000, 600), undefined, "30 px in is the pane's, not the window's");
+    assert.equal(windowEdge(0.005, 0.02, 1000, 600), "left");
+  });
+});
+
 describe("placing slots", () => {
   const layout: Layout = {
     kind: "split", dir: "row", ratio: 0.6,
@@ -115,6 +125,7 @@ describe("dropping a pane on another", () => {
   it("previews where it lands", () => {
     assert.deepEqual(dropPreview(rect, "left"), { x: 100, y: 0, w: 200, h: 200 });
     assert.deepEqual(dropPreview(rect, "below"), { x: 100, y: 100, w: 400, h: 100 });
+    assert.deepEqual(dropPreview({ x: 0, y: 0, w: 1, h: 1 }, "right", 0.25), { x: 0.75, y: 0, w: 0.25, h: 1 });
     assert.deepEqual(dropPreview(rect, "swap"), rect);
   });
 });

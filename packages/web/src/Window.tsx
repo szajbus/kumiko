@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
-import { CHAT, chatWindow, artifactsOf, LIVE_SESSION_STATUSES, MIN_RATIO, resize, slotOf, windowState, type ArtifactState, type SessionEvent, type SessionInfo, type SlotId, type SplitPath, type WidgetId, type WindowState } from "@kumiko/shared";
+import { CHAT, chatWindow, artifactsOf, edgeShare, WINDOW, LIVE_SESSION_STATUSES, MIN_RATIO, resize, slotOf, windowState, type ArtifactState, type SessionEvent, type SessionInfo, type SlotId, type SplitPath, type WidgetId, type WindowState } from "@kumiko/shared";
 import { api, onPaneRequest, useSessionEvents } from "./api";
 import type { ComposerHandle } from "./Composer";
 import { ArtifactView } from "./ArtifactView";
 import { PaneGrip } from "./PaneGrip";
 import { SessionView } from "./SessionView";
-import { columns, dividers, dropPreview, dropZone, lastChanges, slotRects, streamingWrites, type Divider, type DropZone, type SlotRect } from "./widgets";
+import { columns, dividers, dropPreview, dropZone, lastChanges, slotRects, streamingWrites, windowEdge, type Divider, type DropZone, type SlotRect } from "./widgets";
 import { WindowContext, type ArtifactEntry, type WindowApi } from "./windowContext";
 
 interface Props {
@@ -100,7 +100,16 @@ export function Window({ session, onForked }: Props) {
         {drag?.moved && (
           // Over everything while dragging, so no pane (or what is in it) takes the pointer.
           <div className="window-drop">
-            {drag.target && <div className="window-drop-preview" style={place(dropPreview(rects.get(drag.target.slot)!, drag.target.zone))} />}
+            {drag.target && (
+              <div
+                className="window-drop-preview"
+                style={place(
+                  drag.target.slot === WINDOW
+                    ? dropPreview({ x: 0, y: 0, w: 1, h: 1 }, drag.target.zone, edgeShare(Object.keys(win.slots).length))
+                    : dropPreview(rects.get(drag.target.slot)!, drag.target.zone),
+                )}
+              />
+            )}
           </div>
         )}
       </div>
@@ -275,9 +284,12 @@ function useArrange(id: string, box: RefObject<HTMLElement | null>, win: WindowS
       const moved = d.moved || Math.hypot(ev.clientX - d.from.x, ev.clientY - d.from.y) > DRAG_THRESHOLD;
       if (!moved) return;
       const p = at(ev);
+      const size = box.current!.getBoundingClientRect();
+      // Along the window's border, the window is the target: the pane goes to that side of it, along the whole of it.
+      const edge = windowEdge(p.x, p.y, size.width, size.height);
       const over = [...rects].find(([, r]) => p.x >= r.x && p.x < r.x + r.w && p.y >= r.y && p.y < r.y + r.h);
       // Over itself, the whole pane is the target, as a drop there leaves it where it is.
-      const target = over && { slot: over[0], zone: over[0] === d.slot ? ("swap" as const) : dropZone(over[1], p.x, p.y) };
+      const target = edge ? { slot: WINDOW, zone: edge } : over && { slot: over[0], zone: over[0] === d.slot ? ("swap" as const) : dropZone(over[1], p.x, p.y) };
       set({ ...d, moved, target });
     };
     const end = (drop: boolean) => {

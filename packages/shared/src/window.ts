@@ -113,12 +113,25 @@ function withoutSlot(l: Layout, id: SlotId): Layout {
   return { ...l, a: withoutSlot(l.a, id), b: withoutSlot(l.b, id) };
 }
 
+/** The window as a whole, as where `move` takes a slot: to one of its sides, spanning its whole width or height. */
+export const WINDOW = "window";
+
+/** The share of the window a slot moved to its edge takes: as much as each slot would, shared evenly. */
+export const edgeShare = (slots: number) => Math.min(0.5, Math.max(MIN_SIZE, 1 / slots));
+
 /**
  * Moves slot `slot`, with what it shows, to a side of slot `to`, which it splits in halves; its old place goes to the
- * slot beside it. `"swap"` trades the two slots' places instead. The chat moves like any other slot.
+ * slot beside it. `"swap"` trades the two slots' places instead. With `to` WINDOW, it goes to a side of the window,
+ * along the whole of it, taking `edgeShare` of it. The chat moves like any other slot.
  */
 export function move(w: WindowState, slot: SlotId, to: SlotId, side: Side | "swap"): WindowState {
-  for (const s of [slot, to]) if (!w.slots[s]) throw new WindowError(`There is no slot ${s}. Slots: ${slotIds(w.layout).join(", ")}.`);
+  for (const s of to === WINDOW ? [slot] : [slot, to]) if (!w.slots[s]) throw new WindowError(`There is no slot ${s}. Slots: ${slotIds(w.layout).join(", ")}.`);
+  if (to === WINDOW) {
+    if (side === "swap") throw new WindowError("A slot goes to a side of the window, not in its place.");
+    const rest = withoutSlot(w.layout, slot);
+    if (rest === w.layout) return w;
+    return { ...w, layout: beside(rest, { kind: "slot", id: slot }, side, edgeShare(slotIds(w.layout).length)) };
+  }
   if (slot === to) return w;
   if (side === "swap") {
     const swap = (l: Layout): Layout =>

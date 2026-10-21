@@ -214,7 +214,7 @@ An artifact pane shows one artifact at a time and switches between all of the wi
 - **Dividers:** a 6 px strip along each split's boundary. Dragging follows the pointer locally and sends one `resize` when let go. Each side keeps 240 px (120 px tall) per pane across it.
 - **Routes:** `POST /api/sessions/:id/window/move` and `/window/resize`.
 - **Pages keep their scroll:** slots are rendered in their own order, not the layout's, so a move doesn't move a pane in the page.
-- **Later:** dropping on the window's outer edges to span its whole width or height, and a menu on the handle (move left/right/up/down, swap with…) for the keyboard.
+- **The window's edges:** within `EDGE_PX` (20 px) of the window's border, the target is the window itself (`WINDOW` as `move`'s `to`): the pane leaves its place and goes to that side of the whole layout, taking `edgeShare` of it (an even share: a third of the window with three panes, at most half). The preview is that strip of the window.
 
 ### Later, designed for but not built
 - **User actions.** A widget kind declares the actions its view can send. Each goes through `apply` as an op (with `source: "user"`) and reaches Claude in one of three ways:
