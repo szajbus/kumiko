@@ -691,6 +691,31 @@ describe("sessions", () => {
       await api(`/api/sessions/saved/${parked}`, { method: "DELETE" });
     });
 
+    it("shares sandboxes with a server on another home, but not its home", async () => {
+      const id = await startSession("one", "hello");
+      await waitFor(async () => (await session(id))?.status === "idle" || undefined);
+      await assert.rejects(startServer({ ...serverOpts, lockWaitMs: 100 }), /Another Kumiko server .* is using/);
+
+      // Another home with the same project, on the same VM: its startup sweep leaves this home's Claude alone.
+      const other = join(root, "other");
+      await mkdir(join(other, "projects"), { recursive: true });
+      await writeFile(join(other, "projects", "one.json"), await readFile(join(root, "data", "projects", "one.json")));
+      const second = await startServer({ ...serverOpts, dataDir: other, sessionsDir: join(other, "sessions") });
+      try {
+        assert.ok(await alive(id), "the other server didn't stop it");
+        const theirs = await json(await fetch(`${second.url}/api/sessions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sandbox: "one", prompt: "hi" }) }));
+        await waitFor(async () => ((await json(await fetch(`${second.url}/api/sessions`))) as SessionInfo[]).find((x) => x.id === theirs.id)?.status === "idle" || undefined);
+        // And this one, restarting, leaves the other's alone.
+        await restart();
+        assert.equal(((await json(await fetch(`${second.url}/api/sessions`))) as SessionInfo[]).find((x) => x.id === theirs.id)?.status, "idle");
+        assert.equal(await session(theirs.id), undefined);
+        assert.equal((await session(id))?.status, "idle");
+      } finally {
+        await second.close({ endSessions: true });
+      }
+      await api(`/api/sessions/${id}`, { method: "DELETE" });
+    });
+
     it("ends every live session when the server closes with endSessions", async () => {
       const id = await startSession("one", "hello");
       await waitFor(async () => (await session(id))?.status === "idle" || undefined);

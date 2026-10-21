@@ -45,7 +45,8 @@ import { GitError, worktreeStatuses } from "./git.js";
 import { isLocalRequest } from "./guard.js";
 import { LoginFailed, Logins } from "./logins.js";
 import { BusyError, Operations } from "./operations.js";
-import { ProjectExists, ProjectRecordError, ProjectStore } from "./projects.js";
+import { homeId, lockHome } from "./home.js";
+import { defaultKumikoHome, ProjectExists, ProjectRecordError, ProjectStore } from "./projects.js";
 import { RewindRefused, SessionEnded, SessionNotFound, SessionNotResumable, Sessions } from "./sessions.js";
 import { SessionStore, type StoredSession } from "./store.js";
 import { TabsStore } from "./tabs.js";
@@ -73,6 +74,8 @@ export interface ServerOptions {
   driver?: () => AgentDriver;
   /** Finds and removes the runs agents work in, in each sandbox; defaults to the provider's exec. */
   runs?: Pick<Runs, "list" | "remove">;
+  /** How long to wait for another server to let go of the Kumiko home before refusing to start, in ms. */
+  lockWaitMs?: number;
   /** Reads the account and usage of the Claude in a sandbox; defaults to asking Claude inside it. Usage is cached per account. */
   usage?: UsageSource;
 }
@@ -90,6 +93,19 @@ export interface RunningServer {
 }
 
 export async function startServer(opts: ServerOptions = {}): Promise<RunningServer> {
+  const home = opts.dataDir ?? defaultKumikoHome();
+  // One server per home: two would attach to the same Claudes, and each would sweep away the other's runs.
+  const lock = await lockHome(home, { waitMs: opts.lockWaitMs });
+  try {
+    return await serveHome(opts, home, lock);
+  } catch (err) {
+    await lock.release();
+    throw err;
+  }
+}
+
+async function serveHome(opts: ServerOptions, home: string, lock: Awaited<ReturnType<typeof lockHome>>): Promise<RunningServer> {
+  const owner = await homeId(home);
   const provider = opts.provider ?? new LimaProvider({ env: opts.env });
   const env = opts.env ?? (() => process.env);
   const host = opts.host ?? "127.0.0.1";
@@ -101,8 +117,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   const attachments = new AttachmentStore(join(sessionStore.dir, "attachments"));
   await attachments.sweep((await sessionStore.readAll()).flatMap((s) => s.events));
   const tabs = new TabsStore(opts.dataDir);
-  const sessions = new Sessions(opts.driver ?? (() => new ClaudeDriver(provider.exec.bind(provider))), sessionStore);
-  const runs = opts.runs ?? new Runs(provider.exec.bind(provider));
+  const sessions = new Sessions(opts.driver ?? (() => new ClaudeDriver(provider.exec.bind(provider), { owner })), sessionStore);
+  const runs = opts.runs ?? new Runs(provider.exec.bind(provider), owner);
   const clients = new Set<WebSocket>();
   const usage = new UsageCache(
     opts.usage ?? sandboxUsageSource(provider.exec.bind(provider), (sandbox) => infos.find((i) => i.name === sandbox)?.meta?.spec.env ?? []),
@@ -738,6 +754,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
   };
 
   const port = (server.address() as AddressInfo).port;
+  await lock.setPort(port);
   return {
     url: `http://${host}:${port}`,
     port,
@@ -753,6 +770,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
       for (const ws of sessionSockets) ws.close(1001, "server closing");
       wss.close();
       await new Promise<void>((r) => server.close(() => r()));
+      await lock.release();
     },
   };
 }

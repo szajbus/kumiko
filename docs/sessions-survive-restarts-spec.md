@@ -110,7 +110,8 @@ What came out differently, or wasn't settled above:
 - **Startup** asks each running project's sandbox for its runs (one SSH command each) before the server listens, so the window's first snapshot already lists the reopened sessions. A sandbox that can't be asked is left alone; resuming one of its sessions asks again, and refuses (503) rather than start a second Claude on a conversation whose first may still be running.
 - **Orphans**: runs no saved, live session points at. They are removed at startup and after Kumiko starts a sandbox, in the server rather than in `prepareShells`, since only the server knows the saved sessions.
 - **Quitting** is as proposed: no dialog when nothing is working; otherwise "Claude keeps working in the background. Reopen Kumiko to see it." with Quit (default), Stop Claude and Quit, Cancel. `RunningServer.close({ endSessions })` picks.
-- **Two servers on one Kumiko home** would take a session's attachment from each other in turn. Killing an attachment mid-write could leave half a line in Claude's input; that is the corruption risk, not the files.
+- **One server per Kumiko home.** A server takes `<home>/server.lock` (its pid, port and command line as `ps` shows it) before anything else, and lets go of it when it closes. A lock held by a live server is waited for 5 s, which covers a restart's handover, then the server refuses to start, naming the other's pid and port. A lock whose pid is gone, or now runs something else (a reboot), is taken over. Two servers on one home would otherwise take each session's attachment from each other in turn, and killing an attachment mid-write can leave half a line in Claude's input.
+- **Runs belong to a home.** Each home has an id (`<home>/home-id`, made on first start), written to `owner` in the runs its server starts. A server only lists, reopens and sweeps its own runs, and those with no owner, so a second home on the same VMs (a separate dev instance) doesn't stop the first's Claudes as orphans.
 
 ## Tests
 In `packages/server/test/sessions.test.ts`, with the fakes:
@@ -128,8 +129,8 @@ Update the README's "Notes on agent sessions" (closing a tab, quitting, resuming
 
 ## Open questions
 - **Quitting:** keep Claude working by default, as proposed, or ask every time? Should the window's close on macOS (which already leaves the app running) stay as it is?
-- **The dev instance:** a separate `dev:desktop` instance (its own `KUMIKO_HOME` and `LIMA_HOME`, and its own Electron data folder, since the single-instance lock is per folder) was discussed and parked in favour of this. With this feature, server restarts are harmless, so it only matters for keeping test projects apart.
-- **Two servers on one Kumiko home** (the regular app and a dev one on the same `~/.kumiko`) would both try to attach to the same runs. Out of scope, but the attachment's `attach.pid` takeover should at least not corrupt anything.
+- **The dev instance:** (runs are tagged with their home now, so this is safe if it is ever done.) A separate `dev:desktop` instance (its own `KUMIKO_HOME` and `LIMA_HOME`, and its own Electron data folder, since the single-instance lock is per folder) was discussed and parked in favour of this. With this feature, server restarts are harmless, so it only matters for keeping test projects apart.
+- **Two servers on one Kumiko home** (the regular app and a dev one on the same `~/.kumiko`) would both try to attach to the same runs. Settled: the second refuses to start (see "as built").
 
 ## Out of scope
 Claude surviving a sandbox restart, several servers attached to one session, sandboxes on other machines.

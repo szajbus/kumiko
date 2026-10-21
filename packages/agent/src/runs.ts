@@ -9,6 +9,8 @@ import type { Exec } from "./driver.js";
  * - `out`, `err`: the agent's stdout, appended to, and stderr. When the agent exits, a wrapper writes its code to
  *   `exit` and appends `{"type":"kumiko_exit","code":<n>}` to `out`, so whoever follows `out` learns of it in order.
  * - `pid`: the agent's; `boot`: the kernel's boot id when it started, since a pid means nothing after a reboot.
+ * - `owner`: the id of the Kumiko home whose server started it, so servers on different homes sharing a VM leave
+ *   each other's runs alone.
  * - `attach.pid`: the attachment that writes to `in` now. A new one replaces it: lines longer than PIPE_BUF aren't
  *   atomic in a FIFO, so only one may write at a time.
  * Runs are generic: any agent that speaks lines on stdin and stdout can run in one.
@@ -30,7 +32,7 @@ export const RUN_FAILED = 70;
 export const ATTACHED = "kumiko: attached";
 
 /**
- * One script for the three ways in, by its first argument, `bash -c <script> kumiko-run <mode> <run> <offset> [command]`:
+ * One script for the three ways in, by its first argument, `bash -c <script> kumiko-run <mode> <run> <offset> [command] [owner]`:
  * - `launch`: makes the run, starts `command` in it in a session of its own (setsid, or perl's where there is none:
  *   macOS, in tests), waits for its pid, then attaches from the start.
  * - `run`: what `launch` starts detached: the holder, the agent, and the wrapper that records its exit.
@@ -54,6 +56,7 @@ run)
 launch)
   mkdir -p "$r" && mkfifo "$r/in" && : > "$r/out" && : > "$r/err" || { echo "kumiko: couldn't make the run $r" >&2; exit ${RUN_FAILED}; }
   cat /proc/sys/kernel/random/boot_id > "$r/boot" 2>/dev/null
+  printf '%s\n' "$5" > "$r/owner"
   if command -v setsid >/dev/null 2>&1; then
     setsid bash -c "$BASH_EXECUTION_STRING" kumiko-run run "$2" 0 "$4" < /dev/null > /dev/null 2>&1 &
   else
@@ -89,9 +92,13 @@ function checkRun(id: string): string {
   return id;
 }
 
-/** The command that starts `command` in a new run and attaches to it. */
-export function launchCommand(run: string, command: string): string {
-  return `bash -c ${shellQuote(RUN_SCRIPT)} kumiko-run launch ${checkRun(run)} 0 ${shellQuote(command)}`;
+/** The id of a Kumiko home, which tags the runs its server starts; checked before it goes into a shell command. */
+export const OWNER_ID = /^[0-9a-z-]{1,64}$/;
+
+/** The command that starts `command` in a new run, tagged with `owner`, and attaches to it. */
+export function launchCommand(run: string, command: string, owner = ""): string {
+  if (owner && !OWNER_ID.test(owner)) throw new Error(`Not an owner id: ${owner}`);
+  return `bash -c ${shellQuote(RUN_SCRIPT)} kumiko-run launch ${checkRun(run)} 0 ${shellQuote(command)} ${shellQuote(owner)}`;
 }
 
 /** The command that attaches to a run, following its `out` from byte `offset`. */
@@ -117,7 +124,7 @@ export const stderrCommand = (run: string, lines: number) => `tail -n ${lines} $
 /** The state of a run's agent: still running, exited (its last words are in `out`), or gone without a trace. */
 export type RunState = "alive" | "exited" | "lost";
 
-/** Lists every run with its state, one `<id> <state>` per line. */
+/** Lists every run with its state and owner, one `<id> <state> <owner>` per line. */
 const LIST_SCRIPT = String.raw`
 b=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)
 for r in "$HOME/${RUNS_DIR}"/*/; do
@@ -125,7 +132,7 @@ for r in "$HOME/${RUNS_DIR}"/*/; do
   if [ -f "$r/exit" ]; then s=exited
   elif [ "$(cat "$r/boot" 2>/dev/null)" = "$b" ] && kill -0 "$(cat "$r/pid" 2>/dev/null)" 2>/dev/null; then s=alive
   else s=lost; fi
-  echo "$(basename "$r") $s"
+  echo "$(basename "$r") $s $(cat "$r/owner" 2>/dev/null)"
 done
 `;
 
@@ -169,16 +176,20 @@ export function execOutput(exec: Exec, sandbox: string, cmd: string, timeoutMs =
   });
 }
 
-/** The runs in each sandbox, for the server to find its sessions' agents again and to clean up those it has lost. */
+/**
+ * The runs in each sandbox, for the server to find its sessions' agents again and to clean up those it has lost. With
+ * an `owner`, only that Kumiko home's runs are seen, and those with no owner, which came before runs had one.
+ */
 export class Runs {
-  constructor(private readonly exec: Exec) {}
+  constructor(private readonly exec: Exec, private readonly owner?: string) {}
 
   /** Every run in the sandbox and the state of its agent. Rejects if the sandbox can't be asked. */
   async list(sandbox: string): Promise<Map<string, RunState>> {
     const out = await execOutput(this.exec, sandbox, `bash -c ${shellQuote(LIST_SCRIPT)}`);
     const runs = new Map<string, RunState>();
     for (const line of out.split("\n")) {
-      const [id, state] = line.trim().split(" ");
+      const [id, state, owner] = line.trim().split(" ");
+      if (this.owner && owner && owner !== this.owner) continue;
       if (id && RUN_ID.test(id) && (state === "alive" || state === "exited" || state === "lost")) runs.set(id, state);
     }
     return runs;

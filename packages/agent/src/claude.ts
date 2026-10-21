@@ -45,6 +45,8 @@ const GIVE_UP_MS = 4000;
 export interface ClaudeDriverOptions {
   /** How long `stop()` waits after closing stdin before killing Claude, in ms. */
   graceMs?: number;
+  /** Tags the runs this driver starts, as the Kumiko home's; see `Runs`. */
+  owner?: string;
 }
 
 /** A file as a content block of its own, the way the API takes it: images and PDFs in base64, text as a titled document. */
@@ -108,9 +110,11 @@ export class ClaudeDriver implements AgentDriver {
   /** Control requests waiting for Claude's answer, by request id. */
   private pending = new Map<string, { resolve(): void; reject(err: Error): void }>();
   private readonly graceMs: number;
+  private readonly owner?: string;
 
   constructor(private readonly exec: Exec, opts: ClaudeDriverOptions = {}) {
     this.graceMs = opts.graceMs ?? 5000;
+    this.owner = opts.owner;
   }
 
   onEvent(listener: (ev: AgentEvent) => void): () => void {
@@ -134,7 +138,7 @@ export class ClaudeDriver implements AgentDriver {
   start({ sandbox, workdir, env, prompt, promptId, files, resume, fork, resumeAt, model, run }: StartOptions): void {
     if (this.sandbox) throw new Error("This driver has already started.");
     const runId = run ?? `run-${randomBytes(6).toString("hex")}`;
-    const command = launchCommand(runId, claudeCommand(resume, fork, resumeAt, model));
+    const command = launchCommand(runId, claudeCommand(resume, fork, resumeAt, model), this.owner);
     this.begin(sandbox, runId, 0);
     this.connect(this.exec(sandbox, command, env, { cwd: workdir }), true);
     if (prompt !== undefined) this.send(prompt, promptId, files);
