@@ -17,6 +17,11 @@ const result = (extra: Record<string, unknown> = {}) => claude({ type: "result",
 const ofType = <T extends ChatItem["type"]>(s: ChatState, type: T) => s.items.filter((i): i is Extract<ChatItem, { type: T }> => i.type === type);
 
 describe("chat", () => {
+  it("passes over events of kinds it doesn't know, as a newer Kumiko's", () => {
+    const s = applyEvent(emptyChat(), { seq: 1, kind: "user_prompt", payload: { text: "hi" } });
+    assert.equal(applyEvent(s, { seq: 2, kind: "board", payload: {} } as unknown as SessionEvent), s);
+  });
+
   it("shows a logged-out turn as one error, in place of Claude's reply and the failed turn", () => {
     const signedOut: NewEvent = { kind: "error", payload: { message: "Claude isn't logged in.", hint: "Log in to continue.", signedOut: true } };
     const s = fold([

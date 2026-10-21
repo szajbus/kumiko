@@ -201,7 +201,8 @@ export function applyEvent(s: ChatState, ev: SessionEvent): ChatState {
       return push({ type: "ended", key, reason: ev.payload.reason, code: ev.payload.code });
     case "claude":
       return applyClaude(s, ev.payload, key);
-    case "window":
+    default:
+      // The window's events, and kinds a newer Kumiko adds, aren't the chat's.
       return s;
   }
 }
