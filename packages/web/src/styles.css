@@ -467,7 +467,7 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
   animation: km-fade-in 200ms ease-out;
 }
 .work-summary:hover { color: var(--text-2); border-color: var(--border); }
-.work-summary::before { content: "▾"; color: var(--border-strong); font-size: 11px; }
+.work-summary::before { content: "▾"; flex: none; width: 14px; text-align: center; color: var(--border-strong); font-size: 15px; line-height: 1; }
 .work.is-folded .work-summary::before { content: "▸"; }
 .work-body { display: grid; grid-template-rows: 1fr; transition: grid-template-rows 360ms ease, opacity 360ms ease; }
 .work.is-folded .work-body { grid-template-rows: 0fr; opacity: 0; }
@@ -508,7 +508,7 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
   font-size: 13px; color: var(--muted);
 }
 .thinking summary::-webkit-details-marker, .tool summary::-webkit-details-marker { display: none; }
-.thinking summary::before, .tool summary::before { content: "▸"; color: var(--border-strong); font-size: 11px; }
+.thinking summary::before, .tool summary::before { content: "▸"; flex: none; width: 14px; text-align: center; color: var(--border-strong); font-size: 15px; line-height: 1; }
 .thinking[open] summary::before, .tool[open] summary::before { content: "▾"; }
 .thinking-text { padding: 0 14px 12px; color: var(--muted); font-size: 13px; white-space: pre-wrap; font-style: italic; }
 /* Takes the same 14px box as the done and failed icons, so nothing moves when a tool finishes. */
