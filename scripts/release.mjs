@@ -1,8 +1,10 @@
-// Cuts a release: dates the version's changelog section, sets the app's version, commits and tags that, and pushes
-// both. The tag starts the release workflow, which builds the app into a draft GitHub release.
+// Cuts a release of the unstable build that was tried: dates the version's changelog section, sets the app's version,
+// commits and tags that, and pushes both. The tag starts the release workflow, which builds the app into a draft
+// GitHub release.
 //   npm run release 0.2.0
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
+import { createInterface } from "node:readline/promises";
 
 const version = process.argv[2];
 const tag = `v${version}`;
@@ -22,13 +24,31 @@ try {
 } catch {
   fail("There's no origin remote to push the release to.");
 }
-run("git", "fetch", "--tags", "origin", "main");
+// --force, because the unstable tag moves with every build.
+run("git", "fetch", "--tags", "--force", "origin", "main");
 try {
   git("merge-base", "--is-ancestor", "origin/main", "HEAD");
 } catch {
   fail("main is behind origin/main. Pull first.");
 }
 if (git("tag", "--list", tag)) fail(`${tag} already exists.`);
+
+// Release what was tried: the unstable build's commit, plus at most the changelog written after trying it.
+if (!git("tag", "--list", "unstable")) fail("There's no unstable build yet. Push to main and try the build first.");
+const unstable = git("rev-parse", "unstable^{commit}");
+try {
+  git("merge-base", "--is-ancestor", unstable, "HEAD");
+} catch {
+  fail("The unstable build isn't from main's history. Wait for the build of main, and try that.");
+}
+const since = git("diff", "--name-only", unstable, "HEAD").split("\n").filter((f) => f && f !== "CHANGELOG.md");
+if (since.length) fail(`main has changes the unstable build doesn't, in ${since.join(", ")}. Wait for its build, and try that.`);
+const build = git("tag", "--list", "--format=%(contents:subject)", "unstable");
+const subject = git("log", "-1", "--format=%h %s", unstable);
+const rl = createInterface({ input: process.stdin, output: process.stdout });
+const answer = await rl.question(`Release ${build} (${subject}) as ${version}? [y/N] `);
+rl.close();
+if (answer.trim().toLowerCase() !== "y") fail("Not released.");
 
 // The section is written as "## 0.2.0" and dated here, so the date is the day it ships.
 const changelog = readFileSync("CHANGELOG.md", "utf8");

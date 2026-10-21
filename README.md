@@ -61,14 +61,14 @@ The fakes only copy what the real tools do. When a change depends on how they re
 
 ### Releasing
 
-Releases are cut by hand, and built by CI:
+Every commit on `main` that passes the tests is built into the **unstable** pre-release on GitHub, replacing the last one: `Kumiko-unstable-arm64.dmg` and `Kumiko-unstable-x64.dmg`, with the commits since the last release as its notes. About Kumiko shows which build it is, e.g. `0.1.0-unstable.42`. Releases are that build, once it's been tried:
 
-1. Write what changed for users under a new `## <version>` heading at the top of [`CHANGELOG.md`](CHANGELOG.md), and commit it to `main`. `git log --format=%s v<last>..` lists the commits to start from; leave out docs, tests and fixes to things that never shipped.
-2. `npm run release <version>` dates that heading, sets the app's version, commits and tags `v<version>`, and pushes both.
-3. The tag starts the Release workflow: it runs the tests, builds the `.dmg` and `.zip` for Apple silicon and Intel, and uploads them to a **draft** GitHub release with the changelog section as its notes.
-4. Download the draft's `.dmg`, install it and try it. Publish the draft when it works. When it doesn't, delete the draft and the tag (`git push --delete origin v<version>`, `git tag -d v<version>`), fix it, and release again.
+1. Download the unstable `.dmg`, install it and try it.
+2. Write what changed for users under a new `## <version>` heading at the top of [`CHANGELOG.md`](CHANGELOG.md), from the unstable release's notes: leave out docs, tests and fixes to things that never shipped. Commit it to `main`.
+3. `npm run release <version>` checks that `main` is the unstable build's commit, give or take the changelog, and asks you to confirm which build it's releasing. Then it dates the heading, sets the app's version, commits and tags `v<version>`, and pushes both.
+4. The tag starts the Release workflow: it runs the tests, builds the `.dmg` and `.zip` for Apple silicon and Intel, and uploads them to a **draft** GitHub release with the changelog section as its notes. Check the draft and publish it. To start over, delete the draft and the tag (`git push --delete origin v<version>`, `git tag -d v<version>`).
 
-The app isn't signed. When the `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` secrets are set, the workflow signs and notarizes it with no other changes; then take the Open Anyway step out of the quick start.
+The app isn't signed. When the `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` secrets are set, the Release workflow signs and notarizes it with no other changes; then take the Open Anyway step out of the quick start.
 
 ### Layout
 

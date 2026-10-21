@@ -1,0 +1,64 @@
+name: Unstable
+
+# Builds the Mac app from each commit on main that passes the tests, and replaces the "unstable" pre-release on GitHub
+# with it. `npm run release` releases the commit of the unstable build, once it's been tried.
+on:
+  workflow_run:
+    workflows: [Test]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+# A newer commit replaces the build anyway.
+concurrency:
+  group: unstable
+  cancel-in-progress: true
+
+jobs:
+  unstable:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: macos-latest
+    env:
+      SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          # The notes list the commits since the last release.
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Build the app
+        # The version, shown in About Kumiko, says which build was tried. The file names stay the same, so the
+        # download links do too.
+        run: |
+          version="$(node -p "require('./apps/desktop/package.json').version")-unstable.$GITHUB_RUN_NUMBER"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          CSC_IDENTITY_AUTO_DISCOVERY=false npm run dist:mac -w @kumiko/desktop -- \
+            -c.extraMetadata.version="$version" -c.mac.artifactName='${productName}-unstable-${arch}.${ext}'
+      - name: Replace the unstable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          last=$(git describe --tags --abbrev=0 --match 'v*' "$SHA" 2>/dev/null || true)
+          {
+            echo "Built from $SHA on main. Not a release: it may be broken."
+            echo
+            if [ -n "$last" ]; then echo "Changes since $last:"; else echo "Changes:"; fi
+            echo
+            git log --format='- %s' "${last:+$last..}$SHA"
+          } > notes.md
+          # Annotated, so `npm run release` can say which build it's releasing.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -fa unstable -m "Kumiko $VERSION" "$SHA"
+          gh release delete unstable --yes 2>/dev/null || true
+          git push -f origin refs/tags/unstable
+          gh release create unstable --verify-tag --prerelease --title "Kumiko $VERSION" --notes-file notes.md \
+            apps/desktop/release/*.dmg apps/desktop/release/*.zip
