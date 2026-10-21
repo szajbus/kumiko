@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { formatBytes, LIVE_SESSION_STATUSES, type LoginAccount, type SessionInfo } from "@kumiko/shared";
 import { api, errorMessage, type SessionStream } from "./api";
 import { fromAttachment, toInput } from "./attachments";
+import { ArtifactsButton } from "./ArtifactView";
 import { applyEvent, blocksOf, chatRows, emptyChat, loginCards, partialToolSummary, toolSummary, type Block, type ChatItem, type ChatState, type ItemRow, type LoginAnswer, type WorkRow } from "./chat";
 import { Composer, type ComposerHandle } from "./Composer";
 import { HeaderCorner } from "./Corner";
@@ -244,6 +245,7 @@ export function SessionView({ session, stream, onForked, composerRef }: Props) {
                   void call(() => api.prompt(session.id, `/model ${v}`));
                 }}
               />
+              <ArtifactsButton />
             </>
           }
         />

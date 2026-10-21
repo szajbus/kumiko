@@ -56,8 +56,10 @@ For a preview to show up, the dev server in the sandbox has to listen on `127.0.
   artifact is the session's own, so its file goes too. A preview or a website just leaves the list (the **×**). A pane
   showing it goes back to what it showed before. The agent can delete artifacts too, and rewinding the session to
   before brings them back.
-- **×** in the pane's header closes the pane. Its artifacts stay, and the agent can open them again. In the chat, the line for a tool call
-  on an artifact no pane shows has **Show**, which shows it again.
+- **×** in the pane's header closes the pane. Its artifacts stay, and the agent can open them again. To show one
+  yourself, use **Artifacts** under the message box, which lists all of the session's artifacts and shows the one you
+  pick beside the chat, or <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd>, which brings back the last one (and, with an
+  artifact pane open, closes it). In the chat, the line for a tool call on an artifact no pane shows has **Show** too.
 - In a narrow window, the panes stack one above the other.
 
 The agent opens a second artifact pane only to show two artifacts side by side. A window has at most four panes.

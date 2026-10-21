@@ -33,3 +33,9 @@ sidebar:
 | Keys | Does |
 | --- | --- |
 | <kbd>Q</kbd> | Quote the selected text into the message |
+
+## Artifacts
+
+| Keys | Does |
+| --- | --- |
+| <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd> | Close the artifact pane used last; with none open, show the last artifact beside the chat again |

@@ -1,7 +1,6 @@
 import { createContext, type PointerEvent } from "react";
 import type { ArtifactType, SlotId, WidgetId, WindowState } from "@kumiko/shared";
 
-/** What the widgets of a session's window can do with it; given by `Window`. */
 /** One of the window's artifacts, as an artifact pane's switcher lists it. */
 export interface ArtifactEntry {
   widget: WidgetId;
@@ -12,8 +11,11 @@ export interface ArtifactEntry {
   slot?: SlotId;
   /** It changed since it was last shown, while it wasn't. */
   unread: boolean;
+  /** When it changed last, as the seq of the event that changed it. */
+  at: number;
 }
 
+/** What the widgets of a session's window can do with it; given by `Window`. */
 export interface WindowApi {
   window: WindowState;
   /** The artifacts, by title. */

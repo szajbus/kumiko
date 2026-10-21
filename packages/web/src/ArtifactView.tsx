@@ -1,4 +1,4 @@
-import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useContext, useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from "react";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import { imageTypeOf, MAX_ARTIFACT_BYTES, MAX_IMAGE_BYTES, MAX_SLOTS, urlOrigin, type ArtifactState, type ArtifactType, type SlotId, type WidgetId } from "@kumiko/shared";
 import { ArtifactIcon, Close, OpenNew, Trash } from "./icons";
@@ -8,7 +8,7 @@ import { PaneGrip } from "./PaneGrip";
 import { QuoteButton } from "./QuoteButton";
 import { COLORS } from "./status";
 import { withPolicy } from "./htmlPolicy";
-import { WindowContext, type WindowApi } from "./windowContext";
+import { WindowContext, type ArtifactEntry, type WindowApi } from "./windowContext";
 
 /** How long "Updated" shows after the text changes. */
 const UPDATED_MS = 4000;
@@ -167,55 +167,109 @@ function Switcher({ ctx, slot, title }: { ctx: WindowApi; slot: SlotId; title: s
       <Menu.Portal>
         <Menu.Content className="menu artifact-menu" align="start" sideOffset={6} collisionPadding={8} aria-label="Artifacts">
           {listed.map((d) => (
-            <Menu.Item key={d.widget} className={`menu-item artifact-menu-item${d.slot === slot ? " is-current" : ""}`} onSelect={() => d.slot !== slot && ctx.showIn(d.widget, slot)}>
-              <span className="artifact-menu-check" aria-hidden="true">{d.slot === slot ? "✓" : ""}</span>
-              <ArtifactIcon type={d.type} />
-              <span className="artifact-menu-title">{d.title}</span>
-              {d.unread && <span className="dot dot-small artifact-unread" aria-label="Changed" />}
-              {!d.slot && (
-                <button
-                  type="button"
-                  className="artifact-menu-split"
-                  disabled={full}
-                  aria-label={`Open ${d.title} in a new pane`}
-                  title={full ? `A window has at most ${MAX_SLOTS} panes` : "Open in a new pane"}
-                  // Its own action, not the item's: the item would show it here instead.
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onPointerUp={(e) => e.stopPropagation()}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setOpen(false);
-                    ctx.showBeside(d.widget, slot, below ? "below" : "right");
-                  }}
-                >
-                  <OpenNew />
-                </button>
-              )}
-              <button
-                type="button"
-                className="artifact-menu-remove"
-                // A file artifact is the session's own: removing it deletes it. A preview or a site only leaves the list.
-                aria-label={hasFile(d.type) ? `Delete ${d.title}` : `Remove ${d.title} from this list`}
-                title={hasFile(d.type) ? "Delete" : "Remove from this list"}
-                // Its own action, not the item's; the menu stays open, for removing several in a row.
-                onPointerDown={(e) => e.stopPropagation()}
-                onPointerUp={(e) => e.stopPropagation()}
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  ctx.remove(d.widget);
-                }}
-              >
-                {hasFile(d.type) ? <Trash /> : <Close />}
-              </button>
-            </Menu.Item>
+            <ArtifactItem
+              key={d.widget}
+              ctx={ctx}
+              entry={d}
+              current={d.slot === slot}
+              onSelect={() => d.slot !== slot && ctx.showIn(d.widget, slot)}
+              split={
+                d.slot
+                  ? undefined
+                  : {
+                      full,
+                      open: () => {
+                        setOpen(false);
+                        ctx.showBeside(d.widget, slot, below ? "below" : "right");
+                      },
+                    }
+              }
+            />
           ))}
         </Menu.Content>
       </Menu.Portal>
     </Menu.Root>
   );
 }
+
+/**
+ * One artifact in a list of them: its type's icon, its title, a dot if it changed unseen, and buttons to open it in a
+ * new pane (`split`) and to delete it, which leave the menu open.
+ */
+function ArtifactItem({ ctx, entry: d, current, onSelect, split }: { ctx: WindowApi; entry: ArtifactEntry; current: boolean; onSelect(): void; split?: { full: boolean; open(): void } }) {
+  // Its own action, not the item's.
+  const own = { onPointerDown: (e: PointerEvent) => e.stopPropagation(), onPointerUp: (e: PointerEvent) => e.stopPropagation() };
+  return (
+    <Menu.Item className={`menu-item artifact-menu-item${current ? " is-current" : ""}`} onSelect={onSelect}>
+      <span className="artifact-menu-check" aria-hidden="true">{current ? "✓" : ""}</span>
+      <ArtifactIcon type={d.type} />
+      <span className="artifact-menu-title">{d.title}</span>
+      {d.unread && <span className="dot dot-small artifact-unread" aria-label="Changed" />}
+      {split && (
+        <button
+          type="button"
+          className="artifact-menu-split"
+          disabled={split.full}
+          aria-label={`Open ${d.title} in a new pane`}
+          title={split.full ? `A window has at most ${MAX_SLOTS} panes` : "Open in a new pane"}
+          {...own}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            split.open();
+          }}
+        >
+          <OpenNew />
+        </button>
+      )}
+      <button
+        type="button"
+        className="artifact-menu-remove"
+        // A file artifact is the session's own: removing it deletes it. A preview or a site only leaves the list.
+        aria-label={hasFile(d.type) ? `Delete ${d.title}` : `Remove ${d.title} from this list`}
+        title={hasFile(d.type) ? "Delete" : "Remove from this list"}
+        // The menu stays open, for removing several in a row.
+        {...own}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          ctx.remove(d.widget);
+        }}
+      >
+        {hasFile(d.type) ? <Trash /> : <Close />}
+      </button>
+    </Menu.Item>
+  );
+}
+
+/**
+ * The composer's way back to the window's artifacts: a count of them that opens the list, to show one beside the chat.
+ * Those panes show already are ticked. A dot marks those that changed while no pane showed them.
+ */
+export function ArtifactsButton() {
+  const ctx = useContext(WindowContext);
+  const [open, setOpen] = useState(false);
+  if (!ctx?.live || !ctx.artifacts.length) return null;
+  const unread = ctx.artifacts.some((d) => d.unread);
+  return (
+    <Menu.Root modal={false} open={open} onOpenChange={setOpen}>
+      <Menu.Trigger className="select-trigger select-compact artifacts-button" title={`Show an artifact beside the chat (${MOD}+Shift+A)`}>
+        <span>Artifacts · {ctx.artifacts.length}</span>
+        {unread && <span className="dot dot-small artifact-unread" aria-label="An artifact changed" />}
+      </Menu.Trigger>
+      <Menu.Portal>
+        <Menu.Content className="menu artifact-menu" side="top" align="start" sideOffset={6} collisionPadding={8} aria-label="Artifacts">
+          {ctx.artifacts.map((d) => (
+            <ArtifactItem key={d.widget} ctx={ctx} entry={d} current={Boolean(d.slot)} onSelect={() => !d.slot && ctx.show(d.widget)} />
+          ))}
+        </Menu.Content>
+      </Menu.Portal>
+    </Menu.Root>
+  );
+}
+
+/** The key that goes with Shift+A, as the user's platform names it. */
+const MOD = typeof navigator !== "undefined" && /Mac/.test(navigator.platform) ? "Cmd" : "Ctrl";
 
 /** An artifact's text, shown as its type is shown. */
 function Rendered({ doc, text, writing }: { doc: ArtifactState; text: string; writing: boolean }) {
