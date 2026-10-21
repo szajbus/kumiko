@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import type { AccountUsage, UsageWindow } from "@kumiko/shared";
 import { api, errorMessage } from "./api";
 import { Corner } from "./Corner";
@@ -31,6 +31,7 @@ export function UsageStrip({ sessionId, live, turnDone, cost, bufferBytes }: Pro
   const [usage, setUsage] = useState<AccountUsage | undefined>();
   const [error, setError] = useState<string | undefined>();
   const [now, setNow] = useState(() => Date.now());
+  const headingId = useId();
 
   useEffect(() => {
     if (!live) return;
@@ -93,20 +94,29 @@ export function UsageStrip({ sessionId, live, turnDone, cost, bufferBytes }: Pro
         {windows.map((w) => (
           <Window key={w.id} w={w} now={now} />
         ))}
-        {bufferBytes !== undefined && (
-          <>
-            <dt title="Memory this session's chat takes in Kumiko's server, as of the last finished turn. Tool output past 64 KB isn't kept.">Memory</dt>
-            <dd className="mono">{formatBytes(bufferBytes)}</dd>
-          </>
-        )}
-        {cost > 0 && (
-          <>
-            <dt title="Total cost of this session">Cost</dt>
-            <dd className="mono">{formatCost(cost)}</dd>
-          </>
-        )}
       </dl>
       {problem && <p className="usage-problem">⚠ {problem}</p>}
+      {(bufferBytes !== undefined || cost > 0) && (
+        <section className="corner-section" aria-labelledby={headingId}>
+          <h3 className="corner-heading" id={headingId}>
+            Current session
+          </h3>
+          <dl className="corner-list">
+            {bufferBytes !== undefined && (
+              <>
+                <dt title="Memory this session's chat takes in Kumiko's server, as of the last finished turn. Tool output past 64 KB isn't kept.">Memory</dt>
+                <dd className="mono">{formatBytes(bufferBytes)}</dd>
+              </>
+            )}
+            {cost > 0 && (
+              <>
+                <dt title="Total cost of this session">Cost</dt>
+                <dd className="mono">{formatCost(cost)}</dd>
+              </>
+            )}
+          </dl>
+        </section>
+      )}
     </Corner>
   );
 }
