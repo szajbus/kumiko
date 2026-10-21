@@ -64,6 +64,16 @@ describe("the chat's lines for widget tools", () => {
     assert.equal(widgetLine("Bash", { command: "ls" }, w), undefined);
     assert.deepEqual(widgetLine("mcp__kumiko__window_close", { slot: "s2" }, w), { label: "Closed a pane" });
   });
+
+  it("say which artifact was looked at, reloaded or deleted, by its id or its path", () => {
+    assert.deepEqual(widgetLine("mcp__kumiko__artifact_capture", { artifact: "w2" }, w), { label: "Looked at", title: "The plan", widget: "w2" });
+    assert.deepEqual(widgetLine("mcp__kumiko__artifact_capture", { artifact: doc.path, reload: true }, w), { label: "Reloaded and looked at", title: "The plan", widget: "w2" });
+    assert.deepEqual(widgetLine("mcp__kumiko__artifact_capture", {}, w), { label: "Looked at a pane" });
+    assert.deepEqual(widgetLine("mcp__kumiko__artifact_reload", { artifact: "w2" }, w), { label: "Reloaded", title: "The plan", widget: "w2" });
+    // Gone from the window by the time the line shows: named by its file.
+    assert.deepEqual(widgetLine("mcp__kumiko__artifact_remove", { artifact: "/home/u/.claude/kumiko/artifacts/abc/old.md" }, w), { label: "Deleted", title: "old.md" });
+    assert.deepEqual(widgetLine("mcp__kumiko__artifact_remove", { artifact: "http://localhost:5173/" }, w), { label: "Removed", title: "localhost:5173/" });
+  });
 });
 
 describe("placing slots", () => {

@@ -114,13 +114,28 @@ const TOOL_PREFIX = "mcp__kumiko__";
 
 /** The chat's line for a tool call that opened, changed or closed something in the window; undefined for any other. */
 export function widgetLine(name: string, input: Record<string, unknown>, w: WindowState): WidgetLine | undefined {
-  const path = typeof input.path === "string" ? input.path : typeof input.file_path === "string" ? input.file_path : undefined;
+  const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
+  // An artifact is named by its path (a file's, or a page's URL), or by its id in the window.
+  const ref = str(input.path) ?? str(input.file_path) ?? str(input.url) ?? str(input.artifact);
   const docs = artifactsOf(w);
-  const doc = path ? docs.find(([, d]) => d.path === normalize(path)) ?? docs.find(([, d]) => d.path.endsWith(`/${normalize(path).replace(/^\//, "")}`)) : undefined;
-  const of = doc ? { title: doc[1].title, widget: doc[0] } : { title: path };
+  const byPath = (p: string) => {
+    const n = normalize(p);
+    return docs.find(([, d]) => d.path === p || d.path === n) ?? docs.find(([, d]) => d.path.endsWith(`/${n.replace(/^\//, "")}`));
+  };
+  const doc = ref ? (w.widgets[ref]?.kind === "artifact" ? docs.find(([id]) => id === ref) : byPath(ref)) : undefined;
+  // One that is gone from the window (deleted, say) goes by its file's name, or its page's address.
+  const named = ref && !w.widgets[ref] ? (/^https?:\/\//.test(ref) ? ref.replace(/^https?:\/\//, "") : ref.split("/").pop()) : undefined;
+  const of = doc ? { title: doc[1].title, widget: doc[0] } : { title: named };
+  const page = doc ? doc[1].type === "preview" || doc[1].type === "web" : Boolean(ref && /^https?:\/\//.test(ref));
   switch (name) {
     case `${TOOL_PREFIX}artifact_open`:
       return { label: "Opened", ...of };
+    case `${TOOL_PREFIX}artifact_capture`:
+      return ref ? { label: input.reload === true ? "Reloaded and looked at" : "Looked at", ...of } : { label: input.reload === true ? "Reloaded and looked at a pane" : "Looked at a pane" };
+    case `${TOOL_PREFIX}artifact_reload`:
+      return ref ? { label: "Reloaded", ...of } : { label: "Reloaded a pane" };
+    case `${TOOL_PREFIX}artifact_remove`:
+      return { label: page ? "Removed" : "Deleted", ...of };
     case `${TOOL_PREFIX}window_close`:
       return { label: "Closed a pane" };
     case `${TOOL_PREFIX}window_list`:
