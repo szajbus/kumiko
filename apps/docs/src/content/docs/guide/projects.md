@@ -1,6 +1,6 @@
 ---
 title: Projects and sandboxes
-description: Creating, editing, recreating and deleting projects and their sandboxes.
+description: Creating, editing, restarting, recreating and deleting projects and their sandboxes.
 sidebar:
   order: 1
 ---
@@ -68,12 +68,15 @@ to save:
 
 - **Save and recreate sandbox** (the default) deletes the sandbox and creates it again from the changed settings,
   provisioning included. It works whether the sandbox is running or not, and the disk can shrink.
-- **Save** keeps the sandbox. CPUs, memory, disk and mounts need it stopped and apply on its next start, and the disk
-  can only grow. Forwarded variables and the script can change while it runs, but a new script only runs on a
-  recreate.
+- **Save** keeps the sandbox. CPUs, memory, disk and mounts apply on its next start, and the disk can only grow. If
+  the sandbox is running when they change, the button becomes **Save and restart sandbox**: it stops the sandbox,
+  saves and starts it again, ending its live sessions. Forwarded variables and the script can change while it runs,
+  but a new script only runs on a recreate.
 
-## Recreating and deleting
+## Restarting, recreating and deleting
 
+- **Restart sandbox** stops a running sandbox and starts it again, ending its live sessions (it asks first if there
+  are any). The disk is kept, so nothing is provisioned again.
 - **Recreate sandbox** deletes the sandbox and creates it again from its stored settings. The agent home and the
   saved sessions stay, and so does the login.
 - **Delete** removes the project, its sandbox, its agent home and its saved sessions, after asking. The clone and its
