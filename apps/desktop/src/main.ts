@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { app, BrowserWindow, dialog, ipcMain, session, shell, webContents, type NativeImage, type Session } from "electron";
-import { isExternalUrl, isPreviewUrl, isPrivateHost, paneNavigation } from "@kumiko/shared";
+import { isExternalUrl, isPreviewUrl, paneMayReach, paneNavigation } from "@kumiko/shared";
 import { startServer, type RunningServer } from "@kumiko/server";
 import { adoptLoginShellEnv } from "./shell-env.js";
 
@@ -122,25 +122,26 @@ function guardPages(s: Session) {
   s.on("will-download", (e) => e.preventDefault());
 }
 
-/** Whether a host name resolves to an address on this machine or a private network, remembered for a minute. */
-const resolved = new Map<string, { at: number; private: Promise<boolean> }>();
-function resolvesPrivate(host: string): Promise<boolean> {
+/** The addresses a host name resolves to, remembered for a minute; none for one that doesn't resolve. */
+const resolved = new Map<string, { at: number; addresses: Promise<string[]> }>();
+function addressesOf(host: string): Promise<string[]> {
   const known = resolved.get(host);
-  if (known && Date.now() - known.at < 60_000) return known.private;
-  const answer = lookup(host, { all: true }).then(
-    (addresses) => addresses.some((a) => isPrivateHost(a.address)),
+  if (known && Date.now() - known.at < 60_000) return known.addresses;
+  const addresses = lookup(host, { all: true }).then(
+    (found) => found.map((a) => a.address),
     // Unresolvable: the request fails by itself.
-    () => false,
+    () => [],
   );
-  resolved.set(host, { at: Date.now(), private: answer });
-  return answer;
+  resolved.set(host, { at: Date.now(), addresses });
+  return addresses;
 }
 
 /**
- * External sites can't reach this machine or its networks: a request to a private address, or to a name that resolves
- * to one (DNS rebinding), is cancelled. Otherwise a site Claude opens could read the intranet for it, by a picture.
+ * Pages in panes can't reach private networks, and websites not this machine either (`paneMayReach`): a request to
+ * such an address, or to a name that resolves to one (DNS rebinding), is cancelled. Otherwise a page could read the
+ * intranet for Claude, by a picture.
  */
-function guardPrivateNetwork(s: Session) {
+function guardPrivateNetwork(s: Session, pane: "preview" | "site") {
   s.webRequest.onBeforeRequest({ urls: ["<all_urls>"] }, (details, callback) => {
     let url: URL;
     try {
@@ -158,9 +159,9 @@ function guardPrivateNetwork(s: Session) {
       }
       callback({ cancel: true });
     };
-    if (isPrivateHost(host)) return block();
+    if (!paneMayReach(pane, host)) return block();
     if (isIP(host)) return callback({});
-    void resolvesPrivate(host).then((isPrivate) => (isPrivate ? block() : callback({})));
+    void addressesOf(host).then((addresses) => (addresses.every((a) => paneMayReach(pane, a)) ? callback({}) : block()));
   });
 }
 
@@ -192,6 +193,8 @@ if (!app.requestSingleInstanceLock()) {
   // windows, don't open: a page's script can ask for them without a click, and the browser would load them with the
   // user's logins, on their network. The pane says where the page wanted to go, and the user can open it from there.
   app.on("web-contents-created", (_e, contents) => {
+    // WebRTC connects on its own, past the requests guardPrivateNetwork sees, so only through a proxy, which is none.
+    contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
     if (contents.getType() !== "webview") return;
     const pane = contents.session === session.fromPartition(SITES) ? "site" : "preview";
     const ask = (target: string) => paneNavigation(pane, target) === "ask" && contents.hostWebContents?.send("kumiko:page-wants", contents.id, target);
@@ -243,7 +246,8 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     guardPages(session.fromPartition(PREVIEWS));
     guardPages(session.fromPartition(SITES));
-    guardPrivateNetwork(session.fromPartition(SITES));
+    guardPrivateNetwork(session.fromPartition(PREVIEWS), "preview");
+    guardPrivateNetwork(session.fromPartition(SITES), "site");
     if (process.platform === "darwin" && !app.isPackaged) app.dock?.setIcon(icon("macos/icon-macos-1024.png"));
     if (devLoginUrl) {
       createWindow(devLoginUrl);

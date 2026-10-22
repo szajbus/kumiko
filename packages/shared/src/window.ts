@@ -303,19 +303,45 @@ export function urlOrigin(url: string): string | undefined {
  * names that resolve to them are checked where they are resolved.
  */
 export function isPrivateHost(host: string): boolean {
-  const h = host.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  const h = hostOf(host);
   if (h === "localhost" || /\.(localhost|local|internal|lan|home\.arpa)$/.test(h) || !h.includes(".") && !h.includes(":")) return true;
-  // An IPv4 address in IPv6 (::ffff:7f00:1, as URLs write ::ffff:127.0.0.1) is checked as the IPv4 one.
-  const hex = /^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(h);
-  const v4 = hex
-    ? [, parseInt(hex[1], 16) >> 8, parseInt(hex[1], 16) & 255]
-    : /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h.replace(/^::(?:ffff:)?/, ""));
+  const v4 = ipv4Of(h);
   if (v4) {
-    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    const [a, b] = v4;
     return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || (a === 198 && (b === 18 || b === 19)) || a >= 224;
   }
-  if (h.includes(":")) return h === "::" || h === "::1" || /^f[cd][0-9a-f]{0,2}:/.test(h) || /^fe[89ab][0-9a-f]?:/.test(h);
+  // Unique local (fc00::/7), link-local (fe80::/10) and the old site-local (fec0::/10).
+  if (h.includes(":")) return h === "::" || h === "::1" || /^f[cd][0-9a-f]{0,2}:/.test(h) || /^fe[89a-f][0-9a-f]?:/.test(h);
   return false;
+}
+
+/** Whether `host` is this machine itself: localhost, or a loopback address. */
+export function isLoopbackHost(host: string): boolean {
+  const h = hostOf(host);
+  return h === "localhost" || h.endsWith(".localhost") || h === "::1" || ipv4Of(h)?.[0] === 127;
+}
+
+/**
+ * Whether a page in a pane may load from `host`: a website only from the web at large, a preview from this machine's
+ * pages too, which it shows, but neither from a private network, which the sandbox can't reach.
+ */
+export function paneMayReach(pane: "preview" | "site", host: string): boolean {
+  return !isPrivateHost(host) || (pane === "preview" && isLoopbackHost(host));
+}
+
+/** A host as written in a URL or a DNS answer, lowercased, without brackets or a final dot. */
+const hostOf = (host: string) => host.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+
+/**
+ * The first two parts of the IPv4 address `h` is, or has in it: in IPv6, as an IPv4-mapped address (::ffff:7f00:1,
+ * as URLs write ::ffff:127.0.0.1) or a NAT64 one (64:ff9b::7f00:1), which reaches the IPv4 address it names.
+ */
+function ipv4Of(h: string): [number, number] | undefined {
+  const prefix = "(?:::(?:ffff:)?|64:ff9b::)";
+  const hex = new RegExp(`^${prefix}([0-9a-f]{1,4}):([0-9a-f]{1,4})$`).exec(h);
+  if (hex) return [parseInt(hex[1], 16) >> 8, parseInt(hex[1], 16) & 255];
+  const dotted = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h.replace(new RegExp(`^${prefix}`), ""));
+  return dotted ? [Number(dotted[1]), Number(dotted[2])] : undefined;
 }
 
 /** Whether `url` is an external site an artifact may show: http(s), not on this machine or a private network. */

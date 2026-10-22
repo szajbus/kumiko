@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { addWidget, applyWindowOp, artifactTypeOf, imageTypeOf, isExternalUrl, isPrivateHost, paneNavigation, urlHost, urlOrigin, CHAT, chatWindow, close, move, remove, resize, show, compactWindow, nextId, paneIds, paneOf, split, windowState, WINDOW, MAX_PANES, WindowError, type SessionEvent, type WindowOp, type WindowState } from "@kumiko/shared";
+import { addWidget, applyWindowOp, artifactTypeOf, imageTypeOf, isExternalUrl, isLoopbackHost, isPrivateHost, paneMayReach, paneNavigation, urlHost, urlOrigin, CHAT, chatWindow, close, move, remove, resize, show, compactWindow, nextId, paneIds, paneOf, split, windowState, WINDOW, MAX_PANES, WindowError, type SessionEvent, type WindowOp, type WindowState } from "@kumiko/shared";
 
 /** A window with an artifact widget per id, none shown. */
 const withDocs = (...ids: string[]): WindowState => ids.reduce((w, id) => addWidget(w, id, { kind: "artifact" }), chatWindow());
@@ -321,6 +321,23 @@ describe("external sites", () => {
     for (const host of ["example.com", "8.8.8.8", "172.32.0.1", "100.128.0.1", "[2606:4700::1111]", "[::ffff:808:808]", "docs.github.com"]) {
       assert.equal(isPrivateHost(host), false, host);
     }
+    // A NAT64 address reaches the IPv4 one it names; site-local IPv6 is a private network's.
+    for (const host of ["[64:ff9b::c0a8:101]", "64:ff9b::7f00:1", "[64:ff9b::10.0.0.1]", "[fec0::1]", "[feff::1]"]) assert.equal(isPrivateHost(host), true, host);
+    assert.equal(isPrivateHost("[64:ff9b::808:808]"), false, "a public address through NAT64");
+  });
+
+  it("reach this machine from a preview only, and private networks from neither", () => {
+    for (const host of ["localhost", "app.localhost", "127.0.0.1", "127.8.0.1", "[::1]", "[::ffff:7f00:1]"]) {
+      assert.equal(isLoopbackHost(host), true, host);
+      assert.equal(paneMayReach("preview", host), true, host);
+      assert.equal(paneMayReach("site", host), false, host);
+    }
+    for (const host of ["192.168.1.1", "10.0.0.5", "printer.local", "[fd12::1]", "169.254.169.254"]) {
+      assert.equal(paneMayReach("preview", host), false, host);
+      assert.equal(paneMayReach("site", host), false, host);
+    }
+    assert.equal(paneMayReach("preview", "example.com"), true);
+    assert.equal(paneMayReach("site", "example.com"), true);
   });
 
   it("are http(s) URLs to public hosts", () => {

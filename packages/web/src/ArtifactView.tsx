@@ -453,7 +453,7 @@ const ABORTED = -3;
 
 /** Why a page didn't load, in words for the user and for Claude. */
 function loadError(code: number, description: string, url: string): string {
-  if (code === BLOCKED_BY_CLIENT) return "Blocked: it points to the user's machine or a private network, which websites in Kumiko can't reach.";
+  if (code === BLOCKED_BY_CLIENT) return "Blocked: it points to a private network, or, for a website, the user's machine. Pages in Kumiko can't reach those.";
   return `${description || `error ${code}`} (${url})`;
 }
 
