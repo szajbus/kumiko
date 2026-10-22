@@ -1,5 +1,5 @@
 ---
-title: What the agent is told
+title: Agent instructions
 description: The instructions Kumiko gives the agent, word for word.
 sidebar:
   order: 1
