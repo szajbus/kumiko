@@ -145,7 +145,9 @@ for id in "$@"; do
   if [ "$(cat "$r/boot" 2>/dev/null)" = "$b" ]; then
     for f in attach.pid hold.pid pid; do kill "$(cat "$r/$f" 2>/dev/null)" 2>/dev/null; done
   fi
-  rm -rf "$r"
+  # The run's own shell writes its exit as the agent dies, which can land while rm empties the folder: try again.
+  for n in 1 2 3 4 5 6 7 8 9; do rm -rf "$r" 2>/dev/null && break; sleep 0.2; done
+  [ ! -e "$r" ] || rm -rf "$r"
 done
 `;
 

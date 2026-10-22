@@ -62,12 +62,16 @@ describe("widgets", () => {
   const listen = async (id: string) => {
     let got: SessionEvent[] = [];
     const sock = new WebSocket(`${server.url.replace("http", "ws")}/api/sessions/${id}/events?after=0`);
+    // Ready once the events so far have come, so a result from before doesn't pass for the next prompt's.
+    let ready!: () => void;
+    const caughtUp = new Promise<void>((r) => (ready = r));
     sock.on("message", (m) => {
       const msg = JSON.parse(String(m)) as SessionStreamMessage;
       if (msg.kind !== "caught_up") got.push(msg);
+      else ready();
     });
-    sock.on("close", () => (got = []));
-    await new Promise((r) => sock.once("open", r));
+    sock.on("close", () => ((got = []), ready()));
+    await caughtUp;
     const results = () => got.filter((e) => e.kind === "claude" && e.payload.type === "result");
     return { events: () => got, window: () => windowState(got), results, close: () => sock.close() };
   };

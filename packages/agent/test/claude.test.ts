@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { appendFile, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { CLAUDE_COMMAND, ClaudeDriver, claudeCommand, exitHint, mcpConfig, Runs, RUNS_DIR, userMessage, type AgentEvent, type AgentMessage, type Exec, type ToolCallContext, type ToolHost } from "../src/index.js";
@@ -230,6 +231,19 @@ describe("ClaudeDriver", () => {
       assert.equal(exit.kind === "exit" && exit.code, 75);
       const err = d.events.find((e) => e.kind === "error");
       assert.match(err?.kind === "error" ? err.message : "", /gone/);
+    });
+
+    it("removes a run whose folder is still being written to as it goes", async () => {
+      const d = await drive();
+      const dir = join(d.home, RUNS_DIR, "s5-a");
+      await mkdir(dir, { recursive: true });
+      // As the run's own shell writes its exit while its agent dies: files keep coming for a second.
+      const writer = spawn("sh", ["-c", 'end=$(($(date +%s) + 2)); i=0; while [ "$(date +%s)" -lt "$end" ]; do : > "$1/f$i" 2>/dev/null || exit 0; i=$((i + 1)); done', "sh", dir]);
+      const written = new Promise((r) => writer.once("exit", r));
+      await new Promise((r) => setTimeout(r, 100));
+      await new Runs(d.exec).remove("test", ["s5-a"]);
+      await written;
+      assert.equal(existsSync(dir), false);
     });
 
     it("lists runs with their state, and removes them", async () => {
