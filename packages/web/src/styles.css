@@ -428,6 +428,8 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 }
 .tab:hover { background: var(--surface-2); color: var(--text-2); }
 .tab.is-active { background: #262b35; border-color: var(--border-strong); color: var(--text); }
+/* Its session waits for its sandbox to start. */
+.tab.is-asleep .tab-main { opacity: 0.5; }
 /* Dragging a tab: it fades, and a bar in the gap shows where it would land. */
 .tab.is-dragging { opacity: 0.45; }
 .tab:is(.drop-before, .drop-after)::before {

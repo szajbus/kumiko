@@ -109,6 +109,10 @@ export const sessionStatus = (s: SessionStatus) => SESSION_STATUS[s];
 
 /** A session's state for its tab and lists: waiting on the user stands out from merely ready. */
 export const sessionState = (s: SessionInfo) =>
-  isWaiting(s) && s.status === "idle" ? { text: "Waiting on you", color: COLORS.warn } : SESSION_STATUS[s.status];
+  s.asleep
+    ? { text: "Sandbox stopped", color: COLORS.stopped }
+    : isWaiting(s) && s.status === "idle"
+      ? { text: "Waiting on you", color: COLORS.warn }
+      : SESSION_STATUS[s.status];
 
 export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;

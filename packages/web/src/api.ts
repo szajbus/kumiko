@@ -16,6 +16,7 @@ import type {
   ProjectView,
   PromptRequest,
   ResumableSession,
+  ResumeRequest,
   SavedTabs,
   RewindRequest,
   RewindResponse,
@@ -142,8 +143,10 @@ export const api = {
   resizeSplit: (id: string, path: string, ratio: number) => request<WindowState>("POST", `/api/sessions/${id}/window/resize`, { path, ratio }),
   /** Saved sessions that aren't open, most recent first. */
   resumable: () => request<ResumableSession[]>("GET", "/api/sessions/resumable"),
-  /** Reopens a saved session with its chat; returns the same id. */
-  resumeSession: (id: string) => request<{ id: string }>("POST", `/api/sessions/${id}/resume`),
+  /** Reopens a saved session with its chat; returns the same id. With `start: false`, a stopped sandbox stays stopped. */
+  resumeSession: (id: string, opts: ResumeRequest = {}) => request<{ id: string }>("POST", `/api/sessions/${id}/resume`, opts),
+  /** Starts the sandbox of a session opened asleep, and Claude in it. */
+  wakeSession: (id: string) => request<SessionInfo>("POST", `/api/sessions/${id}/wake`),
   /** Deletes a saved session for good. */
   deleteSavedSession: (id: string) => request("DELETE", `/api/sessions/saved/${id}`),
   /** Starts a new session from a copy of this one's conversation: all of it, or up to the end of a prompt's turn. */

@@ -20,7 +20,7 @@ import { UsageStrip } from "./UsageStrip";
 import { widgetLine } from "./widgets";
 import { WindowContext } from "./windowContext";
 
-/** How long the note that Claude restarted stays. */
+/** How long the note that Claude restarted, or that the sandbox started, stays. */
 const RESTARTED_MS = 4000;
 /** How long it takes to fade away; as `.banner-success.is-fading` does. */
 const FADE_MS = 650;
@@ -80,6 +80,23 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
   // Bumped by a rewind, so the composer starts again from the draft it left.
   const [composerKey, setComposerKey] = useState(0);
   const [loggingIn, setLoggingIn] = useState(false);
+  // Starting the sandbox of a session opened asleep; it wakes once that is done, which says so for a moment and fades
+  // away, however the sandbox was started.
+  const [waking, setWaking] = useState(false);
+  const [woke, setWoke] = useState<"done" | "fading">();
+  const wasAsleep = useRef(session.asleep);
+  useEffect(() => {
+    if (wasAsleep.current && !session.asleep) {
+      setWaking(false);
+      setWoke("done");
+    }
+    wasAsleep.current = session.asleep;
+  }, [session.asleep]);
+  useEffect(() => {
+    if (!woke) return;
+    const t = setTimeout(() => setWoke(woke === "done" ? "fading" : undefined), woke === "done" ? RESTARTED_MS : FADE_MS);
+    return () => clearTimeout(t);
+  }, [woke]);
   // Restarting Claude for Kumiko's new tools: under way, then done, which says so for a moment and fades away.
   const [restart, setRestart] = useState<"pending" | "done" | "fading">();
   // Restarted by Kumiko on its own, once idle: said the same way.
@@ -240,6 +257,29 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
           <div className="banner banner-warn">Lost connection to the session. Reconnecting…</div>
         )}
         {error && <div className="banner banner-error">{error}</div>}
+        {session.asleep && (
+          <div className="banner banner-info">
+            <span className="banner-text">
+              {waking ? "Starting the sandbox…" : "Start the sandbox to resume this session."}
+            </span>
+            <button
+              type="button"
+              className="btn btn-primary btn-compact"
+              disabled={waking}
+              onClick={async () => {
+                setWaking(true);
+                if (!(await call(() => api.wakeSession(session.id)))) setWaking(false);
+              }}
+            >
+              {waking ? "Starting…" : "Start sandbox"}
+            </button>
+          </div>
+        )}
+        {woke && (
+          <div className={`banner banner-success${woke === "fading" ? " is-fading" : ""}`} role="status">
+            Sandbox started. Claude is ready to continue.
+          </div>
+        )}
         {session.toolsOutdated && live && !idle && restart === undefined && (
           <div className="banner banner-info" role="status">
             Claude restarts after this turn, for Kumiko's new tools.
@@ -276,7 +316,7 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
           history={history}
           draftKey={session.id}
           submitLabel="Send"
-          placeholder={live ? "Message Claude…" : "This session has ended."}
+          placeholder={live ? "Message Claude…" : session.asleep ? "Start the sandbox to continue." : "This session has ended."}
           disabled={!live || session.status === "starting"}
           onStop={session.status === "running" ? () => void call(() => api.interrupt(session.id)) : undefined}
           onSubmit={(text, files) => {

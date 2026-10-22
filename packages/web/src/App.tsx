@@ -111,7 +111,7 @@ export function App() {
   const started = useRef(new Set<string>());
   // A snapshot after the first is a server that restarted. It lists the sessions whose Claude it picked up again; the
   // tabs' sessions it doesn't list are resumed, as at launch, and wait for it like ones just started. Any other wait is over, as the snapshot
-  // lists all the server has.
+  // lists all the server has. Like at launch, a stopped sandbox isn't started for them: they come back asleep.
   const shown = useRef<string[]>([]);
   const resuming = useRef<string[]>([]);
   const snapshotSeen = useRef(live.snapshots);
@@ -127,7 +127,7 @@ export function App() {
     const ids = resuming.current;
     if (!ids.length) return;
     void (async () => {
-      for (const id of ids) if (!(await api.resumeSession(id).then(() => true, () => false))) started.current.delete(id);
+      for (const id of ids) if (!(await api.resumeSession(id, { start: false }).then(() => true, () => false))) started.current.delete(id);
       resuming.current = [];
       // Tabs whose session couldn't come back stop waiting, and the tabs are saved again.
       setResumed((n) => n + 1);
@@ -154,11 +154,11 @@ export function App() {
         return setRestored(true);
       }
       // Sessions that are gone or can't be resumed just don't get a tab. One at a time: the server lists sessions in the
-      // order they started, which is the tab order.
+      // order they started, which is the tab order. Those whose sandbox is stopped come back asleep, without starting it.
       const back = new Set<string>();
       for (const id of saved.sessions) {
         if (open.has(id)) back.add(id);
-        else if (await api.resumeSession(id).then(() => true, () => false)) {
+        else if (await api.resumeSession(id, { start: false }).then(() => true, () => false)) {
           back.add(id);
           // Its tab may open before the session list has caught up with the resume.
           started.current.add(id);

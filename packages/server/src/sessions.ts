@@ -108,6 +108,26 @@ const toolsVersion = (widgets: SessionWidgets | undefined) =>
 
 const sizeOf = (e: SessionEvent) => Buffer.byteLength(JSON.stringify(e));
 
+/** The driver of a session opened asleep: there is no Claude behind it, so it says nothing and has nothing to stop. */
+const noDriver: AgentDriver = {
+  start: () => {
+    throw new Error("Not a driver to start.");
+  },
+  attach: () => {
+    throw new Error("Not a driver to attach.");
+  },
+  position: () => undefined,
+  send: () => {
+    throw new SessionEnded("Claude isn't running in this session.");
+  },
+  rewindFiles: () => Promise.reject(new SessionEnded("Claude isn't running in this session.")),
+  interrupt: () => {},
+  stop: () => Promise.resolve(),
+  detach: () => Promise.resolve(),
+  pendingCalls: () => [],
+  onEvent: () => () => {},
+};
+
 /**
  * Agent sessions, kept in memory: one driver per session and a buffer of everything it said, so a tab that opens
  * or reconnects can replay it. Sessions that end stay listed until they are removed, so their tab keeps the transcript.
@@ -178,6 +198,35 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     const { endedAt: _endedAt, updatedAt: _updatedAt, unread: _unread, closing: _closing, ...rest } = saved;
     const info: SessionInfo = { ...rest, status: "idle" };
     return this.launch(info, stored.events, { sandbox: info.sandbox, workdir: info.workdir, env, ...continuing(saved) });
+  }
+
+  /**
+   * Opens a saved session with its chat but no Claude, for its tab while its sandbox is stopped; `wake` starts Claude
+   * on it once the sandbox runs. Until then it is `ended`, so nothing can be sent to it.
+   */
+  openAsleep(stored: StoredSession): SessionInfo {
+    const { info: saved } = stored;
+    if (this.sessions.has(saved.id)) throw new SessionNotResumable("This session is already open.");
+    if (!saved.claudeSessionId) throw new SessionNotResumable("This session has nothing of Claude's to resume.");
+    const { endedAt: _endedAt, updatedAt: _updatedAt, closing: _closing, toolsOutdated: _outdated, ...rest } = saved;
+    const s = this.newSession({ ...rest, status: "ended", asleep: true }, stored.events);
+    s.driver = noDriver;
+    this.sessions.set(saved.id, s);
+    this.emit("changed");
+    return s.info;
+  }
+
+  /** Starts Claude on a session opened asleep, continuing its conversation; one awake already is left as it is. */
+  wake(id: string, env: string[]): SessionInfo {
+    const s = this.sessions.get(id);
+    if (!s) throw new SessionNotFound(`No session ${id}.`);
+    if (!s.info.asleep) return s.info;
+    const { asleep: _asleep, ...rest } = s.info;
+    s.info = { ...rest, status: "idle" };
+    this.startDriver(s, { sandbox: s.info.sandbox, workdir: s.info.workdir, env, ...continuing(s.info) });
+    this.emit("changed");
+    this.save(s);
+    return s.info;
   }
 
   /**
@@ -420,7 +469,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     const resume = succeeded && s.info.claudeSessionId ? continuing(s.info) : undefined;
     const old = s.driver;
     const live = isLive(s.info);
-    const { endedAt: _endedAt, ...rest } = s.info;
+    const { endedAt: _endedAt, asleep: _asleep, ...rest } = s.info;
     // A fresh start gets a new Claude id from its first init; until then there is nothing to fork or resume.
     s.info = { ...rest, status: "idle", unread: keepUnread ? s.info.unread : false, ...(resume ? {} : { claudeSessionId: undefined, resumeAt: undefined }) };
     s.ending = undefined;

@@ -149,6 +149,55 @@ describe("sessions", () => {
     for (const id of [a, b]) await waitFor(async () => (await session(id))?.status === "idle");
   });
 
+  it("opens a session asleep instead of starting its stopped sandbox, and wakes it once the sandbox runs", async () => {
+    await create("dozy");
+    const idle = (x: string) => waitFor(async () => { const i = await session(x); return i?.status === "idle" && i.claudeSessionId ? i : undefined; });
+    const id = await startSession("dozy", "remember me");
+    await idle(id);
+    const stop = async () => {
+      const since = events.length;
+      assert.equal((await api("/api/projects/dozy/stop", { method: "POST" })).status, 202);
+      assert.equal((await finished("dozy", "stopping", since)).type, "done");
+    };
+    /** Closes its tab, then opens it again as a tab coming back does. */
+    const reopen = async () => {
+      await api(`/api/sessions/${id}`, { method: "DELETE" });
+      const res = await api(`/api/sessions/${id}/resume`, { method: "POST", body: JSON.stringify({ start: false }) });
+      assert.equal(res.status, 201);
+      return session(id);
+    };
+
+    await stop();
+    const asleep = await reopen();
+    assert.equal(asleep?.asleep, true);
+    assert.equal(asleep?.status, "ended");
+    assert.equal((await sandbox("dozy")).status, "stopped", "the sandbox stays stopped");
+    const chat = await listen(id);
+    assert.ok(chat.got.some((e) => e.kind === "user_prompt" && e.payload.text === "remember me"), "its chat is there");
+    assert.equal((await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: "hi" }) })).status, 409);
+    assert.ok(!((await json(await api("/api/sessions/resumable"))) as SessionInfo[]).some((x) => x.id === id), "it is open, not in the list");
+
+    // Its banner starts the sandbox, and Claude continues the conversation.
+    const woken = (await json(await api(`/api/sessions/${id}/wake`, { method: "POST" }))) as SessionInfo;
+    assert.equal(woken.status, "idle");
+    assert.equal(woken.asleep, undefined);
+    assert.equal((await sandbox("dozy")).status, "running");
+    await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: "still there?" }) });
+    await waitFor(() => chat.results().length === 2);
+    assert.ok(chat.got.some((e) => e.kind === "claude" && e.payload.type === "result" && e.payload.result === "You said: still there?"), "the same tab gets the new turn");
+
+    // Started some other way, the sandbox wakes it all the same.
+    await stop();
+    assert.equal((await reopen())?.asleep, true);
+    assert.equal((await api("/api/projects/dozy/start", { method: "POST" })).status, 202);
+    await idle(id);
+    assert.equal((await session(id))?.asleep, undefined);
+
+    // With the sandbox running, it opens awake at once.
+    assert.equal((await reopen())?.asleep, undefined);
+    await api(`/api/sessions/${id}`, { method: "DELETE" });
+  });
+
   it("refuses to close the chat's pane, or a pane that isn't there", async () => {
     const id = await startSession("one", "hi");
     await waitFor(async () => (await session(id))?.status === "idle");

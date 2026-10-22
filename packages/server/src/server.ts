@@ -33,6 +33,7 @@ import {
   type DefaultsResponse,
   type EditSpec,
   type ForkRequest,
+  type ResumeRequest,
   type LoginAccount,
   type LoginStartResponse,
   type LoginStatusResponse,
@@ -262,6 +263,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
           infos = await provider.list();
           listError = undefined;
           endOrphanedSessions();
+          wakeAsleep();
         } catch (err) {
           listError = err instanceof Error ? err.message : String(err);
         }
@@ -312,6 +314,28 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   const endOrphanedSessions = () => {
     for (const [name] of sessions.liveCounts()) {
       if (infos.find((i) => i.name === name)?.status !== "running") void sessions.endSandbox(name, "sandbox");
+    }
+  };
+
+  /** Sessions opened asleep get their Claude once their sandbox runs, however it was started. */
+  const waking = new Set<string>();
+  const wakeAsleep = () => {
+    if (!serving) return;
+    for (const info of sessions.list()) {
+      if (!info.asleep || waking.has(info.id) || ops.active().includes(info.sandbox)) continue;
+      if (infos.find((i) => i.name === info.sandbox)?.status !== "running") continue;
+      waking.add(info.id);
+      void (async () => {
+        try {
+          const ready = await readyProject(info.sandbox);
+          // Its tab may have closed meanwhile.
+          if (sessions.get(info.id)) sessions.wake(info.id, ready.env);
+        } catch (err) {
+          console.error(`Couldn't start Claude in session ${info.id}: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+          waking.delete(info.id);
+        }
+      })();
     }
   };
 
@@ -751,12 +775,23 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     return c.json({ ok: true });
   });
 
-  /** Opens a saved session again: its Claude where it is still running, or a new one continuing its conversation. */
+  /**
+   * Opens a saved session again: its Claude where it is still running, or a new one continuing its conversation. With
+   * `start: false`, one whose sandbox is stopped opens asleep instead, and wakes once the sandbox runs.
+   */
   app.post("/api/sessions/:id/resume", async (c) => {
+    const req = await c.req.json<ResumeRequest>().catch(() => ({}) as ResumeRequest);
     // One whose tab closed while Claude finishes opens again as it is, if it hasn't finished yet.
     if (await sessions.keep(c.req.param("id"))) return c.json({ id: c.req.param("id") }, 201);
     const stored = await sessionStore.read(c.req.param("id"));
     if (!stored || (!stored.info.claudeSessionId && !stored.run?.live)) throw new HttpError(404, `No saved session ${c.req.param("id")}.`);
+    if (req.start === false && !sessions.get(stored.info.id) && (await known(stored.info.sandbox)).info.status === "stopped" && !ops.active().includes(stored.info.sandbox)) {
+      // Nothing runs in a stopped sandbox, its Claude included.
+      await markRunDead(stored);
+      // One closed to be deleted once Claude finished is deleted now.
+      if (!stored.info.claudeSessionId || (stored.run?.live && stored.info.closing?.delete)) throw new HttpError(404, `No saved session ${c.req.param("id")}.`);
+      return c.json({ id: sessions.openAsleep(stored).id }, 201);
+    }
     const ready = await startedProject(stored.info.sandbox);
     if (stored.run?.live && !sessions.get(stored.info.id)) {
       // Not knowing whether its Claude still runs, starting another on the same conversation could have two at once.
@@ -770,6 +805,13 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       if (!stored.info.claudeSessionId) throw new HttpError(404, `No saved session ${c.req.param("id")}.`);
     }
     return c.json({ id: sessions.resume(stored, ready.env).id }, 201);
+  });
+
+  /** Starts the sandbox of a session opened asleep, if it is stopped, and Claude on the session. */
+  app.post("/api/sessions/:id/wake", async (c) => {
+    const { id, sandbox } = sessionOf(c);
+    const ready = await startedProject(sandbox);
+    return c.json(sessions.wake(id, ready.env));
   });
 
   app.post("/api/sessions/:id/prompt", async (c) => {
@@ -1039,6 +1081,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   });
   serving = true;
   restartOutdated();
+  wakeAsleep();
 
   const wss = new WebSocketServer({ noServer: true });
   const sessionSockets = new Set<WebSocket>();

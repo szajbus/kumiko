@@ -341,6 +341,11 @@ export interface SessionInfo {
    * latest, then the session ends, and with `delete` its saved chat goes too. Tabs leave such sessions out.
    */
   closing?: { delete: boolean; until: string };
+  /**
+   * Opened from its saved chat with no Claude, as its tab came back while its sandbox was stopped: Kumiko doesn't
+   * start a sandbox for that on its own. Its status is `ended` until the sandbox runs and Claude continues it.
+   */
+  asleep?: boolean;
 }
 
 /**
@@ -430,6 +435,15 @@ export interface LoginStatusResponse {
 export interface RewindRequest {
   /** Also put the files Claude changed since back as they were. */
   files: boolean;
+}
+
+/** Opens a saved session again. */
+export interface ResumeRequest {
+  /**
+   * With `false`, a session whose sandbox is stopped opens asleep (see `SessionInfo.asleep`) instead of starting the
+   * sandbox: for tabs coming back on their own, rather than at the user's asking.
+   */
+  start?: boolean;
 }
 
 /** Starts a new session from a copy of a session's conversation. */

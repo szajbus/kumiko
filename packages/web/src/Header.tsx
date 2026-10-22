@@ -108,6 +108,7 @@ export function Header({ sessions, newSessions, order, active, onSelect, onClose
         group: s.sandbox,
         dot: st.color,
         pulse: s.status === "running" || s.status === "starting",
+        asleep: s.asleep,
       };
     }
     const n = newSessions.find((x) => `new-session:${x.key}` === id);
@@ -287,6 +288,8 @@ interface TabLook {
   group?: string;
   dot?: string;
   pulse?: boolean;
+  /** Its session waits for its sandbox to start: the tab is greyed. */
+  asleep?: boolean;
 }
 
 type TabProps = TabLook & { id: TabId; active: TabId } & (
@@ -296,7 +299,7 @@ type TabProps = TabLook & { id: TabId; active: TabId } & (
 );
 
 function Tab(props: TabProps) {
-  const { id, active, label, title, dot, pulse } = props;
+  const { id, active, label, title, dot, pulse, asleep } = props;
   const selected = id === active && !props.closing;
   const onSelect = props.closing ? () => {} : props.onSelect;
   const onClose = props.closing ? () => {} : props.onClose;
@@ -317,7 +320,7 @@ function Tab(props: TabProps) {
   const drop = props.closing ? undefined : props.drop;
   return (
     <div
-      className={`tab${selected ? " is-active" : ""}${dragging ? " is-dragging" : ""}${drop ? ` drop-${drop}` : ""}${props.closing ? " is-closing" : ""}`}
+      className={`tab${selected ? " is-active" : ""}${asleep ? " is-asleep" : ""}${dragging ? " is-dragging" : ""}${drop ? ` drop-${drop}` : ""}${props.closing ? " is-closing" : ""}`}
       {...handlers}
     >
       <button type="button" role="tab" aria-selected={selected} className="tab-main" title={title ?? label} onClick={() => onSelect(id)}>
