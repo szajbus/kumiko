@@ -39,8 +39,13 @@ code, .mono { font-family: var(--mono); }
 .align-right { text-align: right; }
 
 .app { min-height: 100vh; display: flex; flex-direction: column; }
-/* A session's window fills the app's exactly: the chat scrolls and the composer stays at the bottom. */
-.app:has(> .window) { height: 100vh; overflow: hidden; }
+/* A session's window fills the app's exactly: the chat scrolls and the composer stays at the bottom. Windows of tabs
+   looked at before stay mounted, and hidden by content-visibility rather than display: the browser skips them but
+   keeps their layout, so one comes back as it was, and quickly. A hidden one keeps the size it has on screen, under
+   the header, or its panes would lose their scroll positions. */
+.session-kept { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.session-kept.is-hidden { position: fixed; inset: 40px 0 0 0; content-visibility: hidden; pointer-events: none; }
+.app:has(> .session-kept:not(.is-hidden)) { height: 100vh; overflow: hidden; }
 
 /* Header */
 .app-header {
@@ -601,6 +606,8 @@ a.artifact-copy { text-decoration: none; }
 /* A stable gutter on both edges keeps the messages centred on the same axis as the composer below. */
 .chat { flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable both-edges; }
 .chat-inner { max-width: 860px; margin: 0 auto; padding: 20px 24px 12px; display: flex; flex-direction: column; gap: 12px; }
+/* Rows out of view are skipped by the browser, sized as they were when last shown, so a long chat lays out quickly. */
+.chat-inner > * { content-visibility: auto; contain-intrinsic-size: auto 90px; }
 .session-foot { flex: none; max-width: 860px; width: 100%; margin: 0 auto; padding: 8px 24px 18px; display: flex; flex-direction: column; gap: 8px; }
 
 .msg-user {

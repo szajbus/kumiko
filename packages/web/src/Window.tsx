@@ -12,6 +12,8 @@ interface Props {
   session: SessionInfo;
   /** A fork was started; opens its tab. */
   onForked(id: string): void;
+  /** Its tab is the one on screen; a window kept in the background for a quick switch back isn't. */
+  active?: boolean;
 }
 
 /** How narrow a pane can get before the window stacks its panes one above the other. */
@@ -22,7 +24,7 @@ const MIN_PANE_WIDTH = 360;
  * folds its state from the stream's `window` events, and passes the stream on to the chat. Panes are placed by the
  * layout but rendered side by side, each under its own key, so the chat stays mounted as panes open and close.
  */
-export function Window({ session, onForked }: Props) {
+export function Window({ session, onForked, active = true }: Props) {
   const stream = useSessionEvents(session.id);
   const win = useWindow(stream.events);
   const composer = useRef<ComposerHandle>(null);
@@ -36,7 +38,7 @@ export function Window({ session, onForked }: Props) {
   const stack = width !== undefined && width < MIN_PANE_WIDTH * columns(win.layout);
   const arrange = live && !stack && Object.keys(win.panes).length > 1;
   const { drag, startDrag, sizing, startResize } = useArrange(session.id, box, win, arrange);
-  usePaneRequests(session.id, box);
+  usePaneRequests(session.id, box, active);
   // While a divider is dragged, the layout follows it here, and the server hears of it once it is let go.
   const layout = sizing ? resizedLayout(win, sizing.path, sizing.ratio) : win.layout;
   const rects = paneRects(layout, stack);
@@ -46,6 +48,7 @@ export function Window({ session, onForked }: Props) {
       window: win,
       artifacts,
       live,
+      active,
       show: (widget) => void api.showWidget(session.id, widget).catch((err) => console.error(err)),
       showIn: (widget, pane) => void api.showWidget(session.id, widget, pane).catch((err) => console.error(err)),
       showBeside: (widget, pane, split) => void api.showWidget(session.id, widget, pane, split).catch((err) => console.error(err)),
@@ -59,7 +62,7 @@ export function Window({ session, onForked }: Props) {
       move: (pane, to, side) => void api.movePane(session.id, pane, to, side).catch((err) => console.error(err)),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [win, artifacts, live, session.id, arrange, JSON.stringify([...rects])],
+    [win, artifacts, live, active, session.id, arrange, JSON.stringify([...rects])],
   );
 
   const widget = (pane: PaneId) => {
@@ -67,7 +70,7 @@ export function Window({ session, onForked }: Props) {
     const w = win.widgets[id];
     switch (w?.kind) {
       case "chat":
-        return <SessionView session={session} stream={stream} onForked={onForked} composerRef={composer} />;
+        return <SessionView session={session} stream={stream} onForked={onForked} composerRef={composer} active={active} />;
       case "artifact": {
         const doc = w.state as ArtifactState;
         // What Claude is writing to the file streams in, until the window has read the file it wrote.
@@ -152,18 +155,19 @@ function reloadPage(pane: Element): Promise<void> {
 /**
  * Answers the server's requests, for Claude, about one of this window's panes: load its page again, then take a picture
  * of it (what a preview's <webview> shows, or the pane's body as it is on screen). Only the desktop app takes pictures;
- * in a browser, the answer says so. Only the active tab's window is mounted; a page without the session's window
- * answers that it lacks it. The server takes the first window that does it, so a browser can't fail it for the app.
+ * in a browser, the answer says so. Only the window of the tab on screen answers (others stay mounted, hidden, for a
+ * quick switch back); a page without the session's window on screen answers that it lacks it. The server takes the first window that does it, so a browser can't fail it for the app.
  */
-function usePaneRequests(id: string, box: RefObject<HTMLElement | null>) {
+function usePaneRequests(id: string, box: RefObject<HTMLElement | null>, active: boolean) {
   useEffect(
     () =>
       onPaneRequest((ev) => {
-        if (ev.session !== id) return false;
+        // A tab kept in the background isn't on screen, so it has nothing to show.
+        if (ev.session !== id || !active) return false;
         void answerPane(id, box, ev);
         return true;
       }),
-    [id, box],
+    [id, box, active],
   );
 }
 
@@ -387,7 +391,8 @@ function useWidth(ref: RefObject<HTMLElement | null>): number | undefined {
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const watch = new ResizeObserver(() => setWidth(el.clientWidth));
+    // A tab kept in the background has no width: it keeps the one it had.
+    const watch = new ResizeObserver(() => el.clientWidth > 0 && setWidth(el.clientWidth));
     watch.observe(el);
     return () => watch.disconnect();
   }, [ref]);

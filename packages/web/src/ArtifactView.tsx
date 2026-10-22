@@ -273,7 +273,8 @@ export function ArtifactsButton() {
   const ctx = useContext(WindowContext);
   const [open, setOpen] = useState(false);
   const content = useRef<HTMLDivElement>(null);
-  const shown = Boolean(ctx?.live && ctx.artifacts.length);
+  // Only the tab on screen takes the shortcut.
+  const shown = Boolean(ctx?.live && ctx.active && ctx.artifacts.length);
   useEffect(() => {
     if (!shown) return;
     const onKey = (e: KeyboardEvent) => {

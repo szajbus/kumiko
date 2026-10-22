@@ -37,29 +37,33 @@ interface Props {
   composerRef?: RefObject<ComposerHandle | null>;
   /** A fork was started; opens its tab. */
   onForked(id: string): void;
+  /** Its tab is the one on screen. */
+  active?: boolean;
 }
 
 /**
- * Tells the server the user has seen the session whenever it has something unread while it is on screen: this view
- * only renders for the active tab, so on screen means the window is visible.
+ * Tells the server the user has seen the session whenever it has something unread while it is on screen: its tab is
+ * the active one, and the window is visible.
  */
-function useMarkSeen(session: SessionInfo) {
+function useMarkSeen(session: SessionInfo, active: boolean) {
   const { id, unread } = session;
   useEffect(() => {
-    if (!unread) return;
+    if (!unread || !active) return;
     const mark = () => {
       if (document.visibilityState === "visible") api.seen(id).catch(() => {});
     };
     mark();
     document.addEventListener("visibilitychange", mark);
     return () => document.removeEventListener("visibilitychange", mark);
-  }, [id, unread]);
+  }, [id, unread, active]);
 }
 
 /** The chat widget: its usage in the title bar's corner, the chat folded from its events, and the composer. */
-export function SessionView({ session, stream, onForked, composerRef }: Props) {
-  const corner = useContext(HeaderCorner);
-  useMarkSeen(session);
+export function SessionView({ session, stream, onForked, composerRef, active = true }: Props) {
+  // The title bar's corner is the tab on screen's.
+  const headerCorner = useContext(HeaderCorner);
+  const corner = active ? headerCorner : undefined;
+  useMarkSeen(session, active);
   const chat = useChat(stream.events);
   const totalCost = useMemo(() => chat.items.reduce((sum, i) => sum + (i.type === "turn" ? (i.costUsd ?? 0) : 0), 0), [chat.items]);
   // What was sent so far, for Up in the composer; a message sent again right after itself is there once.
@@ -91,6 +95,12 @@ export function SessionView({ session, stream, onForked, composerRef }: Props) {
   }, [restart]);
   const ownComposer = useRef<ComposerHandle>(null);
   const composer = composerRef ?? ownComposer;
+  // Back on screen, the cursor goes in the box, as when the tab first opened.
+  const wasActive = useRef(active);
+  useEffect(() => {
+    if (active && !wasActive.current) composer.current?.focus();
+    wasActive.current = active;
+  }, [active, composer]);
   // What is known about the login behind the last logged-out card; `loginCards` decides what that shows.
   const [answer, setAnswer] = useState<LoginAnswer | undefined>();
   const idle = session.status === "idle";
@@ -152,6 +162,7 @@ export function SessionView({ session, stream, onForked, composerRef }: Props) {
       <Chat
         chat={chat}
         running={busy}
+        active={active}
         onRewind={canBranch ? setRewinding : undefined}
         onFork={canBranch ? (item) => void fork(item.id) : undefined}
         onQuote={(quoted) => composer.current?.insertQuote(quoted)}
@@ -353,6 +364,8 @@ function LoggedInCard({ account, retried, busy, onRetry }: { account: LoginAccou
 interface ChatProps {
   chat: ChatState;
   running: boolean;
+  /** On screen; a chat kept in a background tab isn't. */
+  active: boolean;
   onRewind?: (item: UserItem) => void;
   onFork?: (item: UserItem) => void;
   /** Text selected in the chat, quoted, to go in the message. */
@@ -363,17 +376,19 @@ interface ChatProps {
   hidden?: ReadonlySet<string>;
 }
 
-function Chat({ chat, running, onRewind, onFork, onQuote, actions, hidden }: ChatProps) {
+function Chat({ chat, running, active, onRewind, onFork, onQuote, actions, hidden }: ChatProps) {
   const box = useRef<HTMLDivElement>(null);
   const inner = useRef<HTMLDivElement>(null);
   // Follows new output while the view is at the bottom; scrolling up stops that until it is back at the bottom.
   const stick = useRef(true);
   const userCount = chat.items.filter((i) => i.type === "user").length;
+  // A chat kept in a background tab measures as empty; following it there would lose its place.
+  const shown = (el: HTMLElement) => el.clientHeight > 0;
 
   useLayoutEffect(() => {
     const el = box.current;
-    if (el && stick.current) el.scrollTop = el.scrollHeight;
-  }, [chat, running]);
+    if (el && stick.current && shown(el)) el.scrollTop = el.scrollHeight;
+  }, [chat, running, active]);
 
   // Sending a message always brings the chat back down.
   useLayoutEffect(() => {
@@ -387,7 +402,7 @@ function Chat({ chat, running, onRewind, onFork, onQuote, actions, hidden }: Cha
     const el = box.current;
     if (!el || !inner.current) return;
     const follow = new ResizeObserver(() => {
-      if (stick.current) el.scrollTop = el.scrollHeight;
+      if (stick.current && shown(el)) el.scrollTop = el.scrollHeight;
     });
     follow.observe(el);
     follow.observe(inner.current);
@@ -420,7 +435,7 @@ function Chat({ chat, running, onRewind, onFork, onQuote, actions, hidden }: Cha
       aria-live="polite"
       onScroll={(e) => {
         const el = e.currentTarget;
-        stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+        if (shown(el)) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
       }}
     >
       <div ref={inner} className="chat-inner">

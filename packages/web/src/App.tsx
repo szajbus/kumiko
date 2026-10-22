@@ -10,6 +10,9 @@ import { NewSession } from "./NewSession";
 import { ProjectList } from "./ProjectList";
 import { ProjectPage } from "./ProjectPage";
 import { Window } from "./Window";
+
+/** How many session tabs stay mounted, the one on screen included, for switching back to at once. */
+const KEEP_MOUNTED = 5;
 import { landingAfterClose } from "./landing";
 import { arrange, group, moveGroup, moveTab, replaceTab } from "./order";
 import { loadTabs, saveTabs } from "./tabs";
@@ -78,6 +81,15 @@ export function App() {
   // Sessions being closed leave the tabs at once, without waiting for the server to confirm.
   const [ending, setEnding] = useState<ReadonlySet<string>>(new Set());
   const sessions = useMemo(() => live.sessions.filter((s) => !ending.has(s.id)), [live.sessions, ending]);
+  // The session tabs looked at last, most recent first: their windows stay mounted, so switching back is instant.
+  const [recent, setRecent] = useState<string[]>([]);
+  const onSession = route.view === "session" ? route.id : undefined;
+  useEffect(() => {
+    if (onSession) setRecent((r) => [onSession, ...r.filter((id) => id !== onSession)].slice(0, KEEP_MOUNTED));
+  }, [onSession]);
+  // In a fixed order, not by recency: a window moved in the page would lose its scroll positions.
+  const keep = new Set((onSession ? [onSession, ...recent.filter((id) => id !== onSession)] : recent).slice(0, KEEP_MOUNTED));
+  const kept = sessions.filter((s) => keep.has(s.id));
   // The order the tabs were dragged into. Tabs it doesn't name yet follow, sessions then New session tabs.
   const [order, setOrder] = useState<TabId[]>([]);
   // The session whose Cmd+Shift+W is waiting for confirmation.
@@ -422,6 +434,12 @@ export function App() {
           started={started.current}
           onSessionStarted={onSessionStarted}
         />
+        {/* The tab on screen and those looked at before it, hidden; Body decides whether there is one to show. */}
+        {kept.map((s) => (
+          <div key={s.id} className={`session-kept${s.id === onSession ? "" : " is-hidden"}`} aria-hidden={s.id !== onSession || undefined}>
+            <Window session={s} active={s.id === onSession} onForked={(id) => onSessionStarted(id)} />
+          </div>
+        ))}
       </HeaderCorner.Provider>
     </div>
   );
@@ -464,7 +482,7 @@ function Body({ route, live, started, onSessionStarted }: BodyProps) {
       const s = live.sessions.find((x) => x.id === route.id);
       if (!live.loaded || (!s && started.has(route.id))) return null;
       if (!s) return <Redirect to="#/" />;
-      return <Window key={s.id} session={s} onForked={(id) => onSessionStarted(id)} />;
+      return null; // rendered by App, which keeps the session tabs looked at last mounted
     }
     default:
       return <ProjectList live={live} onOpen={(name) => go(`#/project/${name}`)} onNew={() => go("#/new")} />;

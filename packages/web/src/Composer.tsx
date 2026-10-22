@@ -11,6 +11,8 @@ import { quoteInsert } from "./quote";
 export interface ComposerHandle {
   /** Adds a markdown quote to the end of the message, with the cursor on the line after it, ready for the reply. */
   insertQuote(quoted: string): void;
+  /** Puts the cursor in the box. */
+  focus(): void;
 }
 
 interface Props {
@@ -113,6 +115,9 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
       const { from, insert } = quoteInsert(el.value, quoted);
       replace(from, el.value.length, insert);
       el.scrollTop = el.scrollHeight;
+    },
+    focus() {
+      box.current?.focus();
     },
   }));
 

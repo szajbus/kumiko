@@ -27,6 +27,8 @@ export interface WindowApi {
   showBeside(widget: WidgetId, pane: PaneId, split: "right" | "below"): void;
   /** The session is live, so its window can be changed. */
   live: boolean;
+  /** Its tab is the one on screen. */
+  active: boolean;
   /** Shows a hidden widget again, beside the chat. */
   show(widget: WidgetId): void;
   close(pane: PaneId): void;
