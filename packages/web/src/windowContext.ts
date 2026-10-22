@@ -46,6 +46,8 @@ export interface WindowApi {
   rects: ReadonlyMap<PaneId, PaneRect>;
   /** Moves a pane beside another (or the window, WINDOW), or swaps the two. */
   move(pane: PaneId, to: PaneId, side: Side | "swap"): void;
+  /** The open sessions' names as their tabs show them, by id, for the chat to name a session Claude names by its id. */
+  sessionNames: ReadonlyMap<string, string>;
 }
 
 export const WindowContext = createContext<WindowApi | undefined>(undefined);

@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { applyWindowOp, chatWindow, compactWindow, LIVE_SESSION_STATUSES, windowState, type Attachment, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo, type WindowOp, type WindowState } from "@kumiko/shared";
+import { applyWindowOp, chatWindow, compactWindow, isCommand, LIVE_SESSION_STATUSES, sharedNote, sharesWaiting, windowState, type Attachment, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo, type WindowOp, type WindowState } from "@kumiko/shared";
 import { TOOL_TIMEOUT_MS, type AgentDriver, type AgentFile, type AgentMessage, type StartOptions, type ToolHost } from "@kumiko/agent";
 import { chatEvents, type SessionStore, type StoredSession } from "./store.js";
 import { trimMessage } from "./trim.js";
@@ -156,11 +156,12 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
   }
 
   /** Starts Claude on an opening prompt; `attachments` are what the session records of `files`, which Claude gets. */
-  start(opts: { sandbox: string; workdir: string; env: string[]; prompt: string; attachments?: Attachment[]; files?: AgentFile[]; model?: string }): SessionInfo {
+  start(opts: { sandbox: string; workdir: string; env: string[]; prompt: string; attachments?: Attachment[]; files?: AgentFile[]; model?: string; id?: string }): SessionInfo {
     const { attachments = [] } = opts;
     // A prompt that is only files is named after them.
     const prompt = opts.prompt || attachments.map((a) => a.name).join(", ");
-    const info: SessionInfo = { id: this.newId(), sandbox: opts.sandbox, workdir: opts.workdir, status: "starting", prompt, model: opts.model, startedAt: new Date().toISOString() };
+    if (opts.id && this.sessions.has(opts.id)) throw new Error(`There is a session ${opts.id} already.`);
+    const info: SessionInfo = { id: opts.id ?? this.newId(), sandbox: opts.sandbox, workdir: opts.workdir, status: "starting", prompt, model: opts.model, startedAt: new Date().toISOString() };
     const promptId = randomUUID();
     const seed: NewEvent = { kind: "user_prompt", payload: { text: opts.prompt, id: promptId, ...(attachments.length ? { attachments } : {}) } };
     return this.launch(info, [seed], { sandbox: opts.sandbox, workdir: opts.workdir, env: opts.env, prompt: opts.prompt, promptId, files: opts.files, model: opts.model });
@@ -330,7 +331,8 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     await Promise.all(saved.filter((x) => x.info.sandbox === sandbox).map((x) => this.store!.remove(x.info.id)));
   }
 
-  private newId(): string {
+  /** An id no open session has, for one about to start; see `start`. */
+  newId(): string {
     let id: string;
     do id = randomBytes(6).toString("hex");
     while (this.sessions.has(id));
@@ -552,9 +554,11 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
   prompt(id: string, text: string, attachments: Attachment[] = [], files: AgentFile[] = []): void {
     const s = this.live(id);
     const promptId = randomUUID();
+    // Artifacts other sessions shared since the last message: Claude hears of them with this one, unless it is a command.
+    const note = isCommand(text) ? "" : sharedNote(sharesWaiting(s.events));
     this.push(s, { kind: "user_prompt", payload: { text, id: promptId, ...(attachments.length ? { attachments } : {}) } });
     s.pendingModel = /^\/model\s+(\S+)/.exec(text)?.[1];
-    s.driver.send(text, promptId, files);
+    s.driver.send(text + note, promptId, files);
     if (s.info.status === "idle") this.setInfo(s, { status: "running" });
     // Kumiko's own record of the prompt is nowhere in Claude's output, so it is saved now.
     this.save(s);
@@ -582,6 +586,43 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     this.setInfo(s, { ...(title !== undefined && { title, titleBy: by }), ...(description !== undefined && { description }) });
     // Like a change to the window: saved with the turn's result, or now if there is none to come.
     if (s.info.status === "idle") this.save(s);
+  }
+
+  /**
+   * Records Claude's tool call `toolUseId` asking the user to start a new session on `prompt`; returns the proposal's
+   * id. Nothing starts until the user accepts it (see `answerProposal`).
+   */
+  propose(id: string, proposal: { prompt: string; title?: string; artifacts?: string[] }, toolUseId?: string): string {
+    const s = this.live(id);
+    const proposalId = randomUUID();
+    this.push(s, { kind: "proposal", payload: { id: proposalId, ...proposal, ...(toolUseId ? { toolUseId } : {}) } });
+    if (s.info.status === "idle") this.save(s);
+    return proposalId;
+  }
+
+  /** Proposal `proposalId` of the session, if it is there and hasn't been answered. */
+  openProposal(id: string, proposalId: string): { prompt: string; title?: string; artifacts?: string[] } | undefined {
+    const events = this.sessions.get(id)?.events ?? [];
+    if (events.some((e) => e.kind === "proposal_answer" && e.payload.id === proposalId)) return undefined;
+    const p = events.find((e) => e.kind === "proposal" && e.payload.id === proposalId);
+    if (p?.kind !== "proposal") return undefined;
+    const { id: _id, toolUseId: _toolUseId, ...proposal } = p.payload;
+    return proposal;
+  }
+
+  /** Records that session `from` shared copies of artifacts with session `id`; see `sharesWaiting`. */
+  shared(id: string, from: SessionInfo, name: string, artifacts: { path: string; title: string }[]): void {
+    const s = this.live(id);
+    this.push(s, { kind: "shared", payload: { from: from.id, name, artifacts } });
+    if (s.info.status === "idle") this.save(s);
+  }
+
+  /** Records the user's answer to a proposal: accepted, having started `session`, or declined. */
+  answerProposal(id: string, proposalId: string, accepted: boolean, session?: string): void {
+    const s = this.sessions.get(id);
+    if (!s) throw new SessionNotFound(`No session ${id}.`);
+    this.push(s, { kind: "proposal_answer", payload: { id: proposalId, accepted, ...(session ? { session } : {}) } });
+    if (s.info.status !== "running" && s.info.status !== "starting") this.save(s);
   }
 
   /** The user has looked at the session: it no longer waits on them. */

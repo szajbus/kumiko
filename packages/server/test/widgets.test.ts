@@ -8,7 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 import WebSocket from "ws";
-import { artifactsOf, paneIds, windowState, type ArtifactState, type ServerEvent, type SessionEvent, type SessionInfo, type SessionStreamMessage } from "@kumiko/shared";
+import { artifactsOf, paneIds, paneOf, windowState, type ArtifactState, type ServerEvent, type SessionEvent, type SessionInfo, type SessionStreamMessage } from "@kumiko/shared";
 import { LimaProvider, MetadataStore, shellQuote } from "@kumiko/sandbox";
 import { startServer, type RunningServer, type ServerOptions } from "../src/index.js";
 import { makeClone } from "./repo.js";
@@ -127,7 +127,7 @@ describe("widgets", () => {
     assert.ok(existsSync(join(claudeHome, "kumiko", "artifacts", id)), "the session's folder is made");
     assert.match(await ask(s, id, "system prompt"), new RegExp(`${vmHome}/\\.claude/kumiko/artifacts/${id}/`));
     const tools = JSON.parse(await ask(s, id, "tools")) as { name: string; description: string }[];
-    assert.deepEqual(tools.map((t) => t.name).sort(), ["artifact_capture", "artifact_open", "artifact_reload", "artifact_remove", "session_rename", "window_close", "window_list"]);
+    assert.deepEqual(tools.map((t) => t.name).sort(), ["artifact_capture", "artifact_open", "artifact_reload", "artifact_remove", "artifact_share", "session_list", "session_rename", "session_start", "window_close", "window_list"]);
     // The tool names the session's folder itself, so Claude needn't find it in its instructions.
     assert.ok(tools.find((t) => t.name === "artifact_open")?.description.includes(`${vmHome}/.claude/kumiko/artifacts/${id}/`));
     s.close();
@@ -167,6 +167,116 @@ describe("widgets", () => {
     await ask(s, id, "/rename my-name");
     assert.match(await rename("Other", "Something else entirely."), /their name stands; its description is saved/);
     assert.deepEqual(pick(await session(id)), { title: "my-name", titleBy: "user", description: "Something else entirely." });
+    s.close();
+  });
+
+  it("lets Claude ask to start a new session, which starts only once the user accepts", async () => {
+    const { id, s } = await start();
+    const propose = (args: object) => ask(s, id, widget("session_start", args));
+    const proposals = () => s.events().flatMap((e) => (e.kind === "proposal" ? [e.payload] : []));
+    const answer = (proposal: string, accept: boolean) => api(`/api/sessions/${id}/proposals/${proposal}`, { method: "POST", body: JSON.stringify({ accept }) });
+    const before = ((await json(await api("/api/sessions"))) as SessionInfo[]).length;
+
+    assert.match(await propose({ prompt: "  " }), /Give the new session a prompt/);
+    assert.match(await propose({ prompt: "Fix it", title: "A name far too long for a tab" }), /is 29 characters; the tab has room for 20/);
+    assert.equal(proposals().length, 0, "a refused ask asks nothing");
+    assert.match(await propose({ prompt: " Fix the flaky upload test. ", title: "Flaky upload" }), /^Asked the user to start the session/);
+    const [asked] = proposals();
+    assert.deepEqual({ prompt: asked.prompt, title: asked.title }, { prompt: "Fix the flaky upload test.", title: "Flaky upload" });
+    assert.match(String(asked.toolUseId), /^toolu_/);
+    assert.equal(((await json(await api("/api/sessions"))) as SessionInfo[]).length, before, "nothing starts on Claude's say-so");
+
+    // Accepted, it starts on the prompt, named as Claude asked, and can't be accepted twice.
+    const res = await answer(asked.id, true);
+    assert.equal(res.status, 201);
+    const { id: started } = await json(res);
+    assert.deepEqual(pick(await session(started)), { title: "Flaky upload", titleBy: "agent" });
+    assert.equal((await session(started))?.prompt, "Fix the flaky upload test.");
+    assert.deepEqual(s.events().findLast((e) => e.kind === "proposal_answer")?.payload, { id: asked.id, accepted: true, session: started });
+    assert.equal((await answer(asked.id, true)).status, 409);
+    assert.equal((await answer(asked.id, false)).status, 409);
+
+    // Declined, nothing starts.
+    await propose({ prompt: "Something else." });
+    const other = proposals()[1];
+    const count = ((await json(await api("/api/sessions"))) as SessionInfo[]).length;
+    assert.equal((await answer(other.id, false)).status, 200);
+    assert.deepEqual(s.events().findLast((e) => e.kind === "proposal_answer")?.payload, { id: other.id, accepted: false });
+    assert.equal(((await json(await api("/api/sessions"))) as SessionInfo[]).length, count);
+    assert.equal((await answer("nope", true)).status, 409);
+    await api(`/api/sessions/${started}`, { method: "DELETE" });
+    s.close();
+  });
+
+  it("lists the project's sessions for Claude, by their names and descriptions", async () => {
+    const a = await start();
+    const b = await start();
+    await ask(b.s, b.id, widget("session_rename", { title: "Flaky upload", description: "Why the upload test fails one run in five." }));
+    const listed = await ask(a.s, a.id, widget("session_list", {}));
+    assert.match(listed, new RegExp(`- ${a.id} \\(this session\\): "hi", open, working`));
+    assert.match(listed, new RegExp(`- ${b.id}: "Flaky upload", open, (idle|waiting for the user), started .* UTC\\. Why the upload test fails one run in five\\.`));
+    a.s.close();
+    b.s.close();
+  });
+
+  it("shares artifacts with another open session of the project, as copies", async () => {
+    const a = await start();
+    const b = await start();
+    const share = (args: object) => ask(a.s, a.id, widget("artifact_share", args));
+    await ask(a.s, a.id, write(docPath(a.id), "# The plan\n\nStep one.\n"));
+    await ask(a.s, a.id, widget("artifact_open", { path: docPath(a.id) }));
+    assert.match(await share({ session: a.id, artifacts: ["w2"] }), /That is this session/);
+    assert.match(await share({ session: "nope", artifacts: ["w2"] }), /There is no session nope in this project/);
+    assert.match(await share({ session: b.id, artifacts: ["w9"] }), /There is no artifact w9/);
+
+    assert.match(await share({ session: b.id, artifacts: ["w2"] }), new RegExp(`^Copied "The plan" to ${docPath(b.id)} in session ${b.id}`));
+    assert.equal(readFileSync(join(claudeHome, "kumiko", "artifacts", b.id, "plan.md"), "utf8"), "# The plan\n\nStep one.\n");
+    const [[widgetB, copy]] = artifactsOf(b.s.window());
+    assert.deepEqual({ path: copy.path, title: copy.title, text: textOf(copy) }, { path: docPath(b.id), title: "The plan", text: "# The plan\n\nStep one.\n" });
+    assert.equal(paneOf(b.s.window(), widgetB), undefined, "it is in the window, not shown");
+
+    // The other session's Claude hears of it with the user's next message there, once, and not with a command.
+    assert.deepEqual(b.s.events().findLast((e) => e.kind === "shared")?.payload, { from: a.id, name: "hi", artifacts: [{ path: docPath(b.id), title: "The plan" }] });
+    await ask(b.s, b.id, "/model opus");
+    const told = await ask(b.s, b.id, "Carry on.");
+    assert.equal(told, `You said: Carry on.\n\n(From Kumiko: since your last message, session "hi" (${a.id}) shared "The plan", now at ${docPath(b.id)}. These are copies in your artifacts folder, and your window has them.)`);
+    assert.equal(b.s.events().findLast((e) => e.kind === "user_prompt")?.payload.text, "Carry on.", "the chat keeps the message as the user wrote it");
+    assert.equal(await ask(b.s, b.id, "And again."), "You said: And again.");
+
+    // Shared again, the copy is replaced; one of the other session's own files by that name isn't.
+    await ask(a.s, a.id, write(docPath(a.id), "# The plan\n\nStep two.\n"));
+    await share({ session: b.id, artifacts: [docPath(a.id)] });
+    await waitFor(() => textOf(artifactsOf(b.s.window())[0][1]).includes("Step two."));
+    assert.equal(artifactsOf(b.s.window()).length, 1);
+    await ask(a.s, a.id, write(docPath(a.id, "notes.md"), "mine"));
+    await ask(a.s, a.id, widget("artifact_open", { path: docPath(a.id, "notes.md") }));
+    // Told of the second share first, so the fake Claude's write command has nothing after it.
+    assert.match(await ask(b.s, b.id, "Thanks."), /shared "The plan", now at/);
+    await ask(b.s, b.id, write(docPath(b.id, "notes.md"), "theirs"));
+    assert.match(await share({ session: b.id, artifacts: ["w3"] }), new RegExp(`Session ${b.id} has a file notes.md of its own already`));
+    assert.equal(readFileSync(join(claudeHome, "kumiko", "artifacts", b.id, "notes.md"), "utf8"), "theirs");
+    a.s.close();
+    b.s.close();
+  });
+
+  it("starts a session Claude asked for with copies of the artifacts it named", async () => {
+    const { id, s } = await start();
+    await ask(s, id, write(docPath(id), "# The plan\n"));
+    await ask(s, id, widget("artifact_open", { path: docPath(id) }));
+    assert.match(await ask(s, id, widget("session_start", { prompt: "Do it.", artifacts: ["https://example.com/"] })), /There is no artifact/);
+    assert.match(await ask(s, id, widget("session_start", { prompt: "Do it.", artifacts: ["w2"] })), /It gets copies of w2 "The plan"/);
+    const asked = s.events().findLast((e) => e.kind === "proposal");
+    assert.deepEqual(asked?.kind === "proposal" && asked.payload.artifacts, [docPath(id)]);
+    const res = await api(`/api/sessions/${id}/proposals/${asked?.kind === "proposal" && asked.payload.id}`, { method: "POST", body: JSON.stringify({ accept: true }) });
+    const { id: started } = await json(res);
+    assert.equal(readFileSync(join(claudeHome, "kumiko", "artifacts", started, "plan.md"), "utf8"), "# The plan\n");
+    assert.match(String((await session(started))?.prompt), new RegExp(`^Do it\\.\\n\\nCopies of artifacts from the session that asked for this one are in your artifacts folder, and your window shows them: ${docPath(started)} \\("The plan"\\)\\.$`));
+    const t = await listen(started);
+    const [[widget2, copy]] = artifactsOf(t.window());
+    assert.equal(textOf(copy), "# The plan\n");
+    assert.ok(paneOf(t.window(), widget2), "its window shows it");
+    t.close();
+    await api(`/api/sessions/${started}`, { method: "DELETE" });
     s.close();
   });
 

@@ -59,11 +59,23 @@ describe("the chat's lines for widget tools", () => {
     assert.equal(widgetLine("mcp__kumiko__artifact_open", { path: "artifacts/abc/plan.md" }, w)?.widget, "w2");
   });
 
+  it("say what was shared, and with which session", () => {
+    assert.deepEqual(widgetLine("mcp__kumiko__artifact_share", { session: "s2", artifacts: ["w2", "/x/notes.md"] }, w), { label: "Shared", title: "The plan, notes.md with session s2" });
+    assert.deepEqual(widgetLine("mcp__kumiko__artifact_share", { session: "s2", artifacts: ["w2"] }, w, new Map([["s2", "Flaky upload"]])), { label: "Shared", title: "The plan with Flaky upload" });
+    assert.deepEqual(widgetLine("mcp__kumiko__artifact_share", {}, w), { label: "Shared", title: undefined });
+    assert.deepEqual(widgetLine("mcp__kumiko__session_list", {}, w), { label: "Looked at the project's sessions" });
+  });
+
   it("leave other tools as they are", () => {
     assert.equal(widgetLine("Write", { file_path: "/elsewhere.md" }, w), undefined);
     assert.equal(widgetLine("Bash", { command: "ls" }, w), undefined);
     assert.deepEqual(widgetLine("mcp__kumiko__window_close", { pane: "p2" }, w), { label: "Closed a pane" });
     assert.deepEqual(widgetLine("mcp__kumiko__session_rename", { title: "Fix composer paste" }, w), { label: "Named the session", title: "Fix composer paste" });
+    const prompt = "Bump Electron to 39.\n\nRun the tests.";
+    assert.deepEqual(widgetLine("mcp__kumiko__session_start", { prompt, title: "Flaky test" }, w), { label: "Asked to start a session", title: "Flaky test", input: { label: "Prompt", text: prompt } });
+    // Unnamed, it goes by the prompt's first line; still streaming in, by nothing yet.
+    assert.equal(widgetLine("mcp__kumiko__session_start", { prompt }, w)?.title, "Bump Electron to 39.");
+    assert.deepEqual(widgetLine("mcp__kumiko__session_start", {}, w), { label: "Asked to start a session", title: undefined });
   });
 
   it("say which artifact was looked at, reloaded or deleted, by its id or its path", () => {

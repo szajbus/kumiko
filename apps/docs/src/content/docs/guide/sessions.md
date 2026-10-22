@@ -20,6 +20,20 @@ project and state.
 - Click the label to open the project.
 - A New session tab sits with the project picked in it, and moves if you pick another.
 
+## Sessions working together
+
+A session's agent knows about the other sessions of its project, and no other project's:
+
+- **It can list them**, by their names and descriptions, open ones and saved ones, to find work already under way.
+- **It can ask to start a new one** when separate work comes up, such as a bug found along the way. The chat shows the
+  opening prompt it wrote, and any artifacts it wants to give the new session, with **Start session** and **Decline**.
+  Nothing starts until you accept; then the session opens in a tab of its own, in the clone, with that prompt and
+  copies of those artifacts, and nothing else of the conversation. The agent isn't told what you chose.
+- **It can share artifacts with another open session.** The other session gets copies, as they are then, in its window
+  for you to show, and its chat says what came from where. Its agent is told with your next message there, by a note
+  Kumiko adds to what the agent gets; your message stays as you wrote it. Each session changes its own copy, and
+  sharing again replaces it.
+
 ## Closing and ending
 
 - **Closing a tab closes the session.** It stays saved and can be resumed. If the agent is working, the tab closes at

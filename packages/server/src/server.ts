@@ -759,6 +759,44 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     return c.json({ id: sessions.fork(from.id, ready.env, req.prompt).id }, 201);
   });
 
+  /** Proposals being accepted, so a second Start meanwhile doesn't start another session. */
+  const accepting = new Set<string>();
+  /**
+   * The user's answer to Claude asking to start a new session (its session_start tool): accepted, it starts in the
+   * project on the proposed prompt, named as proposed, with copies of the artifacts asked for, and its id is returned,
+   * with what couldn't be copied; declined, nothing starts.
+   */
+  app.post("/api/sessions/:id/proposals/:proposal", async (c) => {
+    const from = sessionOf(c);
+    const proposalId = c.req.param("proposal");
+    const req = await c.req.json<{ accept?: unknown }>().catch(() => ({}) as { accept?: unknown });
+    if (typeof req.accept !== "boolean") throw new HttpError(400, "Body must be JSON: { accept }.");
+    const proposal = sessions.openProposal(from.id, proposalId);
+    if (!proposal || accepting.has(proposalId)) throw new HttpError(409, "That has been answered already.");
+    if (!req.accept) {
+      sessions.answerProposal(from.id, proposalId, false);
+      return c.json({ ok: true });
+    }
+    accepting.add(proposalId);
+    try {
+      const ready = await startedProject(from.sandbox);
+      const { prompt, title, artifacts = [] } = proposal;
+      // The artifacts it is given go in its folder before its Claude starts, and the prompt says where they are.
+      const id = sessions.newId();
+      const { copied, skipped } = artifacts.length ? await widgets.copyArtifacts(from, { id, sandbox: from.sandbox }, artifacts) : { copied: [], skipped: [] };
+      const given = copied.length
+        ? `\n\nCopies of artifacts from the session that asked for this one are in your artifacts folder, and your window shows them: ${copied.map((c) => `${c.path} ("${c.title}")`).join(", ")}.`
+        : "";
+      const session = sessions.start({ sandbox: from.sandbox, workdir: ready.workdir, env: ready.env, prompt: prompt + given, id });
+      sessions.answerProposal(from.id, proposalId, true, session.id);
+      if (title) sessions.rename(session.id, title, "agent");
+      if (copied.length) await widgets.addCopies(session, copied, true);
+      return c.json({ id: session.id, ...(skipped.length ? { skipped } : {}) }, 201);
+    } finally {
+      accepting.delete(proposalId);
+    }
+  });
+
   /** Rewinds this session in place to just before one of its prompts. Returns the prompt's text. */
   app.post("/api/sessions/:id/rewind", async (c) => {
     const from = sessionOf(c);

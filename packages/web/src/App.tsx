@@ -4,7 +4,7 @@ import { api, RequestError, useLiveState } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { HeaderCorner } from "./Corner";
 import { ProjectForm } from "./ProjectForm";
-import { sessionTitle } from "./format";
+import { sessionName, sessionTitle } from "./format";
 import { Header, type NewSessionTab, type TabId } from "./Header";
 import { NewSession } from "./NewSession";
 import { ProjectList } from "./ProjectList";
@@ -82,6 +82,9 @@ export function App() {
   // closing, which Claude finishes out of sight.
   const [ending, setEnding] = useState<ReadonlySet<string>>(new Set());
   const sessions = useMemo(() => live.sessions.filter((s) => !ending.has(s.id) && !s.closing), [live.sessions, ending]);
+  // Changes only when a name does, so the windows' chats don't draw again for every change to a session.
+  const namesKey = JSON.stringify(live.sessions.map((s) => [s.id, sessionName(s)]));
+  const sessionNames = useMemo(() => new Map(JSON.parse(namesKey) as [string, string][]), [namesKey]);
   // The session tabs looked at last, most recent first: their windows stay mounted, so switching back is instant.
   const [recent, setRecent] = useState<string[]>([]);
   const onSession = route.view === "session" ? route.id : undefined;
@@ -426,7 +429,7 @@ export function App() {
         {/* The tab on screen and those looked at before it, hidden; Body decides whether there is one to show. */}
         {kept.map((s) => (
           <div key={s.id} className={`session-kept${s.id === onSession ? "" : " is-hidden"}`} aria-hidden={s.id !== onSession || undefined}>
-            <Window session={s} active={s.id === onSession} onForked={(id) => onSessionStarted(id)} />
+            <Window session={s} active={s.id === onSession} onForked={(id) => onSessionStarted(id)} sessionNames={sessionNames} />
           </div>
         ))}
       </HeaderCorner.Provider>

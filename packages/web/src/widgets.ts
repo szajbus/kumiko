@@ -108,15 +108,17 @@ export interface WidgetLine {
   label: string;
   title?: string;
   widget?: WidgetId;
+  /** Text to show unfolded in place of the input's JSON, under its own heading: a prompt, say, with its line breaks. */
+  input?: { label: string; text: string };
 }
 
 const TOOL_PREFIX = "mcp__kumiko__";
 
 /**
- * The chat's line for a tool call that opened, changed or closed something in the window, or named the session;
- * undefined for any other.
+ * The chat's line for a tool call that opened, changed or closed something in the window, or named or asked to start
+ * a session; undefined for any other.
  */
-export function widgetLine(name: string, input: Record<string, unknown>, w: WindowState): WidgetLine | undefined {
+export function widgetLine(name: string, input: Record<string, unknown>, w: WindowState, sessionNames?: ReadonlyMap<string, string>): WidgetLine | undefined {
   const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
   // An artifact is named by its path (a file's, or a page's URL), or by its id in the window.
   const ref = str(input.path) ?? str(input.file_path) ?? str(input.url) ?? str(input.artifact);
@@ -145,6 +147,27 @@ export function widgetLine(name: string, input: Record<string, unknown>, w: Wind
       return { label: "Looked at the panes" };
     case `${TOOL_PREFIX}session_rename`:
       return { label: "Named the session", title: str(input.title) };
+    case `${TOOL_PREFIX}session_list`:
+      return { label: "Looked at the project's sessions" };
+    case `${TOOL_PREFIX}artifact_share`: {
+      // By the artifacts' titles where this window has them, else their files' names.
+      const names = (Array.isArray(input.artifacts) ? input.artifacts : []).flatMap((a) => {
+        const r = str(a);
+        if (!r) return [];
+        const d = w.widgets[r]?.kind === "artifact" ? docs.find(([id]) => id === r) : byPath(r);
+        return [d ? d[1].title : r.split("/").pop()!];
+      });
+      // The session by its name, as its tab shows it; one that isn't open goes by its id.
+      const to = str(input.session);
+      const withWhom = to && (sessionNames?.has(to) ? `with ${sessionNames.get(to)}` : `with session ${to}`);
+      return { label: "Shared", title: [names.join(", "), withWhom].filter(Boolean).join(" ") || undefined };
+    }
+    case `${TOOL_PREFIX}session_start`: {
+      // Named by the name Claude gave it, or else by the prompt's first line, as an unnamed tab is.
+      const prompt = str(input.prompt);
+      const first = prompt?.trim().split("\n")[0];
+      return { label: "Asked to start a session", title: str(input.title) ?? first, ...(prompt ? { input: { label: "Prompt", text: prompt } } : {}) };
+    }
     case "Write":
       return doc ? { label: "Wrote", ...of } : undefined;
     case "Edit":

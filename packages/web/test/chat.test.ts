@@ -159,6 +159,22 @@ describe("chat", () => {
     assert.equal(after.items[1], before.items[1]);
   });
 
+  it("shows Claude's ask to start a session, and the user's answer to it", () => {
+    const asked = fold([{ kind: "proposal", payload: { id: "a1", prompt: "Fix the test.", title: "Flaky test", toolUseId: "t1" } }]);
+    assert.deepEqual(ofType(asked, "proposal"), [{ type: "proposal", key: "1", id: "a1", prompt: "Fix the test.", title: "Flaky test" }]);
+    const accepted = fold([{ kind: "proposal_answer", payload: { id: "a1", accepted: true, session: "s2" } }], asked, 1);
+    assert.deepEqual(ofType(accepted, "proposal")[0], { type: "proposal", key: "1", id: "a1", prompt: "Fix the test.", title: "Flaky test", accepted: true, session: "s2" });
+    const withCopies = fold([{ kind: "proposal", payload: { id: "a3", prompt: "Go.", artifacts: ["/f/plan.md"] } }]);
+    assert.deepEqual(ofType(withCopies, "proposal")[0].artifacts, ["/f/plan.md"]);
+    // A share is told to Claude with the next prompt that isn't a command.
+    const shared = fold([{ kind: "shared", payload: { from: "s1", name: "Upload form", artifacts: [{ path: "/f/plan.md", title: "The plan" }] } }]);
+    assert.deepEqual(ofType(shared, "shared"), [{ type: "shared", key: "1", name: "Upload form", titles: ["The plan"] }]);
+    assert.equal(ofType(fold([{ kind: "user_prompt", payload: { text: "/model opus" } }], shared, 1), "shared")[0].told, undefined);
+    assert.equal(ofType(fold([{ kind: "user_prompt", payload: { text: "Go on." } }], shared, 1), "shared")[0].told, true);
+    // An answer to an ask that isn't there (rewound away) changes nothing.
+    assert.equal(fold([{ kind: "proposal_answer", payload: { id: "a2", accepted: false } }], asked, 1), asked);
+  });
+
   it("skips events it doesn't understand", () => {
     const s = fold([claude({ type: "something_new" }), stream("m1", { type: "content_block_delta", index: 3, delta: { type: "text_delta", text: "x" } })]);
     assert.ok(s.items.every((i) => i.type !== "assistant" || blocksOf(i).length === 0));
@@ -254,6 +270,15 @@ describe("chat rows", () => {
       ]).items,
     );
     assert.deepEqual(shape(rows), ["user", "work[assistant]", "assistant:0-1", "work[assistant:1-2]", "assistant", "turn"]);
+  });
+
+  it("shows Claude's asks to start a session after the work and the reply, so they don't fold away", () => {
+    const ask: NewEvent = { kind: "proposal", payload: { id: "a1", prompt: "Fix the test." } };
+    const call = assistant("m1", [{ type: "tool_use", id: "t1", name: "mcp__kumiko__session_start", input: {} }]);
+    const running = fold([prompt("p1"), call, ask, toolResult("t1"), assistant("m2", [{ type: "text", text: "Asked." }])]).items;
+    assert.deepEqual(shape(chatRows(running)), ["user", "work (open)[assistant assistant]", "proposal"]);
+    const done = fold([prompt("p1"), call, ask, toolResult("t1"), assistant("m2", [{ type: "text", text: "Asked." }]), result()]).items;
+    assert.deepEqual(shape(chatRows(done)), ["user", "work[assistant]", "assistant", "proposal", "turn"]);
   });
 
   it("leaves a turn that only talked as it is", () => {

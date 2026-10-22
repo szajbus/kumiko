@@ -1,4 +1,4 @@
-import type { Attachment, EndReason, LoginAccount, SessionEvent } from "@kumiko/shared";
+import { isCommand, type Attachment, type EndReason, type LoginAccount, type SessionEvent } from "@kumiko/shared";
 
 // Turns a session's events into what the chat shows. Claude's stream-json is read loosely: only the fields the
 // chat needs, and anything unexpected is skipped rather than breaking the view.
@@ -22,6 +22,10 @@ export type ChatItem =
   | { type: "error"; key: string; message: string; hint?: string; stderr?: string[]; signedOut?: boolean }
   | { type: "retry"; key: string; attempt?: number; max?: number }
   | { type: "notice"; key: string; text: string }
+  /** Claude asking to start a new session on `prompt`; `accepted` once the user has answered, with the `session` it started. */
+  | { type: "proposal"; key: string; id: string; prompt: string; title?: string; artifacts?: string[]; accepted?: boolean; session?: string }
+  /** Another session, `name`d then, sharing copies of artifacts with this one; `told` once Claude has heard of it, with a prompt. */
+  | { type: "shared"; key: string; name: string; titles: string[]; told?: boolean }
   | { type: "ended"; key: string; reason: EndReason; code?: number };
 
 /** Tokens Claude read and wrote, all models together; `cached` of them read from the prompt cache. */
@@ -78,6 +82,8 @@ export interface WorkRow {
 export type ChatRow = ItemRow | WorkRow;
 
 const isWork = (i: ChatItem) => i.type === "assistant" || i.type === "retry" || i.type === "notice";
+/** Items for the user that come in while Claude works, and stay in view when its work folds. */
+const waitsOnUser = (i: ChatItem) => i.type === "proposal" || i.type === "shared";
 
 /** Text this long, or with a heading in it, is meant to be read: an answer, not a remark on the way to one. */
 const SUBSTANTIAL_CHARS = 300;
@@ -99,16 +105,20 @@ export function chatRows(items: readonly ChatItem[]): ChatRow[] {
     rows.push(row(i++));
     if (prompt.type !== "user") continue;
     const start = i;
-    while (i < items.length && isWork(items[i])) i++;
+    while (i < items.length && (isWork(items[i]) || waitsOnUser(items[i]))) i++;
     let end = i;
     while (end < items.length && items[end].type !== "user") end++;
     const done = items.slice(start, end).some((it) => it.type === "turn");
-    if (start === i) {
+    // Claude's asks to start sessions, and shares from other sessions, are for the user: they show after the work
+    // rather than fold away with it.
+    const asks = Array.from({ length: i - start }, (_, k) => start + k).filter((k) => waitsOnUser(items[k])).map((k) => row(k));
+    const work = Array.from({ length: i - start }, (_, k) => row(start + k)).filter((r) => !waitsOnUser(r.item));
+    if (!work.length) {
+      rows.push(...asks);
       for (; i < end; i++) rows.push(row(i));
       continue;
     }
 
-    const work = Array.from({ length: i - start }, (_, k) => row(start + k));
     const reply: ItemRow[] = [];
     if (done) {
       // Peel the text that ends the turn off the work, back to the last thing that wasn't text.
@@ -161,6 +171,7 @@ export function chatRows(items: readonly ChatItem[]): ChatRow[] {
     }
     flush();
     rows.push(...reply);
+    rows.push(...asks);
     for (; i < end; i++) rows.push(row(i));
   }
   return rows;
@@ -223,8 +234,14 @@ export function applyEvent(s: ChatState, ev: SessionEvent): ChatState {
   const push = (item: ChatItem): ChatState => ({ ...s, items: [...s.items, item] });
 
   switch (ev.kind) {
-    case "user_prompt":
-      return { ...push({ type: "user", key, text: ev.payload.text, id: ev.payload.id, ...(ev.payload.attachments ? { attachments: ev.payload.attachments } : {}) }), suggestion: undefined };
+    case "user_prompt": {
+      const next = { ...push({ type: "user", key, text: ev.payload.text, id: ev.payload.id, ...(ev.payload.attachments ? { attachments: ev.payload.attachments } : {}) }), suggestion: undefined };
+      // Claude hears of what was shared with the first prompt after it that isn't a command; see `sharesWaiting`.
+      if (isCommand(ev.payload.text) || !s.items.some((i) => i.type === "shared" && !i.told)) return next;
+      return { ...next, items: next.items.map((i) => (i.type === "shared" && !i.told ? { ...i, told: true } : i)) };
+    }
+    case "shared":
+      return push({ type: "shared", key, name: ev.payload.name, titles: ev.payload.artifacts.map((a) => a.title) });
     case "interrupt":
       return { ...s, interruptPending: true };
     case "error":
@@ -233,6 +250,22 @@ export function applyEvent(s: ChatState, ev: SessionEvent): ChatState {
       return push({ type: "ended", key, reason: ev.payload.reason, code: ev.payload.code });
     case "claude":
       return applyClaude(s, ev.payload, key);
+    case "proposal":
+      return push({
+        type: "proposal",
+        key,
+        id: ev.payload.id,
+        prompt: ev.payload.prompt,
+        ...(ev.payload.title ? { title: ev.payload.title } : {}),
+        ...(ev.payload.artifacts?.length ? { artifacts: ev.payload.artifacts } : {}),
+      });
+    case "proposal_answer": {
+      const index = s.items.findIndex((i) => i.type === "proposal" && i.id === ev.payload.id);
+      if (index < 0) return s;
+      const items = [...s.items];
+      items[index] = { ...(items[index] as Extract<ChatItem, { type: "proposal" }>), accepted: ev.payload.accepted, ...(ev.payload.session ? { session: ev.payload.session } : {}) };
+      return { ...s, items };
+    }
     default:
       // The window's events, and kinds a newer Kumiko adds, aren't the chat's.
       return s;

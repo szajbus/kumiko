@@ -35,7 +35,7 @@ interface Props {
   stream: SessionStream;
   /** The composer, for the window's other widgets to quote into. */
   composerRef?: RefObject<ComposerHandle | null>;
-  /** A fork was started; opens its tab. */
+  /** A fork, or a session Claude asked for, was started; opens its tab. */
   onForked(id: string): void;
   /** Its tab is the one on screen. */
   active?: boolean;
@@ -154,6 +154,15 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
   /** A new tab with the conversation up to the end of `prompt`'s turn, or all of it. */
   const fork = (prompt?: string) => call(() => api.forkSession(session.id, prompt).then(({ id }) => onForked(id)));
   const canBranch = idle && Boolean(session.claudeSessionId);
+  /** The user's answer to Claude asking to start a session; accepted, its tab opens. */
+  const answerProposal = (item: ProposalItem, accept: boolean) =>
+    call(() =>
+      api.answerProposal(session.id, item.id, accept).then(({ id, skipped }) => {
+        if (id) onForked(id);
+        // Started, but without some of what it was to be given.
+        if (skipped?.length) setError(`The session started without some artifacts: ${skipped.join(" ")}`);
+      }),
+    );
 
   return (
     <div className="session">
@@ -166,6 +175,7 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
         onRewind={canBranch ? setRewinding : undefined}
         onFork={canBranch ? (item) => void fork(item.id) : undefined}
         onQuote={(quoted) => composer.current?.insertQuote(quoted)}
+        onAnswer={answerProposal}
         hidden={login.hidden}
         actions={
           login.card && {
@@ -324,6 +334,43 @@ function useChat(events: SessionStream["events"]): ChatState {
 }
 
 type UserItem = Extract<ChatItem, { type: "user" }>;
+type ProposalItem = Extract<ChatItem, { type: "proposal" }>;
+
+/** Claude asking to start a new session on a prompt: the prompt, and Start or Decline until the user answers. */
+function ProposalCard({ item, onAnswer }: { item: ProposalItem; onAnswer?: (item: ProposalItem, accept: boolean) => Promise<boolean> }) {
+  const [sending, setSending] = useState<boolean | undefined>();
+  const answer = async (accept: boolean) => {
+    setSending(accept);
+    if (!(await onAnswer!(item, accept))) setSending(undefined);
+  };
+  const answered = item.accepted !== undefined;
+  return (
+    <div className={`chat-proposal${answered ? " is-answered" : ""}`} role={answered ? undefined : "group"} aria-label="Claude asks to start a new session">
+      <strong>{item.title ? `Claude asks to start a new session, "${item.title}":` : "Claude asks to start a new session:"}</strong>
+      <div className="chat-proposal-prompt">{item.prompt}</div>
+      {item.artifacts && (
+        <span className="chat-proposal-artifacts">
+          With {item.artifacts.length > 1 ? "copies of these artifacts" : "a copy of this artifact"}: {item.artifacts.map((p) => p.split("/").pop()).join(", ")}
+        </span>
+      )}
+      {answered ? (
+        <span className="chat-proposal-answer">{item.accepted ? "Started in a tab of its own." : "Declined."}</span>
+      ) : (
+        onAnswer && (
+          <div className="chat-error-actions">
+            <span>It starts in this project, in a tab of its own, with nothing of this conversation but the prompt.</span>
+            <button type="button" className="btn btn-primary btn-compact" disabled={sending !== undefined} onClick={() => void answer(true)}>
+              {sending === true ? "Starting…" : "Start session"}
+            </button>
+            <button type="button" className="btn btn-secondary btn-compact" disabled={sending !== undefined} onClick={() => void answer(false)}>
+              Decline
+            </button>
+          </div>
+        )
+      )}
+    </div>
+  );
+}
 
 
 /** In place of the last logged-out card, while the project still isn't logged in. */
@@ -370,13 +417,15 @@ interface ChatProps {
   onFork?: (item: UserItem) => void;
   /** Text selected in the chat, quoted, to go in the message. */
   onQuote(quoted: string): void;
+  /** Answers Claude asking to start a session; resolves to whether that went through. */
+  onAnswer?: (item: ProposalItem, accept: boolean) => Promise<boolean>;
   /** Shown in place of one item: the logged-out card, with Log in, or once logged in, the green one with Retry. */
   actions?: { key: string; node: ReactNode };
   /** Items not to show at all. */
   hidden?: ReadonlySet<string>;
 }
 
-function Chat({ chat, running, active, onRewind, onFork, onQuote, actions, hidden }: ChatProps) {
+function Chat({ chat, running, active, onRewind, onFork, onQuote, onAnswer, actions, hidden }: ChatProps) {
   const box = useRef<HTMLDivElement>(null);
   const inner = useRef<HTMLDivElement>(null);
   // Follows new output while the view is at the bottom; scrolling up stops that until it is back at the bottom.
@@ -422,6 +471,7 @@ function Chat({ chat, running, active, onRewind, onFork, onQuote, actions, hidde
         open={running && row.index > lastTurn}
         onRewind={onRewind}
         onFork={onFork}
+        onAnswer={onAnswer}
         actions={actions?.key === row.item.key ? actions.node : undefined}
       />
     );
@@ -512,10 +562,11 @@ interface ItemProps {
   open: boolean;
   onRewind?: (item: UserItem) => void;
   onFork?: (item: UserItem) => void;
+  onAnswer?: (item: ProposalItem, accept: boolean) => Promise<boolean>;
   actions?: ReactNode;
 }
 
-const Item = memo(function Item({ item, from, to, open, onRewind, onFork, actions }: ItemProps) {
+const Item = memo(function Item({ item, from, to, open, onRewind, onFork, onAnswer, actions }: ItemProps) {
   if (actions) return <>{actions}</>;
   switch (item.type) {
     case "user":
@@ -580,6 +631,15 @@ const Item = memo(function Item({ item, from, to, open, onRewind, onFork, action
       );
     case "notice":
       return <div className="chat-quiet">{item.text}</div>;
+    case "proposal":
+      return <ProposalCard item={item} onAnswer={onAnswer} />;
+    case "shared":
+      return (
+        <div className="chat-quiet">
+          {`"${item.name}" shared ${item.titles.map((t) => `"${t}"`).join(", ")} with this session; ${item.titles.length > 1 ? "they're" : "it's"} in the window's artifacts. `}
+          {item.told ? "Claude was told with your next message." : "Claude hears of it with your next message."}
+        </div>
+      );
     case "ended":
       return <div className="chat-ended">{endedText(item.reason, item.code)}</div>;
   }
@@ -628,7 +688,7 @@ function BlockView({ block, open }: { block: Block; open: boolean }) {
 function ToolLine({ block, open }: { block: Extract<Block, { type: "tool" }>; open: boolean }) {
   const ctx = useContext(WindowContext);
   // A call that opened, changed or closed something in the window says so in words, with a way back to a closed artifact.
-  const line = ctx && widgetLine(block.name, block.input, ctx.window);
+  const line = ctx && widgetLine(block.name, block.input, ctx.window, ctx.sessionNames);
   const hidden = line?.widget && !Object.values(ctx!.window.panes).includes(line.widget);
   const summary = toolSummary(block.input) || partialToolSummary(block.partialInput ?? "");
   const state = block.result ? (block.result.isError ? "error" : "ok") : open ? "running" : "stopped";
@@ -653,8 +713,8 @@ function ToolLine({ block, open }: { block: Extract<Block, { type: "tool" }>; op
         )}
       </summary>
       <div className="tool-body">
-        <div className="eyebrow">Input</div>
-        <pre className="mono">{Object.keys(block.input).length ? JSON.stringify(block.input, null, 2) : block.partialInput || "{}"}</pre>
+        <div className="eyebrow">{line?.input?.label ?? "Input"}</div>
+        <pre className="mono">{line?.input?.text ?? (Object.keys(block.input).length ? JSON.stringify(block.input, null, 2) : block.partialInput || "{}")}</pre>
         {block.result && (
           <>
             <div className="eyebrow">{block.result.isError ? "Error" : "Result"}</div>

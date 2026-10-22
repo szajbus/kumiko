@@ -646,6 +646,11 @@ a.artifact-copy { text-decoration: none; }
   background: #2a1517; border: 1px solid #5c2b2e; color: #f6b3aa; overflow-wrap: anywhere;
 }
 .chat-error pre { margin: 4px 0 0; padding: 8px 10px; border-radius: 6px; background: rgba(0, 0, 0, 0.3); font-size: 12px; white-space: pre-wrap; max-height: 200px; overflow: auto; }
+/* Claude asking to start a new session */
+.chat-proposal { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface-2); overflow-wrap: anywhere; }
+.chat-proposal-prompt { padding: 8px 10px; border-radius: 6px; background: rgba(0, 0, 0, 0.25); white-space: pre-wrap; max-height: 240px; overflow: auto; }
+.chat-proposal-answer, .chat-proposal-artifacts { color: var(--muted); font-size: 12.5px; }
+.chat-proposal.is-answered { border-color: var(--border); }
 .chat-ended { align-self: center; padding: 4px 12px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 12.5px; }
 
 /* A turn's work: folds behind a summary line once the turn is done */

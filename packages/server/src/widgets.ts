@@ -27,6 +27,9 @@ import {
   type SessionInfo,
   type WindowOp,
   type WindowState,
+  LIVE_SESSION_STATUSES,
+  isWaiting,
+  chatWindow,
 } from "@kumiko/shared";
 import type { AgentMessage, ToolHost, ToolResult, ToolSpec } from "@kumiko/agent";
 import { contentHash, type ArtifactContent } from "./content.js";
@@ -110,6 +113,25 @@ const MAX_SESSION_TITLE = 20;
 /** The longest description Claude can give a session: two lines in the list of saved sessions. */
 const MAX_SESSION_DESCRIPTION = 160;
 
+/** The longest opening prompt Claude can propose for a new session. */
+const MAX_PROPOSED_PROMPT = 20_000;
+
+/** The largest artifact's file that is copied to another session. */
+const MAX_SHARED_BYTES = 10 * 1024 * 1024;
+
+/** How many artifacts one call can share, or a new session start with. */
+const MAX_SHARED = 10;
+
+/** How many saved sessions session_list names, most recent first; open ones are all named. */
+const MAX_LISTED_SAVED = 30;
+
+/** A copy of an artifact's file in another session's folder, as that session's Claude names it. */
+export interface Copied {
+  path: string;
+  type: ArtifactType;
+  title: string;
+}
+
 /** What Claude's system prompt gets about Kumiko, artifacts and the session's name, naming the session's folder. */
 export const systemPrompt = (folder: string) =>
   [
@@ -175,7 +197,7 @@ export class Widgets implements SessionWidgets {
     return `${home ?? "~"}/.claude/${artifactsDir(info.id)}`;
   }
 
-  private hostDocs(info: SessionInfo): string | undefined {
+  private hostDocs(info: Pick<SessionInfo, "id" | "sandbox">): string | undefined {
     const home = this.opts.home(info.sandbox);
     return home && join(home.claudeHome, artifactsDir(info.id));
   }
@@ -284,6 +306,44 @@ export class Widgets implements SessionWidgets {
           const said = [named && `Named the session "${title}". Its tab shows it.`, described && `${named ? "Its" : "The session's"} description is saved; the list of sessions to resume shows it.`];
           return { text: said.filter(Boolean).join(" ") };
         }
+        case "session_start": {
+          // Answered once already: the user has it to accept, so it isn't asked twice.
+          if (toolUseId && this.sessions.events(id).some((e) => e.kind === "proposal" && e.payload.toolUseId === toolUseId)) {
+            return { text: "Done already: the user has it to accept." };
+          }
+          const prompt = str(args.prompt, "prompt").trim();
+          if (!prompt) throw new ToolError("Give the new session a prompt: what it is to do.");
+          if (prompt.length > MAX_PROPOSED_PROMPT) throw new ToolError(`The prompt is ${prompt.length} characters; at most ${MAX_PROPOSED_PROMPT}. Put the details in a file it can read.`);
+          const title = args.title === undefined ? undefined : str(args.title, "title").trim().replace(/\s+/g, " ") || undefined;
+          if (title && title.length > MAX_SESSION_TITLE) {
+            throw new ToolError(`"${title}" is ${title.length} characters; the tab has room for ${MAX_SESSION_TITLE}. Pick a shorter name.`);
+          }
+          const artifacts = await this.shareable(info, args.artifacts);
+          this.sessions.propose(id, { prompt, ...(title ? { title } : {}), ...(artifacts.length ? { artifacts: artifacts.map(([, a]) => a.path) } : {}) }, toolUseId);
+          const copies = artifacts.length ? ` It gets copies of ${artifacts.map(([w, a]) => `${w} "${a.title}"`).join(", ")} as they are then, in its own folder and window; the prompt it gets names them.` : "";
+          return {
+            text: `Asked the user to start the session: the chat shows them the prompt, and the session starts in a tab of its own once they accept it.${copies} You won't hear whether they do, so don't wait for it.`,
+          };
+        }
+        case "session_list":
+          return { text: await this.list(info) };
+        case "artifact_share": {
+          const to = this.sessions.get(str(args.session, "session"));
+          if (!to || to.sandbox !== info.sandbox) throw new ToolError(`There is no session ${args.session} in this project. session_list names them.`);
+          if (to.id === id) throw new ToolError("That is this session.");
+          if (!LIVE_SESSION_STATUSES.includes(to.status)) throw new ToolError(`Session ${to.id} isn't open, so it can't be given anything; the user can resume it first.`);
+          const artifacts = await this.shareable(info, args.artifacts);
+          if (!artifacts.length) throw new ToolError("Which artifacts? Name them by id or path.");
+          const { copied, skipped } = await this.copyArtifacts(info, to, artifacts.map(([, a]) => a.path));
+          if (copied.length) {
+            await this.addCopies(to, copied, false);
+            this.sessions.shared(to.id, info, nameOf(info), copied.map(({ path, title }) => ({ path, title })));
+          }
+          const said = copied.length
+            ? `Copied ${copied.map((c) => `"${c.title}" to ${c.path}`).join(", ")} in session ${to.id} ("${nameOf(to)}"): its window has ${copied.length > 1 ? "them" : "it"}, not shown, for the user to switch a pane to. These are copies: changing yours doesn't change them, so share again to send a newer one. Its Claude is told with the user's next message there, not before.`
+            : "Nothing was copied.";
+          return { text: [said, ...skipped].join(" "), ...(copied.length ? {} : { isError: true }) };
+        }
         default:
           throw new ToolError(`There is no tool ${name}.`);
       }
@@ -291,6 +351,99 @@ export class Widgets implements SessionWidgets {
       if (err instanceof ToolError || err instanceof WindowError) return { text: err.message, isError: true };
       throw err;
     }
+  }
+
+  /** The artifacts `refs` names, for copying to another session: files in this session's folder, all or nothing. */
+  private async shareable(info: SessionInfo, refs: unknown): Promise<[WidgetId, ArtifactState][]> {
+    if (refs === undefined) return [];
+    if (!Array.isArray(refs)) throw new ToolError("artifacts must be a list of artifacts' ids or paths.");
+    if (refs.length > MAX_SHARED) throw new ToolError(`At most ${MAX_SHARED} artifacts at a time.`);
+    const found: [WidgetId, ArtifactState][] = [];
+    for (const ref of refs) {
+      const [widget, a] = await this.find(info, ref, { shown: false });
+      if (isPage(a) && a.type !== "html") throw new ToolError(`Artifact ${widget} "${a.title}" is a page at ${a.path}, not a file: give the URL in the prompt instead.`);
+      if (!within(a.path, this.vmDocs(info))) throw new ToolError(`Artifact ${widget} "${a.title}" isn't in this session's folder, so it can't be shared.`);
+      if (!found.some(([w]) => w === widget)) found.push([widget, a]);
+    }
+    return found;
+  }
+
+  /** The project's sessions, for Claude: open ones first, then saved ones, most recent first. */
+  private async list(info: SessionInfo): Promise<string> {
+    const open = this.sessions.list().filter((s) => s.sandbox === info.sandbox);
+    const saved = (await this.sessions.resumable()).filter((s) => s.sandbox === info.sandbox);
+    const line = (s: SessionInfo, state: string) =>
+      `- ${s.id}${s.id === info.id ? " (this session)" : ""}: "${nameOf(s)}", ${state}, started ${s.startedAt.slice(0, 16).replace("T", " ")} UTC.${s.description ? ` ${s.description}` : ""}`;
+    const stateOf = (s: SessionInfo) =>
+      !LIVE_SESSION_STATUSES.includes(s.status) ? "ended, its tab still open" : s.status === "idle" ? (isWaiting(s) ? "open, waiting for the user" : "open, idle") : "open, working";
+    const lines = [
+      ...open.map((s) => line(s, stateOf(s))),
+      ...saved.slice(0, MAX_LISTED_SAVED).map((s) => line(s, "closed; the user can resume it")),
+    ];
+    const more = saved.length > MAX_LISTED_SAVED ? `\n(and ${saved.length - MAX_LISTED_SAVED} older saved sessions)` : "";
+    return `Sessions in this project (${info.sandbox}), as the user's tabs name them:\n${lines.join("\n")}${more}`;
+  }
+
+  /**
+   * Copies the artifacts' files at `paths`, in session `from`'s folder, into session `to`'s folder, by name, as they are now.
+   * `to` may not have started yet. A file of that name in `to`'s folder is only replaced if its window has it as an
+   * artifact (an earlier copy, say): anything else there is its Claude's own. Returns the copies, and what wasn't copied.
+   */
+  async copyArtifacts(from: SessionInfo, to: Pick<SessionInfo, "id" | "sandbox">, paths: string[]): Promise<{ copied: Copied[]; skipped: string[] }> {
+    const copied: Copied[] = [];
+    const skipped: string[] = [];
+    const src = await this.realDocs(from).catch(() => undefined);
+    const dir = this.hostDocs(to);
+    const home = this.homes.get(to.sandbox);
+    if (!src || !dir || !home) return { copied, skipped: ["This session's folder can't be read, so nothing was copied."] };
+    mkdirSync(dir, { recursive: true });
+    // Not into a folder Claude has swapped for a link, which would write wherever it points.
+    const dst = inPlace(this.opts.home(to.sandbox)!.claudeHome, to.id) ? await realpath(dir).catch(() => undefined) : undefined;
+    if (!dst) return { copied, skipped: [`Session ${to.id}'s folder links somewhere else, so nothing was copied to it.`] };
+    const theirs = new Set(artifactsOf(this.sessions.window(to.id) ?? chatWindow()).map(([, a]) => a.path));
+    // Named as in this session's window, if it still has them.
+    const mine = this.sessions.window(from.id);
+    for (const a of paths.map((path) => ({ path, title: (mine && artifactsOf(mine).find(([, d]) => d.path === path)?.[1].title) || posix.basename(path) }))) {
+      const type = artifactTypeOf(a.path);
+      const name = posix.basename(a.path);
+      const path = `${home}/.claude/${artifactsDir(to.id)}/${name}`;
+      const at = this.hostPath(from, a.path);
+      const real = at && (await realWithin(at.path, src));
+      const data = real && type ? await readWhole(real.dir, real.name, this.opts.scratch) : undefined;
+      if (!type || !data) {
+        skipped.push(`"${a.title}" (${a.path}) ${data === null ? `is larger than ${MAX_SHARED_BYTES / 1024 / 1024} MB` : "has no file to copy"}.`);
+        continue;
+      }
+      if (existsSync(join(dst, name)) && !theirs.has(path)) {
+        skipped.push(`Session ${to.id} has a file ${name} of its own already, which wasn't replaced: rename yours and share it again.`);
+        continue;
+      }
+      if (await writeIn(dst, name, data, this.opts.scratch)) copied.push({ path, type, title: a.title });
+      else skipped.push(`"${a.title}" couldn't be written to session ${to.id}'s folder.`);
+    }
+    return { copied, skipped };
+  }
+
+  /** Puts copies made by `copyArtifacts` in session `to`'s window: added, or updated if there already, and `show`n. */
+  async addCopies(to: SessionInfo, copies: Copied[], show: boolean): Promise<void> {
+    await this.prepare(to.sandbox);
+    for (const c of copies) {
+      const read = await this.read(to, c.path, c.type).catch(() => undefined);
+      if (!read || read.missing) continue;
+      const content = await this.keepContent(read);
+      let w = this.sessions.window(to.id)!;
+      const existing = artifactsOf(w).find(([, a]) => a.path === c.path);
+      const state = { content, truncated: read.truncated, missing: false };
+      if (existing) w = this.sessions.changeWindow(to.id, { type: "update", widget: existing[0], op: { ...state, title: c.title } });
+      else if (artifactsOf(w).length < MAX_ARTIFACTS) w = this.sessions.changeWindow(to.id, { type: "add", widget: nextId(w, "w"), kind: "artifact", state: { path: c.path, type: c.type, title: c.title, ...state } });
+      else continue;
+      const widget = artifactsOf(w).find(([, a]) => a.path === c.path)![0];
+      if (show && !paneOf(w, widget)) {
+        const target = docPaneTarget(w) ?? { split: { split: "right" as const } };
+        this.sessions.changeWindow(to.id, "pane" in target ? { type: "show", pane: target.pane, widget } : { type: "split", place: target.split, pane: nextId(w, "p"), widget });
+      }
+    }
+    this.watch(to);
   }
 
   private async open(info: SessionInfo, args: Record<string, unknown>, toolUseId?: string): Promise<string> {
@@ -701,6 +854,27 @@ export class Widgets implements SessionWidgets {
   }
 }
 
+/** A session's name as its tab shows it: its title, or its opening prompt's first words. */
+function nameOf(s: SessionInfo): string {
+  if (s.title) return s.title;
+  const first = s.prompt.trim().split("\n")[0];
+  return first.length > 60 ? `${first.slice(0, 60)}…` : first;
+}
+
+/** A file in `dir`, whole, as `openIn` finds it: undefined if it isn't a file there, null if it is too large to copy. */
+async function readWhole(dir: string, name: string, scratch: string): Promise<Buffer | null | undefined> {
+  const opened = await openIn(dir, name, scratch).catch(() => undefined);
+  if (!opened) return undefined;
+  try {
+    const st = await opened.fh.stat();
+    if (!st.isFile()) return undefined;
+    if (st.size > MAX_SHARED_BYTES) return null;
+    return await opened.fh.readFile();
+  } finally {
+    await opened.done();
+  }
+}
+
 function str(v: unknown, name: string): string {
   if (typeof v !== "string" || !v) throw new ToolError(`${name} must be a non-empty string.`);
   return v;
@@ -842,6 +1016,41 @@ const toolsFor = (folder: string): ToolSpec[] => [
         },
       },
       required: ["title"],
+    },
+  },
+  {
+    name: "session_start",
+    description: `Asks the user to start a new session in this project, beside this one, on an opening prompt you write: for separate work that came up, such as a bug found along the way or a follow-up, that shouldn't hold up or crowd this session. The chat shows the user the prompt, and the session starts, in a tab of its own, only once they accept it; you won't hear whether they do. It starts in the project's clone with nothing of this conversation, so the prompt has to say everything it needs: what to do, why, and where to look.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        prompt: { type: "string", description: `The new session's opening prompt, up to ${MAX_PROPOSED_PROMPT} characters, as the user would write it.` },
+        title: { type: "string", description: `A name for the new session, up to ${MAX_SESSION_TITLE} characters, as session_rename takes; its tab shows it.` },
+        artifacts: {
+          type: "array",
+          items: { type: "string" },
+          description: `Artifacts of this session to give it, by id or path, up to ${MAX_SHARED}: a plan or spec it works from, say. It gets copies of their files as they are when the user accepts, in its own artifacts folder and window, and the prompt names them.`,
+        },
+      },
+      required: ["prompt"],
+    },
+  },
+  {
+    name: "session_list",
+    description:
+      "Lists the sessions in this project, as the user's tabs name them, with what each is about: the open ones (working, idle, or waiting for the user) and the saved ones the user can resume. Use it to find work already under way elsewhere before starting more, or the session to share an artifact with.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "artifact_share",
+    description: `Copies artifacts of this session into another open session of this project (as session_list names it): their files go in its artifacts folder, and its window has them for the user to show. They are copies, as they are now: changing yours later doesn't change them, so share again to send a newer one, which replaces the copy. The other session's Claude is told with the user's next message there, not before.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        session: { type: "string", description: "The session's id, as session_list gives it." },
+        artifacts: { type: "array", items: { type: "string" }, description: `The artifacts, by id (as window_list names them) or path, up to ${MAX_SHARED}.` },
+      },
+      required: ["session", "artifacts"],
     },
   },
   {

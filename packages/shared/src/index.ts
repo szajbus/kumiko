@@ -333,7 +333,39 @@ export type SessionEvent =
   | { seq: number; kind: "error"; payload: { message: string; hint?: string; stderr?: string[]; signedOut?: boolean } }
   | { seq: number; kind: "ended"; payload: { reason: EndReason; code?: number } }
   /** A change to the session's window. `toolUseId`: the tool call of Claude's that made it, if one did. */
-  | { seq: number; kind: "window"; payload: { op: WindowOp; toolUseId?: string } };
+  | { seq: number; kind: "window"; payload: { op: WindowOp; toolUseId?: string } }
+  /**
+   * Claude asking, with its tool call `toolUseId`, to start a new session in the project on `prompt`, with copies of
+   * the artifacts whose files are `artifacts` (paths in the VM); see `proposal_answer`.
+   */
+  | { seq: number; kind: "proposal"; payload: { id: string; prompt: string; title?: string; artifacts?: string[]; toolUseId?: string } }
+  /** The user's answer to proposal `id`: accepted, starting `session`, or declined. */
+  | { seq: number; kind: "proposal_answer"; payload: { id: string; accepted: boolean; session?: string } }
+  /**
+   * Session `from`, named `name` then, sharing copies of artifacts with this one (its artifact_share tool): their files
+   * in this session's folder. Claude is told with the user's next message; see `sharesWaiting`.
+   */
+  | { seq: number; kind: "shared"; payload: { from: string; name: string; artifacts: { path: string; title: string }[] } };
+
+/** A prompt that is one of Claude's commands, such as /model, to which nothing can be added. */
+export const isCommand = (text: string) => text.trimStart().startsWith("/");
+
+/** The shares Claude hasn't been told of yet: those since the last prompt that wasn't a command. */
+export function sharesWaiting(events: readonly SessionEvent[]): Extract<SessionEvent, { kind: "shared" }>[] {
+  const waiting: Extract<SessionEvent, { kind: "shared" }>[] = [];
+  for (const e of events) {
+    if (e.kind === "shared") waiting.push(e);
+    else if (e.kind === "user_prompt" && !isCommand(e.payload.text)) waiting.length = 0;
+  }
+  return waiting;
+}
+
+/** What Claude is told, after the user's message, of artifacts other sessions shared with this one meanwhile. */
+export function sharedNote(shares: readonly Extract<SessionEvent, { kind: "shared" }>[]): string {
+  if (!shares.length) return "";
+  const each = shares.map((s) => `session "${s.payload.name}" (${s.payload.from}) shared ${s.payload.artifacts.map((a) => `"${a.title}", now at ${a.path}`).join("; ")}`);
+  return `\n\n(From Kumiko: since your last message, ${each.join("; and ")}. These are copies in your artifacts folder, and your window has them.)`;
+}
 
 /**
  * What a session's event socket sends: its events, and once it has replayed the ones it already had, `caught_up`,

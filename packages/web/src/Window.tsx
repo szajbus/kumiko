@@ -14,7 +14,11 @@ interface Props {
   onForked(id: string): void;
   /** Its tab is the one on screen; a window kept in the background for a quick switch back isn't. */
   active?: boolean;
+  /** The open sessions' names, by id; see `WindowApi`. */
+  sessionNames?: ReadonlyMap<string, string>;
 }
+
+const NO_NAMES: ReadonlyMap<string, string> = new Map();
 
 /** How narrow a pane can get before the window stacks its panes one above the other. */
 const MIN_PANE_WIDTH = 360;
@@ -24,7 +28,7 @@ const MIN_PANE_WIDTH = 360;
  * folds its state from the stream's `window` events, and passes the stream on to the chat. Panes are placed by the
  * layout but rendered side by side, each under its own key, so the chat stays mounted as panes open and close.
  */
-export function Window({ session, onForked, active = true }: Props) {
+export function Window({ session, onForked, active = true, sessionNames = NO_NAMES }: Props) {
   const stream = useSessionEvents(session.id);
   const win = useWindow(stream.events);
   const composer = useRef<ComposerHandle>(null);
@@ -60,9 +64,10 @@ export function Window({ session, onForked, active = true }: Props) {
       startDrag: (pane, e) => startDrag(pane, e, rects),
       rects,
       move: (pane, to, side) => void api.movePane(session.id, pane, to, side).catch((err) => console.error(err)),
+      sessionNames,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [win, artifacts, live, active, session.id, arrange, JSON.stringify([...rects])],
+    [win, artifacts, live, active, session.id, arrange, JSON.stringify([...rects]), sessionNames],
   );
 
   const widget = (pane: PaneId) => {
