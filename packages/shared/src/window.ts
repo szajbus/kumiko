@@ -1,4 +1,4 @@
-// A session's window: a layout of slots, as in tmux, each showing one widget. See docs/widgets-spec.md.
+// A session's window: a layout of slots, as in tmux, each showing one widget.
 // Pure functions only, shared by the server, which changes windows, and the UI, which shows them.
 
 import type { SessionEvent } from "./index.js";

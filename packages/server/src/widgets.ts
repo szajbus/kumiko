@@ -94,7 +94,7 @@ const isPage = (a: ArtifactState) => a.type === "html" || a.type === "preview" |
 
 /**
  * The widgets of sessions' windows, beyond the window itself: the tools Claude changes them with, and the artifacts'
- * files, read on the host and read again when they change. See docs/widgets-spec.md.
+ * files, read on the host and read again when they change.
  */
 export class Widgets implements SessionWidgets {
   sessions!: Sessions;
