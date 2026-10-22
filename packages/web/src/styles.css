@@ -131,6 +131,8 @@ code, .mono { font-family: var(--mono); }
 .banner-error { background: #2a1517; border-color: #5c2b2e; color: #f6b3aa; }
 .banner-error .mono { font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .banner-warn { background: #2a2214; border-color: #5c4a2b; color: #f0cf96; }
+.banner-success { background: #142a1f; border-color: #2b5c43; color: #9fe0bd; animation: banner-in 200ms ease-out; }
+@keyframes banner-in { from { opacity: 0; transform: translateY(4px); } }
 
 .table-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow-x: auto; }
 .table-inner { min-width: 740px; }

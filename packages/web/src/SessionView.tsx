@@ -20,6 +20,9 @@ import { UsageStrip } from "./UsageStrip";
 import { widgetLine } from "./widgets";
 import { WindowContext } from "./windowContext";
 
+/** How long the note that Claude restarted stays. */
+const RESTARTED_MS = 5000;
+
 const MODELS = ["default", "opus", "sonnet", "haiku"];
 /** Commands Kumiko handles itself, since Claude can't run them headless; offered alongside Claude's own. */
 const OWN_COMMANDS = ["fork", "rewind"];
@@ -71,6 +74,13 @@ export function SessionView({ session, stream, onForked, composerRef }: Props) {
   // Bumped by a rewind, so the composer starts again from the draft it left.
   const [composerKey, setComposerKey] = useState(0);
   const [loggingIn, setLoggingIn] = useState(false);
+  // Restarting Claude for Kumiko's new tools: under way, then done, which says so for a moment.
+  const [restart, setRestart] = useState<"pending" | "done">();
+  useEffect(() => {
+    if (restart !== "done") return;
+    const t = setTimeout(() => setRestart(undefined), RESTARTED_MS);
+    return () => clearTimeout(t);
+  }, [restart]);
   const ownComposer = useRef<ComposerHandle>(null);
   const composer = composerRef ?? ownComposer;
   // What is known about the login behind the last logged-out card; `loginCards` decides what that shows.
@@ -201,12 +211,26 @@ export function SessionView({ session, stream, onForked, composerRef }: Props) {
           <div className="banner banner-warn">Lost connection to the session. Reconnecting…</div>
         )}
         {error && <div className="banner banner-error">{error}</div>}
-        {session.toolsOutdated && live && (
+        {session.toolsOutdated && live && restart !== "done" && (
           <div className="banner banner-warn">
             <span className="banner-text">Kumiko's tools for Claude have changed since this session's Claude started. Restart it to get them; the conversation carries on.</span>
-            <button type="button" className="btn btn-compact" disabled={!idle} title={idle ? undefined : "Once Claude has finished"} onClick={() => void call(() => api.restartClaude(session.id))}>
-              Restart Claude
+            <button
+              type="button"
+              className="btn btn-compact"
+              disabled={!idle || restart === "pending"}
+              title={idle ? undefined : "Once Claude has finished"}
+              onClick={async () => {
+                setRestart("pending");
+                setRestart((await call(() => api.restartClaude(session.id))) ? "done" : undefined);
+              }}
+            >
+              {restart === "pending" ? "Restarting…" : "Restart Claude"}
             </button>
+          </div>
+        )}
+        {restart === "done" && (
+          <div className="banner banner-success" role="status">
+            Claude restarted with Kumiko's current tools. The conversation carries on.
           </div>
         )}
         <Composer
