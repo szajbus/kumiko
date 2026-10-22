@@ -1,5 +1,5 @@
 ---
-title: Artifacts beside the chat
+title: Artifacts
 description: Plans, diagrams, drawings and charts the agent keeps up to date in a pane next to the conversation.
 sidebar:
   order: 4
