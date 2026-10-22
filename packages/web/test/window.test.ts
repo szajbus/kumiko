@@ -124,6 +124,19 @@ describe("windows", () => {
     assert.deepEqual(move(two, "s2", WINDOW, "above").layout, { kind: "split", dir: "column", ratio: 0.5, a: { kind: "slot", id: "s2" }, b: { kind: "slot", id: CHAT } });
   });
 
+  it("keeps two panes' sizes when the two sides of one split change places", () => {
+    // chat (70%) | s2 (30%): the user made the artifact narrower.
+    const w = resize(split(withDocs("w2"), { split: "right" }, "s2", "w2"), "", 0.7);
+    const narrowLeft = { kind: "split", dir: "row", ratio: 1 - 0.7, a: { kind: "slot", id: "s2" }, b: { kind: "slot", id: CHAT } };
+    assert.deepEqual(move(w, "s2", CHAT, "left").layout, narrowLeft);
+    assert.deepEqual(move(w, CHAT, "s2", "swap").layout, narrowLeft);
+    assert.deepEqual(move(w, "s2", WINDOW, "left").layout, narrowLeft);
+    // Where it is already: nothing changes.
+    assert.equal(move(w, "s2", WINDOW, "right"), w);
+    // Across the split's way, it goes above in halves as before.
+    assert.deepEqual(move(w, "s2", CHAT, "above").layout, { kind: "split", dir: "column", ratio: 0.5, a: { kind: "slot", id: "s2" }, b: { kind: "slot", id: CHAT } });
+  });
+
   it("swaps two slots' places", () => {
     let w = split(withDocs("w2", "w3"), { split: "right" }, "s2", "w2");
     w = split(w, { split: "below", of: "s2" }, "s3", "w3");

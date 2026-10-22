@@ -128,11 +128,20 @@ export function move(w: WindowState, slot: SlotId, to: SlotId, side: Side | "swa
   for (const s of to === WINDOW ? [slot] : [slot, to]) if (!w.slots[s]) throw new WindowError(`There is no slot ${s}. Slots: ${slotIds(w.layout).join(", ")}.`);
   if (to === WINDOW) {
     if (side === "swap") throw new WindowError("A slot goes to a side of the window, not in its place.");
+    // One of the window's two sides already, along the same way: the two change sides, keeping their sizes.
+    const flipped = flipSides(w.layout, slot, side);
+    if (flipped) return flipped === w.layout ? w : { ...w, layout: flipped };
     const rest = withoutSlot(w.layout, slot);
     if (rest === w.layout) return w;
     return { ...w, layout: beside(rest, { kind: "slot", id: slot }, side, edgeShare(slotIds(w.layout).length)) };
   }
   if (slot === to) return w;
+  // The two sides of one split, alone in it: they change places, each keeping its size.
+  const pair = siblings(w.layout, slot, to);
+  if (pair && (side === "swap" || (pair.dir === "row") === (side === "left" || side === "right"))) {
+    const flipped = side === "swap" ? { ...pair, a: pair.b, b: pair.a, ratio: 1 - pair.ratio } : flipSides(pair, slot, side)!;
+    return { ...w, layout: replaceSplit(w.layout, pair, flipped) };
+  }
   if (side === "swap") {
     const swap = (l: Layout): Layout =>
       l.kind === "slot" ? (l.id === slot ? { kind: "slot", id: to } : l.id === to ? { kind: "slot", id: slot } : l) : { ...l, a: swap(l.a), b: swap(l.b) };
@@ -140,6 +149,39 @@ export function move(w: WindowState, slot: SlotId, to: SlotId, side: Side | "swa
   }
   const layout = replaceSlot(withoutSlot(w.layout, slot), to, (l) => beside(l, { kind: "slot", id: slot }, side, 0.5));
   return { ...w, layout };
+}
+
+type Split = Extract<Layout, { kind: "split" }>;
+
+/** The split whose two sides are the slots `x` and `y`, if there is one. */
+function siblings(l: Layout, x: SlotId, y: SlotId): Split | undefined {
+  if (l.kind === "slot") return undefined;
+  const is = (side: Layout, id: SlotId) => side.kind === "slot" && side.id === id;
+  if ((is(l.a, x) && is(l.b, y)) || (is(l.a, y) && is(l.b, x))) return l;
+  return siblings(l.a, x, y) ?? siblings(l.b, x, y);
+}
+
+/** `l` with the split `old` (by identity) replaced by `by`. */
+function replaceSplit(l: Layout, old: Split, by: Layout): Layout {
+  if (l === old) return by;
+  if (l.kind === "slot") return l;
+  return { ...l, a: replaceSplit(l.a, old, by), b: replaceSplit(l.b, old, by) };
+}
+
+/**
+ * Split `l` with slot `slot` on `side` of it, keeping the share `slot` has, if `slot` is one of its two sides and it
+ * splits the way `side` goes; undefined if not. `l` itself when `slot` is on that side already.
+ */
+function flipSides(l: Layout, slot: SlotId, side: Side): Layout | undefined {
+  if (l.kind !== "split" || (l.dir === "row") !== (side === "left" || side === "right")) return undefined;
+  const isSlot = (x: Layout) => x.kind === "slot" && x.id === slot;
+  if (!isSlot(l.a) && !isSlot(l.b)) return undefined;
+  const first = side === "left" || side === "above";
+  if (isSlot(first ? l.a : l.b)) return l;
+  const share = isSlot(l.a) ? l.ratio : 1 - l.ratio;
+  const other = isSlot(l.a) ? l.b : l.a;
+  const leaf: Layout = { kind: "slot", id: slot };
+  return first ? { ...l, a: leaf, b: other, ratio: share } : { ...l, a: other, b: leaf, ratio: 1 - share };
 }
 
 /** Where a split is in a layout: the sides taken from the root to reach it, "" for the root. */
