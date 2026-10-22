@@ -142,7 +142,7 @@ export function ArtifactView({ widget, slot, doc, writing }: Props) {
           {doc.type === "web" && !doc.approved ? (
             <SiteApproval doc={doc} live={ctx.live} onAnswer={(allow) => ctx.approve(widget, allow)} />
           ) : (
-            <Rendered key={reloads} doc={doc} text={text} writing={writing !== undefined} source={source} />
+            <Rendered key={reloads} doc={doc} text={text} writing={writing !== undefined} source={source} loading={writing === undefined && !wrote.current && Boolean(shown.loading)} />
           )}
           {shown.failed && writing === undefined && <p className="artifact-note">Couldn't get it from Kumiko: {shown.failed}</p>}
           {doc.truncated && writing === undefined && (
@@ -372,7 +372,9 @@ function DeleteButton({ title, onDelete }: { title: string; onDelete(): void }) 
 }
 
 /** An artifact's text, shown as its type is shown. */
-function Rendered({ doc, text, writing, source }: { doc: ArtifactState; text: string; writing: boolean; source: boolean }) {
+function Rendered({ doc, text, writing, source, loading }: { doc: ArtifactState; text: string; writing: boolean; source: boolean; loading: boolean }) {
+  // Nothing to draw until the text has come: an empty diagram or page is an error, or a flash of nothing.
+  if (loading) return <div className="diagram-wait">Loading…</div>;
   // While it is written, and when asked for, the source of what is drawn shows instead, marked with its language so a
   // quote of it is fenced as code.
   const lang = SOURCE_LANG[doc.type];
@@ -575,7 +577,7 @@ function fetchContent(hash: string): Promise<string> {
  * The text of the artifact as the window has it: the server keeps it, and the window names it by hash. The version
  * shown stays until the next has come, so the pane doesn't flash empty. An image isn't fetched as text: it loads itself.
  */
-function useContent(doc: ArtifactState): { text: string; stale?: boolean; failed?: string } {
+function useContent(doc: ArtifactState): { text: string; stale?: boolean; loading?: boolean; failed?: string } {
   const [got, setGot] = useState<{ hash?: string; text: string; failed?: string }>({ text: "" });
   const hash = doc.type === "image" ? undefined : doc.content;
   useEffect(() => {
@@ -590,7 +592,8 @@ function useContent(doc: ArtifactState): { text: string; stale?: boolean; failed
     };
   }, [hash]);
   if (!hash) return { text: doc.text ?? "" };
-  return { ...got, stale: got.hash !== hash };
+  // Loading: no version of it has come yet, so there is nothing to show.
+  return { ...got, stale: got.hash !== hash, loading: got.hash === undefined && !got.failed };
 }
 
 function useUpdated(text: string): boolean {

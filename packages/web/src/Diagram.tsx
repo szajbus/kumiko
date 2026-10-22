@@ -21,12 +21,21 @@ export function Diagram({ source }: { source: string }) {
   const [out, setOut] = useState<{ svg?: string; error?: string }>({});
   useEffect(() => {
     let current = true;
+    const id = `km-diagram-${++drawn}`;
     void loadMermaid()
-      .then((m) => m.render(`km-diagram-${++drawn}`, source))
+      .then(async (m) => {
+        // Checked first: a source that doesn't parse makes render draw its error into the page, and leave it there.
+        await m.parse(source);
+        return m.render(id, source);
+      })
       .then(
         ({ svg }) => current && setOut({ svg }),
         (err: unknown) => current && setOut({ error: err instanceof Error ? err.message : String(err) }),
-      );
+      )
+      // Whatever render left in the page to measure the diagram by.
+      .finally(() => {
+        for (const leftover of [document.getElementById(id), document.getElementById(`d${id}`)]) leftover?.remove();
+      });
     return () => {
       current = false;
     };
