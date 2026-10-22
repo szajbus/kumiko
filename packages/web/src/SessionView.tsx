@@ -614,7 +614,7 @@ function ToolLine({ block, open }: { block: Extract<Block, { type: "tool" }>; op
   const ctx = useContext(WindowContext);
   // A call that opened, changed or closed something in the window says so in words, with a way back to a closed artifact.
   const line = ctx && widgetLine(block.name, block.input, ctx.window);
-  const hidden = line?.widget && !Object.values(ctx!.window.slots).includes(line.widget);
+  const hidden = line?.widget && !Object.values(ctx!.window.panes).includes(line.widget);
   const summary = toolSummary(block.input) || partialToolSummary(block.partialInput ?? "");
   const state = block.result ? (block.result.isError ? "error" : "ok") : open ? "running" : "stopped";
   return (

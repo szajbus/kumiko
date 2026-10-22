@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
-import { CHAT, chatWindow, artifactsOf, edgeShare, WINDOW, LIVE_SESSION_STATUSES, MIN_RATIO, resize, slotOf, windowState, type ArtifactState, type SessionEvent, type SessionInfo, type SlotId, type SplitPath, type WidgetId, type WindowState } from "@kumiko/shared";
+import { CHAT, chatWindow, artifactsOf, edgeShare, WINDOW, LIVE_SESSION_STATUSES, MIN_RATIO, resize, paneOf, windowState, type ArtifactState, type SessionEvent, type SessionInfo, type PaneId, type SplitPath, type WidgetId, type WindowState } from "@kumiko/shared";
 import { api, onPaneRequest, useSessionEvents } from "./api";
 import type { ComposerHandle } from "./Composer";
 import { ArtifactView } from "./ArtifactView";
 import { PaneGrip } from "./PaneGrip";
 import { SessionView } from "./SessionView";
-import { columns, dividers, dropPreview, dropZone, lastChanges, slotRects, streamingWrites, windowEdge, type Divider, type DropZone, type SlotRect } from "./widgets";
+import { columns, dividers, dropPreview, dropZone, lastChanges, paneRects, streamingWrites, windowEdge, type Divider, type DropZone, type PaneRect } from "./widgets";
 import { WindowContext, type ArtifactEntry, type WindowApi } from "./windowContext";
 
 interface Props {
@@ -14,12 +14,12 @@ interface Props {
   onForked(id: string): void;
 }
 
-/** How narrow a slot can get before the window stacks its slots one above the other. */
-const MIN_SLOT_WIDTH = 360;
+/** How narrow a pane can get before the window stacks its panes one above the other. */
+const MIN_PANE_WIDTH = 360;
 
 /**
- * A session's tab: its window, a layout of slots each showing a widget. The window owns the session's event stream,
- * folds its state from the stream's `window` events, and passes the stream on to the chat. Slots are placed by the
+ * A session's tab: its window, a layout of panes each showing a widget. The window owns the session's event stream,
+ * folds its state from the stream's `window` events, and passes the stream on to the chat. Panes are placed by the
  * layout but rendered side by side, each under its own key, so the chat stays mounted as panes open and close.
  */
 export function Window({ session, onForked }: Props) {
@@ -32,14 +32,14 @@ export function Window({ session, onForked }: Props) {
   const artifacts = useDocuments(win, changed, stream.history);
   const box = useRef<HTMLDivElement>(null);
   const width = useWidth(box);
-  // Too narrow for its slots side by side, the window stacks them, and they can't be rearranged.
-  const stack = width !== undefined && width < MIN_SLOT_WIDTH * columns(win.layout);
-  const arrange = live && !stack && Object.keys(win.slots).length > 1;
+  // Too narrow for its panes side by side, the window stacks them, and they can't be rearranged.
+  const stack = width !== undefined && width < MIN_PANE_WIDTH * columns(win.layout);
+  const arrange = live && !stack && Object.keys(win.panes).length > 1;
   const { drag, startDrag, sizing, startResize } = useArrange(session.id, box, win, arrange);
   usePaneRequests(session.id, box);
   // While a divider is dragged, the layout follows it here, and the server hears of it once it is let go.
   const layout = sizing ? resizedLayout(win, sizing.path, sizing.ratio) : win.layout;
-  const rects = slotRects(layout, stack);
+  const rects = paneRects(layout, stack);
 
   const ctx = useMemo<WindowApi>(
     () => ({
@@ -47,23 +47,23 @@ export function Window({ session, onForked }: Props) {
       artifacts,
       live,
       show: (widget) => void api.showWidget(session.id, widget).catch((err) => console.error(err)),
-      showIn: (widget, slot) => void api.showWidget(session.id, widget, slot).catch((err) => console.error(err)),
-      showBeside: (widget, slot, split) => void api.showWidget(session.id, widget, slot, split).catch((err) => console.error(err)),
-      close: (slot) => void api.closeSlot(session.id, slot).catch((err) => console.error(err)),
+      showIn: (widget, pane) => void api.showWidget(session.id, widget, pane).catch((err) => console.error(err)),
+      showBeside: (widget, pane, split) => void api.showWidget(session.id, widget, pane, split).catch((err) => console.error(err)),
+      close: (pane) => void api.closePane(session.id, pane).catch((err) => console.error(err)),
       remove: (widget) => void api.removeWidget(session.id, widget).catch((err) => console.error(err)),
       approve: (widget, allow) => void api.approveSite(session.id, widget, allow).catch((err) => console.error(err)),
       quote: (text) => composer.current?.insertQuote(text),
       arrange,
-      startDrag: (slot, e) => startDrag(slot, e, rects),
+      startDrag: (pane, e) => startDrag(pane, e, rects),
       rects,
-      move: (slot, to, side) => void api.moveSlot(session.id, slot, to, side).catch((err) => console.error(err)),
+      move: (pane, to, side) => void api.movePane(session.id, pane, to, side).catch((err) => console.error(err)),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [win, artifacts, live, session.id, arrange, JSON.stringify([...rects])],
   );
 
-  const widget = (slot: SlotId) => {
-    const id = win.slots[slot];
+  const widget = (pane: PaneId) => {
+    const id = win.panes[pane];
     const w = win.widgets[id];
     switch (w?.kind) {
       case "chat":
@@ -73,7 +73,7 @@ export function Window({ session, onForked }: Props) {
         // What Claude is writing to the file streams in, until the window has read the file it wrote.
         const write = writes.get(doc.path);
         const writing = write && (changed.get(id) ?? 0) < write.seq ? write.text : undefined;
-        return <ArtifactView key={id} widget={id} slot={slot} doc={doc} writing={writing} />;
+        return <ArtifactView key={id} widget={id} pane={pane} doc={doc} writing={writing} />;
       }
       default:
         return null;
@@ -83,15 +83,15 @@ export function Window({ session, onForked }: Props) {
   return (
     <WindowContext.Provider value={ctx}>
       <div className={`window${drag?.moved ? " is-dragging" : ""}`} ref={box}>
-        {/* In the slots' own order, not the layout's: moving a pane in the layout doesn't move it in the page, which
+        {/* In the panes' own order, not the layout's: moving a pane in the layout doesn't move it in the page, which
             would remount nothing but would lose its scroll position. */}
-        {Object.keys(win.slots).flatMap((slot) => {
-          const rect = rects.get(slot);
-          return rect ? [[slot, rect] as const] : [];
-        }).map(([slot, rect]) => (
-          <div key={slot} data-slot={slot} className={`window-slot${drag?.slot === slot && drag.moved ? " is-dragged" : ""}`} style={place(rect)}>
-            {widget(slot)}
-            {slot === CHAT && <PaneGrip slot={slot} floating />}
+        {Object.keys(win.panes).flatMap((pane) => {
+          const rect = rects.get(pane);
+          return rect ? [[pane, rect] as const] : [];
+        }).map(([pane, rect]) => (
+          <div key={pane} data-pane={pane} className={`window-pane${drag?.pane === pane && drag.moved ? " is-dragged" : ""}`} style={place(rect)}>
+            {widget(pane)}
+            {pane === CHAT && <PaneGrip pane={pane} floating />}
           </div>
         ))}
         {arrange &&
@@ -105,9 +105,9 @@ export function Window({ session, onForked }: Props) {
               <div
                 className="window-drop-preview"
                 style={place(
-                  drag.target.slot === WINDOW
-                    ? dropPreview({ x: 0, y: 0, w: 1, h: 1 }, drag.target.zone, edgeShare(Object.keys(win.slots).length))
-                    : dropPreview(rects.get(drag.target.slot)!, drag.target.zone),
+                  drag.target.pane === WINDOW
+                    ? dropPreview({ x: 0, y: 0, w: 1, h: 1 }, drag.target.zone, edgeShare(Object.keys(win.panes).length))
+                    : dropPreview(rects.get(drag.target.pane)!, drag.target.zone),
                 )}
               />
             )}
@@ -161,7 +161,7 @@ function usePaneRequests(id: string, box: RefObject<HTMLElement | null>) {
       onPaneRequest(async (ev) => {
         if (ev.session !== id) return;
         const answer = (a: { data?: string; mimeType?: string; error?: string; note?: string }) => void api.answerPane(id, { request: ev.request, ...a }).catch(() => {});
-        const pane = box.current?.querySelector(`[data-slot="${CSS.escape(ev.slot)}"]`);
+        const pane = box.current?.querySelector(`[data-pane="${CSS.escape(ev.pane)}"]`);
         const k = window.kumiko;
         if (!pane) return answer({ error: "That pane isn't in the user's window." });
         // Whatever goes wrong, the window answers, rather than leaving Claude to wait for nothing.
@@ -219,12 +219,12 @@ const MIN_PANE = { width: 240, height: 120 };
 const DRAG_THRESHOLD = 4;
 
 interface Drag {
-  slot: SlotId;
+  pane: PaneId;
   from: { x: number; y: number };
   /** Past the threshold: a drag, not a press. */
   moved: boolean;
   /** The pane under the pointer and where on it the dragged one would land. */
-  target?: { slot: SlotId; zone: DropZone };
+  target?: { pane: PaneId; zone: DropZone };
 }
 
 interface Sizing {
@@ -247,10 +247,10 @@ function useArrange(id: string, box: RefObject<HTMLElement | null>, win: WindowS
     return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
   };
 
-  const startDrag = (slot: SlotId, e: ReactPointerEvent, rects: Map<SlotId, SlotRect>) => {
+  const startDrag = (pane: PaneId, e: ReactPointerEvent, rects: Map<PaneId, PaneRect>) => {
     if (!arrange || e.button !== 0) return;
     e.preventDefault();
-    set({ slot, from: { x: e.clientX, y: e.clientY }, moved: false });
+    set({ pane, from: { x: e.clientX, y: e.clientY }, moved: false });
     const move = (ev: PointerEvent) => {
       const d = dragRef.current;
       if (!d) return;
@@ -262,7 +262,7 @@ function useArrange(id: string, box: RefObject<HTMLElement | null>, win: WindowS
       const edge = windowEdge(p.x, p.y, size.width, size.height);
       const over = [...rects].find(([, r]) => p.x >= r.x && p.x < r.x + r.w && p.y >= r.y && p.y < r.y + r.h);
       // Over itself, the whole pane is the target, as a drop there leaves it where it is.
-      const target = edge ? { slot: WINDOW, zone: edge } : over && { slot: over[0], zone: over[0] === d.slot ? ("swap" as const) : dropZone(over[1], p.x, p.y) };
+      const target = edge ? { pane: WINDOW, zone: edge } : over && { pane: over[0], zone: over[0] === d.pane ? ("swap" as const) : dropZone(over[1], p.x, p.y) };
       set({ ...d, moved, target });
     };
     const end = (drop: boolean) => {
@@ -271,7 +271,7 @@ function useArrange(id: string, box: RefObject<HTMLElement | null>, win: WindowS
       removeEventListener("pointermove", move);
       removeEventListener("pointerup", up);
       removeEventListener("keydown", key);
-      if (drop && d?.target && d.target.slot !== d.slot) void api.moveSlot(id, d.slot, d.target.slot, d.target.zone).catch((err) => console.error(err));
+      if (drop && d?.target && d.target.pane !== d.pane) void api.movePane(id, d.pane, d.target.pane, d.target.zone).catch((err) => console.error(err));
     };
     const up = () => end(true);
     const key = (ev: KeyboardEvent) => ev.key === "Escape" && end(false);
@@ -330,8 +330,8 @@ function dividerPlace({ dir, rect, ratio }: Divider): CSSProperties {
     : { top: `calc(${pct(rect.y + rect.h * ratio)} - 3px)`, left: pct(rect.x), height: 6, width: pct(rect.w) };
 }
 
-/** A slot's place in the window, with a divider on the sides it shares with another slot. */
-function place({ x, y, w, h }: SlotRect): CSSProperties {
+/** A pane's place in the window, with a divider on the sides it shares with another pane. */
+function place({ x, y, w, h }: PaneRect): CSSProperties {
   const pct = (n: number) => `${n * 100}%`;
   return {
     left: pct(x),
@@ -349,16 +349,16 @@ function place({ x, y, w, h }: SlotRect): CSSProperties {
  */
 function useDocuments(win: WindowState, changed: Map<WidgetId, number>, history: number | undefined): ArtifactEntry[] {
   const seen = useRef(new Map<WidgetId, number>());
-  const docs = artifactsOf(win).map(([widget, d]) => ({ widget, type: d.type, title: d.title, path: d.path, slot: slotOf(win, widget), at: changed.get(widget) ?? 0 }));
+  const docs = artifactsOf(win).map(([widget, d]) => ({ widget, type: d.type, title: d.title, path: d.path, pane: paneOf(win, widget), at: changed.get(widget) ?? 0 }));
   useEffect(() => {
-    for (const d of docs) if (d.slot) seen.current.set(d.widget, d.at);
+    for (const d of docs) if (d.pane) seen.current.set(d.widget, d.at);
   });
   const key = JSON.stringify(docs);
   return useMemo(
     () =>
       docs
         .sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: "base" }))
-        .map((d) => ({ ...d, unread: !d.slot && history !== undefined && d.at > history && d.at > (seen.current.get(d.widget) ?? 0) })),
+        .map((d) => ({ ...d, unread: !d.pane && history !== undefined && d.at > history && d.at > (seen.current.get(d.widget) ?? 0) })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [key, history],
   );

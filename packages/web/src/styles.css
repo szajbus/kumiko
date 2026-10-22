@@ -442,10 +442,10 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 .tab-new:hover { background: var(--surface-2); color: var(--text); }
 [data-shell="electron-darwin"] .tab { -webkit-app-region: no-drag; }
 
-/* A session's window: slots placed by its layout, side by side, each showing a widget. */
+/* A session's window: panes placed by its layout, side by side, each showing a widget. */
 .window { flex: 1; min-height: 0; position: relative; }
-.window-slot { position: absolute; display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 0 solid var(--border-soft); }
-.window-slot.is-dragged { opacity: 0.45; }
+.window-pane { position: absolute; display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 0 solid var(--border-soft); }
+.window-pane.is-dragged { opacity: 0.45; }
 .window.is-dragging { user-select: none; }
 .window-divider { position: absolute; z-index: 3; }
 .window-divider.is-row { cursor: col-resize; }
@@ -462,9 +462,9 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
   padding: 0; border: 0; border-radius: 4px; background: none; color: var(--muted); cursor: grab; touch-action: none;
 }
 .pane-grip:hover, .pane-grip[data-state="open"] { background: var(--surface-2); color: var(--text); }
-.window-slot > .pane-grip.is-floating[data-state="open"] { opacity: 1; }
+.window-pane > .pane-grip.is-floating[data-state="open"] { opacity: 1; }
 .pane-grip.is-floating { position: absolute; top: 8px; left: 10px; margin: 0; z-index: 2; opacity: 0.35; transition: opacity 120ms; }
-.window-slot:hover > .pane-grip.is-floating { opacity: 1; }
+.window-pane:hover > .pane-grip.is-floating { opacity: 1; }
 
 /* The artifact widget: a header with its title and controls, and the markdown, which scrolls */
 .artifact { flex: 1; min-height: 0; display: flex; flex-direction: column; }

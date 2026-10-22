@@ -1,4 +1,4 @@
-import { artifactsOf, WINDOW, type Layout, type SessionEvent, type Side, type SlotId, type SplitPath, type WidgetId, type WindowState } from "@kumiko/shared";
+import { artifactsOf, WINDOW, type Layout, type SessionEvent, type Side, type PaneId, type SplitPath, type WidgetId, type WindowState } from "@kumiko/shared";
 
 /**
  * The string value of `key` in JSON that may still be streaming in, as far as it has got: `complete` once its closing
@@ -77,8 +77,8 @@ export function normalize(path: string): string {
   return `${path.startsWith("/") ? "/" : ""}${out.join("/")}`;
 }
 
-/** Where a slot is in its window, as fractions of the window's width and height. */
-export interface SlotRect {
+/** Where a pane is in its window, as fractions of the window's width and height. */
+export interface PaneRect {
   x: number;
   y: number;
   w: number;
@@ -86,20 +86,20 @@ export interface SlotRect {
 }
 
 /**
- * Where each slot of a layout goes. Slots are laid out side by side as siblings rather than nested, so a split doesn't
+ * Where each pane of a layout goes. Panes are laid out side by side as siblings rather than nested, so a split doesn't
  * move the chat in the page and it stays mounted. With `stack`, every split puts its sides one above the other.
  */
-export function slotRects(layout: Layout, stack = false, at: SlotRect = { x: 0, y: 0, w: 1, h: 1 }): Map<SlotId, SlotRect> {
-  if (layout.kind === "slot") return new Map([[layout.id, at]]);
+export function paneRects(layout: Layout, stack = false, at: PaneRect = { x: 0, y: 0, w: 1, h: 1 }): Map<PaneId, PaneRect> {
+  if (layout.kind === "pane") return new Map([[layout.id, at]]);
   const row = layout.dir === "row" && !stack;
   const a = row ? { ...at, w: at.w * layout.ratio } : { ...at, h: at.h * layout.ratio };
   const b = row ? { ...at, x: at.x + a.w, w: at.w - a.w } : { ...at, y: at.y + a.h, h: at.h - a.h };
-  return new Map([...slotRects(layout.a, stack, a), ...slotRects(layout.b, stack, b)]);
+  return new Map([...paneRects(layout.a, stack, a), ...paneRects(layout.b, stack, b)]);
 }
 
-/** How many slots the layout puts side by side, at most. */
+/** How many panes the layout puts side by side, at most. */
 export function columns(l: Layout): number {
-  if (l.kind === "slot") return 1;
+  if (l.kind === "pane") return 1;
   return l.dir === "row" ? columns(l.a) + columns(l.b) : Math.max(columns(l.a), columns(l.b));
 }
 
@@ -160,7 +160,7 @@ const SWAP_SHARE = 1 / 3;
  * The zone of `rect` that point (`x`, `y`) is in. The middle swaps; elsewhere the nearest edge wins, which cuts the pane
  * along its diagonals, so every point is in exactly one zone and moving towards an edge always picks it.
  */
-export function dropZone(rect: SlotRect, x: number, y: number): DropZone {
+export function dropZone(rect: PaneRect, x: number, y: number): DropZone {
   const nx = (x - rect.x) / rect.w;
   const ny = (y - rect.y) / rect.h;
   const lo = (1 - SWAP_SHARE) / 2;
@@ -170,7 +170,7 @@ export function dropZone(rect: SlotRect, x: number, y: number): DropZone {
 }
 
 /** Where a pane dropped in `zone` of `rect` ends up: the half on that side, or the whole of it for a swap. */
-export function dropPreview(rect: SlotRect, zone: DropZone, share = 0.5): SlotRect {
+export function dropPreview(rect: PaneRect, zone: DropZone, share = 0.5): PaneRect {
   const { x, y, w, h } = rect;
   switch (zone) {
     case "left":
@@ -200,18 +200,18 @@ export function windowEdge(x: number, y: number, width: number, height: number):
 }
 
 /**
- * Where moving `slot` one step towards `side` takes it, as the handle's menu does: past the pane next to it on that
+ * Where moving `pane` one step towards `side` takes it, as the handle's menu does: past the pane next to it on that
  * side (the one sharing the most of that edge), or, with none, to that side of the window, unless it spans that
  * whole side already (undefined: it can't go further).
  */
-export function stepTowards(rects: ReadonlyMap<SlotId, SlotRect>, slot: SlotId, side: Side): { to: SlotId; side: Side } | undefined {
-  const r = rects.get(slot);
+export function stepTowards(rects: ReadonlyMap<PaneId, PaneRect>, pane: PaneId, side: Side): { to: PaneId; side: Side } | undefined {
+  const r = rects.get(pane);
   if (!r) return undefined;
   const near = (a: number, b: number) => Math.abs(a - b) < 1e-6;
   const overlap = (a0: number, a1: number, b0: number, b1: number) => Math.min(a1, b1) - Math.max(a0, b0);
-  let best: { to: SlotId; shared: number } | undefined;
+  let best: { to: PaneId; shared: number } | undefined;
   for (const [id, o] of rects) {
-    if (id === slot) continue;
+    if (id === pane) continue;
     const touches =
       side === "left" ? near(o.x + o.w, r.x) : side === "right" ? near(r.x + r.w, o.x) : side === "above" ? near(o.y + o.h, r.y) : near(r.y + r.h, o.y);
     if (!touches) continue;
@@ -229,21 +229,21 @@ export interface Divider {
   path: SplitPath;
   dir: "row" | "column";
   /** The split's own room, which the divider moves across. */
-  rect: SlotRect;
+  rect: PaneRect;
   ratio: number;
-  /** How many slots each side has across the divider's direction, for how small each may get. */
+  /** How many panes each side has across the divider's direction, for how small each may get. */
   across: [number, number];
 }
 
-/** How many slots the layout puts one above the other, at most. */
+/** How many panes the layout puts one above the other, at most. */
 export function rows(l: Layout): number {
-  if (l.kind === "slot") return 1;
+  if (l.kind === "pane") return 1;
   return l.dir === "column" ? rows(l.a) + rows(l.b) : Math.max(rows(l.a), rows(l.b));
 }
 
 /** Every split's divider, as fractions of the window. */
-export function dividers(layout: Layout, at: SlotRect = { x: 0, y: 0, w: 1, h: 1 }, path: SplitPath = ""): Divider[] {
-  if (layout.kind === "slot") return [];
+export function dividers(layout: Layout, at: PaneRect = { x: 0, y: 0, w: 1, h: 1 }, path: SplitPath = ""): Divider[] {
+  if (layout.kind === "pane") return [];
   const row = layout.dir === "row";
   const a = row ? { ...at, w: at.w * layout.ratio } : { ...at, h: at.h * layout.ratio };
   const b = row ? { ...at, x: at.x + a.w, w: at.w - a.w } : { ...at, y: at.y + a.h, h: at.h - a.h };

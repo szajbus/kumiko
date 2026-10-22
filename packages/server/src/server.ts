@@ -17,7 +17,7 @@ import {
   artifactsOf,
   IMAGE_TYPES,
   nextId,
-  slotOf,
+  paneOf,
   urlOrigin,
   vmName,
   WindowError,
@@ -59,7 +59,7 @@ import { BusyError, Operations } from "./operations.js";
 import { homeId, lockHome } from "./home.js";
 import { defaultKumikoHome, ProjectExists, ProjectRecordError, ProjectStore } from "./projects.js";
 import { RewindRefused, SessionEnded, SessionNotFound, SessionNotResumable, Sessions } from "./sessions.js";
-import { docSlotTarget, Widgets, type PaneAnswer } from "./widgets.js";
+import { docPaneTarget, Widgets, type PaneAnswer } from "./widgets.js";
 import { SessionStore, type StoredSession } from "./store.js";
 import { TabsStore } from "./tabs.js";
 import { serveWeb } from "./static.js";
@@ -141,7 +141,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       return p && { claudeHome: projects.claudeHome(p.id), roots: [p.clonePath, p.worktreesPath] };
     },
     vmHome: (sandbox) => execOutput(provider.exec.bind(provider), sandbox, `printf %s "$HOME"`, 10_000),
-    pane: (session, slot, what) => askPane(session, slot, what),
+    pane: (session, pane, what) => askPane(session, pane, what),
     reachable: async (url) => {
       try {
         await fetch(url, { method: "GET", signal: AbortSignal.timeout(3000), redirect: "manual" });
@@ -155,7 +155,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   const paneRequests = new Map<string, { resolve(answer: PaneAnswer): void; reject(err: Error): void }>();
   /** How long the server waits for a window's answer: a reload and a wait of up to 10 s each, and the picture. */
   const PANE_MS = 30_000;
-  const askPane = (session: string, slot: string, what: { reload: boolean; capture: boolean; wait: number }) =>
+  const askPane = (session: string, pane: string, what: { reload: boolean; capture: boolean; wait: number }) =>
     new Promise<PaneAnswer>((resolve, reject) => {
       const request = randomUUID();
       const timer = setTimeout(() => {
@@ -166,7 +166,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
         resolve: (answer) => (clearTimeout(timer), paneRequests.delete(request), resolve(answer)),
         reject: (err) => (clearTimeout(timer), paneRequests.delete(request), reject(err)),
       });
-      broadcast({ type: "pane", session, slot, request, ...what });
+      broadcast({ type: "pane", session, pane, request, ...what });
     });
   const sessions = new Sessions(opts.driver ?? (() => new ClaudeDriver(provider.exec.bind(provider), { owner })), sessionStore, widgets);
   widgets.sessions = sessions;
@@ -804,25 +804,25 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     return c.json({ ok: true });
   });
 
-  // The user closing one of the window's slots, or showing a widget again. Claude's tools change the window too, but
+  // The user closing one of the window's panes, or showing a widget again. Claude's tools change the window too, but
   // not through here. Either may change which files are watched, and a widget shown again may have changed while hidden.
   app.post("/api/sessions/:id/window/close", async (c) => {
-    const req = await c.req.json<{ slot?: unknown }>().catch(() => ({}) as { slot?: unknown });
-    if (typeof req.slot !== "string" || !req.slot) throw new HttpError(400, "Which slot to close?");
+    const req = await c.req.json<{ pane?: unknown }>().catch(() => ({}) as { pane?: unknown });
+    if (typeof req.pane !== "string" || !req.pane) throw new HttpError(400, "Which pane to close?");
     const { id } = sessionOf(c);
-    const w = sessions.changeWindow(id, { type: "close", slot: req.slot });
+    const w = sessions.changeWindow(id, { type: "close", pane: req.pane });
     void widgets.refresh(id);
     return c.json(w);
   });
 
-  // The user rearranging the window: a slot to a side of another, or swapped with it; and a split dragged to a new size.
+  // The user rearranging the window: a pane to a side of another, or swapped with it; and a split dragged to a new size.
   const SIDES = ["left", "right", "above", "below", "swap"];
   app.post("/api/sessions/:id/window/move", async (c) => {
-    const req = await c.req.json<{ slot?: unknown; to?: unknown; side?: unknown }>().catch(() => ({}) as { slot?: unknown; to?: unknown; side?: unknown });
-    if (typeof req.slot !== "string" || typeof req.to !== "string" || typeof req.side !== "string" || !SIDES.includes(req.side)) {
-      throw new HttpError(400, `Body must be JSON: { slot, to, side }, side one of ${SIDES.join(", ")}.`);
+    const req = await c.req.json<{ pane?: unknown; to?: unknown; side?: unknown }>().catch(() => ({}) as { pane?: unknown; to?: unknown; side?: unknown });
+    if (typeof req.pane !== "string" || typeof req.to !== "string" || typeof req.side !== "string" || !SIDES.includes(req.side)) {
+      throw new HttpError(400, `Body must be JSON: { pane, to, side }, side one of ${SIDES.join(", ")}.`);
     }
-    return c.json(sessions.changeWindow(sessionOf(c).id, { type: "move", slot: req.slot, to: req.to, side: req.side as Side | "swap" }));
+    return c.json(sessions.changeWindow(sessionOf(c).id, { type: "move", pane: req.pane, to: req.to, side: req.side as Side | "swap" }));
   });
 
   // A window answering a pane request: the picture, nothing (a reload alone), or why it couldn't. The first answer wins.
@@ -876,22 +876,22 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     return c.json(sessions.changeWindow(sessionOf(c).id, { type: "resize", path: req.path, ratio: req.ratio }));
   });
 
-  // In `slot`, swapping with the slot that shows it now, if any; with `split`, in a new slot split off `slot` that way;
+  // In `pane`, swapping with the pane that shows it now, if any; with `split`, in a new pane split off `pane` that way;
   // without either, where Claude's artifact_open would put it.
   app.post("/api/sessions/:id/window/show", async (c) => {
-    type ShowRequest = { widget?: unknown; slot?: unknown; split?: unknown };
+    type ShowRequest = { widget?: unknown; pane?: unknown; split?: unknown };
     const req = await c.req.json<ShowRequest>().catch(() => ({}) as ShowRequest);
     if (typeof req.widget !== "string" || !req.widget) throw new HttpError(400, "Which widget to show?");
-    if (req.slot !== undefined && (typeof req.slot !== "string" || !req.slot)) throw new HttpError(400, "Which slot to show it in?");
+    if (req.pane !== undefined && (typeof req.pane !== "string" || !req.pane)) throw new HttpError(400, "Which pane to show it in?");
     if (req.split !== undefined && req.split !== "right" && req.split !== "below") throw new HttpError(400, 'split is "right" or "below".');
     const { id } = sessionOf(c);
     const w = sessions.window(id)!;
-    if (!req.slot && !req.split && slotOf(w, req.widget)) return c.json(w);
-    const target = req.split ? undefined : req.slot ? { slot: req.slot } : docSlotTarget(w);
+    if (!req.pane && !req.split && paneOf(w, req.widget)) return c.json(w);
+    const target = req.split ? undefined : req.pane ? { pane: req.pane } : docPaneTarget(w);
     const op: WindowOp =
-      target && "slot" in target
-        ? { type: "show", slot: target.slot, widget: req.widget }
-        : { type: "split", place: { split: req.split === "below" ? "below" : "right", ...(req.split && req.slot ? { of: req.slot } : {}) }, slot: nextId(w, "s"), widget: req.widget };
+      target && "pane" in target
+        ? { type: "show", pane: target.pane, widget: req.widget }
+        : { type: "split", place: { split: req.split === "below" ? "below" : "right", ...(req.split && req.pane ? { of: req.pane } : {}) }, pane: nextId(w, "p"), widget: req.widget };
     const shown = sessions.changeWindow(id, op);
     void widgets.refresh(id);
     return c.json(shown);

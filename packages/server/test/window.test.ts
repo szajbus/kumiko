@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { CHAT, slotIds, WindowError, type SessionEvent, type WindowOp } from "@kumiko/shared";
+import { CHAT, paneIds, WindowError, type SessionEvent, type WindowOp } from "@kumiko/shared";
 import type { AgentDriver, AgentEvent, AgentMessage, StartOptions } from "@kumiko/agent";
 import { Sessions } from "../src/sessions.js";
 import { chatEvents, SessionStore } from "../src/store.js";
@@ -54,7 +54,7 @@ function turn(d: StubDriver) {
 }
 
 const add = (widget: string): WindowOp => ({ type: "add", widget, kind: "chat" });
-const right = (slot: string, widget: string, of?: string): WindowOp => ({ type: "split", place: { split: "right", of }, slot, widget });
+const right = (pane: string, widget: string, of?: string): WindowOp => ({ type: "split", place: { split: "right", of }, pane, widget });
 const windowEvents = (events: readonly SessionEvent[]) => events.filter((e) => e.kind === "window");
 
 describe("session windows", () => {
@@ -83,10 +83,10 @@ describe("session windows", () => {
 
   it("starts with the chat alone, and changes as ops come", () => {
     const id = setup();
-    assert.deepEqual(slotIds(sessions.window(id)!.layout), [CHAT]);
+    assert.deepEqual(paneIds(sessions.window(id)!.layout), [CHAT]);
     sessions.changeWindow(id, add("w2"), "toolu_1");
-    const w = sessions.changeWindow(id, right("s2", "w2"));
-    assert.deepEqual(slotIds(w.layout), [CHAT, "s2"]);
+    const w = sessions.changeWindow(id, right("p2", "w2"));
+    assert.deepEqual(paneIds(w.layout), [CHAT, "p2"]);
     const recorded = windowEvents(sessions.events(id));
     assert.equal(recorded.length, 2);
     assert.equal(recorded[0].kind === "window" && recorded[0].payload.toolUseId, "toolu_1");
@@ -95,8 +95,8 @@ describe("session windows", () => {
   it("refuses an op that doesn't fit, recording nothing", () => {
     const id = setup();
     const before = sessions.events(id).length;
-    assert.throws(() => sessions.changeWindow(id, { type: "close", slot: CHAT }), WindowError);
-    assert.throws(() => sessions.changeWindow(id, right("s2", "w9")), WindowError);
+    assert.throws(() => sessions.changeWindow(id, { type: "close", pane: CHAT }), WindowError);
+    assert.throws(() => sessions.changeWindow(id, right("p2", "w9")), WindowError);
     assert.equal(sessions.events(id).length, before);
   });
 
@@ -105,7 +105,7 @@ describe("session windows", () => {
     const d = drivers[0];
     d.message({ type: "system", subtype: "init", session_id: CLAUDE_ID });
     sessions.changeWindow(id, add("w2"));
-    sessions.changeWindow(id, right("s2", "w2"));
+    sessions.changeWindow(id, right("p2", "w2"));
     sessions.changeWindow(id, add("w3"));
     const w = sessions.window(id);
     d.message({ type: "result", subtype: "success", result: "" });
@@ -119,22 +119,22 @@ describe("session windows", () => {
     const id = setup();
     const d = drivers[0];
     sessions.changeWindow(id, add("w2"));
-    sessions.changeWindow(id, right("s2", "w2"));
+    sessions.changeWindow(id, right("p2", "w2"));
     turn(d);
     sessions.prompt(id, "more");
     sessions.changeWindow(id, add("w3"));
-    sessions.changeWindow(id, right("s3", "w3", "s2"));
+    sessions.changeWindow(id, right("p3", "w3", "p2"));
     turn(d);
-    assert.deepEqual(slotIds(sessions.window(id)!.layout), [CHAT, "s2", "s3"]);
+    assert.deepEqual(paneIds(sessions.window(id)!.layout), [CHAT, "p2", "p3"]);
     await sessions.rewind(id, promptIds(id)[1], [], { files: false });
-    assert.deepEqual(slotIds(sessions.window(id)!.layout), [CHAT, "s2"]);
+    assert.deepEqual(paneIds(sessions.window(id)!.layout), [CHAT, "p2"]);
     assert.equal(sessions.window(id)!.widgets.w3, undefined);
   });
 
   it("forks the window with the chat", () => {
     const id = setup();
     sessions.changeWindow(id, add("w2"));
-    sessions.changeWindow(id, right("s2", "w2"));
+    sessions.changeWindow(id, right("p2", "w2"));
     turn(drivers[0]);
     const fork = sessions.fork(id, []);
     assert.deepEqual(sessions.window(fork.id), sessions.window(id));
@@ -145,7 +145,7 @@ describe("session windows", () => {
     sessions.changeWindow(id, add("w2"));
     turn(drivers[0]);
     // Between turns: saved straight away.
-    sessions.changeWindow(id, right("s2", "w2"));
+    sessions.changeWindow(id, right("p2", "w2"));
     const w = sessions.window(id);
     await sessions.flush();
     await sessions.remove(id);

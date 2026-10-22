@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { addWidget, chatWindow, split, type Layout, type SessionEvent } from "@kumiko/shared";
-import { columns, dividers, dropPreview, dropZone, lastChanges, normalize, partialJsonString, slotRects, streamingWrites, widgetLine, windowEdge, stepTowards } from "../src/widgets.ts";
+import { columns, dividers, dropPreview, dropZone, lastChanges, normalize, partialJsonString, paneRects, streamingWrites, widgetLine, windowEdge, stepTowards } from "../src/widgets.ts";
 
 describe("partial JSON strings", () => {
   it("reads a value as far as it has streamed", () => {
@@ -49,7 +49,7 @@ describe("writes streaming in", () => {
 
 describe("the chat's lines for widget tools", () => {
   const doc = { path: "/home/u/.claude/kumiko/artifacts/abc/plan.md", type: "markdown", title: "The plan", text: "" };
-  const w = split(addWidget(chatWindow(), "w2", { kind: "artifact", state: doc }), { split: "right" }, "s2", "w2");
+  const w = split(addWidget(chatWindow(), "w2", { kind: "artifact", state: doc }), { split: "right" }, "p2", "w2");
 
   it("name the artifact a tool opened or changed", () => {
     assert.deepEqual(widgetLine("mcp__kumiko__artifact_open", { path: doc.path }, w), { label: "Opened", title: "The plan", widget: "w2" });
@@ -62,7 +62,7 @@ describe("the chat's lines for widget tools", () => {
   it("leave other tools as they are", () => {
     assert.equal(widgetLine("Write", { file_path: "/elsewhere.md" }, w), undefined);
     assert.equal(widgetLine("Bash", { command: "ls" }, w), undefined);
-    assert.deepEqual(widgetLine("mcp__kumiko__window_close", { slot: "s2" }, w), { label: "Closed a pane" });
+    assert.deepEqual(widgetLine("mcp__kumiko__window_close", { pane: "p2" }, w), { label: "Closed a pane" });
   });
 
   it("say which artifact was looked at, reloaded or deleted, by its id or its path", () => {
@@ -87,46 +87,46 @@ describe("the window's edges", () => {
 });
 
 describe("stepping a pane", () => {
-  // chat | (s2 / s3)
+  // chat | (p2 / p3)
   const rects = new Map([
     ["chat", { x: 0, y: 0, w: 0.6, h: 1 }],
-    ["s2", { x: 0.6, y: 0, w: 0.4, h: 0.5 }],
-    ["s3", { x: 0.6, y: 0.5, w: 0.4, h: 0.5 }],
+    ["p2", { x: 0.6, y: 0, w: 0.4, h: 0.5 }],
+    ["p3", { x: 0.6, y: 0.5, w: 0.4, h: 0.5 }],
   ]);
 
   it("goes past the pane next to it on that side", () => {
-    assert.deepEqual(stepTowards(rects, "s3", "left"), { to: "chat", side: "left" });
-    assert.deepEqual(stepTowards(rects, "s3", "above"), { to: "s2", side: "above" });
-    assert.deepEqual(stepTowards(rects, "chat", "right"), { to: "s2", side: "right" });
+    assert.deepEqual(stepTowards(rects, "p3", "left"), { to: "chat", side: "left" });
+    assert.deepEqual(stepTowards(rects, "p3", "above"), { to: "p2", side: "above" });
+    assert.deepEqual(stepTowards(rects, "chat", "right"), { to: "p2", side: "right" });
   });
 
   it("goes along the window's side when nothing is there, unless it spans that side already", () => {
-    assert.deepEqual(stepTowards(rects, "s3", "below"), { to: "window", side: "below" });
-    assert.deepEqual(stepTowards(rects, "s2", "right"), { to: "window", side: "right" });
+    assert.deepEqual(stepTowards(rects, "p3", "below"), { to: "window", side: "below" });
+    assert.deepEqual(stepTowards(rects, "p2", "right"), { to: "window", side: "right" });
     assert.equal(stepTowards(rects, "chat", "left"), undefined);
     assert.deepEqual(stepTowards(rects, "chat", "above"), { to: "window", side: "above" });
   });
 });
 
-describe("placing slots", () => {
+describe("placing panes", () => {
   const layout: Layout = {
     kind: "split", dir: "row", ratio: 0.6,
-    a: { kind: "slot", id: "chat" },
-    b: { kind: "split", dir: "column", ratio: 0.5, a: { kind: "slot", id: "s2" }, b: { kind: "slot", id: "s3" } },
+    a: { kind: "pane", id: "chat" },
+    b: { kind: "split", dir: "column", ratio: 0.5, a: { kind: "pane", id: "p2" }, b: { kind: "pane", id: "p3" } },
   };
 
-  it("gives each slot its share of the window", () => {
-    const r = slotRects(layout);
+  it("gives each pane its share of the window", () => {
+    const r = paneRects(layout);
     assert.deepEqual(r.get("chat"), { x: 0, y: 0, w: 0.6, h: 1 });
-    assert.deepEqual(r.get("s2"), { x: 0.6, y: 0, w: 0.4, h: 0.5 });
-    assert.deepEqual(r.get("s3"), { x: 0.6, y: 0.5, w: 0.4, h: 0.5 });
+    assert.deepEqual(r.get("p2"), { x: 0.6, y: 0, w: 0.4, h: 0.5 });
+    assert.deepEqual(r.get("p3"), { x: 0.6, y: 0.5, w: 0.4, h: 0.5 });
     assert.equal(columns(layout), 2);
   });
 
   it("stacks every split when asked", () => {
-    const r = slotRects(layout, true);
+    const r = paneRects(layout, true);
     assert.deepEqual(r.get("chat"), { x: 0, y: 0, w: 1, h: 0.6 });
-    assert.deepEqual(r.get("s3"), { x: 0, y: 0.8, w: 1, h: 0.2 });
+    assert.deepEqual(r.get("p3"), { x: 0, y: 0.8, w: 1, h: 0.2 });
   });
 });
 
@@ -156,8 +156,8 @@ describe("dividers", () => {
   it("are one per split, with its path and room", () => {
     const layout: Layout = {
       kind: "split", dir: "row", ratio: 0.6,
-      a: { kind: "slot", id: "chat" },
-      b: { kind: "split", dir: "column", ratio: 0.5, a: { kind: "slot", id: "s2" }, b: { kind: "slot", id: "s3" } },
+      a: { kind: "pane", id: "chat" },
+      b: { kind: "split", dir: "column", ratio: 0.5, a: { kind: "pane", id: "p2" }, b: { kind: "pane", id: "p3" } },
     };
     assert.deepEqual(dividers(layout), [
       { path: "", dir: "row", rect: { x: 0, y: 0, w: 1, h: 1 }, ratio: 0.6, across: [1, 1] },

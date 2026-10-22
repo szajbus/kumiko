@@ -1,6 +1,6 @@
 import { createContext, type PointerEvent } from "react";
-import type { ArtifactType, Side, SlotId, WidgetId, WindowState } from "@kumiko/shared";
-import type { SlotRect } from "./widgets";
+import type { ArtifactType, Side, PaneId, WidgetId, WindowState } from "@kumiko/shared";
+import type { PaneRect } from "./widgets";
 
 /** One of the window's artifacts, as an artifact pane's switcher lists it. */
 export interface ArtifactEntry {
@@ -8,8 +8,8 @@ export interface ArtifactEntry {
   type: ArtifactType;
   title: string;
   path: string;
-  /** The slot showing it, if one is. */
-  slot?: SlotId;
+  /** The pane showing it, if one is. */
+  pane?: PaneId;
   /** It changed since it was last shown, while it wasn't. */
   unread: boolean;
   /** When it changed last, as the seq of the event that changed it. */
@@ -21,15 +21,15 @@ export interface WindowApi {
   window: WindowState;
   /** The artifacts, by title. */
   artifacts: ArtifactEntry[];
-  /** Shows a widget in a slot, swapping with the slot that shows it now, if any. */
-  showIn(widget: WidgetId, slot: SlotId): void;
-  /** Shows a widget in a new slot split off `slot`, right of it or below it. */
-  showBeside(widget: WidgetId, slot: SlotId, split: "right" | "below"): void;
+  /** Shows a widget in a pane, swapping with the pane that shows it now, if any. */
+  showIn(widget: WidgetId, pane: PaneId): void;
+  /** Shows a widget in a new pane split off `pane`, right of it or below it. */
+  showBeside(widget: WidgetId, pane: PaneId, split: "right" | "below"): void;
   /** The session is live, so its window can be changed. */
   live: boolean;
   /** Shows a hidden widget again, beside the chat. */
   show(widget: WidgetId): void;
-  close(slot: SlotId): void;
+  close(pane: PaneId): void;
   /** Takes a widget out of the window for good. */
   remove(widget: WidgetId): void;
   /** Allows or denies an external site Claude opened. */
@@ -38,12 +38,12 @@ export interface WindowApi {
   quote(text: string): void;
   /** The panes can be rearranged now: there is more than one, the session is live, and they aren't stacked. */
   arrange: boolean;
-  /** Starts dragging a slot's pane by its handle. */
-  startDrag(slot: SlotId, e: PointerEvent): void;
-  /** Where each slot is, as fractions of the window. */
-  rects: ReadonlyMap<SlotId, SlotRect>;
-  /** Moves a slot beside another (or the window, WINDOW), or swaps the two. */
-  move(slot: SlotId, to: SlotId, side: Side | "swap"): void;
+  /** Starts dragging a pane by its handle. */
+  startDrag(pane: PaneId, e: PointerEvent): void;
+  /** Where each pane is, as fractions of the window. */
+  rects: ReadonlyMap<PaneId, PaneRect>;
+  /** Moves a pane beside another (or the window, WINDOW), or swaps the two. */
+  move(pane: PaneId, to: PaneId, side: Side | "swap"): void;
 }
 
 export const WindowContext = createContext<WindowApi | undefined>(undefined);

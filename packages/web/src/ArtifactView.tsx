@@ -1,6 +1,6 @@
 import { useContext, useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from "react";
 import * as Menu from "@radix-ui/react-dropdown-menu";
-import { imageTypeOf, MAX_ARTIFACT_BYTES, MAX_IMAGE_BYTES, MAX_SLOTS, urlOrigin, type ArtifactState, type ArtifactType, type SlotId, type WidgetId } from "@kumiko/shared";
+import { imageTypeOf, MAX_ARTIFACT_BYTES, MAX_IMAGE_BYTES, MAX_PANES, urlOrigin, type ArtifactState, type ArtifactType, type PaneId, type WidgetId } from "@kumiko/shared";
 import { ArtifactIcon, Close, OpenNew, Trash } from "./icons";
 import { Diagram } from "./Diagram";
 import { Markdown } from "./Markdown";
@@ -17,7 +17,7 @@ const UPDATED_MS = 4000;
 
 interface Props {
   widget: WidgetId;
-  slot: SlotId;
+  pane: PaneId;
   doc: ArtifactState;
   /** The text Claude is writing to the file right now, as far as it has streamed. */
   writing?: string;
@@ -43,7 +43,7 @@ const DRAWN_LABEL: Partial<Record<ArtifactType, string>> = { mermaid: "Diagram",
 const isPage = (doc: ArtifactState) => doc.type === "html" || doc.type === "preview" || doc.type === "web";
 
 /** The artifact widget: a file Claude keeps up to date, or a page it previews, read here, and quoted from into the chat. */
-export function ArtifactView({ widget, slot, doc, writing }: Props) {
+export function ArtifactView({ widget, pane, doc, writing }: Props) {
   const ctx = useContext(WindowContext)!;
   const [width, setWidth] = useState<(typeof WIDTHS)[number]["id"]>("full");
   const [reloads, setReloads] = useState(0);
@@ -78,8 +78,8 @@ export function ArtifactView({ widget, slot, doc, writing }: Props) {
     <div className="artifact">
       <div className="artifact-head">
         <div className="artifact-where">
-          <PaneGrip slot={slot} />
-          <Switcher ctx={ctx} slot={slot} title={doc.title} />
+          <PaneGrip pane={pane} />
+          <Switcher ctx={ctx} pane={pane} title={doc.title} />
           <span className="artifact-path mono" title={doc.path}>
             {doc.type === "preview" || doc.type === "web" ? doc.path.replace(/^https?:\/\//, "") : doc.path.split("/").pop()}
           </span>
@@ -123,7 +123,7 @@ export function ArtifactView({ widget, slot, doc, writing }: Props) {
           )}
           {ctx.live && hasFile(doc.type) && <DeleteButton title={doc.title} onDelete={() => ctx.remove(widget)} />}
           {ctx.live && (
-            <button type="button" className="artifact-close" aria-label={`Close ${doc.title}`} title="Close" onClick={() => ctx.close(slot)}>
+            <button type="button" className="artifact-close" aria-label={`Close ${doc.title}`} title="Close" onClick={() => ctx.close(pane)}>
               <svg width="10" height="10" viewBox="0 0 14 14" aria-hidden="true">
                 <path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
               </svg>
@@ -166,17 +166,17 @@ export function ArtifactView({ widget, slot, doc, writing }: Props) {
  * shows, by title, each with its type's icon. One can also open in a new pane split off this one, or be removed from
  * the list. A dot marks those that changed while no pane showed them.
  */
-function Switcher({ ctx, slot, title }: { ctx: WindowApi; slot: SlotId; title: string }) {
+function Switcher({ ctx, pane, title }: { ctx: WindowApi; pane: PaneId; title: string }) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   // This pane's artifact and those no pane shows: one shown in another pane is there already.
-  const listed = ctx.artifacts.filter((d) => !d.slot || d.slot === slot);
+  const listed = ctx.artifacts.filter((d) => !d.pane || d.pane === pane);
   if (!ctx.live) return <span className="artifact-title">{title}</span>;
   const unread = listed.some((d) => d.unread);
-  const full = Object.keys(ctx.window.slots).length >= MAX_SLOTS;
+  const full = Object.keys(ctx.window.panes).length >= MAX_PANES;
   // The new pane goes the way that leaves both halves the roomier: beside a wide pane, below a tall one.
-  const pane = trigger.current?.closest(".window-slot")?.getBoundingClientRect();
-  const below = pane ? pane.height > pane.width : false;
+  const box = trigger.current?.closest(".window-pane")?.getBoundingClientRect();
+  const below = box ? box.height > box.width : false;
   return (
     <Menu.Root modal={false} open={open} onOpenChange={setOpen}>
       <Menu.Trigger ref={trigger} className="artifact-switch" title="Show another artifact here">
@@ -193,16 +193,16 @@ function Switcher({ ctx, slot, title }: { ctx: WindowApi; slot: SlotId; title: s
               key={d.widget}
               ctx={ctx}
               entry={d}
-              current={d.slot === slot}
-              onSelect={() => d.slot !== slot && ctx.showIn(d.widget, slot)}
+              current={d.pane === pane}
+              onSelect={() => d.pane !== pane && ctx.showIn(d.widget, pane)}
               split={
-                d.slot
+                d.pane
                   ? undefined
                   : {
                       full,
                       open: () => {
                         setOpen(false);
-                        ctx.showBeside(d.widget, slot, below ? "below" : "right");
+                        ctx.showBeside(d.widget, pane, below ? "below" : "right");
                       },
                     }
               }
@@ -233,7 +233,7 @@ function ArtifactItem({ ctx, entry: d, current, onSelect, split, hint }: { ctx: 
           className="artifact-menu-split"
           disabled={split.full}
           aria-label={`Open ${d.title} in a new pane`}
-          title={split.full ? `A window has at most ${MAX_SLOTS} panes` : "Open in a new pane"}
+          title={split.full ? `A window has at most ${MAX_PANES} panes` : "Open in a new pane"}
           {...own}
           onClick={(e) => {
             e.preventDefault();
@@ -292,14 +292,14 @@ export function ArtifactsButton() {
   }, [open]);
   if (!ctx || !shown) return null;
   const unread = ctx.artifacts.some((d) => d.unread);
-  const full = Object.keys(ctx.window.slots).length >= MAX_SLOTS;
-  const near = lastArtifactSlot(ctx);
-  const replaced = full && near ? ctx.artifacts.find((d) => d.slot === near)?.title : undefined;
+  const full = Object.keys(ctx.window.panes).length >= MAX_PANES;
+  const near = lastArtifactPane(ctx);
+  const replaced = full && near ? ctx.artifacts.find((d) => d.pane === near)?.title : undefined;
   const toggle = (d: ArtifactEntry) => {
-    if (d.slot) return ctx.close(d.slot);
+    if (d.pane) return ctx.close(d.pane);
     // Full: in place of the artifact in the pane used last. Otherwise a pane of its own, beside that one or the chat.
     if (full || !near) return ctx.show(d.widget);
-    const r = document.querySelector(`[data-slot="${CSS.escape(near)}"]`)?.getBoundingClientRect();
+    const r = document.querySelector(`[data-pane="${CSS.escape(near)}"]`)?.getBoundingClientRect();
     ctx.showBeside(d.widget, near, r && r.height > r.width ? "below" : "right");
   };
   return (
@@ -323,8 +323,8 @@ export function ArtifactsButton() {
               key={d.widget}
               ctx={ctx}
               entry={d}
-              current={Boolean(d.slot)}
-              hint={d.slot ? "Close its pane" : replaced ? `A window has at most ${MAX_SLOTS} panes: this takes the place of “${replaced}”` : "Open it in a pane"}
+              current={Boolean(d.pane)}
+              hint={d.pane ? "Close its pane" : replaced ? `A window has at most ${MAX_PANES} panes: this takes the place of “${replaced}”` : "Open it in a pane"}
               onSelect={(e) => {
                 // The list stays open, to show or hide several.
                 e.preventDefault();
@@ -338,11 +338,11 @@ export function ArtifactsButton() {
   );
 }
 
-/** The artifact pane used last: the active slot if it shows an artifact, else the last one that does. */
-function lastArtifactSlot(ctx: WindowApi): SlotId | undefined {
+/** The artifact pane used last: the active pane if it shows an artifact, else the last one that does. */
+function lastArtifactPane(ctx: WindowApi): PaneId | undefined {
   const { window: w } = ctx;
-  const showsArtifact = (slot: SlotId | undefined) => slot !== undefined && w.widgets[w.slots[slot]]?.kind === "artifact";
-  return showsArtifact(w.active) ? w.active : Object.keys(w.slots).filter(showsArtifact).at(-1);
+  const showsArtifact = (pane: PaneId | undefined) => pane !== undefined && w.widgets[w.panes[pane]]?.kind === "artifact";
+  return showsArtifact(w.active) ? w.active : Object.keys(w.panes).filter(showsArtifact).at(-1);
 }
 
 /** The key that goes with Shift+A, as the user's platform names it. */

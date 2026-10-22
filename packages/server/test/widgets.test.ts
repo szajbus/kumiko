@@ -8,7 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 import WebSocket from "ws";
-import { artifactsOf, slotIds, windowState, type ArtifactState, type ServerEvent, type SessionEvent, type SessionInfo, type SessionStreamMessage } from "@kumiko/shared";
+import { artifactsOf, paneIds, windowState, type ArtifactState, type ServerEvent, type SessionEvent, type SessionInfo, type SessionStreamMessage } from "@kumiko/shared";
 import { LimaProvider, MetadataStore, shellQuote } from "@kumiko/sandbox";
 import { startServer, type RunningServer, type ServerOptions } from "../src/index.js";
 import { makeClone } from "./repo.js";
@@ -128,9 +128,9 @@ describe("widgets", () => {
     const path = docPath(id);
     await ask(s, id, write(path, "# The plan\n\nStep one.\n"));
     const opened = await ask(s, id, widget("artifact_open", { path }));
-    assert.match(opened, /^Showing .*plan\.md as artifact w2 in a new slot s2, right of the chat/);
+    assert.match(opened, /^Showing .*plan\.md as artifact w2 in a new pane p2, right of the chat/);
     const w = s.window();
-    assert.deepEqual(slotIds(w.layout), ["chat", "s2"]);
+    assert.deepEqual(paneIds(w.layout), ["chat", "p2"]);
     const [[, doc]] = artifactsOf(w);
     assert.equal(doc.title, "The plan");
     assert.equal(textOf(doc), "# The plan\n\nStep one.\n");
@@ -154,7 +154,7 @@ describe("widgets", () => {
     await writeFile(join(claudeHome, "kumiko", "artifacts", id, "plan.md"), "# The plan\n\nEdited by hand.\n");
     await waitFor(() => textOf(artifactsOf(s.window())[0][1]).includes("Edited by hand."));
 
-    assert.match(await ask(s, id, widget("window_list", {})), /side by side: \[chat \(the chat\), s2 \(artifact w2 "The plan"/);
+    assert.match(await ask(s, id, widget("window_list", {})), /side by side: \[chat \(the chat\), p2 \(artifact w2 "The plan"/);
     s.close();
   });
 
@@ -163,31 +163,31 @@ describe("widgets", () => {
     const path = docPath(id);
     await ask(s, id, write(path, "# Notes\n"));
     await ask(s, id, widget("artifact_open", { path }));
-    const closed = await api(`/api/sessions/${id}/window/close`, { method: "POST", body: JSON.stringify({ slot: "s2" }) });
+    const closed = await api(`/api/sessions/${id}/window/close`, { method: "POST", body: JSON.stringify({ pane: "p2" }) });
     assert.equal(closed.status, 200);
-    assert.deepEqual(slotIds((await json(closed)).layout), ["chat"]);
+    assert.deepEqual(paneIds((await json(closed)).layout), ["chat"]);
     assert.match(await ask(s, id, widget("window_list", {})), /Not shown: artifact w2 "Notes"/);
     // The user shows it again, and hides it again for Claude to show.
     const show = (w: string) => api(`/api/sessions/${id}/window/show`, { method: "POST", body: JSON.stringify({ widget: w }) });
-    assert.deepEqual(slotIds((await json(await show("w2"))).layout), ["chat", "s2"]);
-    assert.deepEqual(slotIds((await json(await show("w2"))).layout), ["chat", "s2"], "showing a shown widget changes nothing");
+    assert.deepEqual(paneIds((await json(await show("w2"))).layout), ["chat", "p2"]);
+    assert.deepEqual(paneIds((await json(await show("w2"))).layout), ["chat", "p2"], "showing a shown widget changes nothing");
     assert.equal((await show("w9")).status, 400);
-    assert.equal((await api(`/api/sessions/${id}/window/close`, { method: "POST", body: JSON.stringify({ slot: "s2" }) })).status, 200);
-    assert.match(await ask(s, id, widget("artifact_open", { path, place: { split: "below" } })), /as artifact w2 in a new slot s2, below the chat/);
+    assert.equal((await api(`/api/sessions/${id}/window/close`, { method: "POST", body: JSON.stringify({ pane: "p2" }) })).status, 200);
+    assert.match(await ask(s, id, widget("artifact_open", { path, place: { split: "below" } })), /as artifact w2 in a new pane p2, below the chat/);
     assert.equal(artifactsOf(s.window()).length, 1, "the same artifact, not another");
-    assert.match(await ask(s, id, widget("artifact_open", { path })), /is shown already, as artifact w2 in slot s2/);
+    assert.match(await ask(s, id, widget("artifact_open", { path })), /is shown already, as artifact w2 in pane p2/);
     // The user rearranges it: the chat goes right of the artifact, then the split is resized.
     const post = (what: string, body: object) => api(`/api/sessions/${id}/window/${what}`, { method: "POST", body: JSON.stringify(body) });
-    const moved = await json(await post("move", { slot: "chat", to: "s2", side: "right" }));
-    assert.deepEqual(slotIds(moved.layout), ["s2", "chat"]);
-    assert.equal((await json(await post("move", { slot: "s2", to: "chat", side: "swap" }))).layout.a.id, "chat");
+    const moved = await json(await post("move", { pane: "chat", to: "p2", side: "right" }));
+    assert.deepEqual(paneIds(moved.layout), ["p2", "chat"]);
+    assert.equal((await json(await post("move", { pane: "p2", to: "chat", side: "swap" }))).layout.a.id, "chat");
     assert.equal((await json(await post("resize", { path: "", ratio: 0.65 }))).layout.ratio, 0.65);
-    assert.equal((await post("move", { slot: "s2", to: "chat", side: "middle" })).status, 400);
-    assert.equal((await post("move", { slot: "s9", to: "chat", side: "left" })).status, 400);
+    assert.equal((await post("move", { pane: "p2", to: "chat", side: "middle" })).status, 400);
+    assert.equal((await post("move", { pane: "p9", to: "chat", side: "left" })).status, 400);
     assert.equal((await post("resize", { path: "", ratio: 2 })).status, 400);
     assert.equal((await post("resize", { path: "a", ratio: 0.5 })).status, 400);
-    assert.match(await ask(s, id, widget("window_close", { slot: "s2" })), /^Closed slot s2/);
-    assert.match(await ask(s, id, widget("window_close", { slot: "chat" })), /can't be closed/);
+    assert.match(await ask(s, id, widget("window_close", { pane: "p2" })), /^Closed pane p2/);
+    assert.match(await ask(s, id, widget("window_close", { pane: "chat" })), /can't be closed/);
     s.close();
   });
 
@@ -197,43 +197,43 @@ describe("widgets", () => {
     for (const [p, t] of [[a, "A"], [b, "B"], [c, "C"]]) await ask(s, id, write(p, `# ${t}\n`));
     await ask(s, id, widget("artifact_open", { path: a }));
     // The next one takes the pane the last one was in, which stays in the window.
-    assert.match(await ask(s, id, widget("artifact_open", { path: b })), /as artifact w3 in slot s2 in place of "A", which stays in the window/);
-    assert.deepEqual(slotIds(s.window().layout), ["chat", "s2"]);
+    assert.match(await ask(s, id, widget("artifact_open", { path: b })), /as artifact w3 in pane p2 in place of "A", which stays in the window/);
+    assert.deepEqual(paneIds(s.window().layout), ["chat", "p2"]);
     assert.match(await ask(s, id, widget("window_list", {})), /Not shown: artifact w2 "A".*The user can switch an artifact pane/);
     // Asked for, a second pane; then an artifact goes where one was put last.
-    assert.match(await ask(s, id, widget("artifact_open", { path: c, place: { split: "below", of: "s2" } })), /in a new slot s3, below slot s2/);
-    assert.match(await ask(s, id, widget("artifact_open", { path: a })), /as artifact w2 in slot s3 in place of "C"/);
-    assert.match(await ask(s, id, widget("artifact_open", { path: b, place: { in: "s3" } })), /in slot s3 in place of "A"/);
-    assert.deepEqual([s.window().slots.s2, s.window().slots.s3], ["w2", "w3"], "the two swapped");
+    assert.match(await ask(s, id, widget("artifact_open", { path: c, place: { split: "below", of: "p2" } })), /in a new pane p3, below pane p2/);
+    assert.match(await ask(s, id, widget("artifact_open", { path: a })), /as artifact w2 in pane p3 in place of "C"/);
+    assert.match(await ask(s, id, widget("artifact_open", { path: b, place: { in: "p3" } })), /in pane p3 in place of "A"/);
+    assert.deepEqual([s.window().panes.p2, s.window().panes.p3], ["w2", "w3"], "the two swapped");
 
     // Removing: Claude by path, the user by id. A pane showing the one removed shows another instead.
     const before = s.window();
-    const shownInS2 = before.slots.s2;
+    const shownInS2 = before.panes.p2;
     const removedPath = before.widgets[shownInS2].state as { path: string };
     assert.match(await ask(s, id, widget("artifact_remove", { artifact: shownInS2 })), new RegExp(`Removed artifact ${shownInS2} .* and deleted its file`));
     assert.equal(s.window().widgets[shownInS2], undefined);
     assert.equal(existsSync(join(claudeHome, "kumiko", "artifacts", id, removedPath.path.split("/").pop()!)), false, "an artifact's file goes with it");
     for (const [p, t] of [[a, "A"], [b, "B"], [c, "C"]]) await ask(s, id, write(p, `# ${t}\n`));
-    assert.ok(s.window().slots.s2, "the pane stays, showing another");
+    assert.ok(s.window().panes.p2, "the pane stays, showing another");
     assert.match(await ask(s, id, widget("artifact_remove", { artifact: "w99" })), /There is no artifact w99/);
     await ask(s, id, widget("artifact_open", { path: c }));
     await ask(s, id, widget("artifact_open", { path: b }));
     await ask(s, id, widget("artifact_open", { path: a }));
 
     // The user switches a pane: to a hidden artifact, or to the other pane's, which swaps them.
-    const show = (widget: string, slot?: string) => api(`/api/sessions/${id}/window/show`, { method: "POST", body: JSON.stringify({ widget, slot }) });
-    assert.equal((await json(await show("w4", "s2"))).slots.s2, "w4");
-    const swapped = await json(await show("w3", "s2"));
-    assert.deepEqual([swapped.slots.s2, swapped.slots.s3], ["w3", "w4"]);
+    const show = (widget: string, pane?: string) => api(`/api/sessions/${id}/window/show`, { method: "POST", body: JSON.stringify({ widget, pane }) });
+    assert.equal((await json(await show("w4", "p2"))).panes.p2, "w4");
+    const swapped = await json(await show("w3", "p2"));
+    assert.deepEqual([swapped.panes.p2, swapped.panes.p3], ["w3", "w4"]);
     assert.equal((await show("w2", "chat")).status, 400);
     // Or opens one in a new pane split off the one it's in.
-    const split = (widget: string, slot: string, how: string) => api(`/api/sessions/${id}/window/show`, { method: "POST", body: JSON.stringify({ widget, slot, split: how }) });
-    const three = await json(await split("w2", "s3", "below"));
-    // s2 and s3 were one above the other right of the chat; s4 is split off below s3.
-    assert.deepEqual(slotIds(three.layout), ["chat", "s2", "s3", "s4"]);
-    assert.equal(three.slots.s4, "w2");
-    assert.equal(three.active, "s4");
-    assert.equal((await split("w3", "s2", "sideways")).status, 400);
+    const split = (widget: string, pane: string, how: string) => api(`/api/sessions/${id}/window/show`, { method: "POST", body: JSON.stringify({ widget, pane, split: how }) });
+    const three = await json(await split("w2", "p3", "below"));
+    // p2 and p3 were one above the other right of the chat; p4 is split off below p3.
+    assert.deepEqual(paneIds(three.layout), ["chat", "p2", "p3", "p4"]);
+    assert.equal(three.panes.p4, "w2");
+    assert.equal(three.active, "p4");
+    assert.equal((await split("w3", "p2", "sideways")).status, 400);
     const removed = await json(await api(`/api/sessions/${id}/window/remove`, { method: "POST", body: JSON.stringify({ widget: "w2" }) }));
     assert.equal(removed.widgets.w2, undefined);
     assert.equal((await api(`/api/sessions/${id}/window/remove`, { method: "POST", body: JSON.stringify({ widget: "chat" }) })).status, 400);
@@ -245,7 +245,7 @@ describe("widgets", () => {
     const { id, s } = await start();
     const page = docPath(id, "mock.html");
     await ask(s, id, write(page, "<!doctype html><html><head><title>Pricing mock-up</title></head><body><h1>Plans</h1></body></html>"));
-    assert.match(await ask(s, id, widget("artifact_open", { path: page })), /as artifact w2 in a new slot s2/);
+    assert.match(await ask(s, id, widget("artifact_open", { path: page })), /as artifact w2 in a new pane p2/);
     const [[, html]] = artifactsOf(s.window());
     assert.deepEqual([html.type, html.title], ["html", "Pricing mock-up"]);
 
@@ -253,7 +253,7 @@ describe("widgets", () => {
     const dev = createServer((_req, res) => res.end("<h1>dev</h1>"));
     await new Promise<void>((r) => dev.listen(0, "127.0.0.1", () => r()));
     const url = `http://127.0.0.1:${(dev.address() as AddressInfo).port}/components`;
-    assert.match(await ask(s, id, widget("artifact_open", { url, place: { split: "below", of: "s2" } })), /Previewing .*\/components as artifact w3 in slot s3/);
+    assert.match(await ask(s, id, widget("artifact_open", { url, place: { split: "below", of: "p2" } })), /Previewing .*\/components as artifact w3 in pane p3/);
     assert.deepEqual(
       artifactsOf(s.window()).map(([, a]) => [a.type, a.title]),
       [["html", "Pricing mock-up"], ["preview", `Preview of 127.0.0.1:${(dev.address() as AddressInfo).port}/components`]],
@@ -263,7 +263,7 @@ describe("widgets", () => {
     assert.match(await ask(s, id, widget("artifact_open", { path: page, url })), /either path .* or url/);
 
     // Claude asks for a picture; a window showing the session sends one, or says why it can't.
-    const answer = (picture: (req: { session: string; slot: string; request: string; reload: boolean; capture: boolean; wait: number }) => object) => {
+    const answer = (picture: (req: { session: string; pane: string; request: string; reload: boolean; capture: boolean; wait: number }) => object) => {
       const sock = new WebSocket(`${server.url.replace("http", "ws")}/api/events`);
       sock.on("message", (m) => {
         const ev = JSON.parse(String(m)) as ServerEvent;
@@ -273,10 +273,10 @@ describe("widgets", () => {
       });
       return new Promise((r) => sock.once("open", r));
     };
-    let asked: { slot: string; reload: boolean; capture: boolean; wait: number } | undefined;
+    let asked: { pane: string; reload: boolean; capture: boolean; wait: number } | undefined;
     await answer((req) => ((asked = req), { data: Buffer.from("png bytes").toString("base64"), mimeType: "image/png" }));
-    assert.match(await ask(s, id, widget("artifact_capture", { artifact: "w2" })), /^Artifact w2 "Pricing mock-up" in slot s2, as the user sees it now\. \[image image\/png, 9 bytes\]/);
-    assert.equal(asked?.slot, "s2");
+    assert.match(await ask(s, id, widget("artifact_capture", { artifact: "w2" })), /^Artifact w2 "Pricing mock-up" in pane p2, as the user sees it now\. \[image image\/png, 9 bytes\]/);
+    assert.equal(asked?.pane, "p2");
     await answer(() => ({ error: "Capturing needs the Kumiko app; the user has Kumiko open in a browser." }));
     assert.match(await ask(s, id, widget("artifact_capture", {})), /needs the Kumiko app/);
     assert.match(await ask(s, id, widget("artifact_capture", { artifact: "w9" })), /There is no artifact w9/);
@@ -287,8 +287,8 @@ describe("widgets", () => {
 
     // Loading a page again: alone, or before the picture; opening a preview shown already does it too.
     await answer((req) => ((asked = req), {}));
-    assert.match(await ask(s, id, widget("artifact_reload", { artifact: url })), /^Artifact w3 .* in slot s3 has loaded again/);
-    assert.deepEqual([asked?.slot, asked?.reload, asked?.capture], ["s3", true, false]);
+    assert.match(await ask(s, id, widget("artifact_reload", { artifact: url })), /^Artifact w3 .* in pane p3 has loaded again/);
+    assert.deepEqual([asked?.pane, asked?.reload, asked?.capture], ["p3", true, false]);
     await answer((req) => ((asked = req), { data: Buffer.from("png").toString("base64"), mimeType: "image/png" }));
     assert.match(await ask(s, id, widget("artifact_capture", { artifact: "w3", reload: true })), /loaded again, as the user sees it now\. \[image image\/png, 3 bytes\]/);
     assert.deepEqual([asked?.reload, asked?.capture, asked?.wait], [true, true, 300]);
@@ -297,11 +297,11 @@ describe("widgets", () => {
     assert.deepEqual([asked?.reload, asked?.wait], [false, 1500]);
     assert.match(await ask(s, id, widget("artifact_capture", { artifact: "w3", wait: 60000 })), /wait is a number of milliseconds, from 0 to 10000/);
     await answer((req) => ((asked = req), {}));
-    assert.match(await ask(s, id, widget("artifact_open", { url })), /is shown already, as artifact w3 in slot s3; it has loaded again/);
+    assert.match(await ask(s, id, widget("artifact_open", { url })), /is shown already, as artifact w3 in pane p3; it has loaded again/);
     await answer(() => ({}));
-    assert.match(await ask(s, id, widget("artifact_reload", { artifact: "w2" })), /^Artifact w2 "Pricing mock-up" in slot s2 has loaded again/);
+    assert.match(await ask(s, id, widget("artifact_reload", { artifact: "w2" })), /^Artifact w2 "Pricing mock-up" in pane p2 has loaded again/);
     await answer(() => ({ note: "The page didn't load: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:1/)" }));
-    assert.match(await ask(s, id, widget("artifact_reload", { artifact: "w2" })), /^Artifact w2 "Pricing mock-up" in slot s2 was loaded again, but the page didn't load: net::ERR_CONNECTION_REFUSED/);
+    assert.match(await ask(s, id, widget("artifact_reload", { artifact: "w2" })), /^Artifact w2 "Pricing mock-up" in pane p2 was loaded again, but the page didn't load: net::ERR_CONNECTION_REFUSED/);
 
     dev.close();
 
@@ -315,7 +315,7 @@ describe("widgets", () => {
   it("opens external sites once the user allows them, and never private networks", async () => {
     const { id, s } = await start();
     const approve = (widget: string, allow: boolean) => api(`/api/sessions/${id}/window/approve`, { method: "POST", body: JSON.stringify({ widget, allow }) });
-    assert.match(await ask(s, id, widget("artifact_open", { url: "https://example.com/docs" })), /^Asked the user to allow https:\/\/example\.com in slot s2 \(artifact w2\)/);
+    assert.match(await ask(s, id, widget("artifact_open", { url: "https://example.com/docs" })), /^Asked the user to allow https:\/\/example\.com in pane p2 \(artifact w2\)/);
     let [[, site]] = artifactsOf(s.window());
     assert.deepEqual([site.type, site.title, site.approved], ["web", "example.com", false]);
     assert.match(await ask(s, id, widget("window_list", {})), /waiting for the user to allow it/);
@@ -325,21 +325,21 @@ describe("widgets", () => {
     assert.equal((await approve("w2", true)).status, 200);
     [[, site]] = artifactsOf(s.window());
     assert.equal(site.approved, true);
-    assert.match(await ask(s, id, widget("artifact_open", { url: "https://example.com/pricing" })), /^Showing https:\/\/example\.com\/pricing as artifact w3 in slot s2; the user allowed https:\/\/example\.com in this session already/);
+    assert.match(await ask(s, id, widget("artifact_open", { url: "https://example.com/pricing" })), /^Showing https:\/\/example\.com\/pricing as artifact w3 in pane p2; the user allowed https:\/\/example\.com in this session already/);
 
     // Another site asks again; denied, it goes.
     await ask(s, id, widget("artifact_open", { url: "https://other.example/" }));
     assert.equal(artifactsOf(s.window()).find(([w]) => w === "w4")?.[1].approved, false);
-    assert.equal(s.window().slots.s2, "w4");
+    assert.equal(s.window().panes.p2, "w4");
     assert.equal((await approve("w4", false)).status, 200);
     assert.equal(s.window().widgets.w4, undefined);
-    assert.equal(s.window().slots.s2, "w3", "denied, the pane goes back to what it showed");
+    assert.equal(s.window().panes.p2, "w3", "denied, the pane goes back to what it showed");
     // Opened in a pane of its own and denied, the pane closes.
-    await ask(s, id, widget("artifact_open", { url: "https://third.example/", place: { split: "below", of: "s2" } }));
-    assert.deepEqual(slotIds(s.window().layout), ["chat", "s2", "s3"]);
+    await ask(s, id, widget("artifact_open", { url: "https://third.example/", place: { split: "below", of: "p2" } }));
+    assert.deepEqual(paneIds(s.window().layout), ["chat", "p2", "p3"]);
     const third = artifactsOf(s.window()).find(([, a]) => a.path === "https://third.example/")![0];
     assert.equal((await approve(third, false)).status, 200);
-    assert.deepEqual(slotIds(s.window().layout), ["chat", "s2"]);
+    assert.deepEqual(paneIds(s.window().layout), ["chat", "p2"]);
 
     // This machine and private networks aren't external sites.
     for (const url of ["https://192.168.1.1/", "http://10.0.0.5/admin", "https://intranet/wiki", "https://printer.local/", "http://169.254.169.254/latest/meta-data"]) {
@@ -459,13 +459,13 @@ describe("widgets", () => {
     await boot();
     const again = await listen(id);
     await waitFor(() => artifactsOf(again.window()).length === 1 || undefined);
-    assert.deepEqual(slotIds(again.window().layout), ["chat", "s2"]);
+    assert.deepEqual(paneIds(again.window().layout), ["chat", "p2"]);
     // Its Claude has the tools this Kumiko has: nothing to restart it for.
     assert.equal((await json(await api("/api/sessions"))).find((x: SessionInfo) => x.id === id).toolsOutdated, undefined);
     // What it showed is still there, as the window's saved events name it.
     assert.equal(textOf(artifactsOf(again.window())[0][1]), "# Kept\n");
     // Its Claude was picked up, tools and all.
-    assert.match(await ask(again, id, widget("window_list", {})), /s2 \(artifact w2 "Kept"/);
+    assert.match(await ask(again, id, widget("window_list", {})), /p2 \(artifact w2 "Kept"/);
     again.close();
   });
 });

@@ -1,14 +1,14 @@
-// A session's window: a layout of slots, as in tmux, each showing one widget.
+// A session's window: a layout of panes, as in tmux, each showing one widget.
 // Pure functions only, shared by the server, which changes windows, and the UI, which shows them.
 
 import type { SessionEvent } from "./index.js";
 
-export type SlotId = string;
+export type PaneId = string;
 export type WidgetId = string;
 
-/** A binary tree of splits whose leaves are slots. In a split, `a` is left or above, and gets `ratio` of the room. */
+/** A binary tree of splits whose leaves are panes. In a split, `a` is left or above, and gets `ratio` of the room. */
 export type Layout =
-  | { kind: "slot"; id: SlotId }
+  | { kind: "pane"; id: PaneId }
   | { kind: "split"; dir: "row" | "column"; ratio: number; a: Layout; b: Layout };
 
 export interface Widget {
@@ -19,32 +19,32 @@ export interface Widget {
 
 export interface WindowState {
   layout: Layout;
-  /** The widget each slot shows. */
-  slots: Record<SlotId, WidgetId>;
-  /** Every widget in the window, shown or not: closing a slot hides its widget, which can be shown again. */
+  /** The widget each pane shows. */
+  panes: Record<PaneId, WidgetId>;
+  /** Every widget in the window, shown or not: closing a pane hides its widget, which can be shown again. */
   widgets: Record<WidgetId, Widget>;
-  /** The slot something was last put into, by a split or a show: where the next widget of its kind goes by default. */
-  active?: SlotId;
-  /** For a widget shown in place of another (by `show`), the one it replaced: what its slot goes back to without it. */
+  /** The pane something was last put into, by a split or a show: where the next widget of its kind goes by default. */
+  active?: PaneId;
+  /** For a widget shown in place of another (by `show`), the one it replaced: what its pane goes back to without it. */
   under?: Record<WidgetId, WidgetId>;
 }
 
-/** The chat's slot and widget, which every window has and none can close. */
+/** The chat's pane and widget, which every window has and none can close. */
 export const CHAT = "chat";
 
 /** How many panes a window can have. Enough for a large screen; a window too narrow for its panes stacks them. */
-export const MAX_SLOTS = 16;
-/** The smallest and largest share of a split that a new slot can ask for. */
+export const MAX_PANES = 16;
+/** The smallest and largest share of a split that a new pane can ask for. */
 export const MIN_SIZE = 0.2;
 export const MAX_SIZE = 0.8;
 
-/** A side of a slot: where a new slot goes beside it. */
+/** A side of a pane: where a new pane goes beside it. */
 export type Side = "left" | "right" | "above" | "below";
 
-/** Where a new slot goes: on a side of slot `of` (the chat's by default), taking `size` of its room (half by default). */
+/** Where a new pane goes: on a side of pane `of` (the chat's by default), taking `size` of its room (half by default). */
 export interface Place {
   split: Side;
-  of?: SlotId;
+  of?: PaneId;
   size?: number;
 }
 
@@ -53,22 +53,22 @@ export class WindowError extends Error {}
 
 /** A window with only the chat in it: every window, until something is opened beside the chat. */
 export function chatWindow(): WindowState {
-  return { layout: { kind: "slot", id: CHAT }, slots: { [CHAT]: CHAT }, widgets: { [CHAT]: { kind: "chat" } } };
+  return { layout: { kind: "pane", id: CHAT }, panes: { [CHAT]: CHAT }, widgets: { [CHAT]: { kind: "chat" } } };
 }
 
-/** The layout's slots, left to right and top to bottom. */
-export function slotIds(layout: Layout): SlotId[] {
-  return layout.kind === "slot" ? [layout.id] : [...slotIds(layout.a), ...slotIds(layout.b)];
+/** The layout's panes, left to right and top to bottom. */
+export function paneIds(layout: Layout): PaneId[] {
+  return layout.kind === "pane" ? [layout.id] : [...paneIds(layout.a), ...paneIds(layout.b)];
 }
 
-/** The slot showing `widget`, if one is. */
-export function slotOf(w: WindowState, widget: WidgetId): SlotId | undefined {
-  return Object.keys(w.slots).find((s) => w.slots[s] === widget);
+/** The pane showing `widget`, if one is. */
+export function paneOf(w: WindowState, widget: WidgetId): PaneId | undefined {
+  return Object.keys(w.panes).find((s) => w.panes[s] === widget);
 }
 
-/** An id with `prefix` that the window doesn't use yet for a slot or a widget: `s2`, `s3`, … */
+/** An id with `prefix` that the window doesn't use yet for a pane or a widget: `p2`, `p3`, … */
 export function nextId(w: WindowState, prefix: string): string {
-  const taken = new Set([...Object.keys(w.slots), ...Object.keys(w.widgets)]);
+  const taken = new Set([...Object.keys(w.panes), ...Object.keys(w.widgets)]);
   let n = 2;
   while (taken.has(`${prefix}${n}`)) n++;
   return `${prefix}${n}`;
@@ -80,18 +80,18 @@ export function addWidget(w: WindowState, id: WidgetId, widget: Widget): WindowS
   return { ...w, widgets: { ...w.widgets, [id]: widget } };
 }
 
-/** Splits slot `place.of` and shows `widget`, which isn't shown yet, in the new slot `slot`. */
-export function split(w: WindowState, place: Place, slot: SlotId, widget: WidgetId): WindowState {
+/** Splits pane `place.of` and shows `widget`, which isn't shown yet, in the new pane `pane`. */
+export function split(w: WindowState, place: Place, pane: PaneId, widget: WidgetId): WindowState {
   const of = place.of ?? CHAT;
   if (!w.widgets[widget]) throw new WindowError(`There is no widget ${widget}.`);
-  if (slotOf(w, widget)) throw new WindowError(`Widget ${widget} is shown already, in slot ${slotOf(w, widget)}.`);
-  if (w.slots[slot] || w.widgets[slot]) throw new WindowError(`The id ${slot} is taken.`);
-  if (!w.slots[of]) throw new WindowError(`There is no slot ${of}. Slots: ${slotIds(w.layout).join(", ")}.`);
-  if (slotIds(w.layout).length >= MAX_SLOTS) throw new WindowError(`A window has at most ${MAX_SLOTS} slots. Close one first.`);
+  if (paneOf(w, widget)) throw new WindowError(`Widget ${widget} is shown already, in pane ${paneOf(w, widget)}.`);
+  if (w.panes[pane] || w.widgets[pane]) throw new WindowError(`The id ${pane} is taken.`);
+  if (!w.panes[of]) throw new WindowError(`There is no pane ${of}. Panes: ${paneIds(w.layout).join(", ")}.`);
+  if (paneIds(w.layout).length >= MAX_PANES) throw new WindowError(`A window has at most ${MAX_PANES} panes. Close one first.`);
   const size = place.size ?? 0.5;
-  if (!(size >= MIN_SIZE && size <= MAX_SIZE)) throw new WindowError(`A new slot's size is between ${MIN_SIZE} and ${MAX_SIZE}.`);
-  const layout = replaceSlot(w.layout, of, (l) => beside(l, { kind: "slot", id: slot }, place.split, size));
-  return { ...w, layout, slots: { ...w.slots, [slot]: widget }, active: slot };
+  if (!(size >= MIN_SIZE && size <= MAX_SIZE)) throw new WindowError(`A new pane's size is between ${MIN_SIZE} and ${MAX_SIZE}.`);
+  const layout = replacePane(w.layout, of, (l) => beside(l, { kind: "pane", id: pane }, place.split, size));
+  return { ...w, layout, panes: { ...w.panes, [pane]: widget }, active: pane };
 }
 
 /** A split of `target`'s room with `added` on `side` of it, taking `size` of the room. */
@@ -100,64 +100,64 @@ function beside(target: Layout, added: Layout, side: Side, size: number): Layout
   return side === "left" || side === "above" ? { kind: "split", dir, ratio: size, a: added, b: target } : { kind: "split", dir, ratio: 1 - size, a: target, b: added };
 }
 
-/** The layout with slot `id`'s leaf replaced by what `by` makes of it. */
-function replaceSlot(l: Layout, id: SlotId, by: (leaf: Layout) => Layout): Layout {
-  if (l.kind === "slot") return l.id === id ? by(l) : l;
-  return { ...l, a: replaceSlot(l.a, id, by), b: replaceSlot(l.b, id, by) };
+/** The layout with pane `id`'s leaf replaced by what `by` makes of it. */
+function replacePane(l: Layout, id: PaneId, by: (leaf: Layout) => Layout): Layout {
+  if (l.kind === "pane") return l.id === id ? by(l) : l;
+  return { ...l, a: replacePane(l.a, id, by), b: replacePane(l.b, id, by) };
 }
 
-/** The layout without slot `id`'s leaf: the split it was in gives its room to the other side. */
-function withoutSlot(l: Layout, id: SlotId): Layout {
-  if (l.kind === "slot") return l;
-  if (l.a.kind === "slot" && l.a.id === id) return l.b;
-  if (l.b.kind === "slot" && l.b.id === id) return l.a;
-  return { ...l, a: withoutSlot(l.a, id), b: withoutSlot(l.b, id) };
+/** The layout without pane `id`'s leaf: the split it was in gives its room to the other side. */
+function withoutPane(l: Layout, id: PaneId): Layout {
+  if (l.kind === "pane") return l;
+  if (l.a.kind === "pane" && l.a.id === id) return l.b;
+  if (l.b.kind === "pane" && l.b.id === id) return l.a;
+  return { ...l, a: withoutPane(l.a, id), b: withoutPane(l.b, id) };
 }
 
-/** The window as a whole, as where `move` takes a slot: to one of its sides, spanning its whole width or height. */
+/** The window as a whole, as where `move` takes a pane: to one of its sides, spanning its whole width or height. */
 export const WINDOW = "window";
 
-/** The share of the window a slot moved to its edge takes: as much as each slot would, shared evenly. */
-export const edgeShare = (slots: number) => Math.min(0.5, Math.max(MIN_SIZE, 1 / slots));
+/** The share of the window a pane moved to its edge takes: as much as each pane would, shared evenly. */
+export const edgeShare = (panes: number) => Math.min(0.5, Math.max(MIN_SIZE, 1 / panes));
 
 /**
- * Moves slot `slot`, with what it shows, to a side of slot `to`, which it splits in halves; its old place goes to the
- * slot beside it. `"swap"` trades the two slots' places instead. With `to` WINDOW, it goes to a side of the window,
- * along the whole of it, taking `edgeShare` of it. The chat moves like any other slot.
+ * Moves pane `pane`, with what it shows, to a side of pane `to`, which it splits in halves; its old place goes to the
+ * pane beside it. `"swap"` trades the two panes' places instead. With `to` WINDOW, it goes to a side of the window,
+ * along the whole of it, taking `edgeShare` of it. The chat moves like any other pane.
  */
-export function move(w: WindowState, slot: SlotId, to: SlotId, side: Side | "swap"): WindowState {
-  for (const s of to === WINDOW ? [slot] : [slot, to]) if (!w.slots[s]) throw new WindowError(`There is no slot ${s}. Slots: ${slotIds(w.layout).join(", ")}.`);
+export function move(w: WindowState, pane: PaneId, to: PaneId, side: Side | "swap"): WindowState {
+  for (const s of to === WINDOW ? [pane] : [pane, to]) if (!w.panes[s]) throw new WindowError(`There is no pane ${s}. Panes: ${paneIds(w.layout).join(", ")}.`);
   if (to === WINDOW) {
-    if (side === "swap") throw new WindowError("A slot goes to a side of the window, not in its place.");
+    if (side === "swap") throw new WindowError("A pane goes to a side of the window, not in its place.");
     // One of the window's two sides already, along the same way: the two change sides, keeping their sizes.
-    const flipped = flipSides(w.layout, slot, side);
+    const flipped = flipSides(w.layout, pane, side);
     if (flipped) return flipped === w.layout ? w : { ...w, layout: flipped };
-    const rest = withoutSlot(w.layout, slot);
+    const rest = withoutPane(w.layout, pane);
     if (rest === w.layout) return w;
-    return { ...w, layout: beside(rest, { kind: "slot", id: slot }, side, edgeShare(slotIds(w.layout).length)) };
+    return { ...w, layout: beside(rest, { kind: "pane", id: pane }, side, edgeShare(paneIds(w.layout).length)) };
   }
-  if (slot === to) return w;
+  if (pane === to) return w;
   // The two sides of one split, alone in it: they change places, each keeping its size.
-  const pair = siblings(w.layout, slot, to);
+  const pair = siblings(w.layout, pane, to);
   if (pair && (side === "swap" || (pair.dir === "row") === (side === "left" || side === "right"))) {
-    const flipped = side === "swap" ? { ...pair, a: pair.b, b: pair.a, ratio: 1 - pair.ratio } : flipSides(pair, slot, side)!;
+    const flipped = side === "swap" ? { ...pair, a: pair.b, b: pair.a, ratio: 1 - pair.ratio } : flipSides(pair, pane, side)!;
     return { ...w, layout: replaceSplit(w.layout, pair, flipped) };
   }
   if (side === "swap") {
     const swap = (l: Layout): Layout =>
-      l.kind === "slot" ? (l.id === slot ? { kind: "slot", id: to } : l.id === to ? { kind: "slot", id: slot } : l) : { ...l, a: swap(l.a), b: swap(l.b) };
+      l.kind === "pane" ? (l.id === pane ? { kind: "pane", id: to } : l.id === to ? { kind: "pane", id: pane } : l) : { ...l, a: swap(l.a), b: swap(l.b) };
     return { ...w, layout: swap(w.layout) };
   }
-  const layout = replaceSlot(withoutSlot(w.layout, slot), to, (l) => beside(l, { kind: "slot", id: slot }, side, 0.5));
+  const layout = replacePane(withoutPane(w.layout, pane), to, (l) => beside(l, { kind: "pane", id: pane }, side, 0.5));
   return { ...w, layout };
 }
 
 type Split = Extract<Layout, { kind: "split" }>;
 
-/** The split whose two sides are the slots `x` and `y`, if there is one. */
-function siblings(l: Layout, x: SlotId, y: SlotId): Split | undefined {
-  if (l.kind === "slot") return undefined;
-  const is = (side: Layout, id: SlotId) => side.kind === "slot" && side.id === id;
+/** The split whose two sides are the panes `x` and `y`, if there is one. */
+function siblings(l: Layout, x: PaneId, y: PaneId): Split | undefined {
+  if (l.kind === "pane") return undefined;
+  const is = (side: Layout, id: PaneId) => side.kind === "pane" && side.id === id;
   if ((is(l.a, x) && is(l.b, y)) || (is(l.a, y) && is(l.b, x))) return l;
   return siblings(l.a, x, y) ?? siblings(l.b, x, y);
 }
@@ -165,23 +165,23 @@ function siblings(l: Layout, x: SlotId, y: SlotId): Split | undefined {
 /** `l` with the split `old` (by identity) replaced by `by`. */
 function replaceSplit(l: Layout, old: Split, by: Layout): Layout {
   if (l === old) return by;
-  if (l.kind === "slot") return l;
+  if (l.kind === "pane") return l;
   return { ...l, a: replaceSplit(l.a, old, by), b: replaceSplit(l.b, old, by) };
 }
 
 /**
- * Split `l` with slot `slot` on `side` of it, keeping the share `slot` has, if `slot` is one of its two sides and it
- * splits the way `side` goes; undefined if not. `l` itself when `slot` is on that side already.
+ * Split `l` with pane `pane` on `side` of it, keeping the share `pane` has, if `pane` is one of its two sides and it
+ * splits the way `side` goes; undefined if not. `l` itself when `pane` is on that side already.
  */
-function flipSides(l: Layout, slot: SlotId, side: Side): Layout | undefined {
+function flipSides(l: Layout, pane: PaneId, side: Side): Layout | undefined {
   if (l.kind !== "split" || (l.dir === "row") !== (side === "left" || side === "right")) return undefined;
-  const isSlot = (x: Layout) => x.kind === "slot" && x.id === slot;
-  if (!isSlot(l.a) && !isSlot(l.b)) return undefined;
+  const isPane = (x: Layout) => x.kind === "pane" && x.id === pane;
+  if (!isPane(l.a) && !isPane(l.b)) return undefined;
   const first = side === "left" || side === "above";
-  if (isSlot(first ? l.a : l.b)) return l;
-  const share = isSlot(l.a) ? l.ratio : 1 - l.ratio;
-  const other = isSlot(l.a) ? l.b : l.a;
-  const leaf: Layout = { kind: "slot", id: slot };
+  if (isPane(first ? l.a : l.b)) return l;
+  const share = isPane(l.a) ? l.ratio : 1 - l.ratio;
+  const other = isPane(l.a) ? l.b : l.a;
+  const leaf: Layout = { kind: "pane", id: pane };
   return first ? { ...l, a: leaf, b: other, ratio: share } : { ...l, a: other, b: leaf, ratio: 1 - share };
 }
 
@@ -204,40 +204,40 @@ export function resize(w: WindowState, path: SplitPath, ratio: number): WindowSt
 }
 
 /**
- * Shows `widget` in slot `slot` in place of what it showed, which stays in the window. A widget shown in another slot
- * already swaps places with it, so a widget is never in two slots. The chat stays where it is.
+ * Shows `widget` in pane `pane` in place of what it showed, which stays in the window. A widget shown in another pane
+ * already swaps places with it, so a widget is never in two panes. The chat stays where it is.
  */
-export function show(w: WindowState, slot: SlotId, widget: WidgetId): WindowState {
-  if (!w.slots[slot]) throw new WindowError(`There is no slot ${slot}. Slots: ${slotIds(w.layout).join(", ")}.`);
+export function show(w: WindowState, pane: PaneId, widget: WidgetId): WindowState {
+  if (!w.panes[pane]) throw new WindowError(`There is no pane ${pane}. Panes: ${paneIds(w.layout).join(", ")}.`);
   if (!w.widgets[widget]) throw new WindowError(`There is no widget ${widget}.`);
-  if (slot === CHAT || widget === CHAT) throw new WindowError("The chat stays in its own slot.");
-  const was = w.slots[slot];
-  if (was === widget) return w.active === slot ? w : { ...w, active: slot };
-  const other = slotOf(w, widget);
+  if (pane === CHAT || widget === CHAT) throw new WindowError("The chat stays in its own pane.");
+  const was = w.panes[pane];
+  if (was === widget) return w.active === pane ? w : { ...w, active: pane };
+  const other = paneOf(w, widget);
   // Swapped, each is under nothing new: both are still shown.
   const under = other ? w.under : { ...w.under, [widget]: was };
-  return { ...w, slots: { ...w.slots, [slot]: widget, ...(other ? { [other]: was } : {}) }, active: slot, ...(under ? { under } : {}) };
+  return { ...w, panes: { ...w.panes, [pane]: widget, ...(other ? { [other]: was } : {}) }, active: pane, ...(under ? { under } : {}) };
 }
 
-/** Takes a widget out of the window for good; the slot showing it, if one does, closes. The chat stays. */
+/** Takes a widget out of the window for good; the pane showing it, if one does, closes. The chat stays. */
 export function remove(w: WindowState, widget: WidgetId): WindowState {
   if (widget === CHAT) throw new WindowError("The chat stays in the window.");
   if (!w.widgets[widget]) throw new WindowError(`There is no widget ${widget}.`);
-  const slot = slotOf(w, widget);
-  const closed = slot ? close(w, slot) : w;
+  const pane = paneOf(w, widget);
+  const closed = pane ? close(w, pane) : w;
   const { [widget]: _removed, ...widgets } = closed.widgets;
   const under = Object.fromEntries(Object.entries(closed.under ?? {}).filter(([on, below]) => on !== widget && below !== widget));
   const { under: _under, ...rest } = closed;
   return { ...rest, widgets, ...(Object.keys(under).length ? { under } : {}) };
 }
 
-/** Closes a slot: the split it was in gives its room to the other side. Its widget stays in the window. */
-export function close(w: WindowState, slot: SlotId): WindowState {
-  if (slot === CHAT) throw new WindowError("The chat's slot can't be closed.");
-  if (!w.slots[slot]) throw new WindowError(`There is no slot ${slot}. Slots: ${slotIds(w.layout).join(", ")}.`);
-  const { [slot]: _closed, ...slots } = w.slots;
+/** Closes a pane: the split it was in gives its room to the other side. Its widget stays in the window. */
+export function close(w: WindowState, pane: PaneId): WindowState {
+  if (pane === CHAT) throw new WindowError("The chat's pane can't be closed.");
+  if (!w.panes[pane]) throw new WindowError(`There is no pane ${pane}. Panes: ${paneIds(w.layout).join(", ")}.`);
+  const { [pane]: _closed, ...panes } = w.panes;
   const { active: _active, ...rest } = w;
-  return { ...(w.active === slot ? rest : w), layout: withoutSlot(w.layout, slot), slots };
+  return { ...(w.active === pane ? rest : w), layout: withoutPane(w.layout, pane), panes };
 }
 
 /** What a kind of widget does with the ops sent to it. Kinds without `apply` take none: the chat, for now. */
@@ -352,19 +352,19 @@ export function artifactsOf(w: WindowState): [WidgetId, ArtifactState][] {
  * One change to a window, as a session's `window` event records it.
  * - `add`: a widget, not shown yet. `split`, `show`, `move`, `resize`, `close`, `remove`: see the functions of those names.
  * - `update`: an op for one widget, which its kind applies.
- * - `sync`: the layout and slots, when given, the active slot (null for none), the widgets listed, as they are now,
+ * - `sync`: the layout and panes, when given, the active pane (null for none), the widgets listed, as they are now,
  *   and the widgets `removed`. What a turn's ops come down to.
  */
 export type WindowOp =
   | { type: "add"; widget: WidgetId; kind: string; state?: unknown }
-  | { type: "split"; place: Place; slot: SlotId; widget: WidgetId }
-  | { type: "close"; slot: SlotId }
-  | { type: "show"; slot: SlotId; widget: WidgetId }
-  | { type: "move"; slot: SlotId; to: SlotId; side: Side | "swap" }
+  | { type: "split"; place: Place; pane: PaneId; widget: WidgetId }
+  | { type: "close"; pane: PaneId }
+  | { type: "show"; pane: PaneId; widget: WidgetId }
+  | { type: "move"; pane: PaneId; to: PaneId; side: Side | "swap" }
   | { type: "resize"; path: SplitPath; ratio: number }
   | { type: "remove"; widget: WidgetId }
   | { type: "update"; widget: WidgetId; op: unknown }
-  | { type: "sync"; layout?: Layout; slots?: Record<SlotId, WidgetId>; active?: SlotId | null; under?: Record<WidgetId, WidgetId>; widgets?: Record<WidgetId, Widget>; removed?: WidgetId[] };
+  | { type: "sync"; layout?: Layout; panes?: Record<PaneId, WidgetId>; active?: PaneId | null; under?: Record<WidgetId, WidgetId>; widgets?: Record<WidgetId, Widget>; removed?: WidgetId[] };
 
 /** The window after `op`; throws WindowError if it doesn't fit. */
 export function applyWindowOp(w: WindowState, op: WindowOp): WindowState {
@@ -373,13 +373,13 @@ export function applyWindowOp(w: WindowState, op: WindowOp): WindowState {
       if (!WIDGET_KINDS[op.kind]) throw new WindowError(`There is no kind of widget ${op.kind}.`);
       return addWidget(w, op.widget, op.state === undefined ? { kind: op.kind } : { kind: op.kind, state: op.state });
     case "split":
-      return split(w, op.place, op.slot, op.widget);
+      return split(w, op.place, op.pane, op.widget);
     case "close":
-      return close(w, op.slot);
+      return close(w, op.pane);
     case "show":
-      return show(w, op.slot, op.widget);
+      return show(w, op.pane, op.widget);
     case "move":
-      return move(w, op.slot, op.to, op.side);
+      return move(w, op.pane, op.to, op.side);
     case "resize":
       return resize(w, op.path, op.ratio);
     case "remove":
@@ -398,7 +398,7 @@ export function applyWindowOp(w: WindowState, op: WindowOp): WindowState {
       const under = op.under ?? w.under;
       return {
         layout: op.layout ?? w.layout,
-        slots: op.slots ?? w.slots,
+        panes: op.panes ?? w.panes,
         widgets,
         ...(active ? { active } : {}),
         ...(under && Object.keys(under).length ? { under } : {}),
@@ -428,7 +428,7 @@ export function windowState(events: readonly SessionEvent[], from: WindowState =
 /** A `sync` op that takes `before` to `after`, or undefined if they don't differ. */
 function syncOp(before: WindowState, after: WindowState): WindowOp | undefined {
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
-  const layoutChanged = !same(before.layout, after.layout) || !same(before.slots, after.slots);
+  const layoutChanged = !same(before.layout, after.layout) || !same(before.panes, after.panes);
   const widgets = Object.fromEntries(Object.entries(after.widgets).filter(([id, widget]) => !same(before.widgets[id], widget)));
   const activeChanged = before.active !== after.active;
   const underChanged = !same(before.under ?? {}, after.under ?? {});
@@ -436,7 +436,7 @@ function syncOp(before: WindowState, after: WindowState): WindowOp | undefined {
   if (!layoutChanged && !activeChanged && !underChanged && !Object.keys(widgets).length && !removed.length) return undefined;
   return {
     type: "sync",
-    ...(layoutChanged ? { layout: after.layout, slots: after.slots } : {}),
+    ...(layoutChanged ? { layout: after.layout, panes: after.panes } : {}),
     ...(activeChanged ? { active: after.active ?? null } : {}),
     ...(underChanged ? { under: after.under ?? {} } : {}),
     ...(Object.keys(widgets).length ? { widgets } : {}),

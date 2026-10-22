@@ -1,6 +1,6 @@
 import { useContext, useRef, useState } from "react";
 import * as Menu from "@radix-ui/react-dropdown-menu";
-import { CHAT, type ArtifactState, type Side, type SlotId } from "@kumiko/shared";
+import { CHAT, type ArtifactState, type Side, type PaneId } from "@kumiko/shared";
 import { stepTowards } from "./widgets";
 import { WindowContext, type WindowApi } from "./windowContext";
 
@@ -18,12 +18,12 @@ const STEPS: [Side, string][] = [
  * The handle a pane is dragged by to another place in the window; only there while the panes can be rearranged. A
  * click on it, or Enter, opens a menu that does the same from the keyboard: a step in each direction, or a swap.
  */
-export function PaneGrip({ slot, floating = false }: { slot: SlotId; floating?: boolean }) {
+export function PaneGrip({ pane, floating = false }: { pane: PaneId; floating?: boolean }) {
   const ctx = useContext(WindowContext);
   const [open, setOpen] = useState(false);
   const pressed = useRef<{ x: number; y: number } | undefined>(undefined);
   if (!ctx?.arrange) return null;
-  const others = Object.keys(ctx.window.slots).filter((s) => s !== slot && ctx.rects.has(s));
+  const others = Object.keys(ctx.window.panes).filter((s) => s !== pane && ctx.rects.has(s));
   return (
     <Menu.Root modal={false} open={open} onOpenChange={setOpen}>
       <Menu.Trigger
@@ -33,7 +33,7 @@ export function PaneGrip({ slot, floating = false }: { slot: SlotId; floating?: 
         // A press starts a drag, rather than opening the menu as a trigger would; letting go where it was is a click.
         onPointerDown={(e) => {
           pressed.current = { x: e.clientX, y: e.clientY };
-          ctx.startDrag(slot, e);
+          ctx.startDrag(pane, e);
         }}
         onClick={(e) => {
           const p = pressed.current;
@@ -49,16 +49,16 @@ export function PaneGrip({ slot, floating = false }: { slot: SlotId; floating?: 
       <Menu.Portal>
         <Menu.Content className="menu" align="start" sideOffset={6} collisionPadding={8} aria-label="Move this pane">
           {STEPS.map(([side, label]) => {
-            const step = stepTowards(ctx.rects, slot, side);
+            const step = stepTowards(ctx.rects, pane, side);
             return (
-              <Menu.Item key={side} className="menu-item" disabled={!step} onSelect={() => step && ctx.move(slot, step.to, step.side)}>
+              <Menu.Item key={side} className="menu-item" disabled={!step} onSelect={() => step && ctx.move(pane, step.to, step.side)}>
                 {label}
               </Menu.Item>
             );
           })}
           {others.length > 0 && <Menu.Separator className="menu-separator" />}
           {others.map((other) => (
-            <Menu.Item key={other} className="menu-item" onSelect={() => ctx.move(slot, other, "swap")}>
+            <Menu.Item key={other} className="menu-item" onSelect={() => ctx.move(pane, other, "swap")}>
               Swap with {paneName(ctx, other)}
             </Menu.Item>
           ))}
@@ -69,8 +69,8 @@ export function PaneGrip({ slot, floating = false }: { slot: SlotId; floating?: 
 }
 
 /** A pane as the menu names it: the chat, or the title of what it shows. */
-function paneName(ctx: WindowApi, slot: SlotId): string {
-  if (slot === CHAT) return "the chat";
-  const w = ctx.window.widgets[ctx.window.slots[slot]];
-  return w?.kind === "artifact" ? `“${(w.state as ArtifactState).title}”` : `pane ${slot}`;
+function paneName(ctx: WindowApi, pane: PaneId): string {
+  if (pane === CHAT) return "the chat";
+  const w = ctx.window.widgets[ctx.window.panes[pane]];
+  return w?.kind === "artifact" ? `“${(w.state as ArtifactState).title}”` : `pane ${pane}`;
 }

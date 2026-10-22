@@ -149,16 +149,16 @@ describe("sessions", () => {
     for (const id of [a, b]) await waitFor(async () => (await session(id))?.status === "idle");
   });
 
-  it("refuses to close the chat's slot, or a slot that isn't there", async () => {
+  it("refuses to close the chat's pane, or a pane that isn't there", async () => {
     const id = await startSession("one", "hi");
     await waitFor(async () => (await session(id))?.status === "idle");
-    const closeSlot = (sid: string, body: string) => api(`/api/sessions/${sid}/window/close`, { method: "POST", body });
-    const chat = await closeSlot(id, JSON.stringify({ slot: "chat" }));
+    const closePane = (sid: string, body: string) => api(`/api/sessions/${sid}/window/close`, { method: "POST", body });
+    const chat = await closePane(id, JSON.stringify({ pane: "chat" }));
     assert.equal(chat.status, 400);
     assert.match((await json(chat)).error, /can't be closed/);
-    assert.equal((await closeSlot(id, JSON.stringify({ slot: "s9" }))).status, 400);
-    assert.equal((await closeSlot(id, "{}")).status, 400);
-    assert.equal((await closeSlot("abc123", JSON.stringify({ slot: "s2" }))).status, 404);
+    assert.equal((await closePane(id, JSON.stringify({ pane: "p9" }))).status, 400);
+    assert.equal((await closePane(id, "{}")).status, 400);
+    assert.equal((await closePane("abc123", JSON.stringify({ pane: "p2" }))).status, 404);
     assert.equal((await api(`/api/sessions/${id}`, { method: "DELETE" })).status, 200);
   });
 

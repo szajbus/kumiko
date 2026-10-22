@@ -496,11 +496,11 @@ export type ServerEvent =
   /** Sent whenever a session starts, changes status or ends. */
   | { type: "sessions"; sessions: SessionInfo[] }
   /**
-   * Asks the window showing session `session`, for Claude, to load the page in slot `slot` again (`reload`, waiting for
-   * it to load), then to take a picture of the slot as it is on screen (`capture`), `wait` ms later, and to answer
+   * Asks the window showing session `session`, for Claude, to load the page in pane `pane` again (`reload`, waiting for
+   * it to load), then to take a picture of the pane as it is on screen (`capture`), `wait` ms later, and to answer
    * `POST /api/sessions/:session/window/answer` with `request`: the picture, or nothing, or why it couldn't.
    */
-  | { type: "pane"; session: string; slot: string; request: string; reload: boolean; capture: boolean; wait: number }
+  | { type: "pane"; session: string; pane: string; request: string; reload: boolean; capture: boolean; wait: number }
   | { sandbox: string; op: OpKind; type: "state"; data: Operation }
   | { sandbox: string; op: OpKind; type: "log"; data: LogLine }
   | { sandbox: string; op: OpKind; type: "done"; data: Operation }

@@ -14,14 +14,14 @@ import {
   artifactsOf,
   MAX_ARTIFACT_BYTES,
   nextId,
-  slotIds,
-  slotOf,
+  paneIds,
+  paneOf,
   WindowError,
   type ArtifactState,
   type ArtifactType,
   type Layout,
   type Place,
-  type SlotId,
+  type PaneId,
   type WidgetId,
   type SessionEvent,
   type SessionInfo,
@@ -54,10 +54,10 @@ export interface WidgetsOptions {
   /** The VM user's home, absolute, as `~` is in the VM. */
   vmHome(sandbox: string): Promise<string>;
   /**
-   * Asks the window showing the session to load the page in slot `slot` again, waiting for it to load, and to take a
-   * picture of the slot as it is on screen; resolves with the picture, if one was asked for.
+   * Asks the window showing the session to load the page in pane `pane` again, waiting for it to load, and to take a
+   * picture of the pane as it is on screen; resolves with the picture, if one was asked for.
    */
-  pane?(session: string, slot: SlotId, what: { reload: boolean; capture: boolean; wait: number }): Promise<PaneAnswer>;
+  pane?(session: string, pane: PaneId, what: { reload: boolean; capture: boolean; wait: number }): Promise<PaneAnswer>;
   /** Whether something answers at a preview's URL. */
   reachable?(url: string): Promise<boolean>;
 }
@@ -176,9 +176,9 @@ export class Widgets implements SessionWidgets {
         case "window_list":
           return { text: describe(this.sessions.window(id)!) };
         case "window_close": {
-          const slot = str(args.slot, "slot");
-          const w = this.sessions.changeWindow(id, { type: "close", slot }, toolUseId);
-          return { text: `Closed slot ${slot}. ${describe(w)}` };
+          const pane = str(args.pane, "pane");
+          const w = this.sessions.changeWindow(id, { type: "close", pane }, toolUseId);
+          return { text: `Closed pane ${pane}. ${describe(w)}` };
         }
         case "artifact_capture":
         case "artifact_reload": {
@@ -186,8 +186,8 @@ export class Widgets implements SessionWidgets {
           const reload = !capture || args.reload === true;
           const [widget, artifact] = await this.find(info, args.artifact);
           const w = this.sessions.window(id)!;
-          const slot = slotOf(w, widget);
-          if (!slot) throw new ToolError(`Artifact ${widget} "${artifact.title}" isn't shown, so it can't be ${capture ? "captured" : "reloaded"}: show it with artifact_open first.`);
+          const pane = paneOf(w, widget);
+          if (!pane) throw new ToolError(`Artifact ${widget} "${artifact.title}" isn't shown, so it can't be ${capture ? "captured" : "reloaded"}: show it with artifact_open first.`);
           if (artifact.type === "web" && !artifact.approved) throw new ToolError(`The user hasn't allowed ${urlOrigin(artifact.path)} yet, so it hasn't loaded. Wait for them to allow it in the pane.`);
           if (!capture && !isPage(artifact)) throw new ToolError(`Artifact ${widget} "${artifact.title}" isn't a page; it follows its file without reloading.`);
           const reloading = reload && isPage(artifact);
@@ -196,8 +196,8 @@ export class Widgets implements SessionWidgets {
           }
           // A moment after a reload by default, for the page to paint what it loaded.
           const wait = capture ? Math.round((args.wait as number | undefined) ?? (reloading ? 300 : 0)) : 0;
-          const { image, note } = await this.askPane(id, slot, { reload: reloading, capture, wait });
-          const what = `Artifact ${widget} "${artifact.title}" in slot ${slot}`;
+          const { image, note } = await this.askPane(id, pane, { reload: reloading, capture, wait });
+          const what = `Artifact ${widget} "${artifact.title}" in pane ${pane}`;
           const failed = note ? ` ${note}` : "";
           if (!capture) return { text: note ? `${what} was loaded again, but${failed.replace(/^ The page/, " the page")}` : `${what} has loaded again.` };
           return { text: `${what}${reload && isPage(artifact) ? ", loaded again," : ","} as the user sees it now.${failed}`, images: image ? [image] : [] };
@@ -253,10 +253,10 @@ export class Widgets implements SessionWidgets {
       if (read.hash !== existing[1].content || read.truncated !== Boolean(existing[1].truncated) || existing[1].missing) Object.assign(changed, { content: await this.keepContent(read), truncated: read.truncated, missing: false });
       if (Object.keys(changed).length) ops.push({ type: "update", widget, op: changed });
       // Shown already, and not asked to go anywhere else: nothing moves.
-      const slot = slotOf(w, widget);
-      if (slot && (!asked || ("slot" in asked && asked.slot === slot))) {
+      const pane = paneOf(w, widget);
+      if (pane && (!asked || ("pane" in asked && asked.pane === pane))) {
         for (const op of ops) w = this.sessions.changeWindow(id, op, toolUseId);
-        return `${path} is shown already, as artifact ${widget} in slot ${slot}.${note} ${describe(w)}`;
+        return `${path} is shown already, as artifact ${widget} in pane ${pane}.${note} ${describe(w)}`;
       }
     } else {
       if (docs.length >= MAX_ARTIFACTS) throw new ToolError(`A window has at most ${MAX_ARTIFACTS} artifacts.`);
@@ -265,20 +265,20 @@ export class Widgets implements SessionWidgets {
       ops.push({ type: "add", widget, kind: "artifact", state });
     }
     // By default in the artifact pane used last, so artifacts don't each take a pane; a new one only when there is none.
-    const target = asked ?? docSlotTarget(w) ?? { split: { split: "right" } };
-    let slot: string;
+    const target = asked ?? docPaneTarget(w) ?? { split: { split: "right" } };
+    let pane: string;
     let where: string;
-    if ("slot" in target) {
-      slot = target.slot;
-      const was = w.widgets[w.slots[slot]];
-      ops.push({ type: "show", slot, widget });
+    if ("pane" in target) {
+      pane = target.pane;
+      const was = w.widgets[w.panes[pane]];
+      ops.push({ type: "show", pane, widget });
       const before = was?.kind === "artifact" ? ` in place of "${(was.state as ArtifactState).title}", which stays in the window` : "";
-      where = `in slot ${slot}${before}`;
+      where = `in pane ${pane}${before}`;
     } else {
-      slot = nextId(w, "s");
-      ops.push({ type: "split", place: target.split, slot, widget });
+      pane = nextId(w, "p");
+      ops.push({ type: "split", place: target.split, pane, widget });
       const { split: dir, of } = target.split;
-      where = `in a new slot ${slot}, ${{ right: "right of", left: "left of", above: "above", below: "below" }[dir]} ${of && of !== CHAT ? `slot ${of}` : "the chat"}`;
+      where = `in a new pane ${pane}, ${{ right: "right of", left: "left of", above: "above", below: "below" }[dir]} ${of && of !== CHAT ? `pane ${of}` : "the chat"}`;
     }
     // All or nothing: checked on a copy first, so a split that doesn't fit doesn't leave a widget added.
     let check = w;
@@ -310,15 +310,15 @@ export class Widgets implements SessionWidgets {
 
   /**
    * The artifact `ref` names: its id, its file's path (as given or as resolved), or a preview's URL. Without one, the
-   * artifact in the slot used last, or any shown, unless `shown` is false.
+   * artifact in the pane used last, or any shown, unless `shown` is false.
    */
   private async find(info: SessionInfo, ref: unknown, { shown = true } = {}): Promise<[WidgetId, ArtifactState]> {
     const w = this.sessions.window(info.id)!;
     const all = artifactsOf(w);
     if (ref === undefined) {
       if (!shown) throw new ToolError("Which artifact?");
-      const visible = all.filter(([widget]) => slotOf(w, widget));
-      const pick = visible.find(([widget]) => slotOf(w, widget) === w.active) ?? visible[0];
+      const visible = all.filter(([widget]) => paneOf(w, widget));
+      const pick = visible.find(([widget]) => paneOf(w, widget) === w.active) ?? visible[0];
       if (!pick) throw new ToolError(`No artifact is shown. ${describe(w)}`);
       return pick;
     }
@@ -330,9 +330,9 @@ export class Widgets implements SessionWidgets {
   }
 
   /** Asks the user's window to reload a pane's page or take a picture of it; a tool error if it can't. */
-  private async askPane(session: string, slot: SlotId, what: { reload: boolean; capture: boolean; wait: number }) {
+  private async askPane(session: string, pane: PaneId, what: { reload: boolean; capture: boolean; wait: number }) {
     if (!this.opts.pane) throw new ToolError("This needs the user's window, which isn't available here.");
-    return this.opts.pane(session, slot, what).catch((err: unknown) => {
+    return this.opts.pane(session, pane, what).catch((err: unknown) => {
       throw new ToolError(err instanceof Error ? err.message : String(err));
     });
   }
@@ -371,26 +371,26 @@ export class Widgets implements SessionWidgets {
       ops.push({ type: "add", widget, kind: "artifact", state });
     }
     const pending = type === "web" && !(existing ? existing[1].approved : allowed);
-    const shownIn = slotOf(w, widget);
-    if (shownIn && (!asked || ("slot" in asked && asked.slot === shownIn))) {
+    const shownIn = paneOf(w, widget);
+    if (shownIn && (!asked || ("pane" in asked && asked.pane === shownIn))) {
       // Shown already, where it was asked for: opening it again loads it again, as a stuck page or a server without
       // live reload needs.
       for (const op of ops) w = this.sessions.changeWindow(info.id, op, toolUseId);
-      if (pending) return `${url} is shown already, as artifact ${widget} in slot ${shownIn}, waiting for the user to allow ${origin}. ${describe(w)}`;
+      if (pending) return `${url} is shown already, as artifact ${widget} in pane ${shownIn}, waiting for the user to allow ${origin}. ${describe(w)}`;
       const reloaded = await this.askPane(info.id, shownIn, { reload: true, capture: false, wait: 0 }).then(() => true, () => false);
-      return `${url} is shown already, as artifact ${widget} in slot ${shownIn}; ${reloaded ? "it has loaded again" : "the user's window didn't answer to load it again"}. ${describe(w)}`;
+      return `${url} is shown already, as artifact ${widget} in pane ${shownIn}; ${reloaded ? "it has loaded again" : "the user's window didn't answer to load it again"}. ${describe(w)}`;
     }
-    const target = asked ?? docSlotTarget(w) ?? { split: { split: "right" } };
-    ops.push("slot" in target ? { type: "show", slot: target.slot, widget } : { type: "split", place: target.split, slot: nextId(w, "s"), widget });
+    const target = asked ?? docPaneTarget(w) ?? { split: { split: "right" } };
+    ops.push("pane" in target ? { type: "show", pane: target.pane, widget } : { type: "split", place: target.split, pane: nextId(w, "p"), widget });
     let check = w;
     for (const op of ops) check = applyWindowOp(check, op);
     for (const op of ops) w = this.sessions.changeWindow(info.id, op, toolUseId);
-    const slot = slotOf(w, widget);
-    if (type === "preview") return `Previewing ${url} as artifact ${widget} in slot ${slot}. It shows the page live; the dev server's own reload keeps it current. Use artifact_capture to see it. ${describe(w)}`;
+    const pane = paneOf(w, widget);
+    if (type === "preview") return `Previewing ${url} as artifact ${widget} in pane ${pane}. It shows the page live; the dev server's own reload keeps it current. Use artifact_capture to see it. ${describe(w)}`;
     if (pending) {
-      return `Asked the user to allow ${origin} in slot ${slot} (artifact ${widget}); the site loads once they do, and you can't capture it before. If they deny it, it goes from the window. ${describe(w)}`;
+      return `Asked the user to allow ${origin} in pane ${pane} (artifact ${widget}); the site loads once they do, and you can't capture it before. If they deny it, it goes from the window. ${describe(w)}`;
     }
-    return `Showing ${url} as artifact ${widget} in slot ${slot}; the user allowed ${origin} in this session already. Use artifact_capture to see it. ${describe(w)}`;
+    return `Showing ${url} as artifact ${widget} in pane ${pane}; the user allowed ${origin} in this session already. Use artifact_capture to see it. ${describe(w)}`;
   }
 
   /** The absolute path in the VM that `path` names, if it is one whose file the host can read. */
@@ -617,30 +617,30 @@ function str(v: unknown, name: string): string {
   return v;
 }
 
-/** Where an artifact goes: into a slot that is there, in place of what it shows, or a new slot from a split. */
-type Target = { slot: SlotId } | { split: Place };
+/** Where an artifact goes: into a pane that is there, in place of what it shows, or a new pane from a split. */
+type Target = { pane: PaneId } | { split: Place };
 
 /** The `place` Claude asked for, if any. */
 function targetOf(v: unknown): Target | undefined {
   if (v === undefined) return undefined;
-  const usage = `place must be { split: "right" | "below" | "left" | "above", of?, size? } or { in: <slot> }.`;
+  const usage = `place must be { split: "right" | "below" | "left" | "above", of?, size? } or { in: <pane> }.`;
   if (typeof v !== "object" || v === null) throw new ToolError(usage);
   const { split, of, size, in: into } = v as Record<string, unknown>;
   if (into !== undefined) {
-    if (typeof into !== "string" || !into) throw new ToolError("place.in must be a slot's id.");
-    return { slot: into };
+    if (typeof into !== "string" || !into) throw new ToolError("place.in must be a pane's id.");
+    return { pane: into };
   }
   if (split !== "right" && split !== "below" && split !== "left" && split !== "above") throw new ToolError(`place.split must be a side. ${usage}`);
-  if (of !== undefined && typeof of !== "string") throw new ToolError("place.of must be a slot's id.");
+  if (of !== undefined && typeof of !== "string") throw new ToolError("place.of must be a pane's id.");
   if (size !== undefined && typeof size !== "number") throw new ToolError("place.size must be a number between 0.2 and 0.8.");
   return { split: { split, ...(of ? { of } : {}), ...(size !== undefined ? { size } : {}) } };
 }
 
-/** Where an artifact goes by default: the active slot if it shows an artifact, else any slot that does. */
-export function docSlotTarget(w: WindowState): Target | undefined {
-  const showsDoc = (slot: string | undefined) => slot !== undefined && w.widgets[w.slots[slot]]?.kind === "artifact";
-  const slot = showsDoc(w.active) ? w.active : slotIds(w.layout).find(showsDoc);
-  return slot ? { slot } : undefined;
+/** Where an artifact goes by default: the active pane if it shows an artifact, else any pane that does. */
+export function docPaneTarget(w: WindowState): Target | undefined {
+  const showsDoc = (pane: string | undefined) => pane !== undefined && w.widgets[w.panes[pane]]?.kind === "artifact";
+  const pane = showsDoc(w.active) ? w.active : paneIds(w.layout).find(showsDoc);
+  return pane ? { pane } : undefined;
 }
 
 /** The first heading of an artifact, or its file's name. */
@@ -651,30 +651,30 @@ function titleOf(path: string, type: ArtifactType, text: string): string {
   return (heading || posix.basename(path)).slice(0, MAX_TITLE);
 }
 
-/** The window for Claude: its layout, what each slot shows, and the artifacts not shown. */
+/** The window for Claude: its layout, what each pane shows, and the artifacts not shown. */
 function describe(w: WindowState): string {
-  const name = (slot: string) => {
-    const id = w.slots[slot];
+  const name = (pane: string) => {
+    const id = w.panes[pane];
     const widget = w.widgets[id];
-    if (widget?.kind === "chat") return `${slot} (the chat)`;
+    if (widget?.kind === "chat") return `${pane} (the chat)`;
     const d = widget?.state as ArtifactState | undefined;
-    return `${slot} (artifact ${id} "${d?.title}", ${d?.path}${d?.missing ? ", file missing" : ""}${d?.type === "web" && !d.approved ? ", waiting for the user to allow it" : ""})`;
+    return `${pane} (artifact ${id} "${d?.title}", ${d?.path}${d?.missing ? ", file missing" : ""}${d?.type === "web" && !d.approved ? ", waiting for the user to allow it" : ""})`;
   };
-  const tree = (l: Layout): string => (l.kind === "slot" ? name(l.id) : `${l.dir === "row" ? "side by side" : "one above the other"}: [${tree(l.a)}, ${tree(l.b)}]`);
-  const hidden = artifactsOf(w).filter(([id]) => !slotOf(w, id));
-  const slots = slotIds(w.layout).length;
-  return `Window (${slots} slot${slots > 1 ? "s" : ""}): ${tree(w.layout)}.${hidden.length ? ` Not shown: ${hidden.map(([id, d]) => `artifact ${id} "${d.title}", ${d.path}`).join("; ")}. The user can switch an artifact pane to any of them, and so can artifact_open.` : ""}`;
+  const tree = (l: Layout): string => (l.kind === "pane" ? name(l.id) : `${l.dir === "row" ? "side by side" : "one above the other"}: [${tree(l.a)}, ${tree(l.b)}]`);
+  const hidden = artifactsOf(w).filter(([id]) => !paneOf(w, id));
+  const panes = paneIds(w.layout).length;
+  return `Window (${panes} pane${panes > 1 ? "s" : ""}): ${tree(w.layout)}.${hidden.length ? ` Not shown: ${hidden.map(([id, d]) => `artifact ${id} "${d.title}", ${d.path}`).join("; ")}. The user can switch an artifact pane to any of them, and so can artifact_open.` : ""}`;
 }
 
 const PLACE_SCHEMA = {
   type: "object",
   description:
-    "Where to show it. Leave it out to show it in the artifact pane used last (or a new pane right of the chat if there is none). `split` opens a new pane right of or below a slot (the chat's by default), taking `size` of its room (0.5 by default); `in` shows it in that slot's pane instead of the artifact there.",
+    "Where to show it. Leave it out to show it in the artifact pane used last (or a new pane right of the chat if there is none). `split` opens a new pane right of or below a pane (the chat's by default), taking `size` of its room (0.5 by default); `in` shows it in that pane instead of the artifact there.",
   properties: {
     split: { type: "string", enum: ["right", "below", "left", "above"] },
-    of: { type: "string", description: 'The slot to split, as window_list names it. Default: "chat".' },
+    of: { type: "string", description: 'The pane to split, as window_list names it. Default: "chat".' },
     size: { type: "number", minimum: 0.2, maximum: 0.8 },
-    in: { type: "string", description: "A slot showing an artifact, as window_list names it." },
+    in: { type: "string", description: "A pane showing an artifact, as window_list names it." },
   },
 };
 
@@ -737,7 +737,7 @@ const toolsFor = (folder: string): ToolSpec[] => [
     name: "window_close",
     alwaysLoad: true,
     description: "Closes a pane. Its artifact stays and can be shown again with artifact_open. The chat's pane can't be closed.",
-    inputSchema: { type: "object", properties: { slot: { type: "string", description: "The pane's slot, as window_list names it." } }, required: ["slot"] },
+    inputSchema: { type: "object", properties: { pane: { type: "string", description: "The pane, as window_list names it." } }, required: ["pane"] },
   },
   {
     name: "artifact_remove",
@@ -758,10 +758,10 @@ const toolsFor = (folder: string): ToolSpec[] => [
  * closes.
  */
 export function removeArtifact(w: WindowState, widget: WidgetId, instead: "another" | "close" = "another"): WindowOp[] {
-  const slot = slotOf(w, widget);
+  const pane = paneOf(w, widget);
   const below = w.under?.[widget];
-  const back = slot && below && w.widgets[below] && !slotOf(w, below) ? below : undefined;
-  const other = slot && !back && instead === "another" ? artifactsOf(w).findLast(([id]) => id !== widget && !slotOf(w, id))?.[0] : undefined;
+  const back = pane && below && w.widgets[below] && !paneOf(w, below) ? below : undefined;
+  const other = pane && !back && instead === "another" ? artifactsOf(w).findLast(([id]) => id !== widget && !paneOf(w, id))?.[0] : undefined;
   const next = back ?? other;
-  return [...(slot && next ? [{ type: "show" as const, slot, widget: next }] : []), { type: "remove", widget }];
+  return [...(pane && next ? [{ type: "show" as const, pane, widget: next }] : []), { type: "remove", widget }];
 }

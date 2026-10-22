@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { addWidget, applyWindowOp, artifactTypeOf, imageTypeOf, isExternalUrl, isPrivateHost, urlHost, urlOrigin, CHAT, chatWindow, close, move, remove, resize, show, compactWindow, nextId, slotIds, slotOf, split, windowState, WINDOW, MAX_SLOTS, WindowError, type SessionEvent, type WindowOp, type WindowState } from "@kumiko/shared";
+import { addWidget, applyWindowOp, artifactTypeOf, imageTypeOf, isExternalUrl, isPrivateHost, urlHost, urlOrigin, CHAT, chatWindow, close, move, remove, resize, show, compactWindow, nextId, paneIds, paneOf, split, windowState, WINDOW, MAX_PANES, WindowError, type SessionEvent, type WindowOp, type WindowState } from "@kumiko/shared";
 
 /** A window with an artifact widget per id, none shown. */
 const withDocs = (...ids: string[]): WindowState => ids.reduce((w, id) => addWidget(w, id, { kind: "artifact" }), chatWindow());
@@ -8,22 +8,22 @@ const withDocs = (...ids: string[]): WindowState => ids.reduce((w, id) => addWid
 describe("windows", () => {
   it("starts with the chat alone", () => {
     const w = chatWindow();
-    assert.deepEqual(w.layout, { kind: "slot", id: CHAT });
-    assert.deepEqual(slotIds(w.layout), [CHAT]);
-    assert.equal(slotOf(w, CHAT), CHAT);
+    assert.deepEqual(w.layout, { kind: "pane", id: CHAT });
+    assert.deepEqual(paneIds(w.layout), [CHAT]);
+    assert.equal(paneOf(w, CHAT), CHAT);
   });
 
   it("splits the chat to the right by default, in halves", () => {
-    const w = split(withDocs("w2"), { split: "right" }, "s2", "w2");
-    assert.deepEqual(w.layout, { kind: "split", dir: "row", ratio: 0.5, a: { kind: "slot", id: CHAT }, b: { kind: "slot", id: "s2" } });
-    assert.equal(w.slots.s2, "w2");
-    assert.equal(slotOf(w, "w2"), "s2");
+    const w = split(withDocs("w2"), { split: "right" }, "p2", "w2");
+    assert.deepEqual(w.layout, { kind: "split", dir: "row", ratio: 0.5, a: { kind: "pane", id: CHAT }, b: { kind: "pane", id: "p2" } });
+    assert.equal(w.panes.p2, "w2");
+    assert.equal(paneOf(w, "w2"), "p2");
   });
 
-  it("splits any slot, below it, giving the new slot the size asked for", () => {
-    let w = split(withDocs("w2", "w3"), { split: "right" }, "s2", "w2");
-    w = split(w, { split: "below", of: "s2", size: 0.3 }, "s3", "w3");
-    assert.deepEqual(slotIds(w.layout), [CHAT, "s2", "s3"]);
+  it("splits any pane, below it, giving the new pane the size asked for", () => {
+    let w = split(withDocs("w2", "w3"), { split: "right" }, "p2", "w2");
+    w = split(w, { split: "below", of: "p2", size: 0.3 }, "p3", "w3");
+    assert.deepEqual(paneIds(w.layout), [CHAT, "p2", "p3"]);
     const right = w.layout.kind === "split" ? w.layout.b : undefined;
     assert.equal(right?.kind, "split");
     if (right?.kind !== "split") return;
@@ -32,124 +32,124 @@ describe("windows", () => {
   });
 
   it("refuses splits that don't fit", () => {
-    const w = split(withDocs("w2", "w3", "w4", "w5"), { split: "right" }, "s2", "w2");
-    assert.throws(() => split(w, { split: "right" }, "s3", "w9"), WindowError, "an unknown widget");
-    assert.throws(() => split(w, { split: "right" }, "s3", "w2"), WindowError, "a widget shown already");
-    assert.throws(() => split(w, { split: "right" }, "s2", "w3"), WindowError, "a slot id taken");
-    assert.throws(() => split(w, { split: "right", of: "s9" }, "s3", "w3"), WindowError, "an unknown slot");
-    assert.throws(() => split(w, { split: "right", size: 0.9 }, "s3", "w3"), WindowError, "too big");
-    assert.throws(() => split(w, { split: "right", size: 0.1 }, "s3", "w3"), WindowError, "too small");
-    // Up to MAX_SLOTS, then no more.
+    const w = split(withDocs("w2", "w3", "w4", "w5"), { split: "right" }, "p2", "w2");
+    assert.throws(() => split(w, { split: "right" }, "p3", "w9"), WindowError, "an unknown widget");
+    assert.throws(() => split(w, { split: "right" }, "p3", "w2"), WindowError, "a widget shown already");
+    assert.throws(() => split(w, { split: "right" }, "p2", "w3"), WindowError, "a pane id taken");
+    assert.throws(() => split(w, { split: "right", of: "p9" }, "p3", "w3"), WindowError, "an unknown pane");
+    assert.throws(() => split(w, { split: "right", size: 0.9 }, "p3", "w3"), WindowError, "too big");
+    assert.throws(() => split(w, { split: "right", size: 0.1 }, "p3", "w3"), WindowError, "too small");
+    // Up to MAX_PANES, then no more.
     let full = w;
-    for (let n = 3; n <= MAX_SLOTS; n++) full = split(addWidget(full, `w${n}x`, { kind: "artifact" }), { split: "below", of: "s2" }, `s${n}`, `w${n}x`);
-    assert.equal(slotIds(full.layout).length, MAX_SLOTS);
-    assert.throws(() => split(addWidget(full, "wmore", { kind: "artifact" }), { split: "right" }, "smore", "wmore"), new RegExp(`at most ${MAX_SLOTS}`));
+    for (let n = 3; n <= MAX_PANES; n++) full = split(addWidget(full, `w${n}x`, { kind: "artifact" }), { split: "below", of: "p2" }, `p${n}`, `w${n}x`);
+    assert.equal(paneIds(full.layout).length, MAX_PANES);
+    assert.throws(() => split(addWidget(full, "wmore", { kind: "artifact" }), { split: "right" }, "pmore", "wmore"), new RegExp(`at most ${MAX_PANES}`));
   });
 
-  it("closes a slot, giving its room to its sibling and keeping its widget", () => {
-    let w = split(withDocs("w2", "w3"), { split: "right" }, "s2", "w2");
-    w = split(w, { split: "below", of: "s2" }, "s3", "w3");
-    const closed = close(w, "s2");
-    assert.deepEqual(closed.layout, { kind: "split", dir: "row", ratio: 0.5, a: { kind: "slot", id: CHAT }, b: { kind: "slot", id: "s3" } });
-    assert.equal(closed.slots.s2, undefined);
+  it("closes a pane, giving its room to its sibling and keeping its widget", () => {
+    let w = split(withDocs("w2", "w3"), { split: "right" }, "p2", "w2");
+    w = split(w, { split: "below", of: "p2" }, "p3", "w3");
+    const closed = close(w, "p2");
+    assert.deepEqual(closed.layout, { kind: "split", dir: "row", ratio: 0.5, a: { kind: "pane", id: CHAT }, b: { kind: "pane", id: "p3" } });
+    assert.equal(closed.panes.p2, undefined);
     assert.ok(closed.widgets.w2);
-    assert.equal(slotOf(closed, "w2"), undefined);
-    assert.deepEqual(close(closed, "s3").layout, chatWindow().layout);
+    assert.equal(paneOf(closed, "w2"), undefined);
+    assert.deepEqual(close(closed, "p3").layout, chatWindow().layout);
   });
 
-  it("shows another widget in a slot, swapping with the slot that had it", () => {
-    let w = split(withDocs("w2", "w3", "w4"), { split: "right" }, "s2", "w2");
-    w = split(w, { split: "below", of: "s2" }, "s3", "w3");
-    const switched = show(w, "s2", "w4");
-    assert.equal(switched.slots.s2, "w4");
-    assert.equal(slotOf(switched, "w2"), undefined, "the widget it showed stays, hidden");
+  it("shows another widget in a pane, swapping with the pane that had it", () => {
+    let w = split(withDocs("w2", "w3", "w4"), { split: "right" }, "p2", "w2");
+    w = split(w, { split: "below", of: "p2" }, "p3", "w3");
+    const switched = show(w, "p2", "w4");
+    assert.equal(switched.panes.p2, "w4");
+    assert.equal(paneOf(switched, "w2"), undefined, "the widget it showed stays, hidden");
     assert.ok(switched.widgets.w2);
-    const swapped = show(w, "s2", "w3");
-    assert.deepEqual([swapped.slots.s2, swapped.slots.s3], ["w3", "w2"]);
-    assert.equal(show(w, "s2", "w2").slots, w.slots);
-    assert.equal(w.active, "s3", "a split makes its new slot the active one");
-    assert.equal(show(w, "s2", "w2").active, "s2", "and so does showing something in one");
-    assert.equal(close(w, "s3").active, undefined, "closing the active slot leaves none");
-    assert.equal(close(w, "s2").active, "s3");
-    assert.throws(() => show(w, CHAT, "w4"), /stays in its own slot/);
-    assert.throws(() => show(w, "s2", CHAT), /stays in its own slot/);
-    assert.throws(() => show(w, "s9", "w4"), /no slot/);
-    assert.throws(() => show(w, "s2", "w9"), /no widget/);
+    const swapped = show(w, "p2", "w3");
+    assert.deepEqual([swapped.panes.p2, swapped.panes.p3], ["w3", "w2"]);
+    assert.equal(show(w, "p2", "w2").panes, w.panes);
+    assert.equal(w.active, "p3", "a split makes its new pane the active one");
+    assert.equal(show(w, "p2", "w2").active, "p2", "and so does showing something in one");
+    assert.equal(close(w, "p3").active, undefined, "closing the active pane leaves none");
+    assert.equal(close(w, "p2").active, "p3");
+    assert.throws(() => show(w, CHAT, "w4"), /stays in its own pane/);
+    assert.throws(() => show(w, "p2", CHAT), /stays in its own pane/);
+    assert.throws(() => show(w, "p9", "w4"), /no pane/);
+    assert.throws(() => show(w, "p2", "w9"), /no widget/);
   });
 
-  it("splits to the left and above too, putting the new slot first", () => {
-    const w = split(withDocs("w2"), { split: "left", size: 0.3 }, "s2", "w2");
-    assert.deepEqual(w.layout, { kind: "split", dir: "row", ratio: 0.3, a: { kind: "slot", id: "s2" }, b: { kind: "slot", id: CHAT } });
-    const above = split(withDocs("w2"), { split: "above" }, "s2", "w2");
-    assert.deepEqual(slotIds(above.layout), ["s2", CHAT]);
+  it("splits to the left and above too, putting the new pane first", () => {
+    const w = split(withDocs("w2"), { split: "left", size: 0.3 }, "p2", "w2");
+    assert.deepEqual(w.layout, { kind: "split", dir: "row", ratio: 0.3, a: { kind: "pane", id: "p2" }, b: { kind: "pane", id: CHAT } });
+    const above = split(withDocs("w2"), { split: "above" }, "p2", "w2");
+    assert.deepEqual(paneIds(above.layout), ["p2", CHAT]);
     assert.equal(above.layout.kind === "split" && above.layout.dir, "column");
   });
 
-  it("moves a slot to a side of another, which it splits in halves", () => {
-    // chat | (s2 / s3)
-    let w = split(withDocs("w2", "w3"), { split: "right" }, "s2", "w2");
-    w = split(w, { split: "below", of: "s2" }, "s3", "w3");
-    // s3 to the left of the chat: s2 takes the whole right side.
-    const moved = move(w, "s3", CHAT, "left");
+  it("moves a pane to a side of another, which it splits in halves", () => {
+    // chat | (p2 / p3)
+    let w = split(withDocs("w2", "w3"), { split: "right" }, "p2", "w2");
+    w = split(w, { split: "below", of: "p2" }, "p3", "w3");
+    // p3 to the left of the chat: p2 takes the whole right side.
+    const moved = move(w, "p3", CHAT, "left");
     assert.deepEqual(moved.layout, {
       kind: "split", dir: "row", ratio: 0.5,
-      a: { kind: "split", dir: "row", ratio: 0.5, a: { kind: "slot", id: "s3" }, b: { kind: "slot", id: CHAT } },
-      b: { kind: "slot", id: "s2" },
+      a: { kind: "split", dir: "row", ratio: 0.5, a: { kind: "pane", id: "p3" }, b: { kind: "pane", id: CHAT } },
+      b: { kind: "pane", id: "p2" },
     });
-    assert.equal(moved.slots.s3, "w3", "it keeps what it shows");
+    assert.equal(moved.panes.p3, "w3", "it keeps what it shows");
     // Beside its own sibling: it comes out, then goes back in on the other side.
-    assert.deepEqual(slotIds(move(w, "s3", "s2", "above").layout), [CHAT, "s3", "s2"]);
+    assert.deepEqual(paneIds(move(w, "p3", "p2", "above").layout), [CHAT, "p3", "p2"]);
     // The chat moves too.
-    assert.deepEqual(slotIds(move(w, CHAT, "s3", "below").layout), ["s2", "s3", CHAT]);
-    assert.equal(move(w, "s2", "s2", "left"), w);
-    assert.throws(() => move(w, "s9", CHAT, "left"), WindowError);
+    assert.deepEqual(paneIds(move(w, CHAT, "p3", "below").layout), ["p2", "p3", CHAT]);
+    assert.equal(move(w, "p2", "p2", "left"), w);
+    assert.throws(() => move(w, "p9", CHAT, "left"), WindowError);
   });
 
-  it("moves a slot to a side of the window, along the whole of it", () => {
-    // chat | (s2 / s3)
-    let w = split(withDocs("w2", "w3"), { split: "right" }, "s2", "w2");
-    w = split(w, { split: "below", of: "s2" }, "s3", "w3");
-    // s3 under both: a third of the window's height, as each of three would have.
-    const moved = move(w, "s3", WINDOW, "below");
+  it("moves a pane to a side of the window, along the whole of it", () => {
+    // chat | (p2 / p3)
+    let w = split(withDocs("w2", "w3"), { split: "right" }, "p2", "w2");
+    w = split(w, { split: "below", of: "p2" }, "p3", "w3");
+    // p3 under both: a third of the window's height, as each of three would have.
+    const moved = move(w, "p3", WINDOW, "below");
     assert.deepEqual(moved.layout, {
       kind: "split", dir: "column", ratio: 1 - 1 / 3,
-      a: { kind: "split", dir: "row", ratio: 0.5, a: { kind: "slot", id: CHAT }, b: { kind: "slot", id: "s2" } },
-      b: { kind: "slot", id: "s3" },
+      a: { kind: "split", dir: "row", ratio: 0.5, a: { kind: "pane", id: CHAT }, b: { kind: "pane", id: "p2" } },
+      b: { kind: "pane", id: "p3" },
     });
     // The chat along the whole left side.
     const left = move(w, CHAT, WINDOW, "left").layout;
-    assert.deepEqual(left.kind === "split" && left.a, { kind: "slot", id: CHAT });
-    assert.throws(() => move(w, "s3", WINDOW, "swap"), WindowError);
-    assert.throws(() => move(w, "s9", WINDOW, "left"), WindowError);
-    // Two slots: half each.
-    const two = split(withDocs("w2"), { split: "right" }, "s2", "w2");
-    assert.deepEqual(move(two, "s2", WINDOW, "above").layout, { kind: "split", dir: "column", ratio: 0.5, a: { kind: "slot", id: "s2" }, b: { kind: "slot", id: CHAT } });
+    assert.deepEqual(left.kind === "split" && left.a, { kind: "pane", id: CHAT });
+    assert.throws(() => move(w, "p3", WINDOW, "swap"), WindowError);
+    assert.throws(() => move(w, "p9", WINDOW, "left"), WindowError);
+    // Two panes: half each.
+    const two = split(withDocs("w2"), { split: "right" }, "p2", "w2");
+    assert.deepEqual(move(two, "p2", WINDOW, "above").layout, { kind: "split", dir: "column", ratio: 0.5, a: { kind: "pane", id: "p2" }, b: { kind: "pane", id: CHAT } });
   });
 
   it("keeps two panes' sizes when the two sides of one split change places", () => {
-    // chat (70%) | s2 (30%): the user made the artifact narrower.
-    const w = resize(split(withDocs("w2"), { split: "right" }, "s2", "w2"), "", 0.7);
-    const narrowLeft = { kind: "split", dir: "row", ratio: 1 - 0.7, a: { kind: "slot", id: "s2" }, b: { kind: "slot", id: CHAT } };
-    assert.deepEqual(move(w, "s2", CHAT, "left").layout, narrowLeft);
-    assert.deepEqual(move(w, CHAT, "s2", "swap").layout, narrowLeft);
-    assert.deepEqual(move(w, "s2", WINDOW, "left").layout, narrowLeft);
+    // chat (70%) | p2 (30%): the user made the artifact narrower.
+    const w = resize(split(withDocs("w2"), { split: "right" }, "p2", "w2"), "", 0.7);
+    const narrowLeft = { kind: "split", dir: "row", ratio: 1 - 0.7, a: { kind: "pane", id: "p2" }, b: { kind: "pane", id: CHAT } };
+    assert.deepEqual(move(w, "p2", CHAT, "left").layout, narrowLeft);
+    assert.deepEqual(move(w, CHAT, "p2", "swap").layout, narrowLeft);
+    assert.deepEqual(move(w, "p2", WINDOW, "left").layout, narrowLeft);
     // Where it is already: nothing changes.
-    assert.equal(move(w, "s2", WINDOW, "right"), w);
+    assert.equal(move(w, "p2", WINDOW, "right"), w);
     // Across the split's way, it goes above in halves as before.
-    assert.deepEqual(move(w, "s2", CHAT, "above").layout, { kind: "split", dir: "column", ratio: 0.5, a: { kind: "slot", id: "s2" }, b: { kind: "slot", id: CHAT } });
+    assert.deepEqual(move(w, "p2", CHAT, "above").layout, { kind: "split", dir: "column", ratio: 0.5, a: { kind: "pane", id: "p2" }, b: { kind: "pane", id: CHAT } });
   });
 
-  it("swaps two slots' places", () => {
-    let w = split(withDocs("w2", "w3"), { split: "right" }, "s2", "w2");
-    w = split(w, { split: "below", of: "s2" }, "s3", "w3");
-    const swapped = move(w, CHAT, "s3", "swap");
-    assert.deepEqual(slotIds(swapped.layout), ["s3", "s2", CHAT]);
-    assert.deepEqual(swapped.slots, w.slots);
+  it("swaps two panes' places", () => {
+    let w = split(withDocs("w2", "w3"), { split: "right" }, "p2", "w2");
+    w = split(w, { split: "below", of: "p2" }, "p3", "w3");
+    const swapped = move(w, CHAT, "p3", "swap");
+    assert.deepEqual(paneIds(swapped.layout), ["p3", "p2", CHAT]);
+    assert.deepEqual(swapped.panes, w.panes);
   });
 
   it("resizes a split by its path", () => {
-    let w = split(withDocs("w2", "w3"), { split: "right" }, "s2", "w2");
-    w = split(w, { split: "below", of: "s2" }, "s3", "w3");
+    let w = split(withDocs("w2", "w3"), { split: "right" }, "p2", "w2");
+    w = split(w, { split: "below", of: "p2" }, "p3", "w3");
     const wider = resize(w, "", 0.7);
     assert.equal(wider.layout.kind === "split" && wider.layout.ratio, 0.7);
     const lower = resize(w, "b", 0.25);
@@ -159,20 +159,20 @@ describe("windows", () => {
     assert.throws(() => resize(w, "x", 0.5), /Not a split's path/);
   });
 
-  it("remembers what a slot showed before, and forgets a widget removed", () => {
-    let w = split(withDocs("w2", "w3", "w4"), { split: "right" }, "s2", "w2");
-    w = show(w, "s2", "w3");
+  it("remembers what a pane showed before, and forgets a widget removed", () => {
+    let w = split(withDocs("w2", "w3", "w4"), { split: "right" }, "p2", "w2");
+    w = show(w, "p2", "w3");
     assert.deepEqual(w.under, { w3: "w2" });
-    w = show(w, "s2", "w4");
+    w = show(w, "p2", "w4");
     assert.deepEqual(w.under, { w3: "w2", w4: "w3" });
     assert.equal(remove(w, "w3").under, undefined, "neither what w3 replaced nor what replaced it");
     // Through a turn's sync too.
-    const events = log("one", add("w2"), add("w3"), right("s2", "w2"), { type: "show", slot: "s2", widget: "w3" });
+    const events = log("one", add("w2"), add("w3"), right("p2", "w2"), { type: "show", pane: "p2", widget: "w3" });
     assert.deepEqual(windowState(compactWindow(events)).under, { w3: "w2" });
   });
 
-  it("removes a widget for good, closing its slot", () => {
-    const w = split(withDocs("w2", "w3"), { split: "right" }, "s2", "w2");
+  it("removes a widget for good, closing its pane", () => {
+    const w = split(withDocs("w2", "w3"), { split: "right" }, "p2", "w2");
     const gone = remove(w, "w2");
     assert.equal(gone.widgets.w2, undefined);
     assert.deepEqual(gone.layout, chatWindow().layout);
@@ -182,19 +182,19 @@ describe("windows", () => {
     assert.throws(() => remove(w, "w9"), /no widget/);
   });
 
-  it("refuses to close the chat or a slot that isn't there", () => {
-    const w = split(withDocs("w2"), { split: "right" }, "s2", "w2");
+  it("refuses to close the chat or a pane that isn't there", () => {
+    const w = split(withDocs("w2"), { split: "right" }, "p2", "w2");
     assert.throws(() => close(w, CHAT), /can't be closed/);
-    assert.throws(() => close(w, "s9"), WindowError);
-    assert.deepEqual(close(w, "s2").layout, chatWindow().layout);
+    assert.throws(() => close(w, "p9"), WindowError);
+    assert.deepEqual(close(w, "p2").layout, chatWindow().layout);
   });
 
   it("makes up ids the window doesn't use", () => {
     let w = withDocs("w2");
     assert.equal(nextId(w, "w"), "w3");
-    assert.equal(nextId(w, "s"), "s2");
-    w = split(w, { split: "right" }, nextId(w, "s"), "w2");
-    assert.equal(nextId(w, "s"), "s3");
+    assert.equal(nextId(w, "p"), "p2");
+    w = split(w, { split: "right" }, nextId(w, "p"), "w2");
+    assert.equal(nextId(w, "p"), "p3");
   });
 });
 
@@ -208,15 +208,15 @@ const log = (...items: (string | WindowOp | "reply")[]): SessionEvent[] =>
   });
 
 const add = (widget: string): WindowOp => ({ type: "add", widget, kind: "chat" });
-const right = (slot: string, widget: string): WindowOp => ({ type: "split", place: { split: "right" }, slot, widget });
+const right = (pane: string, widget: string): WindowOp => ({ type: "split", place: { split: "right" }, pane, widget });
 
 describe("window ops", () => {
   it("apply as the functions they name", () => {
     let w = applyWindowOp(chatWindow(), add("w2"));
-    w = applyWindowOp(w, right("s2", "w2"));
-    assert.deepEqual(slotIds(w.layout), [CHAT, "s2"]);
-    w = applyWindowOp(w, { type: "close", slot: "s2" });
-    assert.deepEqual(slotIds(w.layout), [CHAT]);
+    w = applyWindowOp(w, right("p2", "w2"));
+    assert.deepEqual(paneIds(w.layout), [CHAT, "p2"]);
+    w = applyWindowOp(w, { type: "close", pane: "p2" });
+    assert.deepEqual(paneIds(w.layout), [CHAT]);
     assert.throws(() => applyWindowOp(w, { type: "add", widget: "w3", kind: "nope" }), WindowError);
     assert.throws(() => applyWindowOp(w, { type: "update", widget: "w2", op: {} }), /takes no changes/);
   });
@@ -229,15 +229,15 @@ describe("window ops", () => {
   });
 
   it("fold from a log, skipping ops that don't fit", () => {
-    const w = windowState(log("hi", add("w2"), right("s2", "w2"), right("s3", "w9"), "reply"));
-    assert.deepEqual(slotIds(w.layout), [CHAT, "s2"]);
-    assert.equal(w.slots.s2, "w2");
+    const w = windowState(log("hi", add("w2"), right("p2", "w2"), right("p3", "w9"), "reply"));
+    assert.deepEqual(paneIds(w.layout), [CHAT, "p2"]);
+    assert.equal(w.panes.p2, "w2");
   });
 });
 
 describe("compacting a window's log", () => {
   it("brings the ops between two prompts down to one sync, where the last of them was", () => {
-    const events = log("one", add("w2"), "reply", right("s2", "w2"), "reply", "two", add("w3"), right("s3", "w3"), "reply");
+    const events = log("one", add("w2"), "reply", right("p2", "w2"), "reply", "two", add("w3"), right("p3", "w3"), "reply");
     const compact = compactWindow(events);
     assert.deepEqual(
       compact.map((e) => `${e.seq}:${e.kind === "window" ? e.payload.op.type : e.kind}`),
@@ -249,7 +249,7 @@ describe("compacting a window's log", () => {
   });
 
   it("syncs only what changed", () => {
-    const compact = compactWindow(log("one", add("w2"), right("s2", "w2"), "two", add("w3"), add("w4")));
+    const compact = compactWindow(log("one", add("w2"), right("p2", "w2"), "two", add("w3"), add("w4")));
     const second = compact.at(-1)!;
     assert.equal(second.kind, "window");
     if (second.kind !== "window" || second.payload.op.type !== "sync") return;
@@ -260,24 +260,24 @@ describe("compacting a window's log", () => {
   it("leaves a lone op as it is, and drops a run that changed nothing", () => {
     const lone = log("one", add("w2"), "reply");
     assert.deepEqual(compactWindow(lone), lone);
-    const undone = compactWindow(log("one", add("w2"), right("s2", "w2"), { type: "close", slot: "s2" }, "reply"));
+    const undone = compactWindow(log("one", add("w2"), right("p2", "w2"), { type: "close", pane: "p2" }, "reply"));
     // The widget stays (closing only hides it), so the sync has it, and no layout.
     assert.deepEqual(undone.map((e) => e.kind), ["user_prompt", "window", "claude"]);
     const w = undone[1];
     assert.ok(w.kind === "window" && w.payload.op.type === "sync" && !w.payload.op.layout);
-    const nothing = compactWindow(log("one", { type: "close", slot: "s9" }, { type: "close", slot: "s8" }));
+    const nothing = compactWindow(log("one", { type: "close", pane: "p9" }, { type: "close", pane: "p8" }));
     assert.deepEqual(nothing.map((e) => e.kind), ["user_prompt"]);
   });
 
   it("keeps a removal through a sync", () => {
-    const events = log("one", add("w2"), right("s2", "w2"), "two", add("w3"), { type: "remove", widget: "w2" });
+    const events = log("one", add("w2"), right("p2", "w2"), "two", add("w3"), { type: "remove", widget: "w2" });
     const compact = compactWindow(events);
     assert.deepEqual(windowState(compact), windowState(events));
     assert.equal(windowState(compact).widgets.w2, undefined);
   });
 
   it("is done again without changing anything", () => {
-    const once = compactWindow(log("one", add("w2"), right("s2", "w2"), "two", add("w3"), add("w4")));
+    const once = compactWindow(log("one", add("w2"), right("p2", "w2"), "two", add("w3"), add("w4")));
     assert.deepEqual(compactWindow(once), once);
   });
 });

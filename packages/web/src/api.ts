@@ -114,16 +114,16 @@ export const api = {
   /** The Claude account behind a session and how much of its subscription is used. */
   usage: (id: string) => request<AccountUsage>("GET", `/api/sessions/${id}/usage`),
   interrupt: (id: string) => request("POST", `/api/sessions/${id}/interrupt`),
-  /** Closes one of the session window's slots; its widget stays, hidden. */
-  closeSlot: (id: string, slot: string) => request<WindowState>("POST", `/api/sessions/${id}/window/close`, { slot }),
+  /** Closes one of the session window's panes; its widget stays, hidden. */
+  closePane: (id: string, pane: string) => request<WindowState>("POST", `/api/sessions/${id}/window/close`, { pane }),
   /**
-   * Shows a widget in `slot`, swapping with the slot that shows it now, or with `split`, in a new slot split off `slot`
+   * Shows a widget in `pane`, swapping with the pane that shows it now, or with `split`, in a new pane split off `pane`
    * that way; with neither, where a new artifact would go.
    */
-  showWidget: (id: string, widget: string, slot?: string, split?: "right" | "below") =>
-    request<WindowState>("POST", `/api/sessions/${id}/window/show`, { widget, slot, split }),
-  /** Moves a slot to a side of another, or swaps the two. */
-  moveSlot: (id: string, slot: string, to: string, side: string) => request<WindowState>("POST", `/api/sessions/${id}/window/move`, { slot, to, side }),
+  showWidget: (id: string, widget: string, pane?: string, split?: "right" | "below") =>
+    request<WindowState>("POST", `/api/sessions/${id}/window/show`, { widget, pane, split }),
+  /** Moves a pane to a side of another, or swaps the two. */
+  movePane: (id: string, pane: string, to: string, side: string) => request<WindowState>("POST", `/api/sessions/${id}/window/move`, { pane, to, side }),
   /** Answers a pane request: with a picture, with nothing once done, or with why it couldn't be done. */
   answerPane: (id: string, answer: { request: string; data?: string; mimeType?: string; error?: string; note?: string }) =>
     request("POST", `/api/sessions/${id}/window/answer`, answer),
