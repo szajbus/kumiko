@@ -462,7 +462,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
       if (isNew) this.save(s);
     } else if (m.type === "system" && m.subtype === "session_title_changed") {
       // /rename; saved with the turn's result that follows.
-      if (typeof m.title === "string" && m.title.trim()) this.setInfo(s, { title: m.title.trim() });
+      if (typeof m.title === "string" && m.title.trim()) this.setInfo(s, { title: m.title.trim(), titleBy: "user" });
     } else if (m.type === "assistant" && isLive(s.info)) {
       // /model shows up here first, as the model of the next real reply.
       const model = (m.message as { model?: unknown } | undefined)?.model;
@@ -533,6 +533,14 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     // A turn's changes are saved with its result; one between turns has nothing else to be saved with.
     if (s.info.status === "idle") this.save(s);
     return s.window;
+  }
+
+  /** Names the session, as Claude does with Kumiko's tool; the user's /rename goes through Claude instead. */
+  rename(id: string, title: string, by: "user" | "agent"): void {
+    const s = this.live(id);
+    this.setInfo(s, { title, titleBy: by });
+    // Like a change to the window: saved with the turn's result, or now if there is none to come.
+    if (s.info.status === "idle") this.save(s);
   }
 
   /** The user has looked at the session: it no longer waits on them. */

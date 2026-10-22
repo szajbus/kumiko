@@ -266,8 +266,10 @@ export interface SessionInfo {
   status: SessionStatus;
   /** The opening prompt, for the tab title. */
   prompt: string;
-  /** Set by /rename; replaces the prompt in the tab title. */
+  /** Set by /rename, or by Claude with Kumiko's session_rename; replaces the prompt in the tab title. */
   title?: string;
+  /** Who set `title`. Missing on sessions saved before Claude could name them, whose title was the user's. */
+  titleBy?: "user" | "agent";
   startedAt: string;
   endedAt?: string;
   /** When the session was last saved to disk; orders the list of sessions that can be resumed. */

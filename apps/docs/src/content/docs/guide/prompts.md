@@ -58,4 +58,6 @@ Kumiko handles a few itself:
 | `/fork` | Forks the whole conversation into a new tab. |
 | `/rewind` | Asks to rewind to just before your last message. |
 
-`/rename <title>` gives the tab a title in place of the opening message.
+`/rename <title>` gives the tab a title in place of the opening message. Until you do, the agent names the session
+itself, in a few words, once your messages make clear what it is about, and again if the subject changes. A name you
+give with `/rename` stands: the agent can't change it.

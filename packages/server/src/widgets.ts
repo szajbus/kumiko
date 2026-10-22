@@ -91,12 +91,16 @@ async function realWithin(path: string, dir: string): Promise<string | undefined
 /** Stands for a session's artifacts' folder in `given`. */
 const FOLDER = "<folder>";
 
-/** What Claude's system prompt gets about Kumiko and artifacts, naming the session's folder. */
+/** The longest name Claude can give a session: the tab has room for about that much beside the project's name. */
+const MAX_SESSION_TITLE = 20;
+
+/** What Claude's system prompt gets about Kumiko, artifacts and the session's name, naming the session's folder. */
 export const systemPrompt = (folder: string) =>
   [
     "You are running in Kumiko, which shows this conversation in a window that can have panes beside the chat.",
     "For an artifact the user will want to look at while it changes, such as a plan, a spec, a report, a diagram or a chart, write it as a file (Markdown, SVG, a Mermaid diagram, or an image you generate) and show it beside the chat with the mcp__kumiko__artifact_open tool; then keep changing the file, and the pane follows it. Unlike artifacts elsewhere, you don't pass the content to the tool: the artifact is the file.",
     `Write artifacts in ${folder}/, the session's folder for them; only files there can be shown.`,
+    `Once the user's message makes clear what this session is about, name it with the mcp__kumiko__session_rename tool: a few words, up to ${MAX_SESSION_TITLE} characters, saying what the work is; the session's tab shows it. Name it again only if the subject really changes.`,
   ].join(" ");
 
 /** An artifact's file as read: what is shown of it and its hash, and its text, for a title. */
@@ -223,6 +227,18 @@ export class Widgets implements SessionWidgets {
         }
         case "artifact_open":
           return { text: await this.open(info, args, toolUseId) };
+        case "session_rename": {
+          const title = str(args.title, "title").trim().replace(/\s+/g, " ");
+          // Sessions saved before Claude could name them have a title without a namer: the user's, from /rename.
+          if (info.title && info.titleBy !== "agent") throw new ToolError(`The user named this session "${info.title}" with /rename, and their name stands.`);
+          if (!title) throw new ToolError("Give the session a name: a few words saying what the work is.");
+          if (title.length > MAX_SESSION_TITLE) {
+            throw new ToolError(`"${title}" is ${title.length} characters; the tab has room for ${MAX_SESSION_TITLE}. Pick a shorter name.`);
+          }
+          if (title === info.title) return { text: `The session is named "${title}" already.` };
+          this.sessions.rename(id, title, "agent");
+          return { text: `Named the session "${title}". Its tab shows it.` };
+        }
         default:
           throw new ToolError(`There is no tool ${name}.`);
       }
@@ -759,6 +775,12 @@ const toolsFor = (folder: string): ToolSpec[] => [
     alwaysLoad: true,
     description: "Closes a pane. Its artifact stays and can be shown again with artifact_open. The chat's pane can't be closed.",
     inputSchema: { type: "object", properties: { pane: { type: "string", description: "The pane, as window_list names it." } }, required: ["pane"] },
+  },
+  {
+    name: "session_rename",
+    alwaysLoad: true,
+    description: `Names this session; its tab in the user's window shows the name. Give a few words, up to ${MAX_SESSION_TITLE} characters, saying what the work is, once the user has made that clear; name it again only if the subject really changes. A name the user gave with /rename stands, and can't be changed.`,
+    inputSchema: { type: "object", properties: { title: { type: "string", description: `The name, up to ${MAX_SESSION_TITLE} characters, such as "Fix composer paste".` } }, required: ["title"] },
   },
   {
     name: "artifact_remove",

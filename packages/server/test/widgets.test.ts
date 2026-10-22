@@ -55,6 +55,7 @@ describe("widgets", () => {
       await new Promise((r) => setTimeout(r, 20));
     }
   };
+  const pick = (i: SessionInfo | undefined) => ({ title: i?.title, titleBy: i?.titleBy });
   const session = async (id: string): Promise<SessionInfo | undefined> => ((await json(await api("/api/sessions"))) as SessionInfo[]).find((s) => s.id === id);
 
   /** A session's events, as a tab gets them, and its window folded from them. */
@@ -122,9 +123,29 @@ describe("widgets", () => {
     assert.ok(existsSync(join(claudeHome, "kumiko", "artifacts", id)), "the session's folder is made");
     assert.match(await ask(s, id, "system prompt"), new RegExp(`${vmHome}/\\.claude/kumiko/artifacts/${id}/`));
     const tools = JSON.parse(await ask(s, id, "tools")) as { name: string; description: string }[];
-    assert.deepEqual(tools.map((t) => t.name).sort(), ["artifact_capture", "artifact_open", "artifact_reload", "artifact_remove", "window_close", "window_list"]);
+    assert.deepEqual(tools.map((t) => t.name).sort(), ["artifact_capture", "artifact_open", "artifact_reload", "artifact_remove", "session_rename", "window_close", "window_list"]);
     // The tool names the session's folder itself, so Claude needn't find it in its instructions.
     assert.ok(tools.find((t) => t.name === "artifact_open")?.description.includes(`${vmHome}/.claude/kumiko/artifacts/${id}/`));
+    s.close();
+  });
+
+  it("lets Claude name the session, until the user names it with /rename", async () => {
+    const { id, s } = await start();
+    assert.match(await ask(s, id, "system prompt"), /name it with the mcp__kumiko__session_rename tool/);
+    const rename = (title: string) => ask(s, id, widget("session_rename", { title }));
+    assert.match(await rename("  Fix   composer "), /^Named the session "Fix composer"/);
+    assert.deepEqual(pick(await session(id)), { title: "Fix composer", titleBy: "agent" });
+    assert.match(await rename("Fix composer"), /named "Fix composer" already/);
+    assert.match(await rename("A name far too long for a tab"), /is 29 characters; the tab has room for 20/);
+    assert.match(await rename("   "), /Give the session a name/);
+    assert.equal((await session(id))?.title, "Fix composer", "a refused name changes nothing");
+    // Claude may name it again, as the subject changes.
+    assert.match(await rename("Paste handling"), /^Named the session "Paste handling"/);
+    // The user's name wins, and stays.
+    await ask(s, id, "/rename my-name");
+    assert.deepEqual(pick(await session(id)), { title: "my-name", titleBy: "user" });
+    assert.match(await rename("Something else"), /The user named this session "my-name" with \/rename, and their name stands/);
+    assert.equal((await session(id))?.title, "my-name");
     s.close();
   });
 
