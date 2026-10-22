@@ -4,12 +4,12 @@ import { AGENT_SCRIPT_MAX_BYTES, AGENT_SCRIPT_PATTERN, AGENT_SETUP_DIR, type Age
 import { openIn, removeIn } from "./files.js";
 
 /**
- * The agent's setup scripts in a Claude home, in the order they run: by name, byte by byte, so `10-…` comes before `20-…`
+ * The agent's setup scripts in a project's Kumiko folder, in the order they run: by name, byte by byte, so `10-…` comes before `20-…`
  * whatever the locale. The folder is the agent's to change, so each file is opened as it really is there (see `openIn`):
  * a link, or a folder on the way that leads elsewhere, is ignored rather than followed out to the host.
  */
-export async function readAgentScripts(claudeHome: string, scratch: string): Promise<{ scripts: AgentScript[]; ignored: string[] }> {
-  const home = await realpath(claudeHome).catch(() => undefined);
+export async function readAgentScripts(kumikoHome: string, scratch: string): Promise<{ scripts: AgentScript[]; ignored: string[] }> {
+  const home = await realpath(kumikoHome).catch(() => undefined);
   if (!home) return { scripts: [], ignored: [] };
   const dir = join(home, AGENT_SETUP_DIR);
   // Not listing a folder that leads somewhere else; `openIn` checks again for each file.
@@ -40,11 +40,11 @@ async function readScript(dir: string, file: string, scratch: string): Promise<s
 
 /**
  * Deletes the agent's setup folder and all in it, so the next VM starts with only the user's setup. The folder is the
- * agent's to change, so it is deleted as it really is in the Claude home (see `removeIn`): a link in its place is deleted
+ * agent's to change, so it is deleted as it really is in the Kumiko folder (see `removeIn`): a link in its place is deleted
  * itself, and nothing is deleted through a folder on the way that leads elsewhere. Resolves whether it is gone.
  */
-export async function deleteAgentScripts(claudeHome: string): Promise<boolean> {
-  const home = await realpath(claudeHome).catch(() => undefined);
+export async function deleteAgentScripts(kumikoHome: string): Promise<boolean> {
+  const home = await realpath(kumikoHome).catch(() => undefined);
   if (!home) return true;
   const parent = join(home, dirname(AGENT_SETUP_DIR));
   const name = basename(AGENT_SETUP_DIR);

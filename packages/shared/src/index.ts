@@ -29,6 +29,12 @@ export const WORKSPACE_DIR = "/workspace";
  */
 export const CLAUDE_HOME_IN_VM = "~/.claude";
 
+/**
+ * Where a project's Kumiko folder is mounted in its VM: what Kumiko and the agent keep for Kumiko, such as the agent's
+ * setup scripts and sessions' artifacts. Kept out of the Claude home, which is Claude Code's to change.
+ */
+export const KUMIKO_HOME_IN_VM = "~/.kumiko";
+
 /** The folder beside a clone that holds its worktrees: `<clone>__worktrees`. */
 export const WORKTREES_SUFFIX = "__worktrees";
 
@@ -93,6 +99,8 @@ export interface DefaultsResponse {
   home: string;
   /** The folder holding each project's Claude home, as `<claudeHomes>/<project id>`. */
   claudeHomes: string;
+  /** The folder holding each project's Kumiko folder, as `<kumikoHomes>/<project id>`. */
+  kumikoHomes: string;
 }
 
 export interface SandboxSpec {
@@ -137,10 +145,10 @@ export interface SandboxMeta {
 }
 
 /**
- * Where the agent keeps its setup scripts, in the project's Claude home: `*.sh` files run in name order after the
+ * Where the agent keeps its setup scripts, in the project's Kumiko folder: `*.sh` files run in name order after the
  * user's provisioning script whenever the VM is created, so what the agent set up survives a recreate.
  */
-export const AGENT_SETUP_DIR = "sandbox/provision.d";
+export const AGENT_SETUP_DIR = "provision.d";
 
 /** Which files in the agent's setup folder are its scripts; others are left alone. */
 export const AGENT_SCRIPT_PATTERN = /^[A-Za-z0-9][\w.-]*\.sh$/;
@@ -231,14 +239,19 @@ export function suggestProjectId(clonePath: string): string {
 }
 
 /**
- * Which of the mounts every project's VM has this one is, if any: the clone and its worktrees at their own paths, and
- * the Claude home at ~/.claude. With `claudeHome`, the Claude home's host folder must match too.
+ * Which of the mounts every project's VM has this one is, if any: the clone and its worktrees at their own paths, the
+ * Claude home at ~/.claude and the Kumiko folder at ~/.kumiko. With `homes`, the homes' host folders must match too.
  */
-export function projectMountRole(p: Project, m: Mount, claudeHome?: string): "clone" | "worktrees" | "claude-home" | undefined {
+export function projectMountRole(
+  p: Project,
+  m: Mount,
+  homes?: { claude: string; kumiko: string },
+): "clone" | "worktrees" | "claude-home" | "kumiko-home" | undefined {
   const guest = m.guestPath ?? m.hostPath;
   if (m.hostPath === p.clonePath && guest === p.clonePath) return "clone";
   if (m.hostPath === p.worktreesPath && guest === p.worktreesPath) return "worktrees";
-  if (guest === CLAUDE_HOME_IN_VM && (claudeHome === undefined || m.hostPath === claudeHome)) return "claude-home";
+  if (guest === CLAUDE_HOME_IN_VM && (homes === undefined || m.hostPath === homes.claude)) return "claude-home";
+  if (guest === KUMIKO_HOME_IN_VM && (homes === undefined || m.hostPath === homes.kumiko)) return "kumiko-home";
   return undefined;
 }
 

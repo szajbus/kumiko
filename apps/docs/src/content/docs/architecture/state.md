@@ -13,8 +13,9 @@ sandbox provider.
 | `projects/<id>.json` | The project: clone and worktrees paths. |
 | `sandboxes/<id>.json` | The sandbox's settings (variable names, never values) and setup state, with the agent's setup scripts it was created with and how each went. |
 | `claude/<id>/` | The project's agent home: login, settings, history. |
-| `claude/<id>/kumiko/artifacts/<session id>/` | The session's [artifacts](/guide/artifacts/), which the agent writes. |
-| `claude/<id>/sandbox/provision.d/` | The agent's [setup scripts](/guide/projects/#the-agents-setup-scripts), run when the sandbox is created. |
+| `sandbox/<id>/` | The project's Kumiko folder, `~/.kumiko` in the sandbox: what Kumiko and the agent keep for Kumiko, apart from the agent home. |
+| `sandbox/<id>/artifacts/<session id>/` | The session's [artifacts](/guide/artifacts/), which the agent writes. |
+| `sandbox/<id>/provision.d/` | The agent's [setup scripts](/guide/projects/#the-agents-setup-scripts), run when the sandbox is created. |
 | `claude-template/` | What new agent homes are copied from. |
 | `sessions/<id>.json` | Saved chats, for resuming, with the window's panes and which version of each artifact they showed, and where the session's agent runs: its run, how much of the run's output the chat covers, and any calls to Kumiko's tools the agent is waiting on. |
 | `sessions/attachments/` | Files sent with prompts. |

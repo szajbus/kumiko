@@ -2,6 +2,8 @@ import { cpSync, existsSync, mkdirSync, realpathSync, watch, type FSWatcher } fr
 import { realpath } from "node:fs/promises";
 import { basename, dirname, join, posix, relative, sep } from "node:path";
 import {
+  CLAUDE_HOME_IN_VM,
+  KUMIKO_HOME_IN_VM,
   applyWindowOp,
   isExternalUrl,
   urlHost,
@@ -40,6 +42,8 @@ import type { SessionWidgets, Sessions } from "./sessions.js";
 export interface WidgetHome {
   /** The project's Claude home on the host, which is `~/.claude` in the VM. */
   claudeHome: string;
+  /** The project's Kumiko folder on the host, which is `~/.kumiko` in the VM. */
+  kumikoHome: string;
   /** Folders mounted at the same path in the VM and on the host: the clone and its worktrees. */
   roots: string[];
 }
@@ -73,18 +77,31 @@ const MAX_TITLE = 200;
 /** How long after a file changes on disk it is read again: editors write in bursts. */
 const DEBOUNCE_MS = 150;
 
-/** The folder of a session's artifacts, under the Claude home; the same in the VM (under `~/.claude`) and on the host. */
-const artifactsDir = (id: string) => join("kumiko", "artifacts", id);
+/** The folder of a session's artifacts, under the Kumiko folder; the same in the VM (under `~/.kumiko`) and on the host. */
+const artifactsDir = (id: string) => join("artifacts", id);
+
+/** The Claude home and the Kumiko folder in the VM, relative to its home. */
+const CLAUDE_DIR = CLAUDE_HOME_IN_VM.slice(2);
+const KUMIKO_DIR = KUMIKO_HOME_IN_VM.slice(2);
+
+/** Where sessions' artifacts were in the VM before they moved out of the Claude home, relative to its home. */
+const OLD_ARTIFACTS = `${CLAUDE_DIR}/kumiko/artifacts`;
+
+/** A path in the VM as it is now: one in the old artifacts' folder, as older windows name them, is in the new one. */
+function current(vmHome: string, path: string): string {
+  const old = `${vmHome}/${OLD_ARTIFACTS}`;
+  return within(path, old) ? `${vmHome}/${KUMIKO_DIR}/artifacts${path.slice(old.length)}` : path;
+}
 
 const within = (path: string, root: string) => path === root || path.startsWith(root.endsWith("/") ? root : root + "/");
 const hostWithin = (path: string, root: string) => path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
 
 class ToolError extends Error {}
 
-/** Whether a session's artifacts' folder is really where it should be in `claudeHome`, not a link anywhere else. */
-function inPlace(claudeHome: string, id: string): boolean {
+/** Whether a session's artifacts' folder is really where it should be in `kumikoHome`, not a link anywhere else. */
+function inPlace(kumikoHome: string, id: string): boolean {
   try {
-    return realpathSync(join(claudeHome, artifactsDir(id))) === join(realpathSync(claudeHome), artifactsDir(id));
+    return realpathSync(join(kumikoHome, artifactsDir(id))) === join(realpathSync(kumikoHome), artifactsDir(id));
   } catch {
     return false;
   }
@@ -194,25 +211,25 @@ export class Widgets implements SessionWidgets {
   /** The session's artifacts' folder in the VM, as Claude should name it. */
   private vmDocs(info: SessionInfo): string {
     const home = this.homes.get(info.sandbox);
-    return `${home ?? "~"}/.claude/${artifactsDir(info.id)}`;
+    return `${home ?? "~"}/${KUMIKO_DIR}/${artifactsDir(info.id)}`;
   }
 
   private hostDocs(info: Pick<SessionInfo, "id" | "sandbox">): string | undefined {
     const home = this.opts.home(info.sandbox);
-    return home && join(home.claudeHome, artifactsDir(info.id));
+    return home && join(home.kumikoHome, artifactsDir(info.id));
   }
 
   /**
-   * The session's artifacts' folder resolved, or undefined if there isn't one. Claude owns the Claude home, so it can
+   * The session's artifacts' folder resolved, or undefined if there isn't one. Claude can change the Kumiko folder, so it can
    * swap the folder, or one above it, for a link to anywhere on the host; then it isn't the session's folder any more,
    * and nothing is read, written or deleted through it.
    */
   private async realDocs(info: SessionInfo): Promise<string | undefined> {
     const home = this.opts.home(info.sandbox);
     if (!home) return undefined;
-    const dir = join(home.claudeHome, artifactsDir(info.id));
+    const dir = join(home.kumikoHome, artifactsDir(info.id));
     if (!existsSync(dir)) return undefined;
-    if (!inPlace(home.claudeHome, info.id)) {
+    if (!inPlace(home.kumikoHome, info.id)) {
       throw new ToolError(`This session's folder, ${this.vmDocs(info)}, links somewhere else, so Kumiko won't show, write or delete anything in it. Make it a folder again.`);
     }
     return realpath(dir);
@@ -398,7 +415,7 @@ export class Widgets implements SessionWidgets {
     if (!src || !dir || !home) return { copied, skipped: ["This session's folder can't be read, so nothing was copied."] };
     mkdirSync(dir, { recursive: true });
     // Not into a folder Claude has swapped for a link, which would write wherever it points.
-    const dst = inPlace(this.opts.home(to.sandbox)!.claudeHome, to.id) ? await realpath(dir).catch(() => undefined) : undefined;
+    const dst = inPlace(this.opts.home(to.sandbox)!.kumikoHome, to.id) ? await realpath(dir).catch(() => undefined) : undefined;
     if (!dst) return { copied, skipped: [`Session ${to.id}'s folder links somewhere else, so nothing was copied to it.`] };
     const theirs = new Set(artifactsOf(this.sessions.window(to.id) ?? chatWindow()).map(([, a]) => a.path));
     // Named as in this session's window, if it still has them.
@@ -406,7 +423,7 @@ export class Widgets implements SessionWidgets {
     for (const a of paths.map((path) => ({ path, title: (mine && artifactsOf(mine).find(([, d]) => d.path === path)?.[1].title) || posix.basename(path) }))) {
       const type = artifactTypeOf(a.path);
       const name = posix.basename(a.path);
-      const path = `${home}/.claude/${artifactsDir(to.id)}/${name}`;
+      const path = `${home}/${KUMIKO_DIR}/${artifactsDir(to.id)}/${name}`;
       const at = this.hostPath(from, a.path);
       const real = at && (await realWithin(at.path, src));
       const data = real && type ? await readWhole(real.dir, real.name, this.opts.scratch) : undefined;
@@ -628,10 +645,11 @@ export class Widgets implements SessionWidgets {
     const home = await this.vmHome(info.sandbox);
     let p = path.startsWith("~/") ? home + path.slice(1) : path;
     if (!p.startsWith("/")) p = posix.resolve(info.workdir, p);
-    p = posix.normalize(p);
+    // Resumed sessions may name the artifacts' old folder.
+    p = current(home, posix.normalize(p));
     if (this.hostPath(info, p)) return p;
     const roots = this.opts.home(info.sandbox)?.roots ?? [];
-    throw new ToolError(`Kumiko can't show ${p}: it can only show files in ${[this.vmDocs(info), ...roots].join(", ")} (or anywhere under ~/.claude).`);
+    throw new ToolError(`Kumiko can't show ${p}: it can only show files in ${[this.vmDocs(info), ...roots].join(", ")} (or anywhere under ${KUMIKO_HOME_IN_VM} or ${CLAUDE_HOME_IN_VM}).`);
   }
 
   /** Where a file in the VM is on the host, if it is in a folder mounted from there. */
@@ -639,7 +657,12 @@ export class Widgets implements SessionWidgets {
     const home = this.opts.home(info.sandbox);
     const vmHome = this.homes.get(info.sandbox);
     if (!home) return undefined;
-    if (vmHome && within(vmPath, `${vmHome}/.claude`)) return { path: join(home.claudeHome, relative(`${vmHome}/.claude`, vmPath)), root: home.claudeHome };
+    if (vmHome) {
+      const p = current(vmHome, vmPath);
+      for (const [dir, root] of [[KUMIKO_DIR, home.kumikoHome], [CLAUDE_DIR, home.claudeHome]]) {
+        if (within(p, `${vmHome}/${dir}`)) return { path: join(root, relative(`${vmHome}/${dir}`, p)), root };
+      }
+    }
     const root = home.roots.find((r) => within(vmPath, r));
     return root ? { path: vmPath, root } : undefined;
   }
@@ -803,12 +826,14 @@ export class Widgets implements SessionWidgets {
     const src = this.hostDocs(from);
     const dst = this.hostDocs(to);
     // Not from a folder Claude has swapped for a link, which would copy what it points to where Claude can read it.
-    if (src && dst && existsSync(src) && inPlace(this.opts.home(from.sandbox)!.claudeHome, from.id)) cpSync(src, dst, { recursive: true });
+    if (src && dst && existsSync(src) && inPlace(this.opts.home(from.sandbox)!.kumikoHome, from.id)) cpSync(src, dst, { recursive: true });
     const home = this.homes.get(from.sandbox);
     if (!home) return events;
-    const a = JSON.stringify(`${home}/.claude/${artifactsDir(from.id)}/`).slice(1, -1);
-    const b = JSON.stringify(`${home}/.claude/${artifactsDir(to.id)}/`).slice(1, -1);
-    return events.map((e) => (e.kind === "window" ? (JSON.parse(JSON.stringify(e).split(a).join(b)) as SessionEvent) : e));
+    const quoted = (path: string) => JSON.stringify(path).slice(1, -1);
+    const b = quoted(`${home}/${KUMIKO_DIR}/${artifactsDir(to.id)}/`);
+    // Older windows name the original's artifacts in their old folder.
+    const olds = [`${home}/${KUMIKO_DIR}/${artifactsDir(from.id)}/`, `${home}/${OLD_ARTIFACTS}/${from.id}/`].map(quoted);
+    return events.map((e) => (e.kind === "window" ? (JSON.parse(olds.reduce((json, a) => json.split(a).join(b), JSON.stringify(e))) as SessionEvent) : e));
   }
 
   /** After a rewind, the artifacts in the session's own folder are put back as the window has them. */
@@ -821,13 +846,14 @@ export class Widgets implements SessionWidgets {
     const realDir = await this.realDocs(info).catch(() => undefined);
     const home = this.homes.get(info.sandbox);
     if (!dir || !realDir || !home) return;
-    const vmDir = `${home}/.claude/${artifactsDir(info.id)}`;
+    const vmDir = `${home}/${KUMIKO_DIR}/${artifactsDir(info.id)}`;
     for (const [widget, d] of artifactsOf(w)) {
-      if (d.truncated || d.missing || d.type === "preview" || d.type === "web" || !within(d.path, vmDir)) continue;
+      const path = current(home, d.path);
+      if (d.truncated || d.missing || d.type === "preview" || d.type === "web" || !within(path, vmDir)) continue;
       this.seen.delete(`${info.id}:${widget}`);
       // Older sessions kept the content in the window, an image's in base64.
       const data = d.content ? await this.opts.content.get(d.content) : d.text !== undefined ? Buffer.from(d.text, d.type === "image" ? "base64" : "utf8") : undefined;
-      const real = data && (await realWithin(join(dir, relative(vmDir, d.path)), realDir));
+      const real = data && (await realWithin(join(dir, relative(vmDir, path)), realDir));
       // Not through a link, which Claude could have pointed anywhere on the host.
       if (real) await writeIn(real.dir, real.name, data, this.opts.scratch);
     }
@@ -837,8 +863,8 @@ export class Widgets implements SessionWidgets {
   deleted(info: SessionInfo): void {
     this.unwatch(info.id);
     const home = this.opts.home(info.sandbox);
-    // From inside the artifacts' folder of the Claude home, so a folder on the way that Claude made a link isn't followed.
-    if (home) void realpath(home.claudeHome).then((real) => removeIn(join(real, "kumiko", "artifacts"), info.id, { recursive: true }), () => {});
+    // From inside the artifacts' folder of the Kumiko folder, so a folder on the way that Claude made a link isn't followed.
+    if (home) void realpath(home.kumikoHome).then((real) => removeIn(join(real, "artifacts"), info.id, { recursive: true }), () => {});
   }
 
   /** The server is going away: nothing more is watched. */

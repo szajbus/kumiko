@@ -18,6 +18,7 @@ import {
   NAME_PATTERN,
   parseSavedTabs,
   SESSION_ID_PATTERN,
+  sameMounts,
   artifactsOf,
   IMAGE_TYPES,
   nextId,
@@ -161,7 +162,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     scratch,
     home: (sandbox) => {
       const p = projectList.find((x) => x.id === sandbox);
-      return p && { claudeHome: projects.claudeHome(p.id), roots: [p.clonePath, p.worktreesPath] };
+      return p && { claudeHome: projects.claudeHome(p.id), kumikoHome: projects.kumikoHome(p.id), roots: [p.clonePath, p.worktreesPath] };
     },
     vmHome: (sandbox) => execOutput(provider.exec.bind(provider), sandbox, `printf %s "$HOME"`, 10_000),
     pane: (session, pane, what) => askPane(session, pane, what),
@@ -505,7 +506,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     return c.json(templatesCache);
   });
 
-  app.get("/api/defaults", (c) => c.json({ home: opts.home ?? homedir(), claudeHomes: projects.claudeRoot } satisfies DefaultsResponse));
+  app.get("/api/defaults", (c) => c.json({ home: opts.home ?? homedir(), claudeHomes: projects.claudeRoot, kumikoHomes: projects.kumikoRoot } satisfies DefaultsResponse));
 
   /** The window's tabs from its last run, or null if none were saved. */
   app.get("/api/tabs", async (c) => c.json((await tabs.read()) ?? null));
@@ -579,6 +580,10 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
 
   const startVm: Work = async (p, _i, log) => {
     await projects.writeManaged(p);
+    // A VM made before the project had all its fixed mounts (the Kumiko folder, say) gets them while it is stopped.
+    const { info } = await known(p.id);
+    const mounts = info.meta?.spec.mounts;
+    if (info.status === "stopped" && mounts && !sameMounts(mounts, projects.mounts(p, mounts))) await provider.edit(p.id, { mounts: projects.mounts(p, mounts) }, log);
     await provider.start(p.id, log);
     // Runs left from before the VM stopped have nothing running in them any more.
     await sweepRuns(p.id, await runs.list(p.id).catch(() => new Map()));
@@ -649,14 +654,14 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
 
   /** The agent's setup scripts a VM is created with, read once its sessions have ended, so none can change them while it is provisioned. */
   const agentSetup = async (project: Project): Promise<AgentSetupRun | undefined> => {
-    const { scripts } = await readAgentScripts(projects.claudeHome(project.id), scratch);
+    const { scripts } = await readAgentScripts(projects.kumikoHome(project.id), scratch);
     return scripts.length ? { scripts } : undefined;
   };
 
   /** The agent's setup scripts as they are now, with how each went when the VM was created. */
   app.get("/api/projects/:id/agent-setup", async (c) => {
     const { project, info } = await known(c.req.param("id"));
-    const now = await readAgentScripts(projects.claudeHome(project.id), scratch);
+    const now = await readAgentScripts(projects.kumikoHome(project.id), scratch);
     return c.json(withExitCodes(info.meta?.agentSetup, now) satisfies AgentSetupResponse);
   });
 
@@ -668,8 +673,8 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     const id = c.req.param("id");
     assertIdle(id);
     const project = await projectOf(id);
-    const dir = `${projects.claudeHome(project.id)}/${AGENT_SETUP_DIR}`;
-    if (!(await deleteAgentScripts(projects.claudeHome(project.id)))) throw new HttpError(409, `Couldn't delete ${dir}: a folder on the way leads somewhere else.`);
+    const dir = `${projects.kumikoHome(project.id)}/${AGENT_SETUP_DIR}`;
+    if (!(await deleteAgentScripts(projects.kumikoHome(project.id)))) throw new HttpError(409, `Couldn't delete ${dir}: a folder on the way leads somewhere else.`);
     return c.json({});
   });
 

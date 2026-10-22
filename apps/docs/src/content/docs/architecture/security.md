@@ -29,8 +29,8 @@ ask for a password. Either way, a service on your Mac that listens on all interf
 reachable at your Mac's network address, as from anywhere on your network. A proxy on your Mac's loopback, set for the
 sandbox, isn't reachable once it's blocked.
 
-Recreating a sandbox doesn't wipe everything the agent did. The agent home survives it, and with it what the agent
-can make run again in the new VM: its settings and hooks, and its [setup scripts](/guide/projects/#the-agents-setup-scripts),
+Recreating a sandbox doesn't wipe everything the agent did. The agent home and the Kumiko folder survive it, and with
+them what the agent can make run again in the new VM: its settings and hooks, and its [setup scripts](/guide/projects/#the-agents-setup-scripts),
 which run when the VM is created (**Delete scripts** on the project page clears them). All of it runs inside the VM only. Kumiko reads the scripts on your Mac as text, only
 as plain files in their folder, not through links.
 
@@ -54,7 +54,7 @@ Forwarded values go over stdin, never in arguments.
 ## Artifacts
 
 The agent asks Kumiko to show [artifacts](/guide/artifacts/) by their path in the sandbox, and Kumiko reads them on
-your Mac. It only reads files in the session's artifacts folder, in the agent home the sandbox shares with your Mac
+your Mac. It only reads files in the session's artifacts folder, in the Kumiko folder the sandbox shares with your Mac
 anyway, and doesn't follow a link that leads out of it, so the agent can't use an artifact to read a file it couldn't
 already. Kumiko writes and deletes only artifacts in that folder: when a rewind puts them back, and when one is
 deleted. SVG artifacts and Mermaid diagrams are shown as images, so nothing in them runs or loads, and Mermaid draws in

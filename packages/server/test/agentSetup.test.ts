@@ -11,7 +11,7 @@ const tmp = async () => realpath(await mkdtemp(join(tmpdir(), "kumiko-agent-setu
 describe("the agent's setup scripts", () => {
   it("are the plain *.sh files in the folder, in byte order", async () => {
     const root = await tmp();
-    const home = join(root, "claude");
+    const home = join(root, "kumiko");
     const dir = join(home, AGENT_SETUP_DIR);
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "20-b.sh"), "echo b\n");
@@ -21,7 +21,7 @@ describe("the agent's setup scripts", () => {
     await writeFile(join(dir, ".hidden.sh"), "echo hidden\n");
     await writeFile(join(dir, "30-big.sh"), "#".repeat(AGENT_SCRIPT_MAX_BYTES + 1));
     await mkdir(join(dir, "40-dir.sh"));
-    // A link out to the host, as `ln -s /Users/you/.ssh/id_ed25519 ~/.claude/sandbox/provision.d/50-key.sh` in the VM makes it.
+    // A link out to the host, as `ln -s /Users/you/.ssh/id_ed25519 ~/.kumiko/provision.d/50-key.sh` in the VM makes it.
     await writeFile(join(root, "secret"), "do not read\n");
     await symlink(join(root, "secret"), join(dir, "50-key.sh"));
 
@@ -36,7 +36,7 @@ describe("the agent's setup scripts", () => {
 
   it("aren't read through a folder that leads elsewhere", async () => {
     const root = await tmp();
-    const home = join(root, "claude");
+    const home = join(root, "kumiko");
     await mkdir(join(root, "elsewhere"), { recursive: true });
     await writeFile(join(root, "elsewhere", "10-a.sh"), "echo a\n");
     await mkdir(join(home, AGENT_SETUP_DIR, ".."), { recursive: true });
@@ -45,35 +45,28 @@ describe("the agent's setup scripts", () => {
     assert.deepEqual(await readAgentScripts(join(root, "missing"), join(root, "scratch")), { scripts: [], ignored: [] });
   });
 
-  it("are deleted folder and all, but never through a folder that leads elsewhere", async () => {
+  it("are deleted folder and all, but never through a link in its place", async () => {
     const root = await tmp();
-    const home = join(root, "claude");
+    const home = join(root, "kumiko");
     const dir = join(home, AGENT_SETUP_DIR);
     await mkdir(join(dir, "sub"), { recursive: true });
     await writeFile(join(dir, "10-a.sh"), "echo a\n");
     await writeFile(join(dir, "sub", "x"), "x");
+    await mkdir(join(home, "artifacts"));
     assert.equal(await deleteAgentScripts(home), true);
-    assert.deepEqual(await readdir(join(home, "sandbox")), []);
+    assert.deepEqual(await readdir(home), ["artifacts"], "only the setup folder goes");
     assert.equal(await deleteAgentScripts(home), true, "nothing to delete is fine");
     assert.equal(await deleteAgentScripts(join(root, "missing")), true);
 
-    // ~/.claude/sandbox made a link to a folder of the user's, as `ln -s /Users/you/work ~/.claude/sandbox` in the VM makes it.
+    // The folder itself a link to one of the user's, as `ln -s /Users/you/work ~/.kumiko/provision.d` in the VM makes
+    // it: the link goes, what it points to stays.
     const theirs = join(root, "theirs");
-    await mkdir(join(theirs, "provision.d"), { recursive: true });
-    await writeFile(join(theirs, "provision.d", "keep.txt"), "mine");
-    const other = join(root, "claude2");
-    await mkdir(other);
-    await symlink(theirs, join(other, "sandbox"));
-    assert.equal(await deleteAgentScripts(other), false);
-    assert.equal(await readFile(join(theirs, "provision.d", "keep.txt"), "utf8"), "mine");
-
-    // The folder itself a link: the link goes, what it points to stays.
-    const third = join(root, "claude3");
-    await mkdir(join(third, "sandbox"), { recursive: true });
-    await symlink(join(theirs, "provision.d"), join(third, AGENT_SETUP_DIR));
-    assert.equal(await deleteAgentScripts(third), true);
-    assert.deepEqual(await readdir(join(third, "sandbox")), []);
-    assert.equal(await readFile(join(theirs, "provision.d", "keep.txt"), "utf8"), "mine");
+    await mkdir(theirs);
+    await writeFile(join(theirs, "keep.txt"), "mine");
+    await symlink(theirs, dir);
+    assert.equal(await deleteAgentScripts(home), true);
+    assert.deepEqual(await readdir(home), ["artifacts"]);
+    assert.equal(await readFile(join(theirs, "keep.txt"), "utf8"), "mine");
   });
 
   it("say how each went when the VM was created, if it ran then as it is now", () => {

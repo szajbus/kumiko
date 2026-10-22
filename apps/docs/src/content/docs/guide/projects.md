@@ -34,13 +34,14 @@ Choose the sandbox's template, its CPUs, memory and disk. The form starts with s
 
 ### Mounts
 
-Three mounts are always there, listed under **Default mounts**, and can't be changed:
+Four mounts are always there, listed under **Default mounts**, and can't be changed:
 
 | Host | In the sandbox | |
 | --- | --- | --- |
 | The clone | The same absolute path | writable |
 | `<clone>__worktrees` | The same absolute path | writable |
 | The project's agent home (shown as **Claude home**) | `~/.claude`, where Claude Code looks | writable |
+| The project's **Kumiko folder**: the agent's setup scripts and the sessions' artifacts | `~/.kumiko` | writable |
 
 **Extra mounts** are up to you. They default to the same path in the sandbox too. A sandbox path of `~/…` means the
 sandbox user's home. Sandbox paths can't be `/` or `~` and can't overlap.
@@ -71,9 +72,9 @@ Before your script, Kumiko installs the agent: Claude Code, with its native inst
 ### The agent's setup scripts
 
 The agent installs what its work needs as it goes, and that is lost when the sandbox is recreated. So the agent is told
-to write it down: as shell scripts in its own folder, `sandbox/provision.d/` in the project's agent home
-(`~/.claude/sandbox/provision.d/` in the sandbox), one per concern, such as `20-postgres.sh`. They survive a recreate,
-because the agent home is on your Mac.
+to write it down: as shell scripts in its own folder, `provision.d/` in the project's Kumiko folder
+(`~/.kumiko/provision.d/` in the sandbox), one per concern, such as `20-postgres.sh`. They survive a recreate,
+because the Kumiko folder is on your Mac. It is kept apart from the agent home, which is Claude Code's to change.
 
 When the sandbox is created, they run after your provisioning script: each `*.sh` file in name order, in the clone,
 with the same forwarded variables, and each stops at its first failing command. One that fails doesn't stop the others

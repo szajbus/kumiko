@@ -96,7 +96,7 @@ const resultText = () => String(messages.findLast((m) => m.type === "result")?.r
 const checks: [string, boolean][] = [];
 const notes: string[] = [];
 const token = randomUUID().slice(0, 8);
-const file = `$HOME/.claude/kumiko/tools-check-${token}.md`;
+const file = `$HOME/.kumiko/tools-check-${token}.md`;
 try {
   await turn("Call the mcp__kumiko__echo tool with the text 'one', then reply with exactly what it returned.", { first: true });
   checks.push(["an always-loaded tool is called", calls.includes("echo") && resultText().includes("echo: one")]);
@@ -125,7 +125,7 @@ try {
   checks.push(["a call pending across a detach is answered by the next driver", pending.length === 1 && resultText().includes("waited")]);
 
   const p2 = randomUUID();
-  await turn(`Run \`mkdir -p ~/.claude/kumiko && printf A > ${file}\` with Bash. Then reply ok.`);
+  await turn(`Run \`mkdir -p ~/.kumiko && printf A > ${file}\` with Bash. Then reply ok.`);
   await turn(`Use your Write tool to replace the whole contents of the file ${file.replace("$HOME", (await execOutput(exec, sandbox, `printf %s "$HOME"`)).trim())} with the single letter B. Then reply ok.`, { id: p2 });
   const before = (await execOutput(exec, sandbox, `cat ${file}`)).trim();
   let restored = "";
@@ -135,7 +135,7 @@ try {
   } catch (err) {
     restored = `(rewind failed: ${err instanceof Error ? err.message : String(err)})`;
   }
-  notes.push(`a file under ~/.claude written by Write was "${before}", and after rewinding its prompt "${restored}": ${restored === "A" ? "checkpoints cover the Claude home" : "checkpoints don't cover it, so Kumiko writes documents back itself"}`);
+  notes.push(`a file under ~/.kumiko written by Write was "${before}", and after rewinding its prompt "${restored}": ${restored === "A" ? "checkpoints cover the Kumiko folder" : "checkpoints don't cover it, so Kumiko writes documents back itself"}`);
 } finally {
   await execOutput(exec, sandbox, `rm -f ${file}`).catch(() => {});
   await driver.stop();

@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import {
   CLAUDE_HOME_IN_VM,
+  KUMIKO_HOME_IN_VM,
   DEFAULTS,
   ENV_NAME_PATTERN,
   MINIMUMS,
@@ -232,6 +233,7 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
       `#   ${repo}  at the same path, writable`,
       `#   ${repo}${WORKTREES_SUFFIX}  at the same path, writable (created if missing)`,
       `#   the project's Claude home  at ${CLAUDE_HOME_IN_VM}, writable (CLAUDE_CONFIG_DIR)`,
+      `#   the project's Kumiko folder  at ${KUMIKO_HOME_IN_VM}, writable`,
       ...s.mounts.map((m) => `#   ${m.hostPath}  at ${m.guestPath === m.hostPath ? "the same path" : m.guestPath}${m.writable ? ", writable" : ""}`),
     ];
     const lines = [
@@ -395,6 +397,11 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
                 host: defaults ? `${tilde(defaults.claudeHomes, home)}/${name.trim() || "<name>"}` : "The project's Claude home",
                 at: CLAUDE_HOME_IN_VM,
                 what: "Claude home: login, settings, history",
+              },
+              {
+                host: defaults ? `${tilde(defaults.kumikoHomes, home)}/${name.trim() || "<name>"}` : "The project's Kumiko folder",
+                at: KUMIKO_HOME_IN_VM,
+                what: "Kumiko folder: the agent's setup scripts, artifacts",
               },
             ].map((m) => (
               <div key={m.what} className="detail-mount mount-grid">

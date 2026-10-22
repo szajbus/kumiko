@@ -2,7 +2,7 @@ import { constants } from "node:fs";
 import { access, cp, lstat, mkdir, readdir, readFile, realpath, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, normalize } from "node:path";
-import { AGENT_SCRIPT_MAX_BYTES, AGENT_SETUP_DIR, CLAUDE_HOME_IN_VM, NAME_PATTERN, projectMountRole, WORKTREES_SUFFIX, type Mount, type Project, type SandboxSpec } from "@kumiko/shared";
+import { AGENT_SCRIPT_MAX_BYTES, AGENT_SETUP_DIR, CLAUDE_HOME_IN_VM, KUMIKO_HOME_IN_VM, NAME_PATTERN, projectMountRole, WORKTREES_SUFFIX, type Mount, type Project, type SandboxSpec } from "@kumiko/shared";
 import { replaceFile } from "./files.js";
 import { cloneProblem } from "./git.js";
 
@@ -34,13 +34,13 @@ The git clone is \`${p.clonePath}\`. Sessions start there.
 
 - You are in a VM made for this project, and it is yours: treat it as your own machine.
 - Install packages and tools, start, stop and configure services, and change system settings whenever the task needs it; you don't need to ask first.
-- Folders mounted from the user's computer are shared with it: the clone, the worktrees, \`~/.claude\`, and any others the project adds. Take the usual care with those; the rest of the VM is yours to change.
+- Folders mounted from the user's computer are shared with it: the clone, the worktrees, \`~/.claude\`, \`~/.kumiko\`, and any others the project adds. Take the usual care with those; the rest of the VM is yours to change.
 
 ## Setup that survives a rebuild
 
-- The user can recreate this VM from scratch, and everything outside the mounted folders is lost then. A new VM gets Claude Code, the user's provisioning script, and then your setup scripts: the \`*.sh\` files in \`~/.claude/${AGENT_SETUP_DIR}/\`, in name order. Each runs with bash as the VM user, in the clone, stopping at its first failing command. Only plain files of up to ${AGENT_SCRIPT_MAX_BYTES / 1024 / 1024} MB run; links, folders and bigger files are skipped.
+- The user can recreate this VM from scratch, and everything outside the mounted folders is lost then. A new VM gets Claude Code, the user's provisioning script, and then your setup scripts: the \`*.sh\` files in \`${KUMIKO_HOME_IN_VM}/${AGENT_SETUP_DIR}/\`, in name order. Each runs with bash as the VM user, in the clone, stopping at its first failing command. Only plain files of up to ${AGENT_SCRIPT_MAX_BYTES / 1024 / 1024} MB run; links, folders and bigger files are skipped.
 - When you install or configure something in the VM that you'd want again after a rebuild (packages, tools, services, system settings), add it to a setup script. Keep one script per concern, named like \`20-postgres.sh\`; look at the ones there first, and change one rather than add a second for the same thing.
-- Write them so they can run again where they ran before, then run a new or changed one right away to check it works: \`bash -e ~/.claude/${AGENT_SETUP_DIR}/<file>\`.
+- Write them so they can run again where they ran before, then run a new or changed one right away to check it works: \`bash -e ${KUMIKO_HOME_IN_VM}/${AGENT_SETUP_DIR}/<file>\`.
 - Don't install what the user's provisioning script already does, and never write secret values into a script: the folder is on the user's computer. Use the project's forwarded variables by name.
 - They are yours to manage; the user can see them on the project page. When you add or change one, say so in your reply.
 - The user can delete the whole folder from the project page to start from scratch. If it is gone or empty, don't write back what was there: start again with what the work needs from now on.
@@ -82,17 +82,20 @@ export interface CreatedProject {
 }
 
 /**
- * Projects, one JSON file each, and their Claude homes. A project's VM (its sandbox) is the provider's business;
+ * Projects, one JSON file each, their Claude homes, and their Kumiko folders: what Kumiko keeps in the VM apart from
+ * the Claude home, which is Claude Code's to change. A project's VM (its sandbox) is the provider's business;
  * this only knows the paths it is built from.
  */
 export class ProjectStore {
   readonly dir: string;
   readonly claudeRoot: string;
+  readonly kumikoRoot: string;
   readonly templateDir: string;
 
   constructor(home: string = defaultKumikoHome()) {
     this.dir = join(home, "projects");
     this.claudeRoot = join(home, "claude");
+    this.kumikoRoot = join(home, "sandbox");
     this.templateDir = join(home, "claude-template");
   }
 
@@ -104,6 +107,12 @@ export class ProjectStore {
   claudeHome(id: string): string {
     assertId(id);
     return join(this.claudeRoot, id);
+  }
+
+  /** The project's Kumiko folder on the host, which is `~/.kumiko` in the VM. */
+  kumikoHome(id: string): string {
+    assertId(id);
+    return join(this.kumikoRoot, id);
   }
 
   /** The project's record; undefined when there is none, ProjectRecordError when there is one that can't be used. */
@@ -215,6 +224,7 @@ export class ProjectStore {
     const rollback = async () => {
       await rm(this.file(id), { force: true });
       await rm(this.claudeHome(id), { recursive: true, force: true });
+      await rm(this.kumikoHome(id), { recursive: true, force: true });
       // Only a folder Kumiko made, and only while it is still empty.
       if (madeWorktrees) await rmdir(worktreesPath).catch(() => {});
     };
@@ -247,18 +257,26 @@ export class ProjectStore {
     await this.writeManaged(p);
   }
 
-  /** Rewrites Kumiko's own instructions in the project's Claude home; CLAUDE.md is the user's. */
+  /**
+   * Rewrites Kumiko's own instructions in the project's Claude home; CLAUDE.md is the user's. Makes the Kumiko folder
+   * too, which the VM mounts.
+   */
   async writeManaged(p: Project): Promise<void> {
+    await mkdir(this.kumikoHome(p.id), { recursive: true });
     const home = this.claudeHome(p.id);
     await mkdir(home, { recursive: true });
     // Claude can make the file a link to one of the user's on the host: that is replaced, not written through.
     await replaceFile(home, MANAGED_FILE, managedInstructions(p));
   }
 
-  /** Deletes the project's record and its Claude home, which holds its login and Claude's session history. */
+  /**
+   * Deletes the project's record, its Claude home, which holds its login and Claude's session history, and its Kumiko
+   * folder.
+   */
   async remove(id: string): Promise<void> {
     await rm(this.file(id), { force: true });
     await rm(this.claudeHome(id), { recursive: true, force: true });
+    await rm(this.kumikoHome(id), { recursive: true, force: true });
   }
 
   /** What is wrong with the project's folders on the host, if anything. The VM can't start without them. */
@@ -271,19 +289,21 @@ export class ProjectStore {
 
   /**
    * The mounts every project's VM has: the clone and its worktrees at the same paths as on the host, which git needs
-   * (a worktree's `.git` file holds the main repo's absolute path), and the Claude home as the VM user's ~/.claude.
+   * (a worktree's `.git` file holds the main repo's absolute path), the Claude home as the VM user's ~/.claude, and
+   * the Kumiko folder as ~/.kumiko.
    */
   fixedMounts(p: Project): Mount[] {
     return [
       { hostPath: p.clonePath, guestPath: p.clonePath, writable: true },
       { hostPath: p.worktreesPath, guestPath: p.worktreesPath, writable: true },
       { hostPath: this.claudeHome(p.id), guestPath: CLAUDE_HOME_IN_VM, writable: true },
+      { hostPath: this.kumikoHome(p.id), guestPath: KUMIKO_HOME_IN_VM, writable: true },
     ];
   }
 
   /** The project's fixed mounts, then the others in `mounts`; any fixed ones among those are replaced, not repeated. */
   mounts(p: Project, mounts: Mount[]): Mount[] {
-    const extra = mounts.filter((m) => !projectMountRole(p, m, this.claudeHome(p.id)));
+    const extra = mounts.filter((m) => !projectMountRole(p, m, { claude: this.claudeHome(p.id), kumiko: this.kumikoHome(p.id) }));
     return [...this.fixedMounts(p), ...extra];
   }
 

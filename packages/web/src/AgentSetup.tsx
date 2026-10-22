@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { AGENT_SETUP_DIR, type AgentScript, type AgentSetupResponse, type ProjectView } from "@kumiko/shared";
+import { AGENT_SETUP_DIR, KUMIKO_HOME_IN_VM, type AgentScript, type AgentSetupResponse, type ProjectView } from "@kumiko/shared";
 import { api, errorMessage } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Trash } from "./icons";
@@ -31,7 +31,7 @@ export function AgentSetupCard({ p }: { p: ProjectView }) {
       <details className="card details" onToggle={(e) => (e.currentTarget.open ? reload() : undefined)}>
         <summary>Agent's setup scripts{setup.scripts.length ? ` · ${plural(setup.scripts.length, "script")}` : ": none"}</summary>
         <p className="muted details-empty">
-          Claude keeps these in <span className="mono">~/.claude/{AGENT_SETUP_DIR}</span>, so what it installs comes back when the sandbox is recreated.
+          Claude keeps these in <span className="mono">{KUMIKO_HOME_IN_VM}/{AGENT_SETUP_DIR}</span>, so what it installs comes back when the sandbox is recreated.
           They run after the provisioning script, in name order.
         </p>
         {setup.scripts.length > 0 && (
@@ -61,7 +61,7 @@ export function AgentSetupCard({ p }: { p: ProjectView }) {
       {confirm && (
         <ConfirmDialog title="Delete the agent's setup scripts?" confirmLabel="Delete scripts" danger onCancel={() => setConfirm(false)} onConfirm={() => void remove()}>
           <p>
-            This deletes <span className="mono">~/.claude/{AGENT_SETUP_DIR}</span> and everything in it. The sandbox keeps what they set up until you
+            This deletes <span className="mono">{KUMIKO_HOME_IN_VM}/{AGENT_SETUP_DIR}</span> and everything in it. The sandbox keeps what they set up until you
             recreate it; then it starts from your provisioning script only. Claude starts new scripts as its work needs them.
           </p>
         </ConfirmDialog>

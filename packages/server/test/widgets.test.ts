@@ -25,6 +25,8 @@ describe("widgets", () => {
   let clone: string;
   /** Project "one"'s Claude home on the host, which the fake VM sees as ~/.claude. */
   let claudeHome: string;
+  /** Project "one"'s Kumiko folder on the host, which the fake VM sees as ~/.kumiko. */
+  let kumikoHome: string;
   let serverOpts: ServerOptions;
   /** What the window shows of an artifact, as the server keeps it. */
   const textOf = (a: ArtifactState | undefined) => (a?.content ? readFileSync(join(root, "sessions", "artifacts", a.content), "utf8") : "");
@@ -89,7 +91,7 @@ describe("widgets", () => {
     await waitFor(async () => (await session(id))?.status === "idle");
     return { id: id as string, s: await listen(id) };
   };
-  const docPath = (id: string, name = "plan.md") => `${vmHome}/.claude/kumiko/artifacts/${id}/${name}`;
+  const docPath = (id: string, name = "plan.md") => `${vmHome}/.kumiko/artifacts/${id}/${name}`;
   const write = (path: string, content: string) => `write ${JSON.stringify({ file_path: path, content })}`;
   const widget = (name: string, args: object) => `widget ${name} ${JSON.stringify(args)}`;
 
@@ -110,11 +112,15 @@ describe("widgets", () => {
     const since = events.length;
     await api("/api/projects", { method: "POST", body: JSON.stringify({ name: "one", clonePath: clone, cpus: 1, memoryGiB: 1, diskGiB: 10, mounts: [], env: [] }) });
     await waitFor(() => events.slice(since).find((e) => "sandbox" in e && e.sandbox === "one" && e.op === "creating" && e.type === "done"));
-    // The fake VM is this machine: its ~/.claude is the project's Claude home, as Lima's mount makes it.
+    // The fake VM is this machine: its ~/.claude is the project's Claude home, and its ~/.kumiko the project's Kumiko
+    // folder, as Lima's mounts make them.
     claudeHome = join(root, "data", "claude", "one");
-    await mkdir(claudeHome, { recursive: true });
-    await rm(join(vmHome, ".claude"), { recursive: true, force: true });
-    await symlink(claudeHome, join(vmHome, ".claude"));
+    kumikoHome = join(root, "data", "sandbox", "one");
+    for (const [host, vm] of [[claudeHome, ".claude"], [kumikoHome, ".kumiko"]]) {
+      await mkdir(host, { recursive: true });
+      await rm(join(vmHome, vm), { recursive: true, force: true });
+      await symlink(host, join(vmHome, vm));
+    }
   });
 
   after(async () => {
@@ -124,12 +130,12 @@ describe("widgets", () => {
 
   it("tells Claude where its artifacts go, and gives it the tools", async () => {
     const { id, s } = await start();
-    assert.ok(existsSync(join(claudeHome, "kumiko", "artifacts", id)), "the session's folder is made");
-    assert.match(await ask(s, id, "system prompt"), new RegExp(`${vmHome}/\\.claude/kumiko/artifacts/${id}/`));
+    assert.ok(existsSync(join(kumikoHome, "artifacts", id)), "the session's folder is made");
+    assert.match(await ask(s, id, "system prompt"), new RegExp(`${vmHome}/\\.kumiko/artifacts/${id}/`));
     const tools = JSON.parse(await ask(s, id, "tools")) as { name: string; description: string }[];
     assert.deepEqual(tools.map((t) => t.name).sort(), ["artifact_capture", "artifact_open", "artifact_reload", "artifact_remove", "artifact_share", "session_list", "session_rename", "session_start", "window_close", "window_list"]);
     // The tool names the session's folder itself, so Claude needn't find it in its instructions.
-    assert.ok(tools.find((t) => t.name === "artifact_open")?.description.includes(`${vmHome}/.claude/kumiko/artifacts/${id}/`));
+    assert.ok(tools.find((t) => t.name === "artifact_open")?.description.includes(`${vmHome}/.kumiko/artifacts/${id}/`));
     s.close();
   });
 
@@ -231,7 +237,7 @@ describe("widgets", () => {
     assert.match(await share({ session: b.id, artifacts: ["w9"] }), /There is no artifact w9/);
 
     assert.match(await share({ session: b.id, artifacts: ["w2"] }), new RegExp(`^Copied "The plan" to ${docPath(b.id)} in session ${b.id}`));
-    assert.equal(readFileSync(join(claudeHome, "kumiko", "artifacts", b.id, "plan.md"), "utf8"), "# The plan\n\nStep one.\n");
+    assert.equal(readFileSync(join(kumikoHome, "artifacts", b.id, "plan.md"), "utf8"), "# The plan\n\nStep one.\n");
     const [[widgetB, copy]] = artifactsOf(b.s.window());
     assert.deepEqual({ path: copy.path, title: copy.title, text: textOf(copy) }, { path: docPath(b.id), title: "The plan", text: "# The plan\n\nStep one.\n" });
     assert.equal(paneOf(b.s.window(), widgetB), undefined, "it is in the window, not shown");
@@ -255,7 +261,7 @@ describe("widgets", () => {
     assert.match(await ask(b.s, b.id, "Thanks."), /shared "The plan", now at/);
     await ask(b.s, b.id, write(docPath(b.id, "notes.md"), "theirs"));
     assert.match(await share({ session: b.id, artifacts: ["w3"] }), new RegExp(`Session ${b.id} has a file notes.md of its own already`));
-    assert.equal(readFileSync(join(claudeHome, "kumiko", "artifacts", b.id, "notes.md"), "utf8"), "theirs");
+    assert.equal(readFileSync(join(kumikoHome, "artifacts", b.id, "notes.md"), "utf8"), "theirs");
     a.s.close();
     b.s.close();
   });
@@ -270,7 +276,7 @@ describe("widgets", () => {
     assert.deepEqual(asked?.kind === "proposal" && asked.payload.artifacts, [docPath(id)]);
     const res = await api(`/api/sessions/${id}/proposals/${asked?.kind === "proposal" && asked.payload.id}`, { method: "POST", body: JSON.stringify({ accept: true }) });
     const { id: started } = await json(res);
-    assert.equal(readFileSync(join(claudeHome, "kumiko", "artifacts", started, "plan.md"), "utf8"), "# The plan\n");
+    assert.equal(readFileSync(join(kumikoHome, "artifacts", started, "plan.md"), "utf8"), "# The plan\n");
     assert.match(String((await session(started))?.prompt), new RegExp(`^Do it\\.\\n\\nCopies of artifacts from the session that asked for this one are in your artifacts folder, and your window shows them: ${docPath(started)} \\("The plan"\\)\\.$`));
     const t = await listen(started);
     const [[widget2, copy]] = artifactsOf(t.window());
@@ -278,6 +284,19 @@ describe("widgets", () => {
     assert.ok(paneOf(t.window(), widget2), "its window shows it");
     t.close();
     await api(`/api/sessions/${started}`, { method: "DELETE" });
+    s.close();
+  });
+
+  it("finds an artifact Claude names in its old folder under ~/.claude in the Kumiko folder", async () => {
+    const { id, s } = await start();
+    // Sessions from before the move name their artifacts there; the files have moved to ~/.kumiko.
+    await writeFile(join(kumikoHome, "artifacts", id, "moved.md"), "# Moved\n");
+    const opened = await ask(s, id, widget("artifact_open", { path: `${vmHome}/.claude/kumiko/artifacts/${id}/moved.md` }));
+    assert.match(opened, /^Showing .*moved\.md as artifact/);
+    assert.equal(artifactsOf(s.window())[0][1].path, docPath(id, "moved.md"), "the window names it where it is now");
+    assert.equal(textOf(artifactsOf(s.window())[0][1]), "# Moved\n");
+    await writeFile(join(kumikoHome, "artifacts", id, "moved.md"), "# Moved\n\nAnd changed.\n");
+    await waitFor(() => textOf(artifactsOf(s.window())[0][1]).includes("And changed."));
     s.close();
   });
 
@@ -309,7 +328,7 @@ describe("widgets", () => {
     assert.ok(JSON.stringify(writes[0]).includes("Step one."), "a Write before the artifact was shown is kept as it was");
 
     // The user edits it on the host, between turns.
-    await writeFile(join(claudeHome, "kumiko", "artifacts", id, "plan.md"), "# The plan\n\nEdited by hand.\n");
+    await writeFile(join(kumikoHome, "artifacts", id, "plan.md"), "# The plan\n\nEdited by hand.\n");
     await waitFor(() => textOf(artifactsOf(s.window())[0][1]).includes("Edited by hand."));
 
     assert.match(await ask(s, id, widget("window_list", {})), /side by side: \[chat \(the chat\), p2 \(artifact w2 "The plan"/);
@@ -370,7 +389,7 @@ describe("widgets", () => {
     const removedPath = before.widgets[shownInS2].state as { path: string };
     assert.match(await ask(s, id, widget("artifact_remove", { artifact: shownInS2 })), new RegExp(`Removed artifact ${shownInS2} .* and deleted its file`));
     assert.equal(s.window().widgets[shownInS2], undefined);
-    assert.equal(existsSync(join(claudeHome, "kumiko", "artifacts", id, removedPath.path.split("/").pop()!)), false, "an artifact's file goes with it");
+    assert.equal(existsSync(join(kumikoHome, "artifacts", id, removedPath.path.split("/").pop()!)), false, "an artifact's file goes with it");
     for (const [p, t] of [[a, "A"], [b, "B"], [c, "C"]]) await ask(s, id, write(p, `# ${t}\n`));
     assert.ok(s.window().panes.p2, "the pane stays, showing another");
     assert.match(await ask(s, id, widget("artifact_remove", { artifact: "w99" })), /There is no artifact w99/);
@@ -476,7 +495,7 @@ describe("widgets", () => {
     // Removing says what became of the file: none for a preview, there or gone for a file.
     assert.match(await ask(s, id, widget("artifact_remove", { artifact: url })), /^Removed artifact w3 "Preview of [^"]+" from the window\. /);
     assert.match(await ask(s, id, widget("artifact_remove", { artifact: page })), /from the window, and deleted its file\./);
-    assert.equal(existsSync(join(claudeHome, "kumiko", "artifacts", id, "mock.html")), false);
+    assert.equal(existsSync(join(kumikoHome, "artifacts", id, "mock.html")), false);
     s.close();
   });
 
@@ -524,7 +543,7 @@ describe("widgets", () => {
 
   it("shows only files in the session's folder, of the types it knows", async () => {
     const { id, s } = await start();
-    const dir = join(claudeHome, "kumiko", "artifacts", id);
+    const dir = join(kumikoHome, "artifacts", id);
     assert.match(await ask(s, id, widget("artifact_open", { path: docPath(id, "nope.md") })), /There is no file .*nope\.md\. Write it first/);
     // The repository's files, and anything else outside the folder, aren't artifacts.
     await writeFile(join(clone, "README.md"), "# Readme\n");
@@ -563,7 +582,7 @@ describe("widgets", () => {
 
   it("brings a deleted artifact back, file and all, when rewound to before", async () => {
     const { id, s } = await start();
-    const dir = join(claudeHome, "kumiko", "artifacts", id);
+    const dir = join(kumikoHome, "artifacts", id);
     const png = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
     await writeFile(join(dir, "chart.png"), png);
     await ask(s, id, widget("artifact_open", { path: docPath(id, "chart.png") }));
@@ -577,7 +596,7 @@ describe("widgets", () => {
 
   it("neither deletes nor writes through links Claude swaps in for an artifact or its folder", async () => {
     const { id, s } = await start();
-    const dir = join(claudeHome, "kumiko", "artifacts", id);
+    const dir = join(kumikoHome, "artifacts", id);
     const outside = join(root, `outside-${id}`);
     await mkdir(join(dir, "sub"), { recursive: true });
     await mkdir(outside);
@@ -612,13 +631,13 @@ describe("widgets", () => {
 
   it("reads, writes, deletes and copies nothing through a session's folder Claude swapped for a link", async () => {
     const { id, s } = await start();
-    const dir = join(claudeHome, "kumiko", "artifacts", id);
+    const dir = join(kumikoHome, "artifacts", id);
     await ask(s, id, write(docPath(id, "x.md"), "# X1\n"));
     await ask(s, id, widget("artifact_open", { path: docPath(id, "x.md") }));
     await ask(s, id, write(docPath(id, "x.md"), "# X2\n"));
     await waitFor(() => textOf(artifactsOf(s.window())[0][1]) === "# X2\n" || undefined);
 
-    // The whole folder becomes a link to one on the host, as `ln -s /Users/you ~/.claude/kumiko/artifacts/<id>` makes it.
+    // The whole folder becomes a link to one on the host, as `ln -s /Users/you ~/.kumiko/artifacts/<id>` makes it.
     const outside = join(root, `host-${id}`);
     await mkdir(outside);
     await writeFile(join(outside, "secret.md"), "# Secret\n");
@@ -637,7 +656,7 @@ describe("widgets", () => {
     assert.equal(await readFile(join(outside, "x.md"), "utf8"), "keep me", "a rewind doesn't write through it");
 
     const fork = await json(await api(`/api/sessions/${id}/fork`, { method: "POST", body: "{}" }));
-    assert.equal(existsSync(join(claudeHome, "kumiko", "artifacts", fork.id, "secret.md")), false, "a fork doesn't copy what it points to");
+    assert.equal(existsSync(join(kumikoHome, "artifacts", fork.id, "secret.md")), false, "a fork doesn't copy what it points to");
 
     assert.equal((await api(`/api/sessions/${id}`, { method: "DELETE" })).status, 200);
     await new Promise((r) => setTimeout(r, 100));
@@ -647,7 +666,7 @@ describe("widgets", () => {
 
   it("never reads a file Claude swaps in for an artifact between Kumiko's check and its read", async () => {
     const { id, s } = await start();
-    const dir = join(claudeHome, "kumiko", "artifacts", id);
+    const dir = join(kumikoHome, "artifacts", id);
     const secret = join(root, `secret-${id}.md`);
     await writeFile(secret, `# SECRET ${id}\n`);
     await writeFile(join(dir, "a.md"), "# Fine\n");
@@ -684,7 +703,7 @@ describe("widgets", () => {
     await waitFor(() => artifactsOf(f.window()).length === 1 || undefined);
     const [[, copy]] = artifactsOf(f.window());
     assert.equal(copy.path, docPath(fork.id), "the fork's window names its own copy");
-    assert.equal(await readFile(join(claudeHome, "kumiko", "artifacts", fork.id, "plan.md"), "utf8"), "# V2\n");
+    assert.equal(await readFile(join(kumikoHome, "artifacts", fork.id, "plan.md"), "utf8"), "# V2\n");
     f.close();
 
     // Back to before the second write: the window and the file in the session's folder are as they were then.
@@ -693,7 +712,7 @@ describe("widgets", () => {
     assert.equal((await api(`/api/sessions/${id}/rewind`, { method: "POST", body: JSON.stringify({ prompt: second.id }) })).status, 200);
     const r = await listen(id);
     await waitFor(() => textOf(artifactsOf(r.window())[0]?.[1]) === "# V1\n" || undefined);
-    await waitFor(async () => (await readFile(join(claudeHome, "kumiko", "artifacts", id, "plan.md"), "utf8")) === "# V1\n" || undefined);
+    await waitFor(async () => (await readFile(join(kumikoHome, "artifacts", id, "plan.md"), "utf8")) === "# V1\n" || undefined);
     r.close();
   });
 
@@ -738,6 +757,28 @@ describe("widgets", () => {
     assert.equal(textOf(artifactsOf(again.window())[0][1]), "# Kept\n");
     // Its Claude was picked up, tools and all.
     assert.match(await ask(again, id, widget("window_list", {})), /p2 \(artifact w2 "Kept"/);
+    again.close();
+  });
+
+  it("follows an artifact a saved window names in its old folder under ~/.claude", async () => {
+    const { id, s } = await start();
+    const path = docPath(id);
+    await ask(s, id, write(path, "# Old\n"));
+    await ask(s, id, widget("artifact_open", { path }));
+    s.close();
+    ws.close();
+    await server.close();
+    // As a window saved before the move names it.
+    const saved = join(root, "sessions", `${id}.json`);
+    await writeFile(saved, (await readFile(saved, "utf8")).split(`${vmHome}/.kumiko/artifacts/`).join(`${vmHome}/.claude/kumiko/artifacts/`));
+    await boot();
+    const again = await listen(id);
+    await waitFor(() => artifactsOf(again.window()).length === 1 || undefined);
+    assert.equal(artifactsOf(again.window())[0][1].path, `${vmHome}/.claude/kumiko/artifacts/${id}/plan.md`);
+    await writeFile(join(kumikoHome, "artifacts", id, "plan.md"), "# Old\n\nChanged where it is now.\n");
+    // A turn ending reads the window's artifacts again.
+    await ask(again, id, widget("window_list", {}));
+    await waitFor(() => textOf(artifactsOf(again.window())[0][1]).includes("Changed where it is now."));
     again.close();
   });
 });

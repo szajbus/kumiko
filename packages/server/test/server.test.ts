@@ -100,7 +100,7 @@ describe("server", () => {
     assert.equal(t.preferred, "template:debian-12");
     const env = await json(await api("/api/env?names=TOKEN,NOPE,bad-name"));
     assert.deepEqual(env, { TOKEN: true, NOPE: false });
-    assert.deepEqual(await json(await api("/api/defaults")), { home, claudeHomes: join(dataDir, "claude") });
+    assert.deepEqual(await json(await api("/api/defaults")), { home, claudeHomes: join(dataDir, "claude"), kumikoHomes: join(dataDir, "sandbox") });
   });
 
   it("keeps the window's tabs in Kumiko's home, refusing what isn't tabs", async () => {
@@ -164,14 +164,17 @@ describe("server", () => {
     assert.deepEqual([p.status, p.meta?.setup, p.vm, p.project.clonePath, p.project.worktreesPath], ["running", "ready", "km-web", clone, clone + "__worktrees"]);
     assert.ok((await stat(clone + "__worktrees")).isDirectory());
 
-    // The clone and its worktrees at the same paths in the VM, the Claude home at ~/.claude, then the extra mount.
+    // The clone and its worktrees at the same paths in the VM, the Claude home at ~/.claude, the Kumiko folder at
+    // ~/.kumiko, then the extra mount.
     const claudeHome = join(dataDir, "claude", "web");
+    const kumikoHome = join(dataDir, "sandbox", "web");
     const createCall = (await readFile(join(limaDir, "calls.log"), "utf8")).split("\n").filter(Boolean).map((l) => JSON.parse(l) as string[]).find((a) => a[0] === "create" && a.includes("--name=km-web"))!;
     const mounts = JSON.parse(createCall.find((a) => a.startsWith("--set=.mounts = "))!.slice("--set=.mounts = ".length));
     assert.deepEqual(mounts, [
       { location: clone, mountPoint: clone, writable: true },
       { location: clone + "__worktrees", mountPoint: clone + "__worktrees", writable: true },
       { location: claudeHome, mountPoint: "{{.Home}}/.claude", writable: true },
+      { location: kumikoHome, mountPoint: "{{.Home}}/.kumiko", writable: true },
       { location: mountDir, mountPoint: mountDir, writable: true },
     ]);
     assert.equal(p.meta?.spec.workdir, clone, "provisioning and sessions start in the clone");
@@ -209,12 +212,35 @@ describe("server", () => {
     assert.equal(await readFile(join(claudeHome, "kumiko.md"), "utf8"), managed);
     assert.equal(await readFile(join(claudeHome, "CLAUDE.md"), "utf8"), "mine\n");
 
-    // Deleting removes the VM and the Claude home; the clone and its worktrees stay.
+    // Deleting removes the VM, the Claude home and the Kumiko folder; the clone and its worktrees stay.
     await remove("web");
     assert.deepEqual(await projects(), []);
     assert.equal(await exists(claudeHome), false);
+    assert.equal(await exists(kumikoHome), false);
     assert.ok(await exists(join(clone, "README")));
     assert.ok(await exists(clone + "__worktrees"));
+  });
+
+  it("gives a VM made before the Kumiko folder its mount when it starts", async () => {
+    await create("old");
+    const stop = events.length;
+    assert.equal((await api("/api/projects/old/stop", { method: "POST" })).status, 202);
+    assert.equal((await finished("old", "stopping", stop)).type, "done");
+    // As Kumiko recorded a VM it made with only the clone, the worktrees and the Claude home.
+    const metadata = new MetadataStore(join(dataDir, "sandboxes"));
+    const was = (await metadata.read("old"))!.spec;
+    await metadata.update("old", { spec: { ...was, mounts: was.mounts.filter((m) => m.guestPath !== "~/.kumiko") } });
+    const before = (await readFile(join(limaDir, "calls.log"), "utf8")).split("\n").length;
+
+    const since = events.length;
+    assert.equal((await api("/api/projects/old/start", { method: "POST" })).status, 202);
+    assert.equal((await finished("old", "starting", since)).type, "done");
+    assert.deepEqual((await project("old"))!.meta?.spec.mounts.map((m) => m.guestPath), [was.mounts[0].hostPath, was.mounts[1].hostPath, "~/.claude", "~/.kumiko"]);
+    const calls = (await readFile(join(limaDir, "calls.log"), "utf8")).split("\n").slice(before - 1).filter(Boolean).map((l) => JSON.parse(l) as string[]);
+    const edit = calls.findIndex((a) => a[0] === "edit" && a.includes("km-old"));
+    assert.ok(edit >= 0 && edit < calls.findIndex((a) => a[0] === "start" && a.includes("km-old")), "Lima gets the mount before the VM starts");
+    assert.ok(calls[edit].some((a) => a.includes(`"location":"${join(dataDir, "sandbox", "old")}","mountPoint":"{{.Home}}/.kumiko"`)));
+    await remove("old");
   });
 
   it("reports provisioning failures and recreates with a fixed script", async () => {
@@ -231,7 +257,7 @@ describe("server", () => {
     assert.equal((await api("/api/projects/bad?recreate=1", { method: "PATCH", body: patch })).status, 202);
     assert.equal((await finished("bad", "recreating", since)).type, "done");
     p = (await project("bad"))!;
-    assert.deepEqual([p.meta?.setup, p.cpus, p.meta?.spec.provision, p.meta?.spec.mounts.length], ["ready", 2, "echo fixed", 3]);
+    assert.deepEqual([p.meta?.setup, p.cpus, p.meta?.spec.provision, p.meta?.spec.mounts.length], ["ready", 2, "echo fixed", 4]);
 
     since = events.length;
     assert.equal((await api("/api/projects/bad/recreate", { method: "POST" })).status, 202);
@@ -239,9 +265,9 @@ describe("server", () => {
     await remove("bad");
   });
 
-  it("recreates a VM with the agent's setup scripts from its Claude home", async () => {
+  it("recreates a VM with the agent's setup scripts from its Kumiko folder", async () => {
     await create("agent");
-    const dir = join(dataDir, "claude", "agent", "sandbox", "provision.d");
+    const dir = join(dataDir, "sandbox", "agent", "provision.d");
     const marker = join(mountDir, "agent-ran");
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "10-a.sh"), `echo a >> ${marker}\n`);
@@ -300,7 +326,7 @@ describe("server", () => {
     const p = (await project("ed"))!;
     assert.deepEqual([p.cpus, p.diskGiB, p.meta?.spec.env], [3, 12, ["TOKEN"]]);
     // Only extra mounts are the user's: the project's own come back whatever is sent.
-    assert.deepEqual(p.meta?.spec.mounts.map((m) => m.guestPath), [clone, clone + "__worktrees", "~/.claude", "/data"]);
+    assert.deepEqual(p.meta?.spec.mounts.map((m) => m.guestPath), [clone, clone + "__worktrees", "~/.claude", "~/.kumiko", "/data"]);
 
     assert.equal((await api("/api/projects/nope", { method: "PATCH", body: "{}" })).status, 404);
     await remove("ed");

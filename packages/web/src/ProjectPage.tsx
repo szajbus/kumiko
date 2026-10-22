@@ -277,7 +277,7 @@ function WorktreeBadges({ w }: { w: WorktreeStatus }) {
   );
 }
 
-const MOUNT_ROLE = { clone: "Clone", worktrees: "Worktrees", "claude-home": "Claude home" } as const;
+const MOUNT_ROLE = { clone: "Clone", worktrees: "Worktrees", "claude-home": "Claude home", "kumiko-home": "Kumiko folder" } as const;
 
 function Details({ p, home }: { p: ProjectView; home?: string }) {
   const spec = p.meta?.spec;

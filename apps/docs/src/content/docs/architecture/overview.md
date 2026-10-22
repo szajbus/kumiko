@@ -31,7 +31,7 @@ flowchart TB
   provider -- "create · start · stop · delete" --> sb
   server -- "attach (ssh)" --> agent
   clone -. "mounted at the same paths" .-> sb
-  data -. "agent home mounted" .-> sb
+  data -. "agent home and Kumiko folder mounted" .-> sb
 ```
 
 ## Processes
