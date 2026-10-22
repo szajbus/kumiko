@@ -36,8 +36,11 @@ npm run dev:desktop      # the app, with the UI hot-reloading and the server res
 To work on the UI in a browser, or without real sandboxes:
 
 ```sh
-npm run dev:server       # API on http://127.0.0.1:4317
+npm run dev:server       # API on http://127.0.0.1:4317; prints the address that signs a browser in
 npm run dev:web          # Vite on http://localhost:5173, proxying /api
+
+# Every API request needs the server's token. Open the address the server prints, with Vite's port in place of
+# the server's when working through Vite: http://localhost:5173/api/login?token=…
 
 # the server against the fake limactl the tests use
 FAKE_LIMA_DIR=/tmp/fake-lima FAKE_LIMA_DELAY=1500 \

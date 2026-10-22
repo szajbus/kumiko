@@ -33,7 +33,7 @@ describe("widgets", () => {
 
   const boot = async () => {
     server = await startServer(serverOpts);
-    ws = new WebSocket(`${server.url.replace("http", "ws")}/api/events`);
+    ws = new WebSocket(`${server.url.replace("http", "ws")}/api/events`, { headers: { authorization: `Bearer ${server.token}` } });
     ws.on("message", (m) => {
       const ev = JSON.parse(String(m)) as ServerEvent;
       events.push(ev);
@@ -43,7 +43,7 @@ describe("widgets", () => {
     await new Promise((r) => ws.once("open", r));
   };
   const api = (path: string, init: RequestInit = {}) =>
-    fetch(server.url + path, { ...init, headers: { "content-type": "application/json", ...init.headers } });
+    fetch(server.url + path, { ...init, headers: { "content-type": "application/json", authorization: `Bearer ${server.token}`, ...init.headers } });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const json = (r: Response): Promise<any> => r.json();
   const waitFor = async <T>(fn: () => T | undefined | Promise<T | undefined>, ms = 10000): Promise<T> => {
@@ -61,7 +61,7 @@ describe("widgets", () => {
   /** A session's events, as a tab gets them, and its window folded from them. */
   const listen = async (id: string) => {
     let got: SessionEvent[] = [];
-    const sock = new WebSocket(`${server.url.replace("http", "ws")}/api/sessions/${id}/events?after=0`);
+    const sock = new WebSocket(`${server.url.replace("http", "ws")}/api/sessions/${id}/events?after=0`, { headers: { authorization: `Bearer ${server.token}` } });
     // Ready once the events so far have come, so a result from before doesn't pass for the next prompt's.
     let ready!: () => void;
     const caughtUp = new Promise<void>((r) => (ready = r));
@@ -311,7 +311,7 @@ describe("widgets", () => {
 
     // Claude asks for a picture; a window showing the session sends one, or says why it can't.
     const answer = (picture: (req: { session: string; pane: string; request: string; reload: boolean; capture: boolean; wait: number }) => object) => {
-      const sock = new WebSocket(`${server.url.replace("http", "ws")}/api/events`);
+      const sock = new WebSocket(`${server.url.replace("http", "ws")}/api/events`, { headers: { authorization: `Bearer ${server.token}` } });
       sock.on("message", (m) => {
         const ev = JSON.parse(String(m)) as ServerEvent;
         if (ev.type !== "pane") return;
@@ -328,7 +328,7 @@ describe("widgets", () => {
     assert.match(await ask(s, id, widget("artifact_capture", {})), /needs the Kumiko app/);
     // A browser that can't take the picture doesn't fail it for the app, which answers after it.
     await answer(() => ({ error: "Capturing needs the Kumiko app; the user has Kumiko open in a browser.", fallback: true }));
-    const late = new WebSocket(`${server.url.replace("http", "ws")}/api/events`);
+    const late = new WebSocket(`${server.url.replace("http", "ws")}/api/events`, { headers: { authorization: `Bearer ${server.token}` } });
     late.on("message", (m) => {
       const ev = JSON.parse(String(m)) as ServerEvent;
       if (ev.type !== "pane") return;

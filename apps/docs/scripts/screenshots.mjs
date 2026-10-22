@@ -19,6 +19,7 @@ const code = join(root, "code");
 const kumikoHome = join(root, ".kumiko");
 const port = Number(process.env.KUMIKO_PORT ?? 4319);
 const api = `http://127.0.0.1:${port}/api`;
+const token = randomUUID();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 try {
@@ -81,7 +82,7 @@ function makeRepos() {
 }
 
 async function call(method, path, body) {
-  const res = await fetch(api + path, { method, headers: { "content-type": "application/json" }, body: body && JSON.stringify(body) });
+  const res = await fetch(api + path, { method, headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: body && JSON.stringify(body) });
   const json = await res.json();
   if (!res.ok) throw new Error(`${method} ${path}: ${json.error}`);
   return json;
@@ -148,13 +149,13 @@ makeRepos();
 const lima = mkdtempSync(join(tmpdir(), "kumiko-demo-lima-"));
 const fixtures = join(repo, "packages/sandbox/fixtures");
 const server = spawn(process.execPath, [join(repo, "packages/server/dist/src/main.js"), "--port", String(port)], {
-  env: { ...process.env, FAKE_LIMA_DIR: lima, FAKE_LIMA_DELAY: "50", KUMIKO_LIMACTL: join(fixtures, "fake-limactl.mjs"), KUMIKO_SSH: join(fixtures, "fake-ssh.sh"), KUMIKO_HOME: kumikoHome, GITHUB_TOKEN: "demo" },
+  env: { ...process.env, FAKE_LIMA_DIR: lima, FAKE_LIMA_DELAY: "50", KUMIKO_LIMACTL: join(fixtures, "fake-limactl.mjs"), KUMIKO_SSH: join(fixtures, "fake-ssh.sh"), KUMIKO_HOME: kumikoHome, KUMIKO_TOKEN: token, GITHUB_TOKEN: "demo" },
   stdio: "inherit",
 });
 const browser = chrome();
 
 try {
-  await waitFor(() => fetch(`${api}/projects`).then((r) => r.ok), "the server");
+  await waitFor(() => fetch(`${api}/projects`, { headers: { authorization: `Bearer ${token}` } }).then((r) => r.ok), "the server");
   const project = (name, cpus, memoryGiB, env, provision) =>
     call("POST", "/projects", { clonePath: join(code, name), name, template: "template:debian-12", cpus, memoryGiB, diskGiB: 100, mounts: [], env, provision });
   await project("webshop", 4, 8, ["GITHUB_TOKEN"], "sudo apt-get update\nsudo apt-get install -y nodejs npm");
@@ -183,7 +184,7 @@ try {
   mkdirSync(out, { recursive: true });
   const shot = async (name, hash, height, active = "projects") => {
     await tabs(active);
-    execFileSync(browser, ["--headless", "--no-sandbox", "--hide-scrollbars", `--window-size=1280,${height}`, "--virtual-time-budget=10000", `--screenshot=${join(out, `${name}.png`)}`, `http://127.0.0.1:${port}/${hash}`], { stdio: "ignore" });
+    execFileSync(browser, ["--headless", "--no-sandbox", "--hide-scrollbars", `--window-size=1280,${height}`, "--virtual-time-budget=10000", `--screenshot=${join(out, `${name}.png`)}`, `${api}/login?token=${token}${hash}`], { stdio: "ignore" });
     console.log(`${name}.png`);
   };
   await shot("projects", "#/", 440);

@@ -18,8 +18,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const builtWeb = resolve(here, "../../../web/dist");
 const webDir = values.web ? resolve(values.web) : existsSync(join(builtWeb, "index.html")) ? builtWeb : undefined;
 
-const server = await startServer({ port: Number(values.port), webDir });
+// KUMIKO_TOKEN keeps the token across restarts, as dev.mjs's watcher makes; otherwise each start has a new one.
+const server = await startServer({ port: Number(values.port), webDir, token: process.env.KUMIKO_TOKEN || undefined });
 console.log(`Kumiko server on ${server.url}${webDir ? "" : " (API only; web UI not built)"}`);
+console.log(`Open ${server.loginUrl} to sign a browser in; through the dev UI, the same path on its port.`);
 
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => void server.close().then(() => process.exit(0)));

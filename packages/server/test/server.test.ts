@@ -42,7 +42,7 @@ describe("server", () => {
       env,
     });
     server = await startServer({ provider, port: 0, refreshMs: 200, env, home, dataDir, sessionsDir: join(dataDir, "sessions") });
-    ws = new WebSocket(`${server.url.replace("http", "ws")}/api/events`);
+    ws = new WebSocket(`${server.url.replace("http", "ws")}/api/events`, { headers: { authorization: `Bearer ${server.token}` } });
     ws.on("message", (m) => events.push(JSON.parse(String(m))));
     await new Promise((r) => ws.once("open", r));
   });
@@ -53,7 +53,7 @@ describe("server", () => {
   });
 
   const api = (path: string, init: RequestInit = {}) =>
-    fetch(server.url + path, { ...init, headers: { "content-type": "application/json", ...init.headers } });
+    fetch(server.url + path, { ...init, headers: { "content-type": "application/json", authorization: `Bearer ${server.token}`, ...init.headers } });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const json = (r: Response): Promise<any> => r.json();
   const waitFor = async <T>(fn: () => T | undefined, ms = 10000): Promise<T> => {
@@ -195,7 +195,7 @@ describe("server", () => {
     assert.equal((await api("/api/projects/web/stop", { method: "POST" })).status, 202);
     assert.equal((await finished("web", "stopping", s2)).type, "done");
     assert.equal((await project("web"))?.status, "stopped");
-    const ws2 = new WebSocket(`${server.url.replace("http", "ws")}/api/events`);
+    const ws2 = new WebSocket(`${server.url.replace("http", "ws")}/api/events`, { headers: { authorization: `Bearer ${server.token}` } });
     const snap = await new Promise<ServerEvent>((r) => ws2.once("message", (m) => r(JSON.parse(String(m)))));
     ws2.close();
     assert.ok(snap.type === "snapshot" && snap.logs.web.some((l) => l.text === "Stopped."));
@@ -393,7 +393,7 @@ describe("server", () => {
   it("refuses requests from other origins", async () => {
     const res = await api("/api/projects", { headers: { origin: "https://evil.example" } });
     assert.equal(res.status, 403);
-    const bad = new WebSocket(`${server.url.replace("http", "ws")}/api/events`, { origin: "https://evil.example" });
+    const bad = new WebSocket(`${server.url.replace("http", "ws")}/api/events`, { headers: { authorization: `Bearer ${server.token}` }, origin: "https://evil.example" });
     await new Promise<void>((r) => bad.once("error", () => r()));
 
     // Pages served from this machine on another port, such as a project's dev server in a preview pane, too.
@@ -401,11 +401,35 @@ describe("server", () => {
     assert.equal((await api("/api/projects", { headers: { origin: "http://localhost:5173" } })).status, 403);
     assert.equal((await api("/api/projects", { headers: { origin: "http://127.0.0.1:5173" } })).status, 403);
     assert.equal((await api("/api/projects", { headers: { origin: "null" } })).status, 403);
-    const local = new WebSocket(`${server.url.replace("http", "ws")}/api/events`, { origin: "http://localhost:5173" });
+    const local = new WebSocket(`${server.url.replace("http", "ws")}/api/events`, { headers: { authorization: `Bearer ${server.token}` }, origin: "http://localhost:5173" });
     await new Promise<void>((r) => local.once("error", () => r()));
     // Its own pages, from either name for this machine.
     assert.equal((await api("/api/projects", { headers: { origin: `http://localhost:${port}` } })).status, 200);
     assert.equal((await api("/api/projects", { headers: { origin: `http://127.0.0.1:${port}` } })).status, 200);
+  });
+
+  it("refuses requests without the server's token, which a sandbox can't learn", async () => {
+    // What an agent in a VM can send through Lima's host address: local Host, no Origin.
+    const bare = (headers: Record<string, string> = {}) => fetch(`${server.url}/api/projects`, { headers });
+    assert.equal((await bare()).status, 403);
+    assert.equal((await bare({ authorization: "Bearer nope" })).status, 403);
+    assert.equal((await bare({ authorization: `Bearer ${server.token}x` })).status, 403);
+    assert.equal((await bare({ cookie: `kumiko-${server.port}=nope` })).status, 403);
+    const sock = new WebSocket(`${server.url.replace("http", "ws")}/api/events`);
+    await new Promise<void>((r) => sock.once("error", () => r()));
+
+    // Signing in sets the cookie and leaves the token's address behind; a wrong token doesn't.
+    assert.equal((await fetch(`${server.url}/api/login?token=nope`, { redirect: "manual" })).status, 403);
+    const login = await fetch(server.loginUrl, { redirect: "manual" });
+    assert.equal(login.status, 302);
+    assert.equal(login.headers.get("location"), "/");
+    const cookie = login.headers.get("set-cookie") ?? "";
+    assert.match(cookie, /HttpOnly/);
+    assert.match(cookie, /SameSite=Strict/);
+    assert.equal((await bare({ cookie: `other=1; ${cookie.split(";")[0]}` })).status, 200);
+    const signedIn = new WebSocket(`${server.url.replace("http", "ws")}/api/events`, { headers: { cookie: cookie.split(";")[0] } });
+    await new Promise<void>((r, j) => (signedIn.once("open", () => r()), signedIn.once("error", j)));
+    signedIn.close();
   });
 
   it("notices a project's VM changing outside Kumiko, and ignores VMs that aren't projects'", async () => {
@@ -432,11 +456,11 @@ describe("server errors", () => {
     await mkdir(process.env.FAKE_LIMA_DIR);
     const server = await startServer({ provider, port: 0, dataDir: root, sessionsDir: join(root, "sessions") });
     try {
-      const templates = await fetch(`${server.url}/api/templates`);
+      const templates = await fetch(`${server.url}/api/templates`, { headers: { authorization: `Bearer ${server.token}` } });
       assert.equal(templates.status, 500);
       assert.deepEqual(await json(templates), { error: "limactl exploded" });
 
-      const bad = await fetch(`${server.url}/api/projects`, { method: "POST", body: "{nope" });
+      const bad = await fetch(`${server.url}/api/projects`, { method: "POST", headers: { authorization: `Bearer ${server.token}` }, body: "{nope" });
       assert.equal(bad.status, 400);
       assert.match((await json(bad)).error, /Body must be JSON/);
     } finally {

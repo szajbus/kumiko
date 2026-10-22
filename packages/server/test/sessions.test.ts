@@ -31,7 +31,7 @@ describe("sessions", () => {
   /** Starts the server and listens to its events. */
   const boot = async () => {
     server = await startServer(serverOpts);
-    ws = new WebSocket(`${server.url.replace("http", "ws")}/api/events`);
+    ws = new WebSocket(`${server.url.replace("http", "ws")}/api/events`, { headers: { authorization: `Bearer ${server.token}` } });
     ws.on("message", (m) => events.push(JSON.parse(String(m))));
     await new Promise((r) => ws.once("open", r));
   };
@@ -44,7 +44,7 @@ describe("sessions", () => {
   };
 
   const api = (path: string, init: RequestInit = {}) =>
-    fetch(server.url + path, { ...init, headers: { "content-type": "application/json", ...init.headers } });
+    fetch(server.url + path, { ...init, headers: { "content-type": "application/json", authorization: `Bearer ${server.token}`, ...init.headers } });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const json = (r: Response): Promise<any> => r.json();
   const waitFor = async <T>(fn: () => T | undefined | Promise<T | undefined>, ms = 10000): Promise<T> => {
@@ -66,7 +66,7 @@ describe("sessions", () => {
     const got: SessionEvent[] = [];
     let caughtUp: number | undefined;
     let buffer: string | undefined;
-    const sock = new WebSocket(`${server.url.replace("http", "ws")}/api/sessions/${id}/events?after=${afterSeq}${inBuffer ? `&buffer=${inBuffer}` : ""}`);
+    const sock = new WebSocket(`${server.url.replace("http", "ws")}/api/sessions/${id}/events?after=${afterSeq}${inBuffer ? `&buffer=${inBuffer}` : ""}`, { headers: { authorization: `Bearer ${server.token}` } });
     sock.on("message", (m) => {
       const msg = JSON.parse(String(m)) as SessionStreamMessage;
       if (msg.kind === "caught_up") {
@@ -718,11 +718,11 @@ describe("sessions", () => {
       const second = await startServer({ ...serverOpts, dataDir: other, sessionsDir: join(other, "sessions") });
       try {
         assert.ok(await alive(id), "the other server didn't stop it");
-        const theirs = await json(await fetch(`${second.url}/api/sessions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sandbox: "one", prompt: "hi" }) }));
-        await waitFor(async () => ((await json(await fetch(`${second.url}/api/sessions`))) as SessionInfo[]).find((x) => x.id === theirs.id)?.status === "idle" || undefined);
+        const theirs = await json(await fetch(`${second.url}/api/sessions`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${second.token}` }, body: JSON.stringify({ sandbox: "one", prompt: "hi" }) }));
+        await waitFor(async () => ((await json(await fetch(`${second.url}/api/sessions`, { headers: { authorization: `Bearer ${second.token}` } }))) as SessionInfo[]).find((x) => x.id === theirs.id)?.status === "idle" || undefined);
         // And this one, restarting, leaves the other's alone.
         await restart();
-        assert.equal(((await json(await fetch(`${second.url}/api/sessions`))) as SessionInfo[]).find((x) => x.id === theirs.id)?.status, "idle");
+        assert.equal(((await json(await fetch(`${second.url}/api/sessions`, { headers: { authorization: `Bearer ${second.token}` } }))) as SessionInfo[]).find((x) => x.id === theirs.id)?.status, "idle");
         assert.equal(await session(theirs.id), undefined);
         assert.equal((await session(id))?.status, "idle");
       } finally {

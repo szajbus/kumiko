@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -53,7 +53,7 @@ import { ClaudeDriver, execOutput, Runs, type AgentDriver } from "@kumiko/agent"
 import { AttachmentRefused, AttachmentStore } from "./attachments.js";
 import { ArtifactContent } from "./content.js";
 import { GitError, worktreeStatuses } from "./git.js";
-import { isLocalRequest } from "./guard.js";
+import { hasToken, isLocalRequest, isToken, tokenCookie } from "./guard.js";
 import { LoginFailed, Logins } from "./logins.js";
 import { BusyError, Operations } from "./operations.js";
 import { homeId, lockHome } from "./home.js";
@@ -90,11 +90,17 @@ export interface ServerOptions {
   lockWaitMs?: number;
   /** Reads the account and usage of the Claude in a sandbox; defaults to asking Claude inside it. Usage is cached per account. */
   usage?: UsageSource;
+  /** The secret every API request must carry (see `hasToken`); a random one by default. */
+  token?: string;
 }
 
 export interface RunningServer {
   url: string;
   port: number;
+  /** The secret every API request must carry. */
+  token: string;
+  /** Signs a browser in with the token, then goes to the UI. */
+  loginUrl: string;
   /** Sessions Claude is working in right now. */
   working(): SessionInfo[];
   /**
@@ -121,6 +127,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   const provider = opts.provider ?? new LimaProvider({ env: opts.env });
   const env = opts.env ?? (() => process.env);
   const host = opts.host ?? "127.0.0.1";
+  const token = opts.token ?? randomBytes(32).toString("hex");
   const ops = new Operations();
   const projects = new ProjectStore(opts.dataDir);
   const logins = new Logins(provider.exec.bind(provider));
@@ -377,8 +384,18 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   /** The port the server listens on, which a browser's requests must come from (see `isLocalRequest`). */
   const ownPort = () => (server.address() as AddressInfo).port;
 
+  // The token goes into a cookie only the server reads (HttpOnly) and only its own pages send (SameSite=Strict), and the
+  // address it came in on is left behind. Through the dev UI's proxy the cookie is that page's, which works the same.
+  app.get("/api/login", (c) => {
+    if (!isLocalRequest(c.req.raw.headers, ownPort()) || !isToken(c.req.query("token"), token)) return c.json(fail("Forbidden: not this server's token."), 403);
+    c.header("set-cookie", `${tokenCookie(ownPort())}=${token}; Path=/; HttpOnly; SameSite=Strict`);
+    c.header("cache-control", "no-store");
+    return c.redirect("/", 302);
+  });
+
   app.use("/api/*", async (c, next) => {
     if (!isLocalRequest(c.req.raw.headers, ownPort())) return c.json(fail("Forbidden: not a local request."), 403);
+    if (!hasToken(c.req.raw.headers, token, ownPort())) return c.json(fail("Forbidden: open Kumiko from the address its server printed, which signs this browser in."), 403);
     await next();
   });
 
@@ -933,7 +950,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     const url = new URL(req.url ?? "/", "http://localhost");
     const sessionId = /^\/api\/sessions\/([^/]+)\/events$/.exec(url.pathname)?.[1];
     // An unknown session is accepted and closed with 4404, which a browser can see; an HTTP 404 would look like a network error.
-    if ((url.pathname !== "/api/events" && !(sessionId && SESSION_ID_PATTERN.test(sessionId))) || !isLocalRequest(req.headers, ownPort())) {
+    if ((url.pathname !== "/api/events" && !(sessionId && SESSION_ID_PATTERN.test(sessionId))) || !isLocalRequest(req.headers, ownPort()) || !hasToken(req.headers, token, ownPort())) {
       socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
       socket.destroy();
       return;
@@ -969,9 +986,12 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
 
   const port = ownPort();
   await lock.setPort(port);
+  const url = `http://${host}:${port}`;
   return {
-    url: `http://${host}:${port}`,
+    url,
     port,
+    token,
+    loginUrl: `${url}/api/login?token=${token}`,
     working: () => sessions.list().filter((s) => s.status === "running" || s.status === "starting"),
     close: async ({ endSessions = false } = {}) => {
       clearInterval(timer);

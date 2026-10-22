@@ -3,6 +3,7 @@
 // Changes to the Electron main process or preload still do. Quitting the app stops everything.
 //   npm run dev:desktop
 import { spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { createServer } from "node:net";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,6 +34,8 @@ const freePort = async (from) => {
 const port = await freePort(Number(process.env.KUMIKO_PORT ?? 4317));
 const webPort = await freePort(Number(process.env.KUMIKO_WEB_PORT ?? 5173));
 const devUrl = `http://localhost:${webPort}`;
+// One token for every restart of the server, so the window stays signed in through them.
+const token = randomBytes(32).toString("hex");
 
 const children = [];
 const run = (cmd, args, opts = {}) => {
@@ -52,7 +55,7 @@ if (spawnSync(tsc, ["-b", "packages/server"], { cwd: root, stdio: "inherit" }).s
 if (spawnSync(process.execPath, ["build.mjs"], { cwd: resolve(root, "apps/desktop"), stdio: "inherit" }).status !== 0) process.exit(1);
 
 run(tsc, ["-b", "packages/server", "--watch", "--preserveWatchOutput"]);
-run(process.execPath, ["--watch", "packages/server/dist/src/main.js", "--port", String(port)]);
+run(process.execPath, ["--watch", "packages/server/dist/src/main.js", "--port", String(port)], { env: { ...process.env, KUMIKO_TOKEN: token } });
 // Vite itself, not through npm, which doesn't pass the signal on when it is stopped.
 run(resolve(root, "node_modules/.bin/vite"), ["--port", String(webPort), "--strictPort"], {
   cwd: resolve(root, "packages/web"),
@@ -69,4 +72,4 @@ for (let i = 0; ; i++) {
     await new Promise((r) => setTimeout(r, 100));
   }
 }
-run(electron, ["."], { cwd: resolve(root, "apps/desktop"), env: { ...process.env, KUMIKO_DEV_URL: devUrl } }).on("exit", stop);
+run(electron, ["."], { cwd: resolve(root, "apps/desktop"), env: { ...process.env, KUMIKO_DEV_URL: devUrl, KUMIKO_TOKEN: token } }).on("exit", stop);

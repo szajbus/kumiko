@@ -35,6 +35,7 @@ The fake `limactl`, for tests and for working on the UI without real sandboxes:
 | Variable | Does |
 | --- | --- |
 | `KUMIKO_DEV_URL` | Set by `dev:desktop`: the window loads the UI from Vite and the app starts no server of its own. Ignored when packaged. |
+| `KUMIKO_TOKEN` | The secret every API request must carry. Set by `dev:desktop`, so the server keeps it through restarts; the server alone makes a new one each start. |
 | `KUMIKO_SERVER` | Where Vite proxies `/api` (default `http://127.0.0.1:4317`). |
 | `KUMIKO_WEB_PORT` | Where `dev:desktop` starts looking for a free Vite port (default `5173`). |
 

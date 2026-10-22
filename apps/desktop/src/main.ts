@@ -24,6 +24,8 @@ const icon = (file: string) => resolve(here, "../assets/icon", file);
  * server of its own; Vite proxies /api to one running on its own, so the UI and the server reload without the app.
  */
 const devUrl = app.isPackaged ? undefined : process.env.KUMIKO_DEV_URL;
+/** Where the window signs in to that server, with the token dev.mjs gave it (KUMIKO_TOKEN), and goes on to the UI. */
+const devLoginUrl = devUrl && `${devUrl}/api/login?token=${encodeURIComponent(process.env.KUMIKO_TOKEN ?? "")}`;
 
 let server: RunningServer | undefined;
 let win: BrowserWindow | undefined;
@@ -241,10 +243,10 @@ if (!app.requestSingleInstanceLock()) {
     guardPages(session.fromPartition(SITES));
     guardPrivateNetwork(session.fromPartition(SITES));
     if (process.platform === "darwin" && !app.isPackaged) app.dock?.setIcon(icon("macos/icon-macos-1024.png"));
-    if (devUrl) {
-      createWindow(devUrl);
+    if (devLoginUrl) {
+      createWindow(devLoginUrl);
       app.on("activate", () => {
-        if (!win) createWindow(devUrl);
+        if (!win) createWindow(devLoginUrl);
       });
       return;
     }
@@ -255,9 +257,9 @@ if (!app.requestSingleInstanceLock()) {
       app.quit();
       return;
     }
-    createWindow(server.url);
+    createWindow(server.loginUrl);
     app.on("activate", () => {
-      if (!win && server) createWindow(server.url);
+      if (!win && server) createWindow(server.loginUrl);
     });
   });
 

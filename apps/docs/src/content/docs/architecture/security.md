@@ -15,7 +15,12 @@ host runs.
 
 ## The local server
 
-The server listens on `127.0.0.1` and rejects any request whose `Host` isn't local, which blocks DNS rebinding, and any
+Every request to the server's API carries a secret it makes each time it starts: the app's window gets it in a cookie
+that only the server reads and only its own pages send, and scripts in an `Authorization` header. A sandbox reaches
+your Mac's loopback through Lima's host address, and the agent in it can send any headers it likes, so without the
+secret it could drive Kumiko: change its own mounts, forward your variables, or prompt other projects' sessions.
+
+The server also listens on `127.0.0.1` only and rejects any request whose `Host` isn't local, which blocks DNS rebinding, and any
 browser request whose `Origin` isn't the server's own, which blocks other sites in your browser and other pages served
 on your Mac, such as a project's dev server shown in a preview. In development, the UI's Vite proxy passes its own
 page's requests on as the server's origin, and no other page's.
