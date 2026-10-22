@@ -15,7 +15,7 @@ So mounts and variables are the security decision. Note that a writable clone in
 `.gitattributes`, which can name commands for git to run: hooks, an fsmonitor, filters, a pager or an SSH command. Git
 on your Mac runs them, whether you run it in a terminal or an editor runs it for you when you open the folder, as VS
 Code and other git apps do. Your global config doesn't stop them, since the clone's own wins. Kumiko's own git on the
-host turns these off, so only reading the clone's state in Kumiko is safe. Run git on the clone from inside the VM when
+host turns these off, so the worktree statuses it shows run none of them. Run git on the clone from inside the VM when
 you can, or read `.git/config` before running git on your Mac.
 
 The network includes your Mac's own: Lima gives the VM a host address (`host.lima.internal`, 192.168.5.2) that leads
@@ -30,10 +30,10 @@ that only the server reads and only its own pages send, and scripts in an `Autho
 your Mac's loopback through Lima's host address, and the agent in it can send any headers it likes, so without the
 secret it could drive Kumiko: change its own mounts, forward your variables, or prompt other projects' sessions.
 
-The server also listens on `127.0.0.1` only and rejects any request whose `Host` isn't local, which blocks DNS rebinding, and any
-browser request whose `Origin` isn't the server's own, which blocks other sites in your browser and other pages served
-on your Mac, such as a project's dev server shown in a preview. In development, the UI's Vite proxy passes its own
-page's requests on as the server's origin, and no other page's.
+The server also listens on `127.0.0.1` only and rejects any request whose `Host` isn't local, which blocks DNS
+rebinding, and any browser request whose `Origin` isn't the server's own, which blocks other sites in your browser and
+other pages served on your Mac, such as a project's dev server shown in a preview. In development, the UI's Vite proxy
+passes its own page's requests on as the server's origin, and no other page's.
 
 ## Inputs
 
@@ -56,7 +56,8 @@ Pages run code from the sandbox on your Mac, so they're contained:
   or the server. A content security policy put first in the page lets it load and fetch over HTTPS only: nothing over
   plain HTTP, which is how it would reach your Mac and your network, no form submissions, no base URL.
 - **Previews** only show pages on `localhost`, `127.0.0.1` or `[::1]`. In the app they're in a `<webview>`: a process
-  and storage of their own, no preload or Node, sandboxed, with links elsewhere opened in your browser. They load from
+  and storage of their own, no preload or Node, sandboxed. Going anywhere else, by a link or by script, is stopped, and the pane offers to open
+  it in your browser instead. They load from
   this machine and the web, not from private networks, by the same check as websites below. The server refuses their
   requests, as above. Lima forwards the sandbox's ports to your Mac's loopback for them, so while nothing of yours
   listens on a port, the agent can: a tool of yours that expects its own server there, Kumiko's included, may reach
@@ -78,3 +79,7 @@ you click in the app's own page: it opens no windows, so a page framed in it, su
 by script. Navigation off the app's origin is refused, and frames in it go over HTTPS only. Pages, the app's own
 included, use WebRTC only through a proxy, so it can't reach around the checks above. The packaged app ignores
 `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS` and the inspector's options, so nothing else can start it to run code as it.
+
+Images in the agent's Markdown, in the chat and in artifacts, load only over HTTPS or from the text itself; others
+show their description. Over plain HTTP they would come from your Mac, which reaches your network where the sandbox
+can't.
