@@ -202,8 +202,10 @@ if (!app.requestSingleInstanceLock()) {
     if (contents.getType() !== "webview") return;
     const pane = contents.session === session.fromPartition(SITES) ? "site" : "preview";
     const ask = (target: string) => paneNavigation(pane, target) === "ask" && contents.hostWebContents?.send("kumiko:page-wants", contents.id, target);
+    // A new window to where the pane may go anyway (another of the dev server's pages, say) opens in the pane itself.
     contents.setWindowOpenHandler(({ url: target }) => {
-      ask(target);
+      if (paneNavigation(pane, target) === "stay") void contents.loadURL(target);
+      else ask(target);
       return { action: "deny" };
     });
     contents.on("will-navigate", (e, target) => {

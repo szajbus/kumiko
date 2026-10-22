@@ -56,12 +56,12 @@ Pages run code from the sandbox on your Mac, so they're contained:
   or the server. A content security policy put first in the page lets it load and fetch over HTTPS only: nothing over
   plain HTTP, which is how it would reach your Mac and your network, no form submissions, no base URL.
 - **Previews** only show pages on `localhost`, `127.0.0.1` or `[::1]`. In the app they're in a `<webview>`: a process
-  and storage of their own, no preload or Node, sandboxed. Going anywhere else, by a link or by script, is stopped, and the pane offers to open
-  it in your browser instead. They load from
-  this machine and the web, not from private networks, by the same check as websites below. The server refuses their
-  requests, as above. Lima forwards the sandbox's ports to your Mac's loopback for them, so while nothing of yours
-  listens on a port, the agent can: a tool of yours that expects its own server there, Kumiko's included, may reach
-  the agent's instead.
+  and storage of their own, no preload or Node, sandboxed. Links and new windows to this machine's pages open in the
+  pane itself; going anywhere else, by a link or by script, is stopped, and the pane offers to open it in your browser
+  instead. They load from this machine and the web, not from private networks, by the same check as websites below.
+  The server refuses their requests, as above. Lima forwards the sandbox's ports to your Mac's loopback for them, so
+  while nothing of yours listens on a port, the agent can: a tool of yours that expects its own server there, Kumiko's
+  included, may reach the agent's instead.
 - **Websites** load only once you allow them, per site and session: the agent picks the URL, so it doesn't get to
   load a site without you. They run in a `<webview>` with storage of their own, apart from previews', in memory only,
   with no permissions and no downloads. They can't reach your Mac or your networks: the app cancels their requests to
