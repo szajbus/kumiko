@@ -143,6 +143,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   // Windows' widgets map the paths Claude names in its VM to the host: the project's mounts, and the VM user's home.
   const widgets = new Widgets({
     content,
+    scratch: join(home, "tmp"),
     home: (sandbox) => {
       const p = projectList.find((x) => x.id === sandbox);
       return p && { claudeHome: projects.claudeHome(p.id), roots: [p.clonePath, p.worktreesPath] };

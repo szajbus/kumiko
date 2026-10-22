@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -527,6 +527,32 @@ describe("widgets", () => {
     assert.equal((await api(`/api/sessions/${id}`, { method: "DELETE" })).status, 200);
     await new Promise((r) => setTimeout(r, 100));
     assert.equal(await readFile(join(outside, "secret.md"), "utf8"), "# Secret\n", "deleting the session leaves what it points to");
+    s.close();
+  });
+
+  it("never reads a file Claude swaps in for an artifact between Kumiko's check and its read", async () => {
+    const { id, s } = await start();
+    const dir = join(claudeHome, "kumiko", "artifacts", id);
+    const secret = join(root, `secret-${id}.md`);
+    await writeFile(secret, `# SECRET ${id}\n`);
+    await writeFile(join(dir, "a.md"), "# Fine\n");
+    await ask(s, id, widget("artifact_open", { path: docPath(id, "a.md") }));
+    // a.md keeps turning from the file into a link to one outside and back, each time all at once, by a rename.
+    let flipping = true;
+    const flipper = (async () => {
+      for (let n = 0; flipping; n++) {
+        const tmp = join(dir, `.swap-${n}`);
+        if (n % 2) await symlink(secret, tmp);
+        else await writeFile(tmp, "# Fine\n");
+        await rename(tmp, join(dir, "a.md"));
+      }
+    })();
+    for (let i = 0; i < 40; i++) await ask(s, id, widget("artifact_reload", { artifact: "w2" }));
+    flipping = false;
+    await flipper;
+    // Everything Kumiko read of an artifact is kept here, for the window.
+    const kept = readdirSync(join(root, "sessions", "artifacts")).map((f) => readFileSync(join(root, "sessions", "artifacts", f), "utf8"));
+    assert.ok(!kept.some((t) => t.includes(`SECRET ${id}`)), "the file outside was read");
     s.close();
   });
 

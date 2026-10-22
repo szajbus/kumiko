@@ -1,5 +1,5 @@
-import { constants, cpSync, existsSync, mkdirSync, realpathSync, watch, type FSWatcher } from "node:fs";
-import { open, realpath, rm, stat } from "node:fs/promises";
+import { cpSync, existsSync, mkdirSync, realpathSync, watch, type FSWatcher } from "node:fs";
+import { realpath } from "node:fs/promises";
 import { basename, dirname, join, posix, relative, sep } from "node:path";
 import {
   applyWindowOp,
@@ -30,6 +30,7 @@ import {
 } from "@kumiko/shared";
 import type { AgentMessage, ToolHost, ToolResult, ToolSpec } from "@kumiko/agent";
 import { contentHash, type ArtifactContent } from "./content.js";
+import { openIn, removeIn, writeIn } from "./files.js";
 import type { SessionWidgets, Sessions } from "./sessions.js";
 
 /** Where a project's files are, for mapping the paths Claude names in its VM to the host. */
@@ -58,6 +59,8 @@ export interface WidgetsOptions {
    * picture of the pane as it is on screen; resolves with the picture, if one was asked for.
    */
   pane?(session: string, pane: PaneId, what: { reload: boolean; capture: boolean; wait: number }): Promise<PaneAnswer>;
+  /** A folder of Kumiko's own, on the same disk as the Claude homes, for files on their way into one (see `writeIn`). */
+  scratch: string;
   /** Whether something answers at a preview's URL. */
   reachable?(url: string): Promise<boolean>;
 }
@@ -85,14 +88,14 @@ function inPlace(claudeHome: string, id: string): boolean {
 }
 
 /**
- * Where `path` really is, if its folder is in `realDir` (resolved already): its folder resolved, so a folder Claude has
- * since swapped for a link doesn't lead out of it. The file itself may be a link; whoever writes or deletes it mustn't
- * follow that.
+ * Where `path` really is, if its folder is in `realDir` (resolved already): its folder resolved, and its name. The
+ * file itself may be a link, and Claude may swap a folder on the way afterwards: `removeIn` and `writeIn` check the
+ * folder again as they use it, and don't follow the file.
  */
-async function realWithin(path: string, realDir: string): Promise<string | undefined> {
+async function realWithin(path: string, realDir: string): Promise<{ dir: string; name: string } | undefined> {
   try {
     const parent = await realpath(dirname(path));
-    return hostWithin(parent, realDir) ? join(parent, basename(path)) : undefined;
+    return hostWithin(parent, realDir) ? { dir: parent, name: basename(path) } : undefined;
   } catch {
     return undefined;
   }
@@ -377,7 +380,7 @@ export class Widgets implements SessionWidgets {
     const realDir = dir && (await this.realDocs(info).catch(() => undefined));
     const real = artifact && at && dir && realDir && hostWithin(at.path, dir) && !(artifact.type === "preview" || artifact.type === "web") ? await realWithin(at.path, realDir) : undefined;
     // A link is deleted itself, not what it points to.
-    if (real) deleted = await rm(real).then(() => true, () => false);
+    if (real) deleted = await removeIn(real.dir, real.name);
     return { window: w, deleted };
   }
 
@@ -500,13 +503,16 @@ export class Widgets implements SessionWidgets {
       if (!docs) return gone;
       const real = await realpath(at.path);
       if (!hostWithin(real, docs)) throw new ToolError(`${vmPath} links to a file outside this session's folder, which Kumiko won't show.`);
-      const st = await stat(real);
-      if (!st.isFile()) throw new ToolError(`${vmPath} isn't a file.`);
-      const stamp = `${st.size}:${st.mtimeMs}`;
-      // An image is all or nothing: a cut one can't be shown.
-      if (type === "image" && st.size > MAX_IMAGE_BYTES) return { ...gone, missing: false, truncated: true, stamp };
-      const fh = await open(real, "r");
+      // The file that is there now, in that folder: Claude may have swapped a link in since the check.
+      const opened = await openIn(dirname(real), basename(real), this.opts.scratch);
+      if (!opened) return gone;
+      const { fh } = opened;
       try {
+        const st = await fh.stat();
+        if (!st.isFile()) throw new ToolError(`${vmPath} isn't a file.`);
+        const stamp = `${st.size}:${st.mtimeMs}`;
+        // An image is all or nothing: a cut one can't be shown.
+        if (type === "image" && st.size > MAX_IMAGE_BYTES) return { ...gone, missing: false, truncated: true, stamp };
         if (type === "image") {
           const data = await fh.readFile();
           return { data, hash: contentHash(data), text: "", truncated: false, missing: false, stamp };
@@ -518,7 +524,7 @@ export class Widgets implements SessionWidgets {
         const data = Buffer.from(text);
         return { data, hash: contentHash(data), text, truncated: st.size > MAX_ARTIFACT_BYTES, missing: false, stamp };
       } finally {
-        await fh.close();
+        await opened.done();
       }
     } catch (err) {
       if (err instanceof ToolError) throw err;
@@ -669,15 +675,16 @@ export class Widgets implements SessionWidgets {
       const data = d.content ? await this.opts.content.get(d.content) : d.text !== undefined ? Buffer.from(d.text, d.type === "image" ? "base64" : "utf8") : undefined;
       const real = data && (await realWithin(join(dir, relative(vmDir, d.path)), realDir));
       // Not through a link, which Claude could have pointed anywhere on the host.
-      if (real) await writeNoFollow(real, data).catch(() => {});
+      if (real) await writeIn(real.dir, real.name, data, this.opts.scratch);
     }
   }
 
   /** A saved session deleted for good: its artifacts go too. */
   deleted(info: SessionInfo): void {
     this.unwatch(info.id);
-    const dir = this.hostDocs(info);
-    if (dir) void rm(dir, { recursive: true, force: true }).catch(() => {});
+    const home = this.opts.home(info.sandbox);
+    // From inside the artifacts' folder of the Claude home, so a folder on the way that Claude made a link isn't followed.
+    if (home) void realpath(home.claudeHome).then((real) => removeIn(join(real, "kumiko", "artifacts"), info.id, { recursive: true }), () => {});
   }
 
   /** The server is going away: nothing more is watched. */
@@ -861,14 +868,4 @@ export function removeArtifact(w: WindowState, widget: WidgetId, instead: "anoth
   const other = pane && !back && instead === "another" ? artifactsOf(w).findLast(([id]) => id !== widget && !paneOf(w, id))?.[0] : undefined;
   const next = back ?? other;
   return [...(pane && next ? [{ type: "show" as const, pane, widget: next }] : []), { type: "remove", widget }];
-}
-
-/** Writes `data` to `path`, unless it is a link. */
-async function writeNoFollow(path: string, data: Buffer): Promise<void> {
-  const fh = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW);
-  try {
-    await fh.writeFile(data);
-  } finally {
-    await fh.close();
-  }
 }

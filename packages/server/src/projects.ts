@@ -3,6 +3,7 @@ import { access, cp, lstat, mkdir, readdir, readFile, realpath, rm, rmdir, stat,
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, normalize } from "node:path";
 import { CLAUDE_HOME_IN_VM, NAME_PATTERN, projectMountRole, WORKTREES_SUFFIX, type Mount, type Project, type SandboxSpec } from "@kumiko/shared";
+import { replaceFile } from "./files.js";
 import { cloneProblem } from "./git.js";
 
 export function defaultKumikoHome(): string {
@@ -241,7 +242,8 @@ export class ProjectStore {
   async writeManaged(p: Project): Promise<void> {
     const home = this.claudeHome(p.id);
     await mkdir(home, { recursive: true });
-    await writeFile(join(home, MANAGED_FILE), managedInstructions(p));
+    // Claude can make the file a link to one of the user's on the host: that is replaced, not written through.
+    await replaceFile(home, MANAGED_FILE, managedInstructions(p));
   }
 
   /** Deletes the project's record and its Claude home, which holds its login and Claude's session history. */
