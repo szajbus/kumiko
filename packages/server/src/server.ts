@@ -55,7 +55,7 @@ import {
 } from "@kumiko/shared";
 import { LimaProvider, validateSpec, type Log, type SandboxProvider } from "@kumiko/sandbox";
 import { ClaudeDriver, execOutput, Runs, type AgentDriver } from "@kumiko/agent";
-import { compareAgentScripts, readAgentScripts } from "./agentSetup.js";
+import { readAgentScripts, withExitCodes } from "./agentSetup.js";
 import { AttachmentRefused, AttachmentStore } from "./attachments.js";
 import { ArtifactContent } from "./content.js";
 import { GitError, worktreeStatuses } from "./git.js";
@@ -524,7 +524,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       throw new HttpError(400, "Can't create this project.", v.errors);
     }
     try {
-      ops.start(id, "creating", async (log) => provider.create(v.spec, log, await agentSetup(project, true)));
+      ops.start(id, "creating", async (log) => provider.create(v.spec, log, await agentSetup(project)));
     } catch (err) {
       // The record is this request's own claim, so undoing it can't touch another project's.
       await rollback();
@@ -615,31 +615,24 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
    * Deletes the VM and creates it again from `spec`, ending its sessions first. Saved sessions stay resumable: Claude's
    * history is in the project's Claude home, on the host.
    */
-  const recreate = async (project: Project, spec: SandboxSpec, log: Log, withAgentSetup: boolean) => {
+  const recreate = async (project: Project, spec: SandboxSpec, log: Log) => {
     await endSessions(project.id, log);
     await provider.delete(project.id, log);
     await projects.writeManaged(project);
-    await provider.create(spec, log, await agentSetup(project, withAgentSetup));
+    await provider.create(spec, log, await agentSetup(project));
   };
 
-  /**
-   * The agent's setup scripts a VM is created with, read once its sessions have ended, so none can change them while it is
-   * provisioned. Without `run`, a record that the user left them out, if there are any.
-   */
-  const agentSetup = async (project: Project, run: boolean): Promise<AgentSetupRun | undefined> => {
+  /** The agent's setup scripts a VM is created with, read once its sessions have ended, so none can change them while it is provisioned. */
+  const agentSetup = async (project: Project): Promise<AgentSetupRun | undefined> => {
     const { scripts } = await readAgentScripts(projects.claudeHome(project.id), scratch);
-    if (!scripts.length) return undefined;
-    return run ? { scripts } : { scripts: [], skipped: true };
+    return scripts.length ? { scripts } : undefined;
   };
 
-  /** Whether a recreate runs the agent's setup scripts: unless the request says `agentSetup=0`. */
-  const withAgentSetup = (c: Context) => c.req.query("agentSetup") !== "0";
-
-  /** The agent's setup scripts as they are now, and what changed since the VM was created. */
+  /** The agent's setup scripts as they are now, with how each went when the VM was created. */
   app.get("/api/projects/:id/agent-setup", async (c) => {
     const { project, info } = await known(c.req.param("id"));
     const now = await readAgentScripts(projects.claudeHome(project.id), scratch);
-    return c.json(compareAgentScripts(info.meta?.agentSetup, now) satisfies AgentSetupResponse);
+    return c.json(withExitCodes(info.meta?.agentSetup, now) satisfies AgentSetupResponse);
   });
 
   /**
@@ -661,7 +654,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       // Nothing to edit in place: build the VM from the stored spec with the changes.
       const v = await validateSpec({ ...vmSpec(project, info), ...patch, name: id, workdir: project.clonePath }, env());
       if (v.errors.length) throw new HttpError(400, "Can't apply these changes.", v.errors);
-      ops.start(id, "recreating", (log) => recreate(project, v.spec, log, withAgentSetup(c)));
+      ops.start(id, "recreating", (log) => recreate(project, v.spec, log));
       return c.json({ name: id, op: "recreating", warnings: v.warnings }, 202);
     }
     const v = await provider.validateEdit(id, patch, { recreate: again, restart: restarting });
@@ -669,7 +662,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     const op: OpKind = again ? "recreating" : restarting ? "restarting" : "editing";
     ops.start(id, op, (log) =>
       again
-        ? recreate(project, projects.spec(project, v.spec), log, withAgentSetup(c))
+        ? recreate(project, projects.spec(project, v.spec), log)
         : restarting
           ? restart(project, info, log, () => provider.edit(id, patch, log))
           : provider.edit(id, patch, log),
@@ -678,15 +671,16 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   });
 
   /** Delete, then create again from the stored spec (or the defaults, if there is none). */
-  app.post("/api/projects/:id/recreate", (c) =>
+  app.post(
+    "/api/projects/:id/recreate",
     action(
       "recreating",
-      (p, i, log) => recreate(p, vmSpec(p, i), log, withAgentSetup(c)),
+      (p, i, log) => recreate(p, vmSpec(p, i), log),
       async (p, i) => {
         if (i.metaError) throw new HttpError(400, i.metaError);
         await assertFolders(p);
       },
-    )(c),
+    ),
   );
 
   /** The clone's worktrees, from git on the host, with what needs attention in each. Needs nothing of the VM. */

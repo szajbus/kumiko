@@ -527,8 +527,7 @@ export class LimaProvider implements SandboxProvider {
     }
 
     const agent = meta.agentSetup;
-    if (agent?.skipped) log("Skipped the agent's setup scripts, as asked.", "note");
-    else if (agent?.scripts.length) {
+    if (agent?.scripts.length) {
       // Each runs on its own, so one that fails doesn't keep the others from setting up what they can.
       const scripts = [];
       for (const s of agent.scripts) {

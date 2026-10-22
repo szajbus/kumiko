@@ -239,7 +239,7 @@ describe("server", () => {
     await remove("bad");
   });
 
-  it("recreates a VM with the agent's setup scripts from its Claude home, or without them when asked", async () => {
+  it("recreates a VM with the agent's setup scripts from its Claude home", async () => {
     await create("agent");
     const dir = join(dataDir, "claude", "agent", "sandbox", "provision.d");
     const marker = join(mountDir, "agent-ran");
@@ -247,7 +247,7 @@ describe("server", () => {
     await writeFile(join(dir, "10-a.sh"), `echo a >> ${marker}\n`);
     await writeFile(join(dir, "20-b.sh"), "exit 7\n");
     let setup = await json(await api("/api/projects/agent/agent-setup"));
-    assert.deepEqual(setup.scripts.map((s: { file: string; state: string }) => [s.file, s.state]), [["10-a.sh", "new"], ["20-b.sh", "new"]]);
+    assert.deepEqual(setup.scripts.map((s: { file: string; exitCode?: number }) => [s.file, s.exitCode]), [["10-a.sh", undefined], ["20-b.sh", undefined]]);
 
     let since = events.length;
     assert.equal((await api("/api/projects/agent/recreate", { method: "POST" })).status, 202);
@@ -259,16 +259,13 @@ describe("server", () => {
 
     await writeFile(join(dir, "20-b.sh"), "true\n");
     setup = await json(await api("/api/projects/agent/agent-setup"));
-    assert.deepEqual(setup.scripts.map((s: { state: string; exitCode?: number }) => [s.state, s.exitCode]), [["same", 0], ["changed", undefined]]);
+    assert.deepEqual(setup.scripts.map((s: { exitCode?: number }) => s.exitCode), [0, undefined], "a script changed since hasn't run in this VM");
 
     since = events.length;
-    assert.equal((await api("/api/projects/agent?recreate=1&agentSetup=0", { method: "PATCH", body: JSON.stringify({ cpus: 2 }) })).status, 202);
+    assert.equal((await api("/api/projects/agent?recreate=1", { method: "PATCH", body: JSON.stringify({ cpus: 2 }) })).status, 202);
     assert.equal((await finished("agent", "recreating", since)).type, "done");
-    assert.equal(await readFile(marker, "utf8"), "a\n", "skipped");
-    assert.deepEqual((await project("agent"))!.meta?.agentSetup, { scripts: [], skipped: true });
-    setup = await json(await api("/api/projects/agent/agent-setup"));
-    assert.equal(setup.skipped, true);
-    assert.deepEqual(setup.scripts.map((s: { state: string }) => s.state), ["new", "new"]);
+    assert.equal(await readFile(marker, "utf8"), "a\na\n");
+    assert.deepEqual((await project("agent"))!.meta?.agentSetup?.scripts.map((s) => s.exitCode), [0, 0]);
     await remove("agent");
   });
 

@@ -36,7 +36,7 @@ The git clone is `<clone>`. Sessions start there.
 - When you install or configure something in the VM that you'd want again after a rebuild (packages, tools, services, system settings), add it to a setup script. Keep one script per concern, named like `20-postgres.sh`; look at the ones there first, and change one rather than add a second for the same thing.
 - Write them so they can run again where they ran before, then run a new or changed one right away to check it works: `bash -e ~/.claude/sandbox/provision.d/<file>`.
 - Don't install what the user's provisioning script already does, and never write secret values into a script: the folder is on the user's computer. Use the project's forwarded variables by name.
-- The user sees these scripts and can recreate the VM without them. When you add or change one, say so in your reply.
+- They are yours to manage; the user can see them on the project page. When you add or change one, say so in your reply.
 
 ## Worktrees
 

@@ -152,31 +152,16 @@ export interface AgentScript {
   exitCode?: number;
 }
 
-/** The agent's setup scripts a VM was created with; with `skipped`, the user recreated it without them. */
+/** The agent's setup scripts a VM was created with. */
 export interface AgentSetupRun {
   scripts: AgentScript[];
-  skipped?: boolean;
 }
 
-/** One of the agent's setup scripts as it is now, against the run that created the VM. */
-export interface AgentScriptView {
-  file: string;
-  script: string;
-  /** `new` and `changed` are since the VM was created; with no record of that run, every script is `new`. */
-  state: "new" | "changed" | "same";
-  /** How it went when the VM was created, if it ran then unchanged. */
-  exitCode?: number;
-}
-
-/** GET /api/projects/:id/agent-setup */
+/** GET /api/projects/:id/agent-setup: the scripts as they are now, each with how it went when the VM was created, if it ran as it is now. */
 export interface AgentSetupResponse {
-  scripts: AgentScriptView[];
-  /** Scripts the VM was created with that are gone now. */
-  removed: string[];
+  scripts: AgentScript[];
   /** Files in the folder Kumiko won't run: not named `*.sh`, not plain files, or too big. */
   ignored: string[];
-  /** Whether the VM was created without the agent's scripts. */
-  skipped: boolean;
 }
 
 export interface SandboxInfo {

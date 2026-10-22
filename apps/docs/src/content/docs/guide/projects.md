@@ -80,9 +80,8 @@ with the same forwarded variables, and each stops at its first failing command. 
 or the sandbox: it shows **Running · agent setup failed**, and the project page says which. Files that aren't plain
 `*.sh` files, or are over 64 KB, are left out. If your own script fails, none of them run.
 
-The project page lists them under **Agent's setup scripts**, marking the ones that are new or changed since the
-sandbox was created: those haven't run in it yet. Recreating asks whether to run them and shows those in full. Leave
-**Run the agent's setup scripts** unchecked for a sandbox with only your own setup.
+The agent manages them; there is nothing you need to do. To see them, open **Agent's setup scripts** on the project
+page, which also says how each went when the sandbox was created.
 
 ## Editing a project
 
@@ -101,8 +100,8 @@ to save:
 - **Restart sandbox** stops a running sandbox and starts it again, ending its live sessions (it asks first if there
   are any). The disk is kept, so nothing is provisioned again.
 - **Recreate sandbox** deletes the sandbox and creates it again from its stored settings, with the
-  [agent's setup scripts](#the-agents-setup-scripts) unless you leave them out. The agent home and the saved sessions
-  stay, and so does the login.
+  [agent's setup scripts](#the-agents-setup-scripts). The agent home and the saved sessions stay, and so does the
+  login.
 - **Delete** removes the project, its sandbox, its agent home and its saved sessions, after asking. The clone and its
   worktrees are never touched.
 

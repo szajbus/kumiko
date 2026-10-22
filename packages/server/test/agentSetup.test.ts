@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { AGENT_SETUP_DIR } from "@kumiko/shared";
-import { compareAgentScripts, MAX_AGENT_SCRIPT_BYTES, readAgentScripts } from "../src/agentSetup.js";
+import { MAX_AGENT_SCRIPT_BYTES, readAgentScripts, withExitCodes } from "../src/agentSetup.js";
 
 const tmp = async () => realpath(await mkdtemp(join(tmpdir(), "kumiko-agent-setup-")));
 
@@ -45,7 +45,7 @@ describe("the agent's setup scripts", () => {
     assert.deepEqual(await readAgentScripts(join(root, "missing"), join(root, "scratch")), { scripts: [], ignored: [] });
   });
 
-  it("are compared with the ones the VM was created with", () => {
+  it("say how each went when the VM was created, if it ran then as it is now", () => {
     const run = {
       scripts: [
         { file: "10-a.sh", script: "a", exitCode: 0 },
@@ -54,17 +54,14 @@ describe("the agent's setup scripts", () => {
       ],
     };
     const now = { scripts: [{ file: "10-a.sh", script: "a" }, { file: "20-b.sh", script: "b2" }, { file: "40-new.sh", script: "n" }], ignored: ["x"] };
-    assert.deepEqual(compareAgentScripts(run, now), {
+    assert.deepEqual(withExitCodes(run, now), {
       scripts: [
-        { file: "10-a.sh", script: "a", state: "same", exitCode: 0 },
-        { file: "20-b.sh", script: "b2", state: "changed" },
-        { file: "40-new.sh", script: "n", state: "new" },
+        { file: "10-a.sh", script: "a", exitCode: 0 },
+        { file: "20-b.sh", script: "b2" },
+        { file: "40-new.sh", script: "n" },
       ],
-      removed: ["30-gone.sh"],
       ignored: ["x"],
-      skipped: false,
     });
-    assert.deepEqual(compareAgentScripts(undefined, now).scripts.map((s) => s.state), ["new", "new", "new"]);
-    assert.equal(compareAgentScripts({ scripts: [], skipped: true }, now).skipped, true);
+    assert.deepEqual(withExitCodes(undefined, now).scripts.map((s) => s.exitCode), [undefined, undefined, undefined]);
   });
 });

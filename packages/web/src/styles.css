@@ -373,10 +373,6 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 .agent-script[open] summary::before { content: "▾"; }
 .agent-script summary::-webkit-details-marker { display: none; }
 .agent-script .preview { margin-bottom: 10px; }
-/* In a recreate dialog, long scripts scroll rather than push the buttons away. */
-.agent-choice { margin-top: 12px; }
-.agent-choice .agent-scripts { margin: 6px 0 0; max-height: 260px; overflow: auto; }
-.agent-choice .preview { max-height: 200px; overflow: auto; }
 .form-actions { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: flex-end; gap: 12px; padding-top: 4px; }
 .form-errors { flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .fieldset-stack { display: flex; flex-direction: column; gap: 12px; }

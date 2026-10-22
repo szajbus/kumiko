@@ -41,18 +41,17 @@ async function readScript(dir: string, file: string, scratch: string): Promise<s
   }
 }
 
-/** The agent's scripts as they are now, against the run the VM was created with: what is new, changed or gone since. */
-export function compareAgentScripts(run: AgentSetupRun | undefined, now: { scripts: AgentScript[]; ignored: string[] }): AgentSetupResponse {
+/**
+ * The agent's scripts as they are now, each with how it went when the VM was created: only if it ran then as it is now,
+ * since a script changed since hasn't run in this VM.
+ */
+export function withExitCodes(run: AgentSetupRun | undefined, now: { scripts: AgentScript[]; ignored: string[] }): AgentSetupResponse {
   const ran = new Map((run?.scripts ?? []).map((s) => [s.file, s]));
   return {
     scripts: now.scripts.map(({ file, script }) => {
-      const before = ran.get(file);
-      if (!before) return { file, script, state: "new" };
-      if (before.script !== script) return { file, script, state: "changed" };
-      return { file, script, state: "same", ...(before.exitCode !== undefined ? { exitCode: before.exitCode } : {}) };
+      const code = ran.get(file)?.script === script ? ran.get(file)?.exitCode : undefined;
+      return { file, script, ...(code !== undefined ? { exitCode: code } : {}) };
     }),
-    removed: [...ran.keys()].filter((f) => !now.scripts.some((s) => s.file === f)),
     ignored: now.ignored,
-    skipped: run?.skipped === true,
   };
 }
