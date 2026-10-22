@@ -37,8 +37,8 @@ describe("quoteInsert", () => {
 
 describe("quoteFrom", () => {
   it("says which artifact the quote is from", () => {
-    assert.equal(quoteFrom("> Step one.", "Widgets plan", "plan.md"), 'From the artifact "Widgets plan" (`plan.md`):\n\n> Step one.');
-    assert.equal(quoteFrom("> Hi", "plan.md", "plan.md"), 'From the artifact "plan.md":\n\n> Hi');
+    assert.equal(quoteFrom("> Step one.", "Widgets plan", "plan.md"), 'From the artifact "Widgets plan" (`plan.md`):\n> Step one.');
+    assert.equal(quoteFrom("> Hi", "plan.md", "plan.md"), 'From the artifact "plan.md":\n> Hi');
     assert.equal(quoteFrom("", "Widgets plan", "plan.md"), "");
   });
 });

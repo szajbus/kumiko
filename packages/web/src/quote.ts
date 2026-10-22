@@ -37,5 +37,5 @@ export function quoteInsert(draft: string, quoted: string): { from: number; inse
 export function quoteFrom(quoted: string, title: string, where: string): string {
   if (!quoted) return "";
   const named = where && where !== title ? `"${title}" (\`${where}\`)` : `"${title}"`;
-  return `From the artifact ${named}:\n\n${quoted}`;
+  return `From the artifact ${named}:\n${quoted}`;
 }
