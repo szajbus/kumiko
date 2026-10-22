@@ -38,4 +38,4 @@ sidebar:
 
 | Keys | Does |
 | --- | --- |
-| <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd> | Close the artifact pane used last; with none open, show the last artifact beside the chat again |
+| <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd> | Open the list of the session's artifacts: <kbd>↑</kbd> / <kbd>↓</kbd> to move, <kbd>Enter</kbd> to show or hide one, <kbd>Esc</kbd> to close it |

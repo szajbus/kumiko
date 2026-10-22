@@ -216,11 +216,11 @@ function Switcher({ ctx, slot, title }: { ctx: WindowApi; slot: SlotId; title: s
  * One artifact in a list of them: its type's icon, its title, a dot if it changed unseen, and buttons to open it in a
  * new pane (`split`) and to delete it, which leave the menu open.
  */
-function ArtifactItem({ ctx, entry: d, current, onSelect, split }: { ctx: WindowApi; entry: ArtifactEntry; current: boolean; onSelect(): void; split?: { full: boolean; open(): void } }) {
+function ArtifactItem({ ctx, entry: d, current, onSelect, split, hint }: { ctx: WindowApi; entry: ArtifactEntry; current: boolean; onSelect(e: Event): void; split?: { full: boolean; open(): void }; hint?: string }) {
   // Its own action, not the item's.
   const own = { onPointerDown: (e: PointerEvent) => e.stopPropagation(), onPointerUp: (e: PointerEvent) => e.stopPropagation() };
   return (
-    <Menu.Item className={`menu-item artifact-menu-item${current ? " is-current" : ""}`} onSelect={onSelect}>
+    <Menu.Item className={`menu-item artifact-menu-item${current ? " is-current" : ""}`} onSelect={onSelect} title={hint}>
       <span className="artifact-menu-check" aria-hidden="true">{current ? "✓" : ""}</span>
       <ArtifactIcon type={d.type} />
       <span className="artifact-menu-title">{d.title}</span>
@@ -263,29 +263,84 @@ function ArtifactItem({ ctx, entry: d, current, onSelect, split }: { ctx: Window
 }
 
 /**
- * The composer's way back to the window's artifacts: a count of them that opens the list, to show one beside the chat.
- * Those panes show already are ticked. A dot marks those that changed while no pane showed them.
+ * The composer's list of the window's artifacts, ticked where a pane shows them: picking one opens it in a pane of its
+ * own, or closes the pane showing it, and the list stays open for more. Cmd+Shift+A opens it from the keyboard. A dot
+ * marks those that changed while no pane showed them.
  */
 export function ArtifactsButton() {
   const ctx = useContext(WindowContext);
   const [open, setOpen] = useState(false);
-  if (!ctx?.live || !ctx.artifacts.length) return null;
+  const content = useRef<HTMLDivElement>(null);
+  const shown = Boolean(ctx?.live && ctx.artifacts.length);
+  useEffect(() => {
+    if (!shown) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || !e.shiftKey || e.altKey || e.code !== "KeyA") return;
+      e.preventDefault();
+      setOpen((o) => !o);
+    };
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+  }, [shown]);
+  // Once open, the first artifact is highlighted, for the arrows and Enter to go on from.
+  useEffect(() => {
+    if (!open) return;
+    const f = requestAnimationFrame(() => content.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus());
+    return () => cancelAnimationFrame(f);
+  }, [open]);
+  if (!ctx || !shown) return null;
   const unread = ctx.artifacts.some((d) => d.unread);
+  const full = Object.keys(ctx.window.slots).length >= MAX_SLOTS;
+  const near = lastArtifactSlot(ctx);
+  const replaced = full && near ? ctx.artifacts.find((d) => d.slot === near)?.title : undefined;
+  const toggle = (d: ArtifactEntry) => {
+    if (d.slot) return ctx.close(d.slot);
+    // Full: in place of the artifact in the pane used last. Otherwise a pane of its own, beside that one or the chat.
+    if (full || !near) return ctx.show(d.widget);
+    const r = document.querySelector(`[data-slot="${CSS.escape(near)}"]`)?.getBoundingClientRect();
+    ctx.showBeside(d.widget, near, r && r.height > r.width ? "below" : "right");
+  };
   return (
     <Menu.Root modal={false} open={open} onOpenChange={setOpen}>
-      <Menu.Trigger className="select-trigger select-compact artifacts-button" title={`Show an artifact beside the chat (${MOD}+Shift+A)`}>
+      <Menu.Trigger className="select-trigger select-compact artifacts-button" title={`Show or hide artifacts (${MOD}+Shift+A)`}>
         <span>Artifacts · {ctx.artifacts.length}</span>
         {unread && <span className="dot dot-small artifact-unread" aria-label="An artifact changed" />}
       </Menu.Trigger>
       <Menu.Portal>
-        <Menu.Content className="menu artifact-menu" side="top" align="start" sideOffset={6} collisionPadding={8} aria-label="Artifacts">
+        <Menu.Content
+          ref={content}
+          className="menu artifact-menu"
+          side="top"
+          align="start"
+          sideOffset={6}
+          collisionPadding={8}
+          aria-label="Artifacts"
+        >
           {ctx.artifacts.map((d) => (
-            <ArtifactItem key={d.widget} ctx={ctx} entry={d} current={Boolean(d.slot)} onSelect={() => !d.slot && ctx.show(d.widget)} />
+            <ArtifactItem
+              key={d.widget}
+              ctx={ctx}
+              entry={d}
+              current={Boolean(d.slot)}
+              hint={d.slot ? "Close its pane" : replaced ? `A window has at most ${MAX_SLOTS} panes: this takes the place of “${replaced}”` : "Open it in a pane"}
+              onSelect={(e) => {
+                // The list stays open, to show or hide several.
+                e.preventDefault();
+                toggle(d);
+              }}
+            />
           ))}
         </Menu.Content>
       </Menu.Portal>
     </Menu.Root>
   );
+}
+
+/** The artifact pane used last: the active slot if it shows an artifact, else the last one that does. */
+function lastArtifactSlot(ctx: WindowApi): SlotId | undefined {
+  const { window: w } = ctx;
+  const showsArtifact = (slot: SlotId | undefined) => slot !== undefined && w.widgets[w.slots[slot]]?.kind === "artifact";
+  return showsArtifact(w.active) ? w.active : Object.keys(w.slots).filter(showsArtifact).at(-1);
 }
 
 /** The key that goes with Shift+A, as the user's platform names it. */

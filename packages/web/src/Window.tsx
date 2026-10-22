@@ -37,7 +37,6 @@ export function Window({ session, onForked }: Props) {
   const arrange = live && !stack && Object.keys(win.slots).length > 1;
   const { drag, startDrag, sizing, startResize } = useArrange(session.id, box, win, arrange);
   usePaneRequests(session.id, box);
-  useArtifactsKey(win, artifacts, live, session.id);
   // While a divider is dragged, the layout follows it here, and the server hears of it once it is let go.
   const layout = sizing ? resizedLayout(win, sizing.path, sizing.ratio) : win.layout;
   const rects = slotRects(layout, stack);
@@ -117,34 +116,6 @@ export function Window({ session, onForked }: Props) {
       </div>
     </WindowContext.Provider>
   );
-}
-
-/**
- * Cmd+Shift+A: closes the artifact pane used last, or with none open, shows the artifact shown last (or changed last)
- * beside the chat again. Only the active tab's window is mounted, so it is that tab's.
- */
-function useArtifactsKey(win: WindowState, artifacts: ArtifactEntry[], live: boolean, id: string) {
-  // The artifact a pane showed last, to bring back.
-  const last = useRef<WidgetId | undefined>(undefined);
-  const shown = Object.entries(win.slots).filter(([, w]) => win.widgets[w]?.kind === "artifact");
-  const pick = win.active && win.widgets[win.slots[win.active]]?.kind === "artifact" ? win.active : shown.at(-1)?.[0];
-  if (pick) last.current = win.slots[pick];
-  const latest = useRef({ pick, artifacts });
-  latest.current = { pick, artifacts };
-  useEffect(() => {
-    if (!live) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey) || !e.shiftKey || e.altKey || e.code !== "KeyA") return;
-      const { pick, artifacts } = latest.current;
-      if (!pick && !artifacts.length) return;
-      e.preventDefault();
-      if (pick) return void api.closeSlot(id, pick).catch((err) => console.error(err));
-      const widget = artifacts.some((d) => d.widget === last.current) ? last.current! : artifacts.reduce((a, b) => (b.at > a.at ? b : a)).widget;
-      void api.showWidget(id, widget).catch((err) => console.error(err));
-    };
-    addEventListener("keydown", onKey);
-    return () => removeEventListener("keydown", onKey);
-  }, [live, id]);
 }
 
 /** How long a reloaded page has to load before the window gives up waiting and answers anyway. */
