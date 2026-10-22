@@ -587,6 +587,9 @@ a.artifact-copy { text-decoration: none; }
 .artifact-image.is-svg { padding: 16px; border-radius: 8px; background: #fff; }
 .artifact-source { white-space: pre-wrap; font-size: 12.5px; color: var(--text-2); }
 .diagram { margin: 12px auto; }
+.md-image-blocked { color: var(--muted); font-style: italic; }
+.md-image-blocked::before { content: "[image: "; }
+.md-image-blocked::after { content: "]"; }
 .diagram-wait { color: var(--muted); font-size: 12.5px; font-style: italic; padding: 8px 0; }
 .diagram-error pre { white-space: pre-wrap; font-size: 12.5px; color: var(--text-2); }
 

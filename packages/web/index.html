@@ -4,6 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
+    <!-- Images from the app itself, data and blob URLs, and the web over HTTPS: not over plain HTTP, which is how one
+         would reach this machine's services and the user's network. Pages framed from the app (HTML artifacts) keep it. -->
+    <meta http-equiv="Content-Security-Policy" content="img-src 'self' data: blob: https:" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <link rel="icon" href="/png/32x32.png" type="image/png" sizes="32x32" />
     <title>Kumiko</title>

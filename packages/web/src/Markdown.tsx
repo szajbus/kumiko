@@ -2,6 +2,7 @@ import { memo, useState, type ComponentProps } from "react";
 import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Diagram } from "./Diagram";
+import { imageSource } from "./imageSource";
 
 /** The text of a hast node and everything in it. */
 type Element = NonNullable<ExtraProps["node"]>;
@@ -30,10 +31,20 @@ function CodeBlock({ node, ...props }: ComponentProps<"pre"> & ExtraProps) {
   );
 }
 
-// Links open outside the app (the desktop shell sends new windows to the browser). Raw HTML is never rendered.
+// Links open outside the app (the desktop shell sends new windows to the browser). Raw HTML is never rendered. Images
+// load only from where `imageSource` lets them; others show their text instead.
 const components: Components = {
   a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
   pre: CodeBlock,
+  img: ({ node: _node, src, alt, ...props }) => {
+    const shown = imageSource(src);
+    if (shown) return <img {...props} src={shown} alt={alt} />;
+    return (
+      <span className="md-image-blocked" title={typeof src === "string" ? `Not loaded: ${src}` : undefined}>
+        {alt || "image"}
+      </span>
+    );
+  },
 };
 
 /** The same, with ```mermaid blocks drawn as diagrams. */
