@@ -78,9 +78,10 @@ export function App() {
     const r = parseHash();
     return r.view === "new-session" ? showDraft(newSessions[0].key) : r;
   });
-  // Sessions being closed leave the tabs at once, without waiting for the server to confirm.
+  // Sessions being closed leave the tabs at once, without waiting for the server to confirm. So do those it says are
+  // closing, which Claude finishes out of sight.
   const [ending, setEnding] = useState<ReadonlySet<string>>(new Set());
-  const sessions = useMemo(() => live.sessions.filter((s) => !ending.has(s.id)), [live.sessions, ending]);
+  const sessions = useMemo(() => live.sessions.filter((s) => !ending.has(s.id) && !s.closing), [live.sessions, ending]);
   // The session tabs looked at last, most recent first: their windows stay mounted, so switching back is instant.
   const [recent, setRecent] = useState<string[]>([]);
   const onSession = route.view === "session" ? route.id : undefined;
@@ -94,8 +95,6 @@ export function App() {
   const [order, setOrder] = useState<TabId[]>([]);
   // The session whose Cmd+Shift+W is waiting for confirmation.
   const [deleting, setDeleting] = useState<SessionInfo | undefined>();
-  // The session Claude is working in whose closing is waiting for confirmation.
-  const [stopping, setStopping] = useState<SessionInfo | undefined>();
   // The title bar's corner, where the open session shows its usage.
   const [corner, setCorner] = useState<HTMLDivElement | null>(null);
   // The project whose page or session tab was last active, which a New session tab opened from elsewhere starts in.
@@ -131,7 +130,8 @@ export function App() {
       setResumed((n) => n + 1);
     })();
   }, [live.snapshots]);
-  // Sessions whose tabs were closed, most recent last, for Cmd+Shift+T to bring back. Deleted ones are dropped.
+  // Sessions whose tabs were closed, most recent last, for Cmd+Shift+T to bring back. Deleted ones are dropped, unless
+  // Claude is finishing in them first: until it has, they can still come back.
   const closed = useRef<string[]>([]);
   const reopening = useRef(false);
   // The Projects tab remembers where it was, so switching back returns to the same page.
@@ -243,32 +243,23 @@ export function App() {
     if (tabOf(route) === tab) select(landingAfterClose(tabs, tab));
   };
 
-  /** Closes a session's tab at once and ends it on the server; the tab comes back if the server refuses. Resolves whether it ended. */
-  const endSession = async (s: SessionInfo): Promise<boolean> => {
+  /**
+   * Closes a session's tab at once, and on the server, where Claude finishes its turn first unless `stop`; the tab comes
+   * back if the server refuses. With `delete`, the saved chat goes too, so it can't be resumed once Claude is done.
+   */
+  const closeSession = async (s: SessionInfo, opts: { delete?: boolean; stop?: boolean } = {}) => {
     leave(`session:${s.id}`);
     setEnding((all) => new Set(all).add(s.id));
     try {
-      await api.endSession(s.id);
-      closed.current = [...closed.current.filter((id) => id !== s.id), s.id];
-      return true;
+      const { finishing } = await api.closeSession(s.id, opts);
+      closed.current = [...closed.current.filter((id) => id !== s.id), ...(opts.delete && !finishing ? [] : [s.id])];
     } catch {
       setEnding((all) => {
         const rest = new Set(all);
         rest.delete(s.id);
         return rest;
       });
-      return false;
     }
-  };
-
-  /** Closes a session's tab, then forgets its saved copy too, so it can't be resumed. */
-  const deleteSession = async (s: SessionInfo) => {
-    if (!(await endSession(s))) return;
-    closed.current = closed.current.filter((id) => id !== s.id);
-    // 404: Claude never answered, so nothing was saved.
-    await api.deleteSavedSession(s.id).catch((err) => {
-      if (!(err instanceof RequestError && err.status === 404)) console.error(err);
-    });
   };
 
   /** Resumes the most recently closed session that still can be. One deleted since, e.g. from the New session tab, is skipped. */
@@ -279,7 +270,7 @@ export function App() {
       while (closed.current.length) {
         const id = closed.current[closed.current.length - 1];
         // Reopened some other way in the meantime: it isn't closed any more.
-        if (live.sessions.some((s) => s.id === id)) {
+        if (live.sessions.some((s) => s.id === id && !s.closing && !ending.has(id))) {
           closed.current = closed.current.slice(0, -1);
           continue;
         }
@@ -306,14 +297,13 @@ export function App() {
     }
     const s = sessions.find((x) => `session:${x.id}` === tab);
     if (!s) return leave(tab);
-    if (isWorking(s)) return setStopping(s);
-    void endSession(s);
+    void closeSession(s);
   };
 
   // Keyboard shortcuts act on the latest render's state, so the listeners below are installed once.
   const shortcut = useRef<(action: "new" | "reopen" | "next" | "prev" | "close" | "delete" | number) => void>(() => {});
   shortcut.current = (action) => {
-    if (deleting || stopping) return;
+    if (deleting) return;
     if (action === "delete") {
       const current = tabOf(route);
       return setDeleting(sessions.find((x) => `session:${x.id}` === current));
@@ -393,38 +383,37 @@ export function App() {
       {deleting && (
         <ConfirmDialog
           title="Delete this session?"
-          confirmLabel="Delete session"
+          confirmLabel={isWorking(deleting) ? "Delete when done" : "Delete session"}
           danger
           enterConfirms
+          alternative={
+            isWorking(deleting)
+              ? {
+                  label: "Stop and delete",
+                  onClick: () => {
+                    const s = deleting;
+                    setDeleting(undefined);
+                    void closeSession(s, { delete: true, stop: true });
+                  },
+                }
+              : undefined
+          }
           onCancel={() => setDeleting(undefined)}
           onConfirm={() => {
             const s = deleting;
             setDeleting(undefined);
-            void deleteSession(s);
+            void closeSession(s, { delete: true });
           }}
         >
           <p>
             <strong>{sessionTitle(deleting)}</strong> closes and its saved chat is deleted, so it can't be resumed.
-            {isWorking(deleting) && " Claude is still working in it, and stops."}
           </p>
-        </ConfirmDialog>
-      )}
-      {stopping && (
-        <ConfirmDialog
-          title="Stop Claude and close?"
-          confirmLabel="Stop and close"
-          danger
-          onCancel={() => setStopping(undefined)}
-          onConfirm={() => {
-            const s = stopping;
-            setStopping(undefined);
-            void endSession(s);
-          }}
-        >
-          <p>
-            Claude is still working in <strong>{sessionTitle(stopping)}</strong>. Closing the tab stops it, and the reply
-            it is writing is lost. You can resume the session later.
-          </p>
+          {isWorking(deleting) && (
+            <p>
+              Claude is still working in it. It can finish its turn first, for up to 30 minutes, out of sight: the Projects
+              tab shows it until then, and Cmd+Shift+T brings it back. Or it can stop now, cutting the turn short.
+            </p>
+          )}
         </ConfirmDialog>
       )}
       <HeaderCorner.Provider value={corner}>
@@ -465,6 +454,7 @@ function Body({ route, live, started, onSessionStarted }: BodyProps) {
           onBack={() => go("#/")}
           onEdit={() => go(`#/project/${route.name}/edit`)}
           onNewSession={() => go(`#/session/new/${route.name}`)}
+          onSessionStarted={onSessionStarted}
         />
       );
     case "edit": {
@@ -479,12 +469,13 @@ function Body({ route, live, started, onSessionStarted }: BodyProps) {
     case "draft":
       return null; // rendered by App, which keeps New session tabs mounted
     case "session": {
-      const s = live.sessions.find((x) => x.id === route.id);
+      // One Claude finishes after its tab closed has no tab.
+      const s = live.sessions.find((x) => x.id === route.id && !x.closing);
       if (!live.loaded || (!s && started.has(route.id))) return null;
       if (!s) return <Redirect to="#/" />;
       return null; // rendered by App, which keeps the session tabs looked at last mounted
     }
     default:
-      return <ProjectList live={live} onOpen={(name) => go(`#/project/${name}`)} onNew={() => go("#/new")} />;
+      return <ProjectList live={live} onOpen={(name) => go(`#/project/${name}`)} onNew={() => go("#/new")} onSessionStarted={onSessionStarted} />;
   }
 }

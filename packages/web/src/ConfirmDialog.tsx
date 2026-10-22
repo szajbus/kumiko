@@ -7,11 +7,13 @@ interface Props {
   /** Focuses the confirm button instead of Cancel, so Enter confirms (Esc always cancels). */
   enterConfirms?: boolean;
   children?: ReactNode;
+  /** Another way to confirm, offered beside the main one. */
+  alternative?: { label: string; onClick(): void };
   onConfirm(): void;
   onCancel(): void;
 }
 
-export function ConfirmDialog({ title, confirmLabel, danger, enterConfirms, children, onConfirm, onCancel }: Props) {
+export function ConfirmDialog({ title, confirmLabel, danger, enterConfirms, children, alternative, onConfirm, onCancel }: Props) {
   const ref = useRef<HTMLDialogElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -28,6 +30,11 @@ export function ConfirmDialog({ title, confirmLabel, danger, enterConfirms, chil
         <button type="button" className="btn btn-secondary" onClick={onCancel} autoFocus={!enterConfirms}>
           Cancel
         </button>
+        {alternative && (
+          <button type="button" className="btn btn-secondary" onClick={alternative.onClick}>
+            {alternative.label}
+          </button>
+        )}
         <button type="button" className={`btn ${danger ? "btn-danger" : "btn-primary"}`} onClick={onConfirm} ref={confirmRef}>
           {confirmLabel}
         </button>

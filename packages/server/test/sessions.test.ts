@@ -479,6 +479,39 @@ describe("sessions", () => {
     await api(`/api/sessions/saved/${kept}`, { method: "DELETE" });
   });
 
+  it("lets Claude finish its turn after the tab closes, and takes it back until then", async () => {
+    const saved = async () => ((await json(await api("/api/sessions/resumable"))) as SessionInfo[]).map((x) => x.id);
+    const id = await startSession("one", "slow");
+    const chat = await listen(id);
+    await waitFor(async () => (await session(id))?.status === "running");
+
+    const res = await api(`/api/sessions/${id}?delete`, { method: "DELETE" });
+    assert.equal(res.status, 202);
+    assert.equal((await json(res)).finishing, true);
+    assert.equal((await session(id))?.closing?.delete, true, "it is listed as closing, for tabs to leave out");
+    assert.ok(!(await saved()).includes(id), "one to be deleted can't be resumed from the list");
+
+    // Taken back: open again, Claude still working.
+    assert.equal((await api(`/api/sessions/${id}/resume`, { method: "POST" })).status, 201);
+    assert.equal((await session(id))?.closing, undefined);
+    assert.equal((await session(id))?.status, "running");
+
+    assert.equal((await api(`/api/sessions/${id}?delete`, { method: "DELETE" })).status, 202);
+    await waitFor(async () => !(await session(id)), 20000);
+    assert.equal(chat.results().length, 1, "the turn was finished, not cut short");
+    assert.ok(!(await saved()).includes(id), "its saved chat is gone");
+    assert.equal((await api(`/api/sessions/${id}/resume`, { method: "POST" })).status, 404);
+
+    // Stopped instead, the turn is cut short at once.
+    const stopped = await startSession("one", "slow");
+    await waitFor(async () => (await session(stopped))?.status === "running");
+    const r = await api(`/api/sessions/${stopped}?stop`, { method: "DELETE" });
+    assert.equal(r.status, 200);
+    assert.equal(await session(stopped), undefined);
+    assert.ok((await saved()).includes(stopped), "closed, not deleted, it can be resumed");
+    await api(`/api/sessions/saved/${stopped}`, { method: "DELETE" });
+  });
+
   it("logs Claude in from a session, then retries the prompt that failed", async () => {
     // The fake Claude reads its config from the fake sandbox's ~/.claude: logged out until it has credentials.
     const claudeHome = join(limaDir, "vm-home", ".claude");

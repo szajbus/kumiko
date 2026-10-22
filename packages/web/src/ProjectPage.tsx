@@ -3,6 +3,7 @@ import { isWaiting, projectMountRole, vmName, type LogLine, type ProjectView, ty
 import { SandboxActions, useActions } from "./actions";
 import { api, errorMessage, useHome, type LiveState } from "./api";
 import { Breadcrumbs } from "./Breadcrumbs";
+import { FinishingItem } from "./Finishing";
 import { sessionTitle, tilde } from "./format";
 import { Folder, Pencil, Plus, Redo } from "./icons";
 import { LogPanel } from "./LogPanel";
@@ -14,10 +15,12 @@ interface Props {
   onBack(): void;
   onEdit(): void;
   onNewSession(): void;
+  /** A session reopened from the page, whose tab opens. */
+  onSessionStarted(id: string): void;
 }
 
 /** One project: what needs the user (sessions waiting, worktrees with work in them), then its VM and the VM's log. */
-export function ProjectPage({ id, live, onBack, onEdit, onNewSession }: Props) {
+export function ProjectPage({ id, live, onBack, onEdit, onNewSession, onSessionStarted }: Props) {
   const p = live.projects.find((x) => x.name === id);
   const lines = live.logs[id] ?? [];
   const actions = useActions({ onDeleted: onBack });
@@ -85,7 +88,7 @@ export function ProjectPage({ id, live, onBack, onEdit, onNewSession }: Props) {
 
         {p && (
           <div className="detail-grid">
-            <SessionsCard sessions={sessions} />
+            <SessionsCard sessions={sessions} onOpened={onSessionStarted} />
             <WorktreesCard p={p} home={home} />
           </div>
         )}
@@ -124,17 +127,19 @@ function DetailHead({ p, home, lines, children }: { p: ProjectView; home?: strin
   );
 }
 
-/** The project's open sessions, the ones waiting on the user first. */
-function SessionsCard({ sessions }: { sessions: SessionInfo[] }) {
+/** The project's open sessions, the ones waiting on the user first, then those Claude finishes after their tab closed. */
+function SessionsCard({ sessions: all, onOpened }: { sessions: SessionInfo[]; onOpened(id: string): void }) {
+  const sessions = all.filter((s) => !s.closing);
   const sorted = [...sessions].sort((a, b) => Number(isWaiting(b)) - Number(isWaiting(a)));
   const waiting = sessions.filter(isWaiting).length;
+  const finishing = all.filter((s) => s.closing);
   return (
     <section className="card section" aria-labelledby="p-sessions">
       <div className="card-head">
         <h2 id="p-sessions">Sessions</h2>
         {waiting > 0 && <span className="badge badge-warn">{waiting} waiting on you</span>}
       </div>
-      {sorted.length === 0 && <p className="muted">No open sessions. Resume saved ones from a New session tab.</p>}
+      {sorted.length === 0 && !finishing.length && <p className="muted">No open sessions. Resume saved ones from a New session tab.</p>}
       <ul className="item-list">
         {sorted.map((s) => {
           const st = sessionState(s);
@@ -150,6 +155,9 @@ function SessionsCard({ sessions }: { sessions: SessionInfo[] }) {
             </li>
           );
         })}
+        {finishing.map((s) => (
+          <FinishingItem key={s.id} s={s} onOpened={onOpened} />
+        ))}
       </ul>
     </section>
   );

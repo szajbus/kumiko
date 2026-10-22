@@ -98,6 +98,8 @@ export interface ServerOptions {
   usage?: UsageSource;
   /** The secret every API request must carry (see `hasToken`); a random one by default. */
   token?: string;
+  /** How long Claude may finish its turn after its session's tab closes, in ms; 30 minutes by default. */
+  finishMs?: number;
 }
 
 export interface RunningServer {
@@ -190,7 +192,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       });
       broadcast({ type: "pane", session, pane, request, ...what });
     });
-  const sessions = new Sessions(opts.driver ?? (() => new ClaudeDriver(provider.exec.bind(provider), { owner })), sessionStore, widgets);
+  const sessions = new Sessions(opts.driver ?? (() => new ClaudeDriver(provider.exec.bind(provider), { owner })), sessionStore, widgets, opts.finishMs);
   widgets.sessions = sessions;
   const runs = opts.runs ?? new Runs(provider.exec.bind(provider), owner);
   const clients = new Set<WebSocket>();
@@ -285,7 +287,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   let serving = false;
   const restartOutdated = () => {
     for (const info of sessions.list()) {
-      if (!info.toolsOutdated || info.status !== "idle" || restartTried.has(info.id)) continue;
+      if (!info.toolsOutdated || info.status !== "idle" || info.closing || restartTried.has(info.id)) continue;
       restartTried.add(info.id);
       void (async () => {
         try {
@@ -315,9 +317,16 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     await sessions.endSandbox(name, "sandbox");
   };
 
-  /** Saves that a session's run is over, without having seen it end: the VM restarted, say. It stays resumable. */
-  const markRunDead = (stored: StoredSession) =>
-    stored.run?.live ? sessionStore.write({ ...stored, run: { ...stored.run, live: false } }) : Promise.resolve();
+  /**
+   * Saves that a session's run is over, without having seen it end: the VM restarted, say. It stays resumable, unless
+   * its tab was closed to delete it once Claude finished, which it now has.
+   */
+  const markRunDead = (stored: StoredSession) => {
+    if (!stored.run?.live) return Promise.resolve();
+    if (stored.info.closing?.delete) return sessionStore.remove(stored.info.id);
+    const { closing: _closing, ...info } = stored.info;
+    return sessionStore.write({ ...stored, info, run: { ...stored.run, live: false } });
+  };
 
   /** Runs in the sandbox that no saved session will attach to again; their agents are stopped and the runs deleted. */
   const sweepRuns = async (sandbox: string, found: Map<string, unknown>) => {
@@ -712,6 +721,8 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
 
   /** Opens a saved session again: its Claude where it is still running, or a new one continuing its conversation. */
   app.post("/api/sessions/:id/resume", async (c) => {
+    // One whose tab closed while Claude finishes opens again as it is, if it hasn't finished yet.
+    if (await sessions.keep(c.req.param("id"))) return c.json({ id: c.req.param("id") }, 201);
     const stored = await sessionStore.read(c.req.param("id"));
     if (!stored || (!stored.info.claudeSessionId && !stored.run?.live)) throw new HttpError(404, `No saved session ${c.req.param("id")}.`);
     const ready = await startedProject(stored.info.sandbox);
@@ -720,7 +731,9 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       const found = await runs.list(stored.info.sandbox).catch(() => undefined);
       if (!found) throw new HttpError(503, `Couldn't reach ${vmName(stored.info.sandbox)} to find this session's Claude. Try again.`);
       const state = found.get(stored.run.id);
-      if (state === "alive" || state === "exited") return c.json({ id: sessions.reopen(stored).id }, 201);
+      // Opened by the user, it isn't closing any more.
+      const { closing: _closing, ...info } = stored.info;
+      if (state === "alive" || state === "exited") return c.json({ id: sessions.reopen({ ...stored, info }).id }, 201);
       await markRunDead(stored);
       if (!stored.info.claudeSessionId) throw new HttpError(404, `No saved session ${c.req.param("id")}.`);
     }
@@ -937,9 +950,13 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     return c.json({ ok: true }, 202);
   });
 
+  /**
+   * Closes a session's tab: once Claude finishes its turn (202), or at once with `?stop` or when it isn't working.
+   * With `?delete`, its saved chat goes too.
+   */
   app.delete("/api/sessions/:id", async (c) => {
-    await sessions.remove(sessionOf(c).id);
-    return c.json({ ok: true });
+    const finishing = await sessions.close(sessionOf(c).id, { forget: c.req.query("delete") !== undefined, stop: c.req.query("stop") !== undefined });
+    return c.json({ ok: true, finishing }, finishing ? 202 : 200);
   });
 
   app.all("/api/*", (c) => c.json(fail("Not found."), 404));

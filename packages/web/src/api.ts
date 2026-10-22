@@ -146,8 +146,14 @@ export const api = {
   /** Takes the session back to just before a prompt, optionally with the files put back too. */
   rewindSession: (id: string, prompt: string, files: boolean) =>
     request<RewindResponse>("POST", `/api/sessions/${id}/rewind`, { prompt, files } satisfies RewindRequest & { prompt: string }),
-  /** Ends the session if it is live and forgets it; a session Claude has talked to stays resumable. */
-  endSession: (id: string) => request("DELETE", `/api/sessions/${id}`),
+  /**
+   * Closes the session's tab: Claude, if working, finishes its turn first (`finishing`), unless `stop`. Then the session
+   * is forgotten; one Claude has talked to stays resumable, unless `delete`.
+   */
+  closeSession: (id: string, opts: { delete?: boolean; stop?: boolean } = {}) => {
+    const query = [opts.delete && "delete", opts.stop && "stop"].filter(Boolean).join("&");
+    return request<{ finishing: boolean }>("DELETE", `/api/sessions/${id}${query ? `?${query}` : ""}`);
+  },
 };
 
 const wsUrl = (path: string) => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${path}`;

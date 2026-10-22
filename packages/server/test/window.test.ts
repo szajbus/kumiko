@@ -148,7 +148,7 @@ describe("session windows", () => {
     sessions.changeWindow(id, right("p2", "w2"));
     const w = sessions.window(id);
     await sessions.flush();
-    await sessions.remove(id);
+    await sessions.close(id);
     const stored = await store.read(id);
     assert.ok(stored);
     const again = new Sessions(() => new StubDriver(), store);
@@ -175,7 +175,7 @@ describe("session windows", () => {
     assert.ok(started.toolsVersion);
     assert.equal(started.toolsOutdated, undefined);
     const stored = { info: { ...started, toolsVersion: "older" }, events: [...sessions.events(id)], run: { id: "r", offset: 0, live: true } };
-    await sessions.remove(id);
+    await sessions.close(id);
     const again = new Sessions(() => new StubDriver(), store);
     assert.equal(again.reopen(stored).toolsOutdated, true);
     const restarted = again.relaunch(id, []);

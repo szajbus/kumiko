@@ -1,6 +1,7 @@
 import type { LogLine, ProjectView } from "@kumiko/shared";
 import { SandboxActions, useActions, type Actions } from "./actions";
 import { useHome, type LiveState } from "./api";
+import { FinishingCard } from "./Finishing";
 import { tilde } from "./format";
 import { EmptyBento, Plus } from "./icons";
 import { plural, resources, statusOf } from "./status";
@@ -9,9 +10,11 @@ interface Props {
   live: LiveState;
   onOpen(id: string): void;
   onNew(): void;
+  /** A session reopened from the list, whose tab opens. */
+  onSessionStarted(id: string): void;
 }
 
-export function ProjectList({ live, onOpen, onNew }: Props) {
+export function ProjectList({ live, onOpen, onNew, onSessionStarted }: Props) {
   const actions = useActions();
   const home = useHome();
   const empty = live.loaded && live.projects.length === 0 && live.unreadable.length === 0;
@@ -49,6 +52,8 @@ export function ProjectList({ live, onOpen, onNew }: Props) {
         )}
 
         {!live.loaded && <p className="muted">Connecting…</p>}
+
+        <FinishingCard sessions={live.sessions} onOpened={onSessionStarted} />
 
         {empty && (
           <div className="empty-state">

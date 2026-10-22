@@ -9,6 +9,12 @@ describe("resumableKey", () => {
     assert.notEqual(resumableKey({ ...live, sessions: [{ id: "a1" }] }), resumableKey(live));
   });
 
+  it("changes when a session's tab closes while Claude finishes, and when it is to be deleted then", () => {
+    const closing = resumableKey({ ...live, sessions: [{ id: "a1", closing: { delete: false } }, { id: "b2" }] });
+    assert.notEqual(closing, resumableKey(live));
+    assert.notEqual(resumableKey({ ...live, sessions: [{ id: "a1", closing: { delete: true } }, { id: "b2" }] }), closing);
+  });
+
   it("changes when a project is deleted, even with no session of its open", () => {
     assert.notEqual(resumableKey({ ...live, projects: [{ name: "web" }] }), resumableKey(live));
   });

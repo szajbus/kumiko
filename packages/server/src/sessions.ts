@@ -40,6 +40,10 @@ interface Session {
   detached?: boolean;
   /** The session's window, as its `window` events leave it. */
   window: WindowState;
+  /** Stops Claude once a closed session's time to finish is up. */
+  closeTimer?: NodeJS.Timeout;
+  /** Ending and forgetting a closed session, once it is under way. */
+  finishing?: Promise<void>;
 }
 
 /** What sessions' windows need beyond the window itself: the tools Claude changes them with, and the files they show. */
@@ -77,6 +81,12 @@ const isChainEntry = (e: SessionEvent): e is ChainEntry =>
 
 const isLive = (s: SessionInfo) => LIVE_SESSION_STATUSES.includes(s.status);
 
+/** Claude is working in the session: closing it now would cut a turn short. */
+const isWorking = (s: SessionInfo) => s.status === "running" || s.status === "starting";
+
+/** How long Claude may go on with its turn after its session is closed, before it is stopped. */
+export const FINISH_MS = 30 * 60_000;
+
 /**
  * How to start Claude on the session's history: as it is, or cut where a rewind left it; on the model it was using, if
  * that was chosen rather than the default, since a Claude started again starts on the default.
@@ -110,6 +120,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     private readonly makeDriver: () => AgentDriver,
     private readonly store?: SessionStore,
     private readonly widgets?: SessionWidgets,
+    private readonly finishMs = FINISH_MS,
   ) {
     super();
   }
@@ -163,7 +174,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     const { info: saved } = stored;
     if (this.sessions.has(saved.id)) throw new SessionNotResumable("This session is already open.");
     if (!saved.claudeSessionId) throw new SessionNotResumable("This session has nothing of Claude's to resume.");
-    const { endedAt: _endedAt, updatedAt: _updatedAt, unread: _unread, ...rest } = saved;
+    const { endedAt: _endedAt, updatedAt: _updatedAt, unread: _unread, closing: _closing, ...rest } = saved;
     const info: SessionInfo = { ...rest, status: "idle" };
     return this.launch(info, stored.events, { sandbox: info.sandbox, workdir: info.workdir, env, ...continuing(saved) });
   }
@@ -188,6 +199,11 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     this.wire(s, driver);
     driver.attach({ sandbox: info.sandbox, run: run.id, offset: run.offset, tools: this.widgets?.tools(s.info).tools, pending: run.pending });
     this.emit("changed");
+    // Closed while Claude worked: it goes on finishing, or, if its turn was over already, ends now.
+    if (info.closing) {
+      if (isWorking(info)) this.armClose(s);
+      else void this.finish(s);
+    }
     return s.info;
   }
 
@@ -268,19 +284,37 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     return { text: prompt.payload.text, attachments: prompt.payload.attachments };
   }
 
-  /** Saved sessions that aren't open, most recently used first. */
+  /**
+   * Saved sessions that aren't open, most recently used first; those whose tab closed while Claude finishes are among
+   * them, as they are now, unless they are to be deleted.
+   */
   async resumable(): Promise<ResumableSession[]> {
     const saved = await this.store?.readAll();
-    return (saved ?? [])
-      .map((s) => s.info)
-      .filter((i): i is ResumableSession => Boolean(i.claudeSessionId) && !this.sessions.has(i.id))
-      .map((i) => ({ ...i, status: "ended" as const }))
+    const finishing = [...this.sessions.values()].map((s) => s.info).filter((i) => i.closing && !i.closing.delete);
+    const listed: SessionInfo[] = [
+      ...(saved ?? [])
+        .map((s) => s.info)
+        .filter((i) => !this.sessions.has(i.id) && !i.closing?.delete)
+        .map((i) => ({ ...i, status: "ended" as const })),
+      ...finishing.map((i) => ({ ...i, updatedAt: i.updatedAt ?? new Date().toISOString() })),
+    ];
+    return listed
+      .filter((i): i is ResumableSession => Boolean(i.claudeSessionId))
       .sort((a, b) => (b.updatedAt ?? b.startedAt).localeCompare(a.updatedAt ?? a.startedAt));
   }
 
-  /** Deletes a saved session for good. An open one can't be: close its tab first. */
+  /**
+   * Deletes a saved session for good. An open one can't be: close its tab first. One closed while Claude finishes is
+   * deleted once it has.
+   */
   async deleteSaved(id: string): Promise<boolean> {
-    if (this.sessions.has(id)) throw new SessionNotResumable("This session is open; close its tab first.");
+    const open = this.sessions.get(id);
+    if (open?.info.closing) {
+      this.setInfo(open, { closing: { ...open.info.closing, delete: true } });
+      this.save(open);
+      return true;
+    }
+    if (open) throw new SessionNotResumable("This session is open; close its tab first.");
     const stored = await this.store?.read(id);
     if (!stored) return false;
     await this.store!.remove(id);
@@ -363,6 +397,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
           this.push(s, { kind: "ended", payload: { reason, code: ev.code } });
           this.save(s);
           resolveExit();
+          if (s.info.closing) void this.finish(s);
           break;
         }
       }
@@ -460,6 +495,8 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
       });
       // Saved as soon as it can be resumed, in case the app goes away before the first turn ends.
       if (isNew) this.save(s);
+      // A prompt queued in a session that was closed: the turn it was waiting for is all Claude finishes.
+      if (s.finishing) s.driver.interrupt();
     } else if (m.type === "system" && m.subtype === "session_title_changed") {
       // /rename; saved with the turn's result that follows.
       if (typeof m.title === "string" && m.title.trim()) this.setInfo(s, { title: m.title.trim(), titleBy: "user" });
@@ -480,6 +517,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
       // Claude is done and waits for the user, until they look.
       this.setInfo(s, { status: "idle", bufferBytes: s.bytes, unread: true, ...(switched ? { model: s.pendingModel } : {}) });
       this.save(s);
+      if (s.info.closing) void this.finish(s);
     }
   }
 
@@ -581,17 +619,65 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     await s.exited;
   }
 
-  /** Ends a session if it is live, then forgets it and tells its subscribers. */
-  async remove(id: string): Promise<void> {
-    await this.end(id, "user");
+  /**
+   * Closes a session's tab. Claude, if working, finishes its turn first, out of the tabs' sight, for up to `finishMs`;
+   * with `stop`, or with Claude not working, the session ends at once. Then it is forgotten, and with `forget` its saved
+   * chat is deleted too. Resolves true once Claude is left to finish, or false once the session is gone.
+   */
+  async close(id: string, { forget = false, stop = false }: { forget?: boolean; stop?: boolean } = {}): Promise<boolean> {
     const s = this.sessions.get(id);
-    if (!s) return;
-    await s.saving;
-    for (const sub of s.subscribers) sub.gone();
-    s.subscribers.clear();
-    this.sessions.delete(id);
-    this.widgets?.closed(id);
+    if (!s) throw new SessionNotFound(`No session ${id}.`);
+    const until = s.info.closing?.until ?? new Date(Date.now() + this.finishMs).toISOString();
+    this.setInfo(s, { closing: { delete: forget || s.info.closing?.delete === true, until } });
+    if (stop || s.finishing || !isLive(s.info) || !isWorking(s.info)) {
+      await this.finish(s);
+      return false;
+    }
+    this.armClose(s);
+    this.save(s);
+    return true;
+  }
+
+  /** Stops a closed session's Claude when its time to finish is up. */
+  private armClose(s: Session) {
+    clearTimeout(s.closeTimer);
+    s.closeTimer = setTimeout(() => void this.finish(s), Math.max(0, Date.parse(s.info.closing!.until) - Date.now()));
+  }
+
+  /** Ends a closed session if it is live, then forgets it, with its saved chat if it is to be deleted, and tells its subscribers. */
+  private finish(s: Session): Promise<void> {
+    s.finishing ??= (async () => {
+      clearTimeout(s.closeTimer);
+      const { id } = s.info;
+      await this.end(id, "user");
+      await s.saving;
+      for (const sub of s.subscribers) sub.gone();
+      s.subscribers.clear();
+      this.sessions.delete(id);
+      this.widgets?.closed(id);
+      if (s.info.closing?.delete) await this.deleteSaved(id).catch(() => {});
+      this.emit("changed");
+    })();
+    return s.finishing;
+  }
+
+  /**
+   * Takes back a session whose tab was closed while Claude finishes: it is open again, Claude still working. Resolves
+   * whether it was; if it was too late, once the session is gone.
+   */
+  async keep(id: string): Promise<boolean> {
+    const s = this.sessions.get(id);
+    if (!s?.info.closing) return false;
+    if (s.finishing) {
+      await s.finishing;
+      return false;
+    }
+    clearTimeout(s.closeTimer);
+    const { closing: _closing, ...info } = s.info;
+    s.info = info;
     this.emit("changed");
+    this.save(s);
+    return true;
   }
 
   /** Ends every live session in a sandbox; returns how many there were. */
@@ -602,7 +688,11 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
   }
 
   async endAll(reason: EndReason): Promise<void> {
-    await Promise.all([...this.sessions.keys()].map((id) => this.end(id, reason)));
+    const all = [...this.sessions.values()];
+    // One closed may be gone already, forgotten as it ended.
+    await Promise.all(all.map((s) => this.end(s.info.id, reason).catch((err) => { if (!(err instanceof SessionNotFound)) throw err; })));
+    // Closed sessions that ended are forgotten, and deleted if they were to be, before the server goes.
+    await Promise.all(all.map((s) => s.finishing));
   }
 
   /**
@@ -615,6 +705,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
       live.map(async (s) => {
         // Saved once let go of, with where its output was read to and the calls it leaves pending, as they end up.
         s.detached = true;
+        clearTimeout(s.closeTimer);
         await s.driver.detach();
         this.save(s);
       }),

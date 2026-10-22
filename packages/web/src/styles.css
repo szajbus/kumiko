@@ -272,6 +272,10 @@ a.item-main:hover .item-title { color: var(--accent-hover); }
 .item-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item-sub { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item-state { flex: none; font-size: 12.5px; }
+.item-finishing .item-main { flex: 1; }
+.item-actions { display: flex; gap: 6px; flex: none; }
+.item-actions .btn-small { min-height: 28px; }
+.item-error { color: var(--danger); }
 .item-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; flex: none; max-width: 60%; }
 .item-quiet { font-size: 12px; }
 

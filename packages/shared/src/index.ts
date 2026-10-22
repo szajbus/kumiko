@@ -303,6 +303,11 @@ export interface SessionInfo {
   toolsVersion?: string;
   /** The session's Claude was started with other tools than Kumiko has now, so restarting it would bring the new ones. */
   toolsOutdated?: boolean;
+  /**
+   * The session's tab was closed while Claude was working: it finishes its turn out of sight, until `until` at the
+   * latest, then the session ends, and with `delete` its saved chat goes too. Tabs leave such sessions out.
+   */
+  closing?: { delete: boolean; until: string };
 }
 
 /**
