@@ -68,6 +68,22 @@ value.
 Before your script, Kumiko installs the agent: Claude Code, with its native installer, linked to
 `/usr/local/bin/claude`. If either fails, the sandbox shows **Provision failed**; fix the script and recreate it.
 
+### The agent's setup scripts
+
+The agent installs what its work needs as it goes, and that is lost when the sandbox is recreated. So the agent is told
+to write it down: as shell scripts in its own folder, `sandbox/provision.d/` in the project's agent home
+(`~/.claude/sandbox/provision.d/` in the sandbox), one per concern, such as `20-postgres.sh`. They survive a recreate,
+because the agent home is on your Mac.
+
+When the sandbox is created, they run after your provisioning script: each `*.sh` file in name order, in the clone,
+with the same forwarded variables, and each stops at its first failing command. One that fails doesn't stop the others
+or the sandbox: it shows **Running · agent setup failed**, and the project page says which. Files that aren't plain
+`*.sh` files, or are over 64 KB, are left out. If your own script fails, none of them run.
+
+The project page lists them under **Agent's setup scripts**, marking the ones that are new or changed since the
+sandbox was created: those haven't run in it yet. Recreating asks whether to run them and shows those in full. Leave
+**Run the agent's setup scripts** unchecked for a sandbox with only your own setup.
+
 ## Editing a project
 
 **Edit** changes the sandbox's settings. The clone, name and template are fixed, and so are the default mounts. Two ways
@@ -84,8 +100,9 @@ to save:
 
 - **Restart sandbox** stops a running sandbox and starts it again, ending its live sessions (it asks first if there
   are any). The disk is kept, so nothing is provisioned again.
-- **Recreate sandbox** deletes the sandbox and creates it again from its stored settings. The agent home and the
-  saved sessions stay, and so does the login.
+- **Recreate sandbox** deletes the sandbox and creates it again from its stored settings, with the
+  [agent's setup scripts](#the-agents-setup-scripts) unless you leave them out. The agent home and the saved sessions
+  stay, and so does the login.
 - **Delete** removes the project, its sandbox, its agent home and its saved sessions, after asking. The clone and its
   worktrees are never touched.
 

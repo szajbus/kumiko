@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type {
+  AgentSetupResponse,
   AccountUsage,
   AttachmentInput,
   ApiError,
@@ -78,15 +79,18 @@ export const api = {
   create: (req: CreateProjectRequest) => request<CreateResponse>("POST", "/api/projects", req),
   start: (id: string) => request("POST", `/api/projects/${id}/start`),
   stop: (id: string) => request("POST", `/api/projects/${id}/stop`),
-  recreate: (id: string) => request("POST", `/api/projects/${id}/recreate`),
+  /** With `agentSetup` false, the new VM leaves out the agent's setup scripts. */
+  recreate: (id: string, agentSetup = true) => request("POST", `/api/projects/${id}/recreate${agentSetup ? "" : "?agentSetup=0"}`),
   restart: (id: string) => request("POST", `/api/projects/${id}/restart`),
   remove: (id: string) => request("DELETE", `/api/projects/${id}`),
   /**
    * Saves in place; with `restart`, stops the VM, saves and starts it again; with `recreate`, deletes the VM and creates it
-   * again from the changed spec.
+   * again from the changed spec, with the agent's setup scripts unless `agentSetup` is false.
    */
-  edit: (id: string, patch: ProjectEdit, how?: "restart" | "recreate") =>
-    request<{ warnings: string[] }>("PATCH", `/api/projects/${id}${how ? `?${how}=1` : ""}`, patch),
+  edit: (id: string, patch: ProjectEdit, how?: "restart" | "recreate", agentSetup = true) =>
+    request<{ warnings: string[] }>("PATCH", `/api/projects/${id}${how ? `?${how}=1` : ""}${how === "recreate" && !agentSetup ? "&agentSetup=0" : ""}`, patch),
+  /** The agent's setup scripts in the project's Claude home, and what changed in them since the VM was created. */
+  agentSetup: (id: string) => request<AgentSetupResponse>("GET", `/api/projects/${id}/agent-setup`),
   /** The clone's worktrees, as git on the host sees them. */
   worktrees: (id: string) => request<WorktreesResponse>("GET", `/api/projects/${id}/worktrees`),
   startSession: (project: string, prompt: string, model?: string, attachments?: AttachmentInput[]) =>

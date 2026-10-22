@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import type { LogLine, SandboxView } from "@kumiko/shared";
 import { matchCommands } from "../src/commands.ts";
 import { ago, endedText, formatBytes, formatCost, formatDuration, planName, projectHue, projectHues, resetText, sessionName, sessionTitle } from "../src/format.ts";
-import { COLORS, opPill, resources, statusOf } from "../src/status.ts";
+import { COLORS, failedAgentScripts, opPill, resources, statusOf } from "../src/status.ts";
 
 describe("format", () => {
   it("titles a session by its /rename name, else the opening prompt cut at a word", () => {
@@ -95,6 +95,16 @@ describe("status", () => {
     assert.equal(statusOf(sb({ busy: true, operation: op }), log).text, "Installing Claude Code…");
     log.push({ text: "— provisioning (runs once, as the sandbox user) —", kind: "note" });
     assert.equal(statusOf(sb({ busy: true, operation: op }), log).text, "Provisioning…");
+    log.push({ text: "— agent setup: 10-a.sh —", kind: "note" });
+    assert.equal(statusOf(sb({ busy: true, operation: op }), log).text, "Running the agent's setup…");
+  });
+
+  it("says when the agent's setup failed in a sandbox that is otherwise ready", () => {
+    const agentSetup = { scripts: [{ file: "10-a.sh", script: "", exitCode: 0 }, { file: "20-b.sh", script: "", exitCode: 7 }, { file: "30-c.sh", script: "" }] };
+    const ready = { ...meta("ready"), agentSetup };
+    assert.deepEqual(failedAgentScripts(sb({ meta: ready })), ["20-b.sh"]);
+    assert.deepEqual(statusOf(sb({ meta: ready })), { text: "Running · agent setup failed", color: COLORS.warn });
+    assert.equal(statusOf(sb({ meta: { ...ready, agentSetup: { scripts: agentSetup.scripts.slice(0, 1) } } })).text, "Running");
   });
 
   it("puts a failed or missing setup ahead of the VM's state", () => {

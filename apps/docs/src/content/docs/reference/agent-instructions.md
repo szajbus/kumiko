@@ -30,6 +30,14 @@ The git clone is `<clone>`. Sessions start there.
 - Install packages and tools, start, stop and configure services, and change system settings whenever the task needs it; you don't need to ask first.
 - Folders mounted from the user's computer are shared with it: the clone, the worktrees, `~/.claude`, and any others the project adds. Take the usual care with those; the rest of the VM is yours to change.
 
+## Setup that survives a rebuild
+
+- The user can recreate this VM from scratch, and everything outside the mounted folders is lost then. A new VM gets Claude Code, the user's provisioning script, and then your setup scripts: the `*.sh` files in `~/.claude/sandbox/provision.d/`, in name order. Each runs with bash as the VM user, in the clone, stopping at its first failing command.
+- When you install or configure something in the VM that you'd want again after a rebuild (packages, tools, services, system settings), add it to a setup script. Keep one script per concern, named like `20-postgres.sh`; look at the ones there first, and change one rather than add a second for the same thing.
+- Write them so they can run again where they ran before, then run a new or changed one right away to check it works: `bash -e ~/.claude/sandbox/provision.d/<file>`.
+- Don't install what the user's provisioning script already does, and never write secret values into a script: the folder is on the user's computer. Use the project's forwarded variables by name.
+- The user sees these scripts and can recreate the VM without them. When you add or change one, say so in your reply.
+
 ## Worktrees
 
 - When a task changes code, make a worktree for it first and work there:

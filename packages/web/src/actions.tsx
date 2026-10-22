@@ -1,6 +1,7 @@
 import { useState } from "react";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import type { ProjectView } from "@kumiko/shared";
+import { AgentSetupChoice } from "./AgentSetup";
 import { api, errorMessage } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Dots, Play, Redo, Restart, Square, Trash } from "./icons";
@@ -38,6 +39,8 @@ export interface Actions {
 export function useActions({ onDeleted }: { onDeleted?(name: string): void } = {}): Actions {
   const [confirm, setConfirm] = useState<Pending | undefined>();
   const [error, setError] = useState<string | undefined>();
+  /** Whether a recreate runs the agent's setup scripts; asked afresh for each. */
+  const [agentSetup, setAgentSetup] = useState(true);
 
   const run = async (name: string, fn: (n: string) => Promise<unknown>) => {
     setError(undefined);
@@ -61,7 +64,7 @@ export function useActions({ onDeleted }: { onDeleted?(name: string): void } = {
           onConfirm={() => {
             const { kind, sandbox } = confirm;
             setConfirm(undefined);
-            if (kind === "recreate") void run(sandbox.name, api.recreate);
+            if (kind === "recreate") void run(sandbox.name, (n) => api.recreate(n, agentSetup));
             else if (kind === "stop") void run(sandbox.name, api.stop);
             else if (kind === "restart") void run(sandbox.name, api.restart);
             else void run(sandbox.name, api.remove).then((ok) => ok && onDeleted?.(sandbox.name));
@@ -76,10 +79,13 @@ export function useActions({ onDeleted }: { onDeleted?(name: string): void } = {
             </>
           )}
           {confirm.kind === "recreate" && (
-            <p>
-              The sandbox and its disk are deleted, then created again from the same settings and provisioned from scratch. Claude's login and history are
-              kept: they live in the project's Claude home, on this machine.
-            </p>
+            <>
+              <p>
+                The sandbox and its disk are deleted, then created again from the same settings and provisioned from scratch. Claude's login and history are
+                kept: they live in the project's Claude home, on this machine.
+              </p>
+              <AgentSetupChoice id={confirm.sandbox.name} run={agentSetup} onChange={setAgentSetup} />
+            </>
           )}
           {confirm.kind === "stop" && <p>The sandbox shuts down. Saved sessions can be resumed once it runs again.</p>}
           {confirm.kind === "restart" && <p>The sandbox shuts down and starts again, with its disk as it was. Saved sessions can be resumed once it runs.</p>}
@@ -104,7 +110,10 @@ export function useActions({ onDeleted }: { onDeleted?(name: string): void } = {
     start: (n) => void run(n, api.start),
     stop: (sandbox) => (sandbox.sessions > 0 ? setConfirm({ kind: "stop", sandbox }) : void run(sandbox.name, api.stop)),
     restart: (sandbox) => (sandbox.sessions > 0 ? setConfirm({ kind: "restart", sandbox }) : void run(sandbox.name, api.restart)),
-    askRecreate: (sandbox) => setConfirm({ kind: "recreate", sandbox }),
+    askRecreate: (sandbox) => {
+      setAgentSetup(true);
+      setConfirm({ kind: "recreate", sandbox });
+    },
     askDelete: (sandbox) => setConfirm({ kind: "delete", sandbox }),
     overlay,
   };

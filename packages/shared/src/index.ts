@@ -132,6 +132,51 @@ export interface SandboxMeta {
   createdAt: string;
   setup: SetupState;
   provisionExitCode?: number;
+  /** The agent's setup scripts this VM was created with, and how each went; absent for VMs from before them. */
+  agentSetup?: AgentSetupRun;
+}
+
+/**
+ * Where the agent keeps its setup scripts, in the project's Claude home: `*.sh` files run in name order after the
+ * user's provisioning script whenever the VM is created, so what the agent set up survives a recreate.
+ */
+export const AGENT_SETUP_DIR = "sandbox/provision.d";
+
+/** Which files in the agent's setup folder are its scripts; others are left alone. */
+export const AGENT_SCRIPT_PATTERN = /^[A-Za-z0-9][\w.-]*\.sh$/;
+
+/** One of the agent's setup scripts as a VM was created with it. `exitCode` is set once it has run. */
+export interface AgentScript {
+  file: string;
+  script: string;
+  exitCode?: number;
+}
+
+/** The agent's setup scripts a VM was created with; with `skipped`, the user recreated it without them. */
+export interface AgentSetupRun {
+  scripts: AgentScript[];
+  skipped?: boolean;
+}
+
+/** One of the agent's setup scripts as it is now, against the run that created the VM. */
+export interface AgentScriptView {
+  file: string;
+  script: string;
+  /** `new` and `changed` are since the VM was created; with no record of that run, every script is `new`. */
+  state: "new" | "changed" | "same";
+  /** How it went when the VM was created, if it ran then unchanged. */
+  exitCode?: number;
+}
+
+/** GET /api/projects/:id/agent-setup */
+export interface AgentSetupResponse {
+  scripts: AgentScriptView[];
+  /** Scripts the VM was created with that are gone now. */
+  removed: string[];
+  /** Files in the folder Kumiko won't run: not named `*.sh`, not plain files, or too big. */
+  ignored: string[];
+  /** Whether the VM was created without the agent's scripts. */
+  skipped: boolean;
 }
 
 export interface SandboxInfo {

@@ -291,6 +291,42 @@ describe("LimaProvider against a fake limactl", () => {
     assert.equal(info.meta?.provisionExitCode, undefined);
   });
 
+  it("runs the agent's setup scripts after the user's, each on its own, and records how each went", async () => {
+    const { mountDir, provider, log, lines } = await fakeLima({ TOKEN: "abc" });
+    const order = join(mountDir, "order");
+    await provider.create(
+      spec({ env: ["TOKEN"], workdir: mountDir, provision: `echo user >> ${order}` }),
+      log,
+      {
+        scripts: [
+          { file: "10-a.sh", script: `echo "a $TOKEN $PWD" >> ${order}` },
+          { file: "20-b.sh", script: `false\necho never >> ${order}` },
+          { file: "30-c.sh", script: `echo c >> ${order}` },
+        ],
+      },
+    );
+    assert.equal(await readFile(order, "utf8"), `user\na abc ${mountDir}\nc\n`, "after the user's script, in order, with variables, in the working directory; a failure stops only its own script");
+    const [info] = await provider.list();
+    assert.equal(info.meta?.setup, "ready", "a failed agent script leaves the sandbox usable");
+    assert.deepEqual(info.meta?.agentSetup?.scripts.map((s) => [s.file, s.exitCode]), [["10-a.sh", 0], ["20-b.sh", 1], ["30-c.sh", 0]]);
+    assert.ok(lines.includes("— agent setup: 20-b.sh —"));
+    assert.ok(lines.some((l) => l.startsWith("warning: the agent's setup script 20-b.sh (exit 1) failed")));
+  });
+
+  it("doesn't run the agent's setup scripts after the user's script fails, nor when asked to skip them", async () => {
+    const { mountDir, provider, log, lines } = await fakeLima();
+    const ran = join(mountDir, "ran");
+    const agent = { scripts: [{ file: "10-a.sh", script: `touch ${ran}` }] };
+    await assert.rejects(provider.create(spec({ provision: "exit 4" }), log, agent), /Provisioning failed with exit code 4/);
+    assert.equal(await readFile(ran).then(() => true, () => false), false);
+    assert.equal((await provider.list())[0].meta?.agentSetup?.scripts[0].exitCode, undefined);
+
+    await provider.delete("web", log);
+    await provider.create(spec(), log, { scripts: [], skipped: true });
+    assert.ok(lines.includes("Skipped the agent's setup scripts, as asked."));
+    assert.deepEqual((await provider.list())[0].meta?.agentSetup, { scripts: [], skipped: true });
+  });
+
   it("refuses a name that is taken, and keeps the record to recreate from when limactl create fails", async () => {
     const { provider, log } = await fakeLima();
     await provider.create(spec(), log);

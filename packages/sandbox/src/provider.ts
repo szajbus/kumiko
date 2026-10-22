@@ -1,5 +1,5 @@
 import type { ChildProcess } from "node:child_process";
-import type { EditSpec, LineKind, SandboxInfo, SandboxSpec } from "@kumiko/shared";
+import type { AgentSetupRun, EditSpec, LineKind, SandboxInfo, SandboxSpec } from "@kumiko/shared";
 import type { Validation } from "./validate.js";
 
 /** Receives progress, one line at a time. */
@@ -8,7 +8,8 @@ export type Log = (line: string, kind?: LineKind) => void;
 export interface SandboxProvider {
   id: "lima";
   list(): Promise<SandboxInfo[]>;                      // km- instances only
-  create(spec: SandboxSpec, log: Log): Promise<void>;  // create + first start + provision
+  /** Creates the VM, starts it and provisions it: Claude Code, the user's script, then the agent's scripts in `agentSetup`. */
+  create(spec: SandboxSpec, log: Log, agentSetup?: AgentSetupRun): Promise<void>;
   start(name: string, log: Log): Promise<void>;
   stop(name: string, log: Log): Promise<void>;
   delete(name: string, log: Log): Promise<void>;

@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { isWaiting, projectMountRole, vmName, type LogLine, type ProjectView, type SessionInfo, type WorktreeStatus, type WorktreesResponse } from "@kumiko/shared";
 import { SandboxActions, useActions } from "./actions";
+import { AgentSetupCard } from "./AgentSetup";
 import { api, errorMessage, useHome, type LiveState } from "./api";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { FinishingItem } from "./Finishing";
 import { sessionTitle, tilde } from "./format";
 import { Folder, Pencil, Plus, Redo } from "./icons";
 import { LogPanel } from "./LogPanel";
-import { COLORS, plural, sessionState, statusOf } from "./status";
+import { COLORS, failedAgentScripts, plural, sessionState, statusOf } from "./status";
 
 interface Props {
   id: string;
@@ -94,6 +95,7 @@ export function ProjectPage({ id, live, onBack, onEdit, onNewSession, onSessionS
         )}
 
         {p && <Details p={p} home={home} />}
+        {p && <AgentSetupCard p={p} />}
 
         {(p || lines.length > 0) && <LogPanel sandbox={p} lines={lines} />}
       </main>
@@ -365,8 +367,11 @@ function Fact({ label, mono, children }: { label: string; mono?: boolean; childr
 
 function SetupState({ p }: { p: ProjectView }) {
   switch (p.meta?.setup) {
-    case "ready":
+    case "ready": {
+      const failed = failedAgentScripts(p);
+      if (failed.length) return <span style={{ color: COLORS.warn }}>Ready · agent setup failed: {failed.join(", ")}</span>;
       return <span style={{ color: COLORS.running }}>Ready</span>;
+    }
     case "provision_failed":
       return <span style={{ color: COLORS.failed }}>Provisioning failed{p.meta.provisionExitCode !== undefined ? ` · exit ${p.meta.provisionExitCode}` : ""}</span>;
     case "creating":

@@ -29,6 +29,11 @@ ask for a password. Either way, a service on your Mac that listens on all interf
 reachable at your Mac's network address, as from anywhere on your network. A proxy on your Mac's loopback, set for the
 sandbox, isn't reachable once it's blocked.
 
+Recreating a sandbox doesn't wipe everything the agent did: its [setup scripts](/guide/projects/#the-agents-setup-scripts)
+live in the agent home and run in the new VM, so something a misled agent planted there comes back with them. Look at
+the new and changed ones, which recreating shows, or recreate without them. Kumiko reads them on your Mac as files in
+that folder only, not through links, and they only ever run inside the VM.
+
 ## The local server
 
 Every request to the server's API carries a secret it makes each time it starts: the app's window gets it in a cookie

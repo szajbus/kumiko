@@ -17,6 +17,7 @@ import {
 } from "@kumiko/shared";
 import { api, errorMessage, RequestError, useDefaults } from "./api";
 import { sessionsNote } from "./actions";
+import { AgentSetupChoice } from "./AgentSetup";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { tilde } from "./format";
@@ -85,6 +86,7 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
   const [hostLoopback, setHostLoopback] = useState(was?.hostLoopback === true);
   const [submitting, setSubmitting] = useState(false);
   const [confirmRecreate, setConfirmRecreate] = useState(false);
+  const [agentSetup, setAgentSetup] = useState(true);
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const [touched, setTouched] = useState(false);
@@ -202,7 +204,10 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
       document.getElementById("f-name")?.focus();
       return;
     }
-    if (editing) setConfirmRecreate(true);
+    if (editing) {
+      setAgentSetup(true);
+      setConfirmRecreate(true);
+    }
     else void save();
   };
 
@@ -212,7 +217,7 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
     try {
       if (editing) {
         const { cpus, memoryGiB, diskGiB, mounts, env, provision } = request();
-        await api.edit(editing.name, { cpus, memoryGiB, diskGiB, mounts, env, provision: provision ?? "", hostLoopback }, how);
+        await api.edit(editing.name, { cpus, memoryGiB, diskGiB, mounts, env, provision: provision ?? "", hostLoopback }, how, agentSetup);
         onCreated(editing.name);
       } else {
         const res = await api.create(request());
@@ -630,6 +635,7 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
               The sandbox and its disk are deleted, then created again from these settings and provisioned from scratch. The clone, its worktrees and the
               project's Claude home are not touched.
             </p>
+            <AgentSetupChoice id={editing.name} run={agentSetup} onChange={setAgentSetup} />
             {sessionsNote(editing)}
           </ConfirmDialog>
         )}

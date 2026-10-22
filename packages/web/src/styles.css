@@ -165,6 +165,7 @@ code, .mono { font-family: var(--mono); }
 .badge { padding: 1px 6px; border: 1px solid var(--border-strong); border-radius: 4px; font-size: 11px; font-weight: 500; color: var(--text-2); letter-spacing: 0.02em; }
 .badge.badge-warn { border-color: #5c4a2b; color: #f0cf96; }
 .badge.badge-ok { border-color: #2b5c45; color: #7fd3a6; }
+.badge.badge-failed { border-color: #5c2b2e; color: #f6b3aa; }
 .badge.badge-bypass { border-color: #6b4a2a; color: #e0a96d; white-space: nowrap; }
 .row-status { display: flex; align-items: center; gap: 8px; font-weight: 500; }
 .row-res { font-size: 13px; color: var(--text-2); }
@@ -365,6 +366,17 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
   margin: 0 0 20px; padding: 12px 14px; border-radius: 8px; background: var(--bg); font-size: 12.5px; line-height: 1.6;
   white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2);
 }
+/* The agent's setup scripts: one line each, opening to the script. */
+.agent-scripts { display: flex; flex-direction: column; margin-bottom: 16px; }
+.agent-script summary { min-height: 36px; display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.agent-script summary::before { content: "▸"; color: var(--muted); }
+.agent-script[open] summary::before { content: "▾"; }
+.agent-script summary::-webkit-details-marker { display: none; }
+.agent-script .preview { margin-bottom: 10px; }
+/* In a recreate dialog, long scripts scroll rather than push the buttons away. */
+.agent-choice { margin-top: 12px; }
+.agent-choice .agent-scripts { margin: 6px 0 0; max-height: 260px; overflow: auto; }
+.agent-choice .preview { max-height: 200px; overflow: auto; }
 .form-actions { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: flex-end; gap: 12px; padding-top: 4px; }
 .form-errors { flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .fieldset-stack { display: flex; flex-direction: column; gap: 12px; }

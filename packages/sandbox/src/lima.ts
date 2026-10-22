@@ -4,6 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   CLAUDE_HOME_IN_VM,
+  type AgentSetupRun,
   mountsExpression,
   sameMounts,
   vmName,
@@ -291,7 +292,7 @@ export class LimaProvider implements SandboxProvider {
     return v;
   }
 
-  async create(input: SandboxSpec, log: Log): Promise<void> {
+  async create(input: SandboxSpec, log: Log, agentSetup?: AgentSetupRun): Promise<void> {
     const v = await this.validate(input);
     if (v.errors.length) throw new ProviderError(v.errors.join("\n"));
     for (const w of v.warnings) log(`warning: ${w}`);
@@ -303,6 +304,7 @@ export class LimaProvider implements SandboxProvider {
       provider: "lima",
       createdAt: new Date().toISOString(),
       setup: "creating",
+      ...(agentSetup ? { agentSetup } : {}),
     });
 
     const args = [
@@ -325,7 +327,7 @@ export class LimaProvider implements SandboxProvider {
 
   /**
    * Starts the VM and makes sure its working directory exists. On the first successful start, runs provisioning
-   * (Claude Code, then the user's script); on later ones, reinstalls Claude Code only if it went missing.
+   * (Claude Code, the user's script, then the agent's); on later ones, reinstalls Claude Code only if it went missing.
    */
   async start(name: string, log: Log): Promise<void> {
     const vm = vmName(name);
@@ -514,22 +516,33 @@ export class LimaProvider implements SandboxProvider {
     if (claude !== 0) return fail("Installing Claude Code", claude);
 
     const script = meta.spec.provision;
-    if (!script) {
-      await this.metadata.update(name, { setup: "ready", provisionExitCode: undefined });
-      log("Ready. No provisioning script.", "ok");
-      return;
-    }
     const forwarded = meta.spec.env.filter((n) => this.env()[n] !== undefined);
-    log("— provisioning (runs once, as the sandbox user) —", "note");
-    if (forwarded.length) log(`forwarding ${forwarded.join(", ")}`, "note");
-
-    const code = await this.runScript(name, script, meta.spec.env, log, meta.spec.workdir ?? WORKSPACE_DIR);
-    if (code === 0) {
-      await this.metadata.update(name, { setup: "ready", provisionExitCode: undefined });
+    const workdir = meta.spec.workdir ?? WORKSPACE_DIR;
+    if (script) {
+      log("— provisioning (runs once, as the sandbox user) —", "note");
+      if (forwarded.length) log(`forwarding ${forwarded.join(", ")}`, "note");
+      const code = await this.runScript(name, script, meta.spec.env, log, workdir);
+      if (code !== 0) return fail("Provisioning", code);
       log("Provisioning finished.", "ok");
-      return;
     }
-    return fail("Provisioning", code);
+
+    const agent = meta.agentSetup;
+    if (agent?.skipped) log("Skipped the agent's setup scripts, as asked.", "note");
+    else if (agent?.scripts.length) {
+      // Each runs on its own, so one that fails doesn't keep the others from setting up what they can.
+      const scripts = [];
+      for (const s of agent.scripts) {
+        log(`— agent setup: ${s.file} —`, "note");
+        scripts.push({ ...s, exitCode: await this.runScript(name, s.script, meta.spec.env, log, workdir) });
+      }
+      await this.metadata.update(name, { agentSetup: { scripts } });
+      const failed = scripts.filter((s) => s.exitCode !== 0);
+      if (failed.length) log(`warning: the agent's setup ${failed.length === 1 ? "script" : "scripts"} ${failed.map((s) => `${s.file} (exit ${s.exitCode})`).join(", ")} failed; the sandbox is usable without ${failed.length === 1 ? "it" : "them"}.`);
+      else log("Agent setup finished.", "ok");
+    }
+
+    await this.metadata.update(name, { setup: "ready", provisionExitCode: undefined });
+    log(script || agent?.scripts.length ? "Ready." : "Ready. No provisioning script.", "ok");
   }
 
   /**

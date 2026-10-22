@@ -239,6 +239,39 @@ describe("server", () => {
     await remove("bad");
   });
 
+  it("recreates a VM with the agent's setup scripts from its Claude home, or without them when asked", async () => {
+    await create("agent");
+    const dir = join(dataDir, "claude", "agent", "sandbox", "provision.d");
+    const marker = join(mountDir, "agent-ran");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "10-a.sh"), `echo a >> ${marker}\n`);
+    await writeFile(join(dir, "20-b.sh"), "exit 7\n");
+    let setup = await json(await api("/api/projects/agent/agent-setup"));
+    assert.deepEqual(setup.scripts.map((s: { file: string; state: string }) => [s.file, s.state]), [["10-a.sh", "new"], ["20-b.sh", "new"]]);
+
+    let since = events.length;
+    assert.equal((await api("/api/projects/agent/recreate", { method: "POST" })).status, 202);
+    assert.equal((await finished("agent", "recreating", since)).type, "done", "a failed agent script doesn't fail the recreate");
+    assert.equal(await readFile(marker, "utf8"), "a\n");
+    const p = (await project("agent"))!;
+    assert.equal(p.meta?.setup, "ready");
+    assert.deepEqual(p.meta?.agentSetup?.scripts.map((s) => [s.file, s.exitCode]), [["10-a.sh", 0], ["20-b.sh", 7]]);
+
+    await writeFile(join(dir, "20-b.sh"), "true\n");
+    setup = await json(await api("/api/projects/agent/agent-setup"));
+    assert.deepEqual(setup.scripts.map((s: { state: string; exitCode?: number }) => [s.state, s.exitCode]), [["same", 0], ["changed", undefined]]);
+
+    since = events.length;
+    assert.equal((await api("/api/projects/agent?recreate=1&agentSetup=0", { method: "PATCH", body: JSON.stringify({ cpus: 2 }) })).status, 202);
+    assert.equal((await finished("agent", "recreating", since)).type, "done");
+    assert.equal(await readFile(marker, "utf8"), "a\n", "skipped");
+    assert.deepEqual((await project("agent"))!.meta?.agentSetup, { scripts: [], skipped: true });
+    setup = await json(await api("/api/projects/agent/agent-setup"));
+    assert.equal(setup.skipped, true);
+    assert.deepEqual(setup.scripts.map((s: { state: string }) => s.state), ["new", "new"]);
+    await remove("agent");
+  });
+
   it("edits a project's VM: variables while running, resources and extra mounts once stopped", async () => {
     const { clone } = await create("ed");
     const running = await api("/api/projects/ed", { method: "PATCH", body: JSON.stringify({ cpus: 2 }) });

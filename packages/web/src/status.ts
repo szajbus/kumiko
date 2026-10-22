@@ -1,4 +1,4 @@
-import { isWaiting, type LogLine, type OpKind, type SandboxView, type SessionInfo, type SessionStatus } from "@kumiko/shared";
+import { isWaiting, type LogLine, type OpKind, type SandboxInfo, type SandboxView, type SessionInfo, type SessionStatus } from "@kumiko/shared";
 
 export const COLORS = {
   running: "#4CC38A",
@@ -38,12 +38,23 @@ const OP_FAILED: Record<OpKind, string> = {
   editing: "Save failed",
 };
 
+/** The agent's setup scripts that failed when the VM was created. */
+export function failedAgentScripts(sb: SandboxInfo): string[] {
+  return (sb.meta?.agentSetup?.scripts ?? []).filter((s) => s.exitCode !== undefined && s.exitCode !== 0).map((s) => s.file);
+}
+
 /** The status cell: what the sandbox is doing or how it is. */
 export function statusOf(sb: SandboxView, log: LogLine[] = []): { text: string; color: string } {
   if (sb.busy && sb.operation) {
     // Once a create or start reaches installing Claude Code or the provisioning script, say so.
     const step = log.findLast((l) => l.kind === "note" && l.text.startsWith("— "))?.text;
-    const label = step?.startsWith("— installing Claude") ? "Installing Claude Code" : step?.startsWith("— provisioning") ? "Provisioning" : OP_LABEL[sb.operation.op];
+    const label = step?.startsWith("— installing Claude")
+      ? "Installing Claude Code"
+      : step?.startsWith("— provisioning")
+        ? "Provisioning"
+        : step?.startsWith("— agent setup")
+          ? "Running the agent's setup"
+          : OP_LABEL[sb.operation.op];
     return { text: `${label}…`, color: COLORS.busy };
   }
   if (sb.meta?.setup === "provision_failed") return { text: "Provisioning failed", color: COLORS.failed };
@@ -51,7 +62,9 @@ export function statusOf(sb: SandboxView, log: LogLine[] = []): { text: string; 
     case "running":
       return sb.meta?.setup === "creating"
         ? { text: "Running · not provisioned", color: COLORS.warn }
-        : { text: "Running", color: COLORS.running };
+        : failedAgentScripts(sb).length
+          ? { text: "Running · agent setup failed", color: COLORS.warn }
+          : { text: "Running", color: COLORS.running };
     case "stopped":
       return sb.meta?.setup === "creating"
         ? { text: "Stopped · not provisioned", color: COLORS.warn }
