@@ -385,8 +385,8 @@ export function App() {
       ))}
       {deleting && (
         <ConfirmDialog
-          title="Delete this session?"
-          confirmLabel={isWorking(deleting) ? "Delete when done" : "Delete session"}
+          title={`Close “${sessionTitle(deleting)}” and delete it from history?`}
+          confirmLabel={isWorking(deleting) ? "Delete when done" : "Close and delete"}
           danger
           enterConfirms
           alternative={
@@ -408,13 +408,10 @@ export function App() {
             void closeSession(s, { delete: true });
           }}
         >
-          <p>
-            <strong>{sessionTitle(deleting)}</strong> closes and its saved chat is deleted, so it can't be resumed.
-          </p>
           {isWorking(deleting) && (
             <p>
-              Claude is still working in it. It can finish its turn first, for up to 30 minutes, out of sight: the Projects
-              tab shows it until then, and Cmd+Shift+T brings it back. Or it can stop now, cutting the turn short.
+              Claude is still working in it and will be allowed to finish (up to 30 minutes), or you can stop it now with{" "}
+              <strong>Stop and delete</strong>.
             </p>
           )}
         </ConfirmDialog>
