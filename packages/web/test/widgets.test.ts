@@ -63,6 +63,7 @@ describe("the chat's lines for widget tools", () => {
     assert.equal(widgetLine("Write", { file_path: "/elsewhere.md" }, w), undefined);
     assert.equal(widgetLine("Bash", { command: "ls" }, w), undefined);
     assert.deepEqual(widgetLine("mcp__kumiko__window_close", { pane: "p2" }, w), { label: "Closed a pane" });
+    assert.deepEqual(widgetLine("mcp__kumiko__session_rename", { title: "Fix composer paste" }, w), { label: "Named the session", title: "Fix composer paste" });
   });
 
   it("say which artifact was looked at, reloaded or deleted, by its id or its path", () => {

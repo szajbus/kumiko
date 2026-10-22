@@ -112,7 +112,10 @@ export interface WidgetLine {
 
 const TOOL_PREFIX = "mcp__kumiko__";
 
-/** The chat's line for a tool call that opened, changed or closed something in the window; undefined for any other. */
+/**
+ * The chat's line for a tool call that opened, changed or closed something in the window, or named the session;
+ * undefined for any other.
+ */
 export function widgetLine(name: string, input: Record<string, unknown>, w: WindowState): WidgetLine | undefined {
   const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
   // An artifact is named by its path (a file's, or a page's URL), or by its id in the window.
@@ -140,6 +143,8 @@ export function widgetLine(name: string, input: Record<string, unknown>, w: Wind
       return { label: "Closed a pane" };
     case `${TOOL_PREFIX}window_list`:
       return { label: "Looked at the panes" };
+    case `${TOOL_PREFIX}session_rename`:
+      return { label: "Named the session", title: str(input.title) };
     case "Write":
       return doc ? { label: "Wrote", ...of } : undefined;
     case "Edit":
