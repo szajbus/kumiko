@@ -486,10 +486,13 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     const { project, info } = await known(id);
     if (info.status !== "running") throw new HttpError(409, `${vmName(id)} is not running. Start it first.`);
     assertIdle(id);
-    await projects.writeManaged(project);
+    await projects.writeManaged(project, setupOf(info.meta?.spec));
     await widgets.prepare(id);
     return { workdir: project.clonePath, env: info.meta?.spec.env ?? [] };
   };
+
+  /** What the agent's setup guide is written from: the user's side of a VM's spec, if it has one. */
+  const setupOf = (spec: SandboxSpec | undefined) => spec && { provision: spec.provision, env: spec.env };
 
   /** The VM's spec for a (re)create: the stored one with the project's fixed mounts made current, or the defaults. */
   const vmSpec = (project: Project, info: SandboxInfo): SandboxSpec =>
@@ -578,8 +581,8 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     if (problem) throw new HttpError(409, problem);
   };
 
-  const startVm: Work = async (p, _i, log) => {
-    await projects.writeManaged(p);
+  const startVm: Work = async (p, i, log) => {
+    await projects.writeManaged(p, setupOf(i.meta?.spec));
     // A VM made before the project had all its fixed mounts (the Kumiko folder, say) gets them while it is stopped.
     const { info } = await known(p.id);
     const mounts = info.meta?.spec.mounts;
@@ -621,13 +624,14 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
 
   /**
    * Stops the VM (ending its sessions) and starts it again, running `between` while it is stopped. Lima reads its
-   * config on start, so resource and mount changes apply; the disk and what provisioning installed stay.
+   * config on start, so resource and mount changes apply; the disk and what provisioning installed stay. `edited` is the
+   * spec `between` saves, which the VM starts with rather than the one in `i`.
    */
-  const restart = async (p: Project, i: SandboxInfo, log: Log, between?: () => Promise<void>) => {
+  const restart = async (p: Project, i: SandboxInfo, log: Log, between?: () => Promise<void>, edited?: SandboxSpec) => {
     await endSessions(p.id, log);
     if (i.status !== "stopped") await provider.stop(p.id, log);
     await between?.();
-    await startVm(p, i, log);
+    await startVm(p, edited && i.meta ? { ...i, meta: { ...i.meta, spec: edited } } : i, log);
   };
 
   app.post("/api/projects/:id/restart", action("restarting", (p, i, log) => restart(p, i, log), checkStart));
@@ -648,7 +652,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   const recreate = async (project: Project, spec: SandboxSpec, log: Log) => {
     await endSessions(project.id, log);
     await provider.delete(project.id, log);
-    await projects.writeManaged(project);
+    await projects.writeManaged(project, setupOf(spec));
     await provider.create(spec, log, await agentSetup(project));
   };
 
@@ -707,8 +711,9 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       again
         ? recreate(project, projects.spec(project, v.spec), log)
         : restarting
-          ? restart(project, info, log, () => provider.edit(id, patch, log))
-          : provider.edit(id, patch, log),
+          ? restart(project, info, log, () => provider.edit(id, patch, log), v.spec)
+          : // The script and variables can change while it runs: the agent's guide follows them now, not at the next session.
+            provider.edit(id, patch, log).then(() => projects.writeManaged(project, setupOf(v.spec))),
     );
     return c.json({ name: id, op, warnings: v.warnings }, 202);
   });

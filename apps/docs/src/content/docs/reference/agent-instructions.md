@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-Kumiko gives Claude Code two pieces of text of its own. Both are below as they are today; a test fails if they drift
+Kumiko gives Claude Code three pieces of text of its own. All are below as they are today; a test fails if they drift
 from the code. Nothing else Kumiko writes reaches the agent's context, beyond what its tools return.
 
 ## `kumiko.md`
@@ -32,12 +32,8 @@ The git clone is `<clone>`. Sessions start there.
 
 ## Setup that survives a rebuild
 
-- The user can recreate this VM from scratch, and everything outside the mounted folders is lost then. A new VM gets Claude Code, the user's provisioning script, and then your setup scripts: the `*.sh` files in `~/.kumiko/shared/provision.d/`, in name order. Each runs with bash as the VM user, in the clone, stopping at its first failing command. Only plain files of up to 1 MB run; links, folders and bigger files are skipped.
-- When you install or configure something in the VM that you'd want again after a rebuild (packages, tools, services, system settings), add it to a setup script. Keep one script per concern, named like `20-postgres.sh`; look at the ones there first, and change one rather than add a second for the same thing.
-- Write them so they can run again where they ran before, then run a new or changed one right away to check it works: `bash -e ~/.kumiko/shared/provision.d/<file>`.
-- Don't install what the user's provisioning script already does, and never write secret values into a script: the folder is on the user's computer. Use the project's forwarded variables by name.
-- They are yours to manage; the user can see them on the project page. When you add or change one, say so in your reply.
-- The user can delete the whole folder from the project page to start from scratch. If it is gone or empty, don't write back what was there: start again with what the work needs from now on.
+- The user can recreate this VM from scratch, and everything outside the mounted folders is lost then. When you install or configure something you'd want again after a rebuild (packages, tools, services, system settings), keep it in a setup script in `~/.kumiko/shared/provision.d/`.
+- Read `~/.kumiko/shared/setup.md` before you add or change one: it says how they run, and what the user's own setup already does.
 
 ## Worktrees
 
@@ -47,6 +43,32 @@ The git clone is `<clone>`. Sessions start there.
 - Questions and read-only exploration don't need a worktree; look around in the clone and leave it as it is.
 - If the user asks for a worktree, or names an existing one, use that.
 - Other sessions may be working in other worktrees at the same time. Leave worktrees you didn't create alone.
+```
+
+## The setup guide
+
+`setup.md` in the project's Kumiko folder, `~/.kumiko/shared` in the sandbox, next to the agent's
+[setup scripts](/guide/projects/#the-agents-setup-scripts). `kumiko.md` points to it, so the agent reads it only when it
+is about to write a script. Kumiko writes it again whenever the sandbox or a session starts, and when you edit the
+sandbox's settings, with the names of the forwarded variables in it and a copy of your provisioning script beside it as
+`user-provision.sh`.
+
+Below, as for a project with a provisioning script and two forwarded variables. Without a script, that line says
+`The user has no provisioning script.`; without variables, `No variables are forwarded from it.`
+
+```markdown wrap
+<!-- Written by Kumiko, and rewritten whenever the sandbox or a session starts. -->
+
+# Setup scripts
+
+When the user recreates this VM, everything outside the mounted folders is lost. A new VM gets Claude Code, then the user's provisioning script, then your setup scripts: the `*.sh` files in `provision.d/` here, in name order. Each runs with bash as the VM user, in `<clone>`, stopping at its first failing command. Only plain files of up to 1 MB run; links, folders and bigger files are skipped.
+
+- Keep one script per concern, named like `20-postgres.sh`. Look at the ones there first, and change one rather than add a second for the same thing.
+- Write them so they can run again where they ran before, then run a new or changed one right away to check it works: `bash -e ~/.kumiko/shared/provision.d/<file>`.
+- Don't repeat what the user's provisioning script does. It is in `user-provision.sh` here, as the user last saved it; changing that copy changes nothing.
+- Never write secret values into a script: this folder is on the user's computer. Use the variables forwarded from it by name: `GITHUB_TOKEN`, `NPM_TOKEN`.
+- The scripts are yours to manage; the user can see them on the project page. When you add or change one, say so in your reply.
+- The user can delete `provision.d/` from the project page to start from scratch. If it is gone or empty, don't write back what was there: start again with what the work needs from now on.
 ```
 
 ## The system prompt

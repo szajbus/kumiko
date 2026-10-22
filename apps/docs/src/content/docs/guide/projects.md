@@ -69,6 +69,9 @@ value.
 Before your script, Kumiko installs the agent: Claude Code, with its native installer, linked to
 `/usr/local/bin/claude`. If either fails, the sandbox shows **Provision failed**; fix the script and recreate it.
 
+The agent gets a copy of the script, `user-provision.sh` in the project's Kumiko folder, so its own setup scripts don't
+repeat what yours does. Keep secrets out of the script: use forwarded variables.
+
 ### The agent's setup scripts
 
 The agent installs what its work needs as it goes, and writes it down as setup scripts so a recreated sandbox gets it

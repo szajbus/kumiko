@@ -13,6 +13,10 @@ export function defaultKumikoHome(): string {
 /** The file Kumiko owns in each Claude home, imported by CLAUDE.md. Rewritten whenever the VM or a session starts. */
 export const MANAGED_FILE = "kumiko.md";
 
+/** The guide to the agent's setup scripts, and the copy of the user's provisioning script it points to, in the Kumiko folder. */
+export const SETUP_GUIDE = "setup.md";
+export const USER_PROVISION_COPY = "user-provision.sh";
+
 /** What a new app-level template's CLAUDE.md says. The import is what brings in Kumiko's instructions. */
 const TEMPLATE_CLAUDE_MD = `@${MANAGED_FILE}
 
@@ -38,12 +42,8 @@ The git clone is \`${p.clonePath}\`. Sessions start there.
 
 ## Setup that survives a rebuild
 
-- The user can recreate this VM from scratch, and everything outside the mounted folders is lost then. A new VM gets Claude Code, the user's provisioning script, and then your setup scripts: the \`*.sh\` files in \`${KUMIKO_HOME_IN_VM}/${AGENT_SETUP_DIR}/\`, in name order. Each runs with bash as the VM user, in the clone, stopping at its first failing command. Only plain files of up to ${AGENT_SCRIPT_MAX_BYTES / 1024 / 1024} MB run; links, folders and bigger files are skipped.
-- When you install or configure something in the VM that you'd want again after a rebuild (packages, tools, services, system settings), add it to a setup script. Keep one script per concern, named like \`20-postgres.sh\`; look at the ones there first, and change one rather than add a second for the same thing.
-- Write them so they can run again where they ran before, then run a new or changed one right away to check it works: \`bash -e ${KUMIKO_HOME_IN_VM}/${AGENT_SETUP_DIR}/<file>\`.
-- Don't install what the user's provisioning script already does, and never write secret values into a script: the folder is on the user's computer. Use the project's forwarded variables by name.
-- They are yours to manage; the user can see them on the project page. When you add or change one, say so in your reply.
-- The user can delete the whole folder from the project page to start from scratch. If it is gone or empty, don't write back what was there: start again with what the work needs from now on.
+- The user can recreate this VM from scratch, and everything outside the mounted folders is lost then. When you install or configure something you'd want again after a rebuild (packages, tools, services, system settings), keep it in a setup script in \`${KUMIKO_HOME_IN_VM}/${AGENT_SETUP_DIR}/\`.
+- Read \`${KUMIKO_HOME_IN_VM}/${SETUP_GUIDE}\` before you add or change one: it says how they run, and what the user's own setup already does.
 
 ## Worktrees
 
@@ -53,6 +53,30 @@ The git clone is \`${p.clonePath}\`. Sessions start there.
 - Questions and read-only exploration don't need a worktree; look around in the clone and leave it as it is.
 - If the user asks for a worktree, or names an existing one, use that.
 - Other sessions may be working in other worktrees at the same time. Leave worktrees you didn't create alone.
+`;
+}
+
+/** What the agent's setup guide says of the user's side of the VM: their provisioning script, and the variables forwarded. */
+export type UserSetup = Pick<SandboxSpec, "provision" | "env">;
+
+/**
+ * The guide to the agent's setup scripts, in the Kumiko folder next to theirs; \`kumiko.md\` points to it, so its
+ * details cost context only when the agent is about to write a script.
+ */
+export function setupGuide(p: Project, user: UserSetup): string {
+  const vars = user.env.map((name) => `\`${name}\``).join(", ");
+  return `<!-- Written by Kumiko, and rewritten whenever the sandbox or a session starts. -->
+
+# Setup scripts
+
+When the user recreates this VM, everything outside the mounted folders is lost. A new VM gets Claude Code, then the user's provisioning script, then your setup scripts: the \`*.sh\` files in \`${AGENT_SETUP_DIR}/\` here, in name order. Each runs with bash as the VM user, in \`${p.clonePath}\`, stopping at its first failing command. Only plain files of up to ${AGENT_SCRIPT_MAX_BYTES / 1024 / 1024} MB run; links, folders and bigger files are skipped.
+
+- Keep one script per concern, named like \`20-postgres.sh\`. Look at the ones there first, and change one rather than add a second for the same thing.
+- Write them so they can run again where they ran before, then run a new or changed one right away to check it works: \`bash -e ${KUMIKO_HOME_IN_VM}/${AGENT_SETUP_DIR}/<file>\`.
+- ${user.provision ? `Don't repeat what the user's provisioning script does. It is in \`${USER_PROVISION_COPY}\` here, as the user last saved it; changing that copy changes nothing.` : "The user has no provisioning script."}
+- Never write secret values into a script: this folder is on the user's computer. ${vars ? `Use the variables forwarded from it by name: ${vars}.` : "No variables are forwarded from it."}
+- The scripts are yours to manage; the user can see them on the project page. When you add or change one, say so in your reply.
+- The user can delete \`${AGENT_SETUP_DIR}/\` from the project page to start from scratch. If it is gone or empty, don't write back what was there: start again with what the work needs from now on.
 `;
 }
 
@@ -259,14 +283,26 @@ export class ProjectStore {
 
   /**
    * Rewrites Kumiko's own instructions in the project's Claude home; CLAUDE.md is the user's. Makes the Kumiko folder
-   * too, which the VM mounts.
+   * too, which the VM mounts, and with the user's setup writes the guide to the agent's setup scripts there.
    */
-  async writeManaged(p: Project): Promise<void> {
+  async writeManaged(p: Project, user?: UserSetup): Promise<void> {
     await mkdir(this.kumikoHome(p.id), { recursive: true });
     const home = this.claudeHome(p.id);
     await mkdir(home, { recursive: true });
     // Claude can make the file a link to one of the user's on the host: that is replaced, not written through.
     await replaceFile(home, MANAGED_FILE, managedInstructions(p));
+    if (user) await this.writeSetupGuide(p, user);
+  }
+
+  /**
+   * Writes the setup guide in the Kumiko folder, beside the agent's scripts, with the copy of the user's script or none.
+   * Claude can make either a link to one of the user's files on the host: that is replaced or deleted, not written through.
+   */
+  private async writeSetupGuide(p: Project, user: UserSetup): Promise<void> {
+    const home = this.kumikoHome(p.id);
+    await replaceFile(home, SETUP_GUIDE, setupGuide(p, user));
+    if (user.provision) await replaceFile(home, USER_PROVISION_COPY, user.provision.endsWith("\n") ? user.provision : `${user.provision}\n`);
+    else await rm(join(home, USER_PROVISION_COPY), { force: true });
   }
 
   /**

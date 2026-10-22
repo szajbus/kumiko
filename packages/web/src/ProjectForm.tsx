@@ -547,7 +547,7 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
             <>
               Kumiko first installs Claude Code, on <code className="mono">PATH</code> as <code className="mono">claude</code>. Then your script runs
               once, as the sandbox user, in the clone, with the forwarded variables set. <code className="mono">sudo</code> is available. Stops at the first
-              failing command.
+              failing command. Claude gets a copy, so its own setup scripts don't repeat it: use forwarded variables for secrets.
               {editing && " A new script runs when you save and recreate the sandbox."}
             </>
           }
