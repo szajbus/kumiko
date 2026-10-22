@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { app, BrowserWindow, dialog, ipcMain, session, shell, webContents, type NativeImage, type Session } from "electron";
-import { isExternalUrl, isPreviewUrl, isPrivateHost } from "@kumiko/shared";
+import { isExternalUrl, isPreviewUrl, isPrivateHost, paneNavigation } from "@kumiko/shared";
 import { startServer, type RunningServer } from "@kumiko/server";
 import { adoptLoginShellEnv } from "./shell-env.js";
 
@@ -189,18 +189,20 @@ if (!app.requestSingleInstanceLock()) {
   adoptLoginShellEnv();
 
   // Inside a preview, links stay on this machine's pages; inside an external site, on external sites. Others, and new
-  // windows, open in the browser.
+  // windows, don't open: a page's script can ask for them without a click, and the browser would load them with the
+  // user's logins, on their network. The pane says where the page wanted to go, and the user can open it from there.
   app.on("web-contents-created", (_e, contents) => {
     if (contents.getType() !== "webview") return;
-    const stays = contents.session === session.fromPartition(SITES) ? isExternalUrl : isPreviewUrl;
+    const pane = contents.session === session.fromPartition(SITES) ? "site" : "preview";
+    const ask = (target: string) => paneNavigation(pane, target) === "ask" && contents.hostWebContents?.send("kumiko:page-wants", contents.id, target);
     contents.setWindowOpenHandler(({ url: target }) => {
-      openOutside(target);
+      ask(target);
       return { action: "deny" };
     });
     contents.on("will-navigate", (e, target) => {
-      if (stays(target)) return;
+      if (paneNavigation(pane, target) === "stay") return;
       e.preventDefault();
-      openOutside(target);
+      ask(target);
     });
   });
 

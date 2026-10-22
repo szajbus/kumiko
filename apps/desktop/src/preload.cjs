@@ -16,6 +16,12 @@ contextBridge.exposeInMainWorld("kumiko", {
     ipcRenderer.on("kumiko:page-blocked", handler);
     return () => ipcRenderer.removeListener("kumiko:page-blocked", handler);
   },
+  // Where a page in a pane wanted to go, off what it may show: the <webview>'s web contents id, and the URL.
+  onPageWants: (cb) => {
+    const handler = (_event, id, url) => cb(id, url);
+    ipcRenderer.on("kumiko:page-wants", handler);
+    return () => ipcRenderer.removeListener("kumiko:page-wants", handler);
+  },
   // Cmd/Ctrl+W, and with Shift to delete the session too; intercepted in the main process before the menu can close the window.
   onCloseTab: (cb) => {
     const handler = (_event, deleteToo) => cb(Boolean(deleteToo));

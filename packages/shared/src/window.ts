@@ -324,6 +324,17 @@ export function isExternalUrl(url: string): boolean {
   return host !== undefined && !/\s/.test(url) && !isPrivateHost(host);
 }
 
+/**
+ * What becomes of a page in a pane going to `target`, by navigating or opening a window: a preview stays on this
+ * machine's pages, a website on external sites. Anywhere else isn't opened, as a page's script can ask for it without
+ * a click, and the user's browser would load it with their logins, on their network: the user is asked, for a web or
+ * mail link, and anything else is dropped.
+ */
+export function paneNavigation(pane: "preview" | "site", target: string): "stay" | "ask" | "drop" {
+  if (pane === "preview" ? isPreviewUrl(target) : isExternalUrl(target)) return "stay";
+  return /^(https?|mailto):/i.test(target) ? "ask" : "drop";
+}
+
 /** An image artifact's media type, by its file's extension. */
 export const imageTypeOf = (path: string): string => IMAGE_TYPES[/\.([a-z0-9]+)$/i.exec(path)?.[1].toLowerCase() ?? ""] ?? "application/octet-stream";
 

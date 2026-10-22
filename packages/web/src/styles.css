@@ -578,6 +578,10 @@ a.artifact-copy { text-decoration: none; }
 /* Over a page that didn't load, where its frame would be blank. */
 .artifact-body.is-page .artifact-inner { position: relative; }
 .artifact-failed { position: absolute; inset: 0; justify-content: center; max-width: none; padding: 24px 15%; background: var(--bg); }
+/* Where a page wanted to go, over its top edge, until the user opens or dismisses it. */
+.artifact-wants { position: absolute; top: 8px; left: 8px; right: 8px; display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); color: var(--text-2); font-size: 12.5px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3); }
+.artifact-wants > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.artifact-wants-url { color: var(--text); }
 /* Pictures fit the pane's width. SVG goes on a light card, as most are drawn for a white page; diagrams are drawn dark. */
 .artifact-image, .diagram { display: block; max-width: 100%; height: auto; margin: 0 auto; }
 .artifact-image.is-svg { padding: 16px; border-radius: 8px; background: #fff; }

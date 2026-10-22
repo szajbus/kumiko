@@ -464,9 +464,12 @@ function loadError(code: number, description: string, url: string): string {
 function PageView({ url, partition }: { url: string; partition: string }) {
   const ref = useRef<HTMLElement>(null);
   const [error, setError] = useState<string>();
+  // Where the page last wanted to go that it may not: the app doesn't open it without the user.
+  const [wants, setWants] = useState<string>();
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    setWants(undefined);
     const failed = (e: Event) => {
       const f = e as Event & { errorCode: number; errorDescription: string; validatedURL: string; isMainFrame: boolean };
       if (!f.isMainFrame || f.errorCode === ABORTED) return;
@@ -491,14 +494,18 @@ function PageView({ url, partition }: { url: string; partition: string }) {
       el.dataset.loadError = why;
       setError(why);
     };
-    const offBlocked = window.kumiko?.onPageBlocked?.((id) => {
-      let mine: number | undefined;
+    const isMine = (id: number) => {
       try {
-        mine = (el as HTMLElement & { getWebContentsId(): number }).getWebContentsId();
+        return id === (el as HTMLElement & { getWebContentsId(): number }).getWebContentsId();
       } catch {
-        return;
+        return false;
       }
-      if (id === mine) fail(loadError(BLOCKED_BY_CLIENT, "", ""));
+    };
+    const offBlocked = window.kumiko?.onPageBlocked?.((id) => {
+      if (isMine(id)) fail(loadError(BLOCKED_BY_CLIENT, "", ""));
+    });
+    const offWants = window.kumiko?.onPageWants?.((id, target) => {
+      if (isMine(id)) setWants(target);
     });
     // And any other load that stops with nothing loaded and nothing said.
     let committed = false;
@@ -514,6 +521,7 @@ function PageView({ url, partition }: { url: string; partition: string }) {
     el.addEventListener("did-stop-loading", stopped);
     return () => {
       offBlocked?.();
+      offWants?.();
       el.removeEventListener("did-start-navigation", navigating);
       el.removeEventListener("did-navigate", navigated);
       el.removeEventListener("did-stop-loading", stopped);
@@ -529,6 +537,20 @@ function PageView({ url, partition }: { url: string; partition: string }) {
         <div className="artifact-ask artifact-failed" role="alert">
           <p className="artifact-ask-title">This page didn't load</p>
           <p>{error}</p>
+        </div>
+      )}
+      {wants && (
+        <div className="artifact-wants" role="status">
+          <span>
+            The page wants to open <span className="mono artifact-wants-url">{wants}</span>
+          </span>
+          {/* Opened by the app's window, which sends http(s) and mail links to the browser. */}
+          <a className="btn btn-secondary btn-compact" href={wants} target="_blank" rel="noreferrer" onClick={() => setWants(undefined)}>
+            Open in browser
+          </a>
+          <button type="button" className="btn btn-secondary btn-compact" onClick={() => setWants(undefined)}>
+            Dismiss
+          </button>
         </div>
       )}
     </>

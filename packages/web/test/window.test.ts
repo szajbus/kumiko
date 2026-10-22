@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { addWidget, applyWindowOp, artifactTypeOf, imageTypeOf, isExternalUrl, isPrivateHost, urlHost, urlOrigin, CHAT, chatWindow, close, move, remove, resize, show, compactWindow, nextId, paneIds, paneOf, split, windowState, WINDOW, MAX_PANES, WindowError, type SessionEvent, type WindowOp, type WindowState } from "@kumiko/shared";
+import { addWidget, applyWindowOp, artifactTypeOf, imageTypeOf, isExternalUrl, isPrivateHost, paneNavigation, urlHost, urlOrigin, CHAT, chatWindow, close, move, remove, resize, show, compactWindow, nextId, paneIds, paneOf, split, windowState, WINDOW, MAX_PANES, WindowError, type SessionEvent, type WindowOp, type WindowState } from "@kumiko/shared";
 
 /** A window with an artifact widget per id, none shown. */
 const withDocs = (...ids: string[]): WindowState => ids.reduce((w, id) => addWidget(w, id, { kind: "artifact" }), chatWindow());
@@ -336,6 +336,16 @@ describe("external sites", () => {
     assert.equal(urlOrigin("https://User:pw@Example.com:8443/x"), "https://example.com:8443");
     assert.equal(urlHost("https://[2606:4700::1111]/"), "[2606:4700::1111]");
     assert.equal(urlOrigin("https://example.com:443/"), "https://example.com");
+  });
+
+  it("are never opened from a pane without the user: it stays, or the user is asked", () => {
+    assert.equal(paneNavigation("preview", "http://localhost:5173/next"), "stay");
+    assert.equal(paneNavigation("site", "https://example.com/next"), "stay");
+    // What a page's script could send the user's browser to: their router, a service on their Mac, a site of its choice.
+    for (const target of ["http://192.168.1.1/cgi?reboot", "https://phish.example/"]) assert.equal(paneNavigation("preview", target), "ask", target);
+    for (const target of ["http://192.168.1.1/cgi?reboot", "http://127.0.0.1:631/"]) assert.equal(paneNavigation("site", target), "ask", target);
+    assert.equal(paneNavigation("site", "mailto:someone@example.com"), "ask");
+    for (const target of ["file:///etc/passwd", "javascript:alert(1)", "vscode://file/x", "smb://server/share"]) assert.equal(paneNavigation("site", target), "drop", target);
   });
 
   it("are read as a browser reads them, whatever tricks the URL has", () => {

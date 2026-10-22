@@ -42,6 +42,7 @@ declare global {
       captureWebview?(id: number): Promise<string>;
       /** Calls back when the app blocks a page a <webview> was to show; returns a function that stops listening. */
       onPageBlocked?(cb: (webContentsId: number, url: string) => void): () => void;
+      onPageWants?(cb: (webContentsId: number, url: string) => void): () => void;
     };
   }
 }
