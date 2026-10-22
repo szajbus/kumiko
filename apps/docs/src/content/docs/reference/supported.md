@@ -38,7 +38,7 @@ follows mostly from the sandbox provider.
 
 | Agent | Status | Checked against | How Kumiko runs it |
 | --- | --- | --- | --- |
-| [Claude Code](https://claude.com/claude-code) | Supported, the only agent | Claude Code 2.1.303 | `claude -p` in stream-json mode, permissions bypassed |
+| [Claude Code](https://claude.com/claude-code) | Supported, the only agent | Claude Code 2.1.304 | `claude -p` in stream-json mode, permissions bypassed |
 
 **Claude Code notes:**
 
@@ -57,6 +57,7 @@ follows mostly from the sandbox provider.
 | Model picker | `--model` and `/model` |
 | Login | `claude auth status`, `claude auth login` |
 | Usage in the title bar | the subscription usage endpoint, with the agent home's credentials |
+| Artifacts, and the other tools Kumiko gives the agent | an SDK MCP server over the control protocol (`--mcp-config`), some tools deferred until `ToolSearch` loads them; `npm run tools-check` checks it against a real Claude |
 
 ## Adding another
 
