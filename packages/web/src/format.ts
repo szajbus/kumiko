@@ -2,15 +2,51 @@ import type { EndReason, SessionInfo } from "@kumiko/shared";
 
 // Text the UI shows for numbers, times and sessions. Plain functions, so they can be tested without a browser.
 
-/** A session's tab title: its project and its name from /rename, or else the first words of the opening prompt. */
-export function sessionTitle(s: Pick<SessionInfo, "sandbox" | "prompt" | "title">): string {
+/** A session's name: from /rename, or else the first words of the opening prompt. Its tab shows it under its project's label. */
+export function sessionName(s: Pick<SessionInfo, "prompt" | "title">): string {
   const words = (s.title ?? s.prompt).split(/\s+/).filter(Boolean);
   let text = "";
   for (const w of words) {
-    if ((text + " " + w).trim().length > 28) return `${s.sandbox} · ${text || w.slice(0, 28)}…`;
+    if ((text + " " + w).trim().length > 28) return `${text || w.slice(0, 28)}…`;
     text = (text + " " + w).trim();
   }
-  return `${s.sandbox} · ${text}`;
+  return text;
+}
+
+/** A session's title where its project doesn't show otherwise: the project, then its name. */
+export function sessionTitle(s: Pick<SessionInfo, "sandbox" | "prompt" | "title">): string {
+  return `${s.sandbox} · ${sessionName(s)}`;
+}
+
+/** The hue a project's tab group would like, from its name, so it stays the same from run to run. */
+export function projectHue(name: string): number {
+  // FNV-1a: close names still land far apart.
+  let h = 0x811c9dc5;
+  for (const c of name) h = Math.imul(h ^ c.codePointAt(0)!, 0x01000193) >>> 0;
+  // Twelve hues, 30° apart, tell groups apart better than any of 360 would.
+  return (h % 12) * 30;
+}
+
+/** How far apart two hues are, around the wheel. */
+const hueGap = (a: number, b: number) => Math.min(Math.abs(a - b), 360 - Math.abs(a - b));
+
+/**
+ * The hues of the open projects' tab groups: each its own, unless one before it by name has it already; then the free
+ * one furthest from those taken, so it doesn't land beside the one it clashed with. By name, so dragging groups around
+ * doesn't change them.
+ */
+export function projectHues(names: readonly string[]): Map<string, number> {
+  const hues = new Map<string, number>();
+  const taken: number[] = [];
+  for (const name of [...new Set(names)].sort()) {
+    const wanted = projectHue(name);
+    const free = Array.from({ length: 12 }, (_, i) => i * 30).filter((h) => !taken.includes(h));
+    const room = (h: number) => Math.min(...taken.map((t) => hueGap(h, t)));
+    const hue = !free.length || free.includes(wanted) ? wanted : free.reduce((a, b) => (room(b) > room(a) || (room(b) === room(a) && hueGap(b, wanted) < hueGap(a, wanted)) ? b : a));
+    hues.set(name, hue);
+    taken.push(hue);
+  }
+  return hues;
 }
 
 /** "max" → "Max". */

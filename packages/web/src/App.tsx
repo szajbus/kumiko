@@ -11,7 +11,7 @@ import { ProjectList } from "./ProjectList";
 import { ProjectPage } from "./ProjectPage";
 import { Window } from "./Window";
 import { landingAfterClose } from "./landing";
-import { arrange, moveTab, replaceTab } from "./order";
+import { arrange, group, moveGroup, moveTab, replaceTab } from "./order";
 import { loadTabs, saveTabs } from "./tabs";
 
 type Route =
@@ -198,11 +198,16 @@ export function App() {
     return () => removeEventListener("hashchange", onHash);
   }, []);
 
-  // The tabs in the order the header shows them: Projects, then the rest.
-  const open = arrange(order, [
-    ...sessions.map((s): TabId => `session:${s.id}`),
-    ...newSessions.map((n): TabId => `new-session:${n.key}`),
-  ]);
+  /** The project a tab is in: its session's, or the one picked in a New session tab, if any. */
+  const projectOf = (tab: TabId): string | undefined =>
+    tab.startsWith("session:")
+      ? sessions.find((s) => `session:${s.id}` === tab)?.sandbox
+      : newSessions.find((n) => `new-session:${n.key}` === tab)?.project;
+  // The tabs in the order the header shows them: Projects, then the rest, each project's together.
+  const open = group(
+    arrange(order, [...sessions.map((s): TabId => `session:${s.id}`), ...newSessions.map((n): TabId => `new-session:${n.key}`)]),
+    projectOf,
+  );
   const tabs: TabId[] = ["projects", ...open];
 
   const select = (tab: TabId) => {
@@ -361,7 +366,9 @@ export function App() {
         active={tabOf(route)}
         onSelect={select}
         onClose={close}
-        onMove={(tab, target, after) => setOrder(moveTab(open, tab, target, after))}
+        onMove={(tab, target, after) => setOrder(group(moveTab(open, tab, target, after), projectOf))}
+        onMoveGroup={(moving, target, after) => setOrder(moveGroup(open, projectOf, moving, target, after))}
+        onOpenProject={(name) => go(`#/project/${name}`)}
         onNewSession={() => go("#/session/new")}
         cornerRef={setCorner}
       />

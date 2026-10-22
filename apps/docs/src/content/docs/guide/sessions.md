@@ -10,6 +10,16 @@ clone, and keeps running between your messages until you close the tab, even whi
 
 ![A session: the first turn's tool calls folded into one line, the agent's reply, and the turn's time, cost and tokens.](../../../assets/screenshots/session.png)
 
+## Tabs
+
+Each project's tabs sit together, behind a label with the project's name in a colour of its own, so a tab only needs
+the session's name: the one given with `/rename`, or else the first words of your opening message. Hover a tab for its
+project and state.
+
+- Drag a tab to move it among its project's tabs, or drag the label to move the project's tabs together.
+- Click the label to open the project.
+- A New session tab sits with the project picked in it, and moves if you pick another.
+
 ## Closing and ending
 
 - **Closing a tab closes the session.** It stays saved and can be resumed. If the agent is working, Kumiko asks first,

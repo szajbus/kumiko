@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { LogLine, SandboxView } from "@kumiko/shared";
 import { matchCommands } from "../src/commands.ts";
-import { ago, endedText, formatBytes, formatCost, formatDuration, planName, resetText, sessionTitle } from "../src/format.ts";
+import { ago, endedText, formatBytes, formatCost, formatDuration, planName, projectHue, projectHues, resetText, sessionName, sessionTitle } from "../src/format.ts";
 import { COLORS, opPill, resources, statusOf } from "../src/status.ts";
 
 describe("format", () => {
@@ -11,6 +11,31 @@ describe("format", () => {
     assert.equal(sessionTitle({ sandbox: "web", prompt: "x", title: "Login" }), "web · Login");
     assert.equal(sessionTitle({ sandbox: "web", prompt: "please refactor the whole payment module today" }), "web · please refactor the whole…");
     assert.equal(sessionTitle({ sandbox: "web", prompt: "a".repeat(40) }), `web · ${"a".repeat(28)}…`);
+  });
+
+  it("names a session without its project, for a tab under the project's label", () => {
+    assert.equal(sessionName({ prompt: "fix the login bug" }), "fix the login bug");
+    assert.equal(sessionName({ prompt: "x", title: "Login" }), "Login");
+    assert.equal(sessionName({ prompt: "please refactor the whole payment module today" }), "please refactor the whole…");
+  });
+
+  it("gives a project the same hue every time, and different projects mostly different ones", () => {
+    assert.equal(projectHue("kumiko"), projectHue("kumiko"));
+    const hues = new Set(["kumiko", "web", "api", "docs", "infra"].map(projectHue));
+    assert.ok(hues.size >= 4, [...hues].join());
+    for (const h of hues) assert.ok(h >= 0 && h < 360);
+  });
+
+  it("gives open projects different hues, by name, whatever order their groups are in", () => {
+    // These two would both like 270°.
+    assert.equal(projectHue("kumiko"), projectHue("webshop"));
+    const hues = projectHues(["webshop", "kumiko", "api-server"]);
+    assert.equal(hues.get("kumiko"), 270);
+    // webshop moves as far as it can from both api-server and kumiko, not to the hue beside kumiko's.
+    assert.equal(hues.get("api-server"), 150);
+    assert.equal(hues.get("webshop"), 30);
+    assert.deepEqual(projectHues(["kumiko", "api-server", "webshop"]), hues);
+    assert.equal(new Set(projectHues(Array.from({ length: 12 }, (_, i) => `p${i}`)).values()).size, 12);
   });
 
   it("says when a limit resets, and nothing once it has", () => {

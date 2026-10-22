@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { arrange, moveTab, replaceTab } from "../src/order.ts";
+import { arrange, group, moveGroup, moveTab, replaceTab } from "../src/order.ts";
 
 describe("arrange", () => {
   it("keeps the open tabs in the given order, dropping the ones that are gone", () => {
@@ -39,5 +39,39 @@ describe("replaceTab", () => {
   it("leaves the new tab out when there is no old one to replace", () => {
     assert.deepEqual(replaceTab(["a", "z"], undefined, "z"), ["a"]);
     assert.deepEqual(replaceTab(["a", "z"], "x", "z"), ["a"]);
+  });
+});
+
+describe("group", () => {
+  const groupOf = (t: string) => (t.includes(":") ? t.split(":")[0] : undefined);
+
+  it("puts each group's tabs together where its first tab is, keeping their order", () => {
+    assert.deepEqual(group(["a:1", "b:1", "a:2", "c:1", "b:2"], groupOf), ["a:1", "a:2", "b:1", "b:2", "c:1"]);
+  });
+
+  it("puts tabs in no group last", () => {
+    assert.deepEqual(group(["x", "a:1", "y", "b:1", "a:2"], groupOf), ["a:1", "a:2", "b:1", "x", "y"]);
+  });
+
+  it("leaves grouped tabs as they are", () => {
+    const tabs = ["b:2", "b:1", "a:1", "x"];
+    assert.deepEqual(group(tabs, groupOf), tabs);
+  });
+});
+
+describe("moveGroup", () => {
+  const groupOf = (t: string) => (t.includes(":") ? t.split(":")[0] : undefined);
+  const tabs = ["a:1", "a:2", "b:1", "c:1", "c:2", "x"];
+
+  it("moves a group's tabs before or after another group's", () => {
+    assert.deepEqual(moveGroup(tabs, groupOf, "c", "a", false), ["c:1", "c:2", "a:1", "a:2", "b:1", "x"]);
+    assert.deepEqual(moveGroup(tabs, groupOf, "a", "c", true), ["b:1", "c:1", "c:2", "a:1", "a:2", "x"]);
+    assert.deepEqual(moveGroup(tabs, groupOf, "a", "b", true), ["b:1", "a:1", "a:2", "c:1", "c:2", "x"]);
+  });
+
+  it("leaves the tabs as they are when dropped on itself or on a group that isn't there", () => {
+    assert.deepEqual(moveGroup(tabs, groupOf, "a", "a", true), tabs);
+    assert.deepEqual(moveGroup(tabs, groupOf, "a", "z", false), tabs);
+    assert.deepEqual(moveGroup(tabs, groupOf, "z", "a", false), tabs);
   });
 });
