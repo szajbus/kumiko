@@ -69,9 +69,9 @@ const atLeast = (v: number[], min: number[]) => {
  * and a vz VM.
  */
 function unblockable(version: number[] | undefined, inst: LimaInstance): string | undefined {
-  if (!version) return "Kumiko couldn't tell which Lima is installed. Upgrade it to 2.3 or later (brew upgrade lima), then restart the sandbox.";
-  if (!atLeast(version, HOST_LOOPBACK_SINCE)) return `Upgrade Lima to 2.3 or later (brew upgrade lima; this is ${version.join(".")}), then restart the sandbox.`;
-  if (inst.vmType !== "vz") return `Lima can only block it in vz VMs, and this one is ${inst.vmType ?? "of an unknown type"}: recreate the sandbox from a template that uses vz.`;
+  if (!version) return "Kumiko can block it if you want, but it couldn't tell which Lima version you have. Lima 2.3 or later supports it.";
+  if (!atLeast(version, HOST_LOOPBACK_SINCE)) return `Kumiko can block it if you want, but your current Lima version (${version.join(".")}) does not support it. You need to upgrade to 2.3 or later first.`;
+  if (inst.vmType !== "vz") return `Kumiko can block it if you want, but Lima only supports it in vz VMs, and this one is ${inst.vmType ?? "of an unknown type"}. You need to recreate the sandbox from a template that uses vz first.`;
   return undefined;
 }
 

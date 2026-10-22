@@ -394,10 +394,10 @@ describe("LimaProvider against a fake limactl", () => {
       const { limaDir, provider, log, lines } = await fakeLima();
       await as({ FAKE_LIMA_VERSION: "2.2.1" }, async () => {
         await provider.create(spec(), log);
-        assert.equal((await provider.list())[0].hostLoopbackOpen, "Upgrade Lima to 2.3 or later (brew upgrade lima; this is 2.2.1), then restart the sandbox.");
+        assert.equal((await provider.list())[0].hostLoopbackOpen, "Kumiko can block it if you want, but your current Lima version (2.2.1) does not support it. You need to upgrade to 2.3 or later first.");
       });
       assert.deepEqual(await loopbackEdits(limaDir), []);
-      assert.ok(lines.some((l) => /warning: this sandbox can reach services on your Mac's localhost \(127\.0\.0\.1\)\. Upgrade Lima to 2\.3/.test(l)), lines.join("\n"));
+      assert.ok(lines.some((l) => /warning: this sandbox can reach services on your Mac's localhost \(127\.0\.0\.1\)\. Kumiko can block it if you want, but your current Lima version \(2\.2\.1\)/.test(l)), lines.join("\n"));
 
       // Lima is upgraded. Kumiko asks its version again after a while; a new provider on the same VMs asks at once.
       const upgraded = new LimaProvider({ limactl: FAKE_LIMACTL, ssh: FAKE_SSH, metadata: provider.metadata });
@@ -412,7 +412,7 @@ describe("LimaProvider against a fake limactl", () => {
       const { limaDir, provider, log } = await fakeLima();
       await as({ FAKE_LIMA_VMTYPE: "qemu" }, () => provider.create(spec(), log));
       assert.deepEqual(await loopbackEdits(limaDir), []);
-      assert.match((await provider.list())[0].hostLoopbackOpen ?? "", /only block it in vz VMs, and this one is qemu: recreate the sandbox/);
+      assert.match((await provider.list())[0].hostLoopbackOpen ?? "", /Lima only supports it in vz VMs, and this one is qemu\. You need to recreate the sandbox/);
     });
   });
 

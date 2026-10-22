@@ -73,8 +73,7 @@ export function ProjectPage({ id, live, onBack, onEdit, onNewSession }: Props) {
             <strong>This sandbox can reach services on your Mac's localhost.</strong>
             <span>
               Claude in it can connect to anything listening on your Mac's 127.0.0.1, such as databases, dev servers and other
-              apps' local APIs, many of which trust anything on localhost. Kumiko blocks that unless the project allows it,
-              but this sandbox isn't blocked yet. {p.hostLoopbackOpen}
+              apps' local APIs, many of which trust anything on localhost. {p.hostLoopbackOpen}
             </span>
           </div>
         )}
