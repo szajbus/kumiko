@@ -781,7 +781,7 @@ a.artifact-copy { text-decoration: none; }
 .project-pick-state { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 12.5px; }
 .project-pick-status { display: flex; align-items: center; gap: 6px; }
 .project-pick-status .spinner { width: 10px; height: 10px; }
-.new-session-foot { display: flex; flex-direction: column; gap: 8px; }
+.new-session-foot { display: flex; flex-direction: column; gap: 8px; margin: 16px 0; }
 .resume-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .resume-item { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 0; border-top: 1px solid var(--border); }
 .resume-item:first-child { border-top: 0; }
