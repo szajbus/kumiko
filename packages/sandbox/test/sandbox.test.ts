@@ -62,10 +62,13 @@ describe("validateSpec", () => {
   });
 
   it("rejects a template limactl would take for an option", async () => {
-    for (const template of ["--set=.mounts=[{location:\"~\",writable:true}]", "-h", "template:debian 12"]) {
+    for (const template of ["--set=.mounts=[{location:\"~\",writable:true}]", "-h", "template:x\n--tty"]) {
       assert.match((await validateSpec(spec({ template }))).errors.join(), /isn't a template/, template);
     }
-    assert.deepEqual((await validateSpec(spec({ template: "template:debian-12" }))).errors, []);
+    // Names, and files and URLs, spaces and all.
+    for (const template of ["template:debian-12", "/Users/you/My Templates/dev.yaml", "https://example.com/t.yaml"]) {
+      assert.deepEqual((await validateSpec(spec({ template }))).errors, [], template);
+    }
   });
 
   it("normalizes the working directory and rejects / and relative paths", async () => {
