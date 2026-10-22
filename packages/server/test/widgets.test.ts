@@ -404,6 +404,10 @@ describe("widgets", () => {
     }
     assert.equal((await approve("w9", true)).status, 400);
     assert.equal((await approve("chat", true)).status, 400);
+
+    // A URL a browser reads as another site isn't taken for the allowed one: "\\" ends the host, so this is evil.example.
+    assert.match(await ask(s, id, widget("artifact_open", { url: "https://evil.example\\@example.com/" })), /^Asked the user to allow https:\/\/evil\.example /);
+    assert.equal(artifactsOf(s.window()).find(([, a]) => a.path.startsWith("https://evil.example"))?.[1].approved, false);
     s.close();
   });
 

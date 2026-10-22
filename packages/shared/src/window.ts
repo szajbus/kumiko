@@ -269,14 +269,32 @@ export function isPreviewUrl(url: string): boolean {
   return /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?([/?#][^\s]*)?$/i.test(url);
 }
 
-/** The host of an http(s) URL, lowercased, with an IPv6 address's brackets; undefined for anything else. */
-export function urlHost(url: string): string | undefined {
-  return /^https?:\/\/(?:[^/?#@]*@)?(\[[0-9a-f:.]+\]|[^/?#:]+)/i.exec(url)?.[1].toLowerCase();
+/** The URL parser every place this runs has, Node and browsers alike; this package names no environment's types. */
+interface ParsedUrl {
+  protocol: string;
+  hostname: string;
+  origin: string;
+}
+declare const URL: { new (url: string): ParsedUrl; canParse(url: string): boolean };
+
+/**
+ * An http(s) URL parsed as a browser parses it, or undefined for anything else. Parsed, not matched by pattern: a
+ * browser reads `https://evil.example\@good.example/` as evil.example, and so must whatever approves what it loads.
+ */
+function httpUrl(url: string): ParsedUrl | undefined {
+  if (!URL.canParse(url)) return undefined;
+  const u = new URL(url);
+  return u.protocol === "http:" || u.protocol === "https:" ? u : undefined;
 }
 
-/** The origin of an http(s) URL (scheme, host and port), lowercased; undefined for anything else. */
+/** The host of an http(s) URL, lowercased, with an IPv6 address's brackets; undefined for anything else. */
+export function urlHost(url: string): string | undefined {
+  return httpUrl(url)?.hostname;
+}
+
+/** The origin of an http(s) URL (scheme, host and port, unless it's the scheme's own), lowercased; undefined for anything else. */
 export function urlOrigin(url: string): string | undefined {
-  return /^(https?:\/\/(?:[^/?#@]*@)?(?:\[[0-9a-f:.]+\]|[^/?#:]+)(?::\d+)?)/i.exec(url)?.[1].replace(/\/\/[^/?#@]*@/, "//").toLowerCase();
+  return httpUrl(url)?.origin;
 }
 
 /**

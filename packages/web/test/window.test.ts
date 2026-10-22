@@ -335,5 +335,17 @@ describe("external sites", () => {
     assert.equal(isExternalUrl("javascript:alert(1)"), false);
     assert.equal(urlOrigin("https://User:pw@Example.com:8443/x"), "https://example.com:8443");
     assert.equal(urlHost("https://[2606:4700::1111]/"), "[2606:4700::1111]");
+    assert.equal(urlOrigin("https://example.com:443/"), "https://example.com");
+  });
+
+  it("are read as a browser reads them, whatever tricks the URL has", () => {
+    // A browser takes "\\" for "/", so what comes before the "@" is the host, not a user name.
+    assert.equal(urlHost("https://evil.example\\@good.example/"), "evil.example");
+    assert.equal(urlOrigin("https://evil.example\\@good.example/"), "https://evil.example");
+    assert.equal(isExternalUrl("https://192.168.1.1\\@example.com/"), false);
+    assert.equal(isExternalUrl("http://0x7f.1/"), false, "127.0.0.1 written another way");
+    assert.equal(urlHost("HTTPS://Example.COM./"), "example.com.");
+    assert.equal(urlHost("ftp://example.com/"), undefined);
+    assert.equal(urlHost("not a url"), undefined);
   });
 });
