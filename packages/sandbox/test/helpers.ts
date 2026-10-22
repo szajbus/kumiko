@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,7 +10,8 @@ export const FAKE_SSH = join(fixtures, "fake-ssh.sh");
 
 /** A LimaProvider wired to the fake limactl and ssh, with its own temp state. */
 export async function fakeLima(env: NodeJS.ProcessEnv = {}) {
-  const root = await mkdtemp(join(tmpdir(), "kumiko-test-"));
+  // Real, as the shell reports it: on macOS the temp dir is under /var, a link to /private/var.
+  const root = await mkdtemp(join(await realpath(tmpdir()), "kumiko-test-"));
   const limaDir = join(root, "lima");
   const mountDir = join(root, "mount");
   await mkdir(limaDir);

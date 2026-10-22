@@ -391,7 +391,8 @@ describe("sessions", () => {
     assert.equal((await json(res)).text, "second");
     assert.equal(await s.closed, 4409);
     const cut = await listen(id);
-    assert.deepEqual(cut.got.map((e) => (e.kind === "claude" ? e.payload.type : e.kind)), ["user_prompt", "user", "assistant", "result"]);
+    await waitFor(() => cut.caughtUp() !== undefined);
+    assert.deepEqual(cut.got.slice(0, cut.caughtUp()).map((e) => (e.kind === "claude" ? e.payload.type : e.kind)), ["user_prompt", "user", "assistant", "result"]);
     // The rewritten buffer has a name of its own, so a tab that missed the 4409 can't resume in it from a stale seq.
     await waitFor(() => cut.buffer());
     assert.notEqual(cut.buffer(), s.buffer());
@@ -411,7 +412,8 @@ describe("sessions", () => {
     await api(`/api/sessions/${id}`, { method: "DELETE" });
     assert.equal((await api(`/api/sessions/${id}/resume`, { method: "POST" })).status, 201);
     const back = await listen(id);
-    assert.equal(back.got.length, 4);
+    await waitFor(() => back.caughtUp() !== undefined);
+    assert.equal(back.caughtUp(), 4);
     await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: "where" }) });
     await waitFor(() => back.results().length === 2);
     assert.ok(back.got.some((e) => e.kind === "claude" && JSON.stringify(e.payload).includes(`resumed at ${firstReplyId}`)), "Claude resumes at the last message of the first turn");

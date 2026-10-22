@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,7 +21,8 @@ export async function installFakeClaude(home: string): Promise<void> {
  * preamble. HOME is a temp dir and PATH is minimal, so only a `claude` installed there is found.
  */
 export async function localExec(values: NodeJS.ProcessEnv = {}, opts: { claude?: boolean } = {}): Promise<{ exec: Exec; home: string }> {
-  const home = await mkdtemp(join(tmpdir(), "kumiko-agent-test-"));
+  // Real, as the shell reports it: on macOS the temp dir is under /var, a link to /private/var.
+  const home = await mkdtemp(join(await realpath(tmpdir()), "kumiko-agent-test-"));
   if (opts.claude !== false) await installFakeClaude(home);
   const exec: Exec = (_sandbox, cmd, env, o = {}) => {
     const child = spawn("bash", ["-s"], { stdio: ["pipe", "pipe", "pipe"], env: { HOME: home, PATH: "/usr/bin:/bin" } });

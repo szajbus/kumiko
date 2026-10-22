@@ -23,7 +23,8 @@
 // start, as Claude does, and lists its tools in init as mcp__<server>__<tool>. --append-system-prompt is taken and
 // replied to by the prompt "system prompt".
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, fstatSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -243,7 +244,10 @@ async function pump() {
   current = undefined;
 }
 
-const rl = createInterface({ input: process.stdin });
+// A run's stdin is a FIFO, and on macOS node never sees its EOF; a cat reading it for us does. (Claude itself runs in
+// the Linux VM; only the fake meets this, when the tests run on a Mac.)
+const input = process.platform === "darwin" && fstatSync(0).isFIFO() ? spawn("cat", [], { stdio: [0, "pipe", "inherit"] }).stdout : process.stdin;
+const rl = createInterface({ input });
 rl.on("line", (line) => {
   if (!line.trim()) return;
   const msg = JSON.parse(line);
