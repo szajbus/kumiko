@@ -61,6 +61,13 @@ describe("validateSpec", () => {
     assert.equal(v.spec.workdir, "/workspace");
   });
 
+  it("rejects a template limactl would take for an option", async () => {
+    for (const template of ["--set=.mounts=[{location:\"~\",writable:true}]", "-h", "template:debian 12"]) {
+      assert.match((await validateSpec(spec({ template }))).errors.join(), /isn't a template/, template);
+    }
+    assert.deepEqual((await validateSpec(spec({ template: "template:debian-12" }))).errors, []);
+  });
+
   it("normalizes the working directory and rejects / and relative paths", async () => {
     assert.equal((await validateSpec(spec({ workdir: "~/code/" }))).spec.workdir, "~/code");
     for (const workdir of ["/", "~", "code"]) assert.match((await validateSpec(spec({ workdir }))).errors.join(), /can't be the working directory/);

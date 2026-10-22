@@ -5,11 +5,14 @@ import { join } from "node:path";
 import type { Server } from "node:http";
 import { serve } from "@hono/node-server";
 import { Hono, type Context } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
+  ATTACHMENTS_TOTAL_LIMIT,
   DEFAULTS,
   ENV_NAME_PATTERN,
+  formatBytes,
   isWaiting,
   NAME_PATTERN,
   parseSavedTabs,
@@ -64,6 +67,9 @@ import { SessionStore, type StoredSession } from "./store.js";
 import { TabsStore } from "./tabs.js";
 import { serveWeb } from "./static.js";
 import { sandboxUsageSource, UsageCache, type UsageSource } from "./usage.js";
+
+/** The largest request body: a prompt's attachments, a third bigger in base64, and room for its text. */
+const MAX_BODY_BYTES = Math.ceil((ATTACHMENTS_TOTAL_LIMIT * 4) / 3) + 1024 * 1024;
 
 export interface ServerOptions {
   provider?: SandboxProvider;
@@ -399,6 +405,8 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     if (!hasToken(c.req.raw.headers, token, ownPort())) return c.json(fail("Forbidden: open Kumiko from the address its server printed, which signs this browser in."), 403);
     await next();
   });
+  // Bodies are read whole, so their size is capped: room for a prompt's attachments, in base64, and its text.
+  app.use("/api/*", bodyLimit({ maxSize: MAX_BODY_BYTES, onError: (c) => c.json(fail(`Too big: a request can be ${formatBytes(MAX_BODY_BYTES)} at most.`), 413) }));
 
   /** Parses the JSON body, or answers 400 with `usage`. */
   const body = async <T>(c: Context, usage: string): Promise<T> => {

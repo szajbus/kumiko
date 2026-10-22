@@ -463,6 +463,11 @@ describe("server errors", () => {
       const bad = await fetch(`${server.url}/api/projects`, { method: "POST", headers: { authorization: `Bearer ${server.token}` }, body: "{nope" });
       assert.equal(bad.status, 400);
       assert.match((await json(bad)).error, /Body must be JSON/);
+
+      // A body bigger than any request needs isn't read at all.
+      const huge = await fetch(`${server.url}/api/projects`, { method: "POST", headers: { authorization: `Bearer ${server.token}` }, body: JSON.stringify({ name: "x".repeat(40 * 1024 * 1024) }) });
+      assert.equal(huge.status, 413);
+      assert.match((await json(huge)).error, /Too big/);
     } finally {
       await server.close();
     }

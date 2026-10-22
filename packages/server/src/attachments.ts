@@ -29,6 +29,9 @@ export class AttachmentStore {
   async take(inputs: unknown): Promise<{ attachments: Attachment[]; files: AgentFile[] }> {
     if (inputs === undefined) return { attachments: [], files: [] };
     if (!Array.isArray(inputs)) throw new AttachmentRefused("Attachments must be a list.");
+    // Sized from the base64 first, so too much is refused before it is decoded.
+    const encoded = inputs.reduce((n: number, i: { data?: unknown }) => n + (typeof i?.data === "string" ? Math.floor((i.data.length * 3) / 4) : 0), 0);
+    if (encoded > ATTACHMENTS_TOTAL_LIMIT) throw new AttachmentRefused(`That's ${formatBytes(encoded)} of files; one message can take ${formatBytes(ATTACHMENTS_TOTAL_LIMIT)} at most.`);
     const read = await Promise.all(
       inputs.map(async (input: { name?: unknown; data?: unknown; hash?: unknown }) => {
         const name = typeof input?.name === "string" && input.name.trim() ? input.name.trim().slice(0, MAX_NAME) : "file";

@@ -104,6 +104,8 @@ export async function validateSpec(input: SandboxSpec, env: NodeJS.ProcessEnv = 
   if (!workdir) errors.push(`${rawWorkdir} can't be the working directory: use an absolute path or ~/…, not / or ~.`);
 
   const template = input.template?.trim() || undefined;
+  // It goes to limactl as an argument of its own, where one starting with "-" would be taken for an option.
+  if (template && (template.startsWith("-") || /[\s\0]/.test(template))) errors.push(`${template} isn't a template: name one like template:debian-12, a file or a URL.`);
   const provision = input.provision?.trim() ? input.provision.replace(/\r\n/g, "\n") : undefined;
 
   return {
