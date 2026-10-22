@@ -508,13 +508,15 @@ function PageView({ url, partition }: { url: string; partition: string }) {
       if (isMine(id)) setWants(target);
     });
     // And any other load that stops with nothing loaded and nothing said.
+    // Only before any page has: a navigation away that stops (one the app blocked, say) leaves the page there was.
     let committed = false;
+    let shown = false;
     const navigating = (e: Event) => {
       if ((e as Event & { isMainFrame: boolean }).isMainFrame) committed = false;
     };
-    const navigated = () => (committed = true);
+    const navigated = () => (committed = shown = true);
     const stopped = () => {
-      if (!committed && !el.dataset.loadError) fail(`Nothing loaded from ${url}.`);
+      if (!committed && !shown && !el.dataset.loadError) fail(`Nothing loaded from ${url}.`);
     };
     el.addEventListener("did-start-navigation", navigating);
     el.addEventListener("did-navigate", navigated);
