@@ -21,7 +21,7 @@ describe("ProjectStore", () => {
       assert.match(managed, /Written by Kumiko/);
       assert.match(managed, /\/src\/web__worktrees/);
       assert.match(managed, /## This machine\n\n- You are in a VM made for this project, and it is yours/);
-      assert.match(managed, /## Setup that survives a rebuild\n[^]*`~\/\.kumiko\/provision\.d\/`/);
+      assert.match(managed, /## Setup that survives a rebuild\n[^]*`~\/\.kumiko\/shared\/provision\.d\/`/);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

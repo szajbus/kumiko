@@ -48,13 +48,13 @@ describe("writes streaming in", () => {
 });
 
 describe("the chat's lines for widget tools", () => {
-  const doc = { path: "/home/u/.kumiko/artifacts/abc/plan.md", type: "markdown", title: "The plan", text: "" };
+  const doc = { path: "/home/u/.kumiko/shared/artifacts/abc/plan.md", type: "markdown", title: "The plan", text: "" };
   const w = split(addWidget(chatWindow(), "w2", { kind: "artifact", state: doc }), { split: "right" }, "p2", "w2");
 
   it("name the artifact a tool opened or changed", () => {
     assert.deepEqual(widgetLine("mcp__kumiko__artifact_open", { path: doc.path }, w), { label: "Opened", title: "The plan", widget: "w2" });
     assert.deepEqual(widgetLine("Write", { file_path: doc.path, content: "x" }, w), { label: "Wrote", title: "The plan", widget: "w2" });
-    assert.deepEqual(widgetLine("Edit", { file_path: "/home/u/.kumiko/artifacts/abc/./plan.md" }, w), { label: "Edited", title: "The plan", widget: "w2" });
+    assert.deepEqual(widgetLine("Edit", { file_path: "/home/u/.kumiko/shared/artifacts/abc/./plan.md" }, w), { label: "Edited", title: "The plan", widget: "w2" });
     // A relative path, as Claude may give it, matches by its end.
     assert.equal(widgetLine("mcp__kumiko__artifact_open", { path: "artifacts/abc/plan.md" }, w)?.widget, "w2");
   });
@@ -84,7 +84,7 @@ describe("the chat's lines for widget tools", () => {
     assert.deepEqual(widgetLine("mcp__kumiko__artifact_capture", {}, w), { label: "Looked at a pane" });
     assert.deepEqual(widgetLine("mcp__kumiko__artifact_reload", { artifact: "w2" }, w), { label: "Reloaded", title: "The plan", widget: "w2" });
     // Gone from the window by the time the line shows: named by its file.
-    assert.deepEqual(widgetLine("mcp__kumiko__artifact_remove", { artifact: "/home/u/.kumiko/artifacts/abc/old.md" }, w), { label: "Deleted", title: "old.md" });
+    assert.deepEqual(widgetLine("mcp__kumiko__artifact_remove", { artifact: "/home/u/.kumiko/shared/artifacts/abc/old.md" }, w), { label: "Deleted", title: "old.md" });
     assert.deepEqual(widgetLine("mcp__kumiko__artifact_remove", { artifact: "http://localhost:5173/" }, w), { label: "Removed", title: "localhost:5173/" });
   });
 });

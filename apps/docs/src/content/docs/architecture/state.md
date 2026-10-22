@@ -13,7 +13,7 @@ sandbox provider.
 | `projects/<id>.json` | The project: clone and worktrees paths. |
 | `sandboxes/<id>.json` | The sandbox's settings (variable names, never values) and setup state, with the agent's setup scripts it was created with and how each went. |
 | `claude/<id>/` | The project's agent home: login, settings, history. |
-| `sandbox/<id>/` | The project's Kumiko folder, `~/.kumiko` in the sandbox: what Kumiko and the agent keep for Kumiko, apart from the agent home. |
+| `sandbox/<id>/` | The project's Kumiko folder, `~/.kumiko/shared` in the sandbox: what Kumiko and the agent keep for Kumiko, apart from the agent home. |
 | `sandbox/<id>/artifacts/<session id>/` | The session's [artifacts](/guide/artifacts/), which the agent writes. |
 | `sandbox/<id>/provision.d/` | The agent's [setup scripts](/guide/projects/#the-agents-setup-scripts), run when the sandbox is created. |
 | `claude-template/` | What new agent homes are copied from. |
@@ -27,7 +27,7 @@ sandbox provider.
 The agent home's `CLAUDE.md` is yours. It imports `kumiko.md`, which Kumiko rewrites with
 [its instructions to the agent](/reference/agent-instructions/).
 
-In each sandbox, every agent process has a run in `~/.kumiko/runs/<session id>-<n>/`, on the sandbox's own disk: a FIFO
+In each sandbox, every agent process has a run in `~/.kumiko/local/runs/<session id>-<n>/`, on the sandbox's own disk: a FIFO
 for its input, its output and errors as files, its pid and, once it exits, its exit code. The run outlives Kumiko's
 server and is deleted when the agent exits. Runs no saved session points at are removed when the server starts and
 when the sandbox starts.

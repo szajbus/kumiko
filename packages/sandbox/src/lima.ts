@@ -4,6 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   CLAUDE_HOME_IN_VM,
+  KUMIKO_DIR_IN_VM,
   type AgentSetupRun,
   mountsExpression,
   sameMounts,
@@ -369,7 +370,7 @@ export class LimaProvider implements SandboxProvider {
   /**
    * Prepares the VM's shells on every start, so changes to the working directory reach them. A failure is only a warning.
    * - Creates the working directory if it's missing and hands it to the VM user if they can't write to it
-   *   (Lima creates /workspace as root when mounting under it).
+   *   (Lima creates /workspace as root when mounting under it). Likewise ~/.kumiko, which holds a mount.
    * - Puts ~/.local/bin, where Claude Code installs, on PATH for every shell: ~/.config/kumiko/env.sh is
    *   sourced from the top of ~/.bashrc (before Debian's early return, so `ssh host cmd` gets it too) and from ~/.profile.
    * - Moves interactive shells that land in ~ to the working directory: without --workdir, `limactl shell` tries
@@ -385,6 +386,7 @@ export class LimaProvider implements SandboxProvider {
     const script = [
       `set -e`,
       `d=${shellPath(workdir)}; sudo mkdir -p "$d"; [ -w "$d" ] || sudo chown "$(id -u):$(id -g)" "$d"`,
+      `k=~/${KUMIKO_DIR_IN_VM.slice(2)}; [ ! -d "$k" ] || [ -w "$k" ] || sudo chown "$(id -u):$(id -g)" "$k"`,
       `mkdir -p ~/.config/kumiko`,
       `cat > ~/.config/kumiko/env.sh <<'KUMIKO_RC'\n${env}KUMIKO_RC`,
       `cat > ~/.config/kumiko/shell.sh <<'KUMIKO_RC'\n${rc}KUMIKO_RC`,

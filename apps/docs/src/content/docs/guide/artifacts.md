@@ -32,6 +32,6 @@ pages and websites can't reach your Mac or your network; see [Security model](/a
 
 ## Where artifacts are
 
-In a folder of the session's own, `~/.kumiko/claude/<project>/kumiko/artifacts/<session>/`, not in your worktree.
+In a folder of the session's own, `~/.kumiko/sandbox/<project>/artifacts/<session>/`, not in your worktree.
 **Rewind** puts them back as they were at that message, **fork** gives the new session its own copy, and deleting a
 saved session deletes them.

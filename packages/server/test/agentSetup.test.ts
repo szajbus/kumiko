@@ -21,7 +21,7 @@ describe("the agent's setup scripts", () => {
     await writeFile(join(dir, ".hidden.sh"), "echo hidden\n");
     await writeFile(join(dir, "30-big.sh"), "#".repeat(AGENT_SCRIPT_MAX_BYTES + 1));
     await mkdir(join(dir, "40-dir.sh"));
-    // A link out to the host, as `ln -s /Users/you/.ssh/id_ed25519 ~/.kumiko/provision.d/50-key.sh` in the VM makes it.
+    // A link out to the host, as `ln -s /Users/you/.ssh/id_ed25519 ~/.kumiko/shared/provision.d/50-key.sh` in the VM makes it.
     await writeFile(join(root, "secret"), "do not read\n");
     await symlink(join(root, "secret"), join(dir, "50-key.sh"));
 
@@ -58,7 +58,7 @@ describe("the agent's setup scripts", () => {
     assert.equal(await deleteAgentScripts(home), true, "nothing to delete is fine");
     assert.equal(await deleteAgentScripts(join(root, "missing")), true);
 
-    // The folder itself a link to one of the user's, as `ln -s /Users/you/work ~/.kumiko/provision.d` in the VM makes
+    // The folder itself a link to one of the user's, as `ln -s /Users/you/work ~/.kumiko/shared/provision.d` in the VM makes
     // it: the link goes, what it points to stays.
     const theirs = join(root, "theirs");
     await mkdir(theirs);

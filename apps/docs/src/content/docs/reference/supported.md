@@ -47,7 +47,7 @@ follows mostly from the sandbox provider.
 
 - Kumiko installs it in every sandbox with its native installer; you don't need it on the host.
 - Each project has its own agent home, Claude Code's `~/.claude`, kept on the host in `~/.kumiko/claude/<project>/`.
-  Kumiko keeps its own files apart from it, in `~/.kumiko` in the sandbox (`~/.kumiko/sandbox/<project>/` on the host).
+  Kumiko keeps its own files apart from it, in `~/.kumiko/shared` in the sandbox (`~/.kumiko/sandbox/<project>/` on the host).
 - Every session feature is available with it:
 
 | Feature | Uses |

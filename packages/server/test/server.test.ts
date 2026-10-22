@@ -165,7 +165,7 @@ describe("server", () => {
     assert.ok((await stat(clone + "__worktrees")).isDirectory());
 
     // The clone and its worktrees at the same paths in the VM, the Claude home at ~/.claude, the Kumiko folder at
-    // ~/.kumiko, then the extra mount.
+    // ~/.kumiko/shared, then the extra mount.
     const claudeHome = join(dataDir, "claude", "web");
     const kumikoHome = join(dataDir, "sandbox", "web");
     const createCall = (await readFile(join(limaDir, "calls.log"), "utf8")).split("\n").filter(Boolean).map((l) => JSON.parse(l) as string[]).find((a) => a[0] === "create" && a.includes("--name=km-web"))!;
@@ -174,7 +174,7 @@ describe("server", () => {
       { location: clone, mountPoint: clone, writable: true },
       { location: clone + "__worktrees", mountPoint: clone + "__worktrees", writable: true },
       { location: claudeHome, mountPoint: "{{.Home}}/.claude", writable: true },
-      { location: kumikoHome, mountPoint: "{{.Home}}/.kumiko", writable: true },
+      { location: kumikoHome, mountPoint: "{{.Home}}/.kumiko/shared", writable: true },
       { location: mountDir, mountPoint: mountDir, writable: true },
     ]);
     assert.equal(p.meta?.spec.workdir, clone, "provisioning and sessions start in the clone");
@@ -229,17 +229,18 @@ describe("server", () => {
     // As Kumiko recorded a VM it made with only the clone, the worktrees and the Claude home.
     const metadata = new MetadataStore(join(dataDir, "sandboxes"));
     const was = (await metadata.read("old"))!.spec;
-    await metadata.update("old", { spec: { ...was, mounts: was.mounts.filter((m) => m.guestPath !== "~/.kumiko") } });
+    await metadata.update("old", { spec: { ...was, mounts: was.mounts.filter((m) => m.guestPath !== "~/.kumiko/shared") } });
     const before = (await readFile(join(limaDir, "calls.log"), "utf8")).split("\n").length;
 
     const since = events.length;
     assert.equal((await api("/api/projects/old/start", { method: "POST" })).status, 202);
     assert.equal((await finished("old", "starting", since)).type, "done");
-    assert.deepEqual((await project("old"))!.meta?.spec.mounts.map((m) => m.guestPath), [was.mounts[0].hostPath, was.mounts[1].hostPath, "~/.claude", "~/.kumiko"]);
+    assert.deepEqual((await project("old"))!.meta?.spec.mounts.map((m) => m.guestPath), [was.mounts[0].hostPath, was.mounts[1].hostPath, "~/.claude", "~/.kumiko/shared"]);
     const calls = (await readFile(join(limaDir, "calls.log"), "utf8")).split("\n").slice(before - 1).filter(Boolean).map((l) => JSON.parse(l) as string[]);
     const edit = calls.findIndex((a) => a[0] === "edit" && a.includes("km-old"));
     assert.ok(edit >= 0 && edit < calls.findIndex((a) => a[0] === "start" && a.includes("km-old")), "Lima gets the mount before the VM starts");
-    assert.ok(calls[edit].some((a) => a.includes(`"location":"${join(dataDir, "sandbox", "old")}","mountPoint":"{{.Home}}/.kumiko"`)));
+    assert.ok(calls[edit].some((a) => a.includes(`"location":"${join(dataDir, "sandbox", "old")}","mountPoint":"{{.Home}}/.kumiko/shared"`)));
+
     await remove("old");
   });
 
@@ -326,7 +327,7 @@ describe("server", () => {
     const p = (await project("ed"))!;
     assert.deepEqual([p.cpus, p.diskGiB, p.meta?.spec.env], [3, 12, ["TOKEN"]]);
     // Only extra mounts are the user's: the project's own come back whatever is sent.
-    assert.deepEqual(p.meta?.spec.mounts.map((m) => m.guestPath), [clone, clone + "__worktrees", "~/.claude", "~/.kumiko", "/data"]);
+    assert.deepEqual(p.meta?.spec.mounts.map((m) => m.guestPath), [clone, clone + "__worktrees", "~/.claude", "~/.kumiko/shared", "/data"]);
 
     assert.equal((await api("/api/projects/nope", { method: "PATCH", body: "{}" })).status, 404);
     await remove("ed");

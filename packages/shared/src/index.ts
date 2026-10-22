@@ -30,10 +30,16 @@ export const WORKSPACE_DIR = "/workspace";
 export const CLAUDE_HOME_IN_VM = "~/.claude";
 
 /**
+ * Kumiko's folder in a VM: `local/` on the VM's own disk, for what must stay there (agents' runs, whose FIFOs don't
+ * cross virtiofs), and `shared/`, the project's Kumiko folder mounted from the host.
+ */
+export const KUMIKO_DIR_IN_VM = "~/.kumiko";
+
+/**
  * Where a project's Kumiko folder is mounted in its VM: what Kumiko and the agent keep for Kumiko, such as the agent's
  * setup scripts and sessions' artifacts. Kept out of the Claude home, which is Claude Code's to change.
  */
-export const KUMIKO_HOME_IN_VM = "~/.kumiko";
+export const KUMIKO_HOME_IN_VM = `${KUMIKO_DIR_IN_VM}/shared`;
 
 /** The folder beside a clone that holds its worktrees: `<clone>__worktrees`. */
 export const WORKTREES_SUFFIX = "__worktrees";

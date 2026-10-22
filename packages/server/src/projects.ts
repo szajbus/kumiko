@@ -34,7 +34,7 @@ The git clone is \`${p.clonePath}\`. Sessions start there.
 
 - You are in a VM made for this project, and it is yours: treat it as your own machine.
 - Install packages and tools, start, stop and configure services, and change system settings whenever the task needs it; you don't need to ask first.
-- Folders mounted from the user's computer are shared with it: the clone, the worktrees, \`~/.claude\`, \`~/.kumiko\`, and any others the project adds. Take the usual care with those; the rest of the VM is yours to change.
+- Folders mounted from the user's computer are shared with it: the clone, the worktrees, \`~/.claude\`, \`${KUMIKO_HOME_IN_VM}\`, and any others the project adds. Take the usual care with those; the rest of the VM is yours to change.
 
 ## Setup that survives a rebuild
 

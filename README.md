@@ -61,7 +61,7 @@ The fakes only copy what the real tools do. When a change depends on how they re
 | `npm run roundtrip` | The Lima provider: create, provision, exec, stop, start, delete. |
 | `npm run projects-check` | Same-path mounts and worktrees seen from both sides. |
 | `npm run drive -- --sandbox <project>` | The Claude Code driver: prompts, forwarded variables, interrupts, and another driver picking the agent up mid-turn. |
-| `npm run tools-check -- --sandbox <project>` | The tools Kumiko hosts for Claude: one always loaded, one deferred, a call left pending across a detach, and whether Claude's checkpoints cover its Claude home. |
+| `npm run tools-check -- --sandbox <project>` | The tools Kumiko hosts for Claude: one always loaded, one deferred, a call left pending across a detach, and whether Claude's checkpoints cover the Kumiko folder. |
 
 ### Releasing
 

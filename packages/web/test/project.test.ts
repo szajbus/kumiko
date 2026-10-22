@@ -18,7 +18,7 @@ describe("projects", () => {
     assert.equal(projectMountRole(p, { hostPath: "/data/claude/web", guestPath: "~/.claude", writable: true }), "claude-home");
     const homes = { claude: "/data/claude/web", kumiko: "/data/sandbox/web" };
     assert.equal(projectMountRole(p, { hostPath: "/other", guestPath: "~/.claude", writable: true }, homes), undefined);
-    assert.equal(projectMountRole(p, { hostPath: "/data/sandbox/web", guestPath: "~/.kumiko", writable: true }, homes), "kumiko-home");
-    assert.equal(projectMountRole(p, { hostPath: "/other", guestPath: "~/.kumiko", writable: true }, homes), undefined);
+    assert.equal(projectMountRole(p, { hostPath: "/data/sandbox/web", guestPath: "~/.kumiko/shared", writable: true }, homes), "kumiko-home");
+    assert.equal(projectMountRole(p, { hostPath: "/other", guestPath: "~/.kumiko/shared", writable: true }, homes), undefined);
   });
 });

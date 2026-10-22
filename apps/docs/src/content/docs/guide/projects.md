@@ -41,7 +41,7 @@ Four mounts are always there, listed under **Default mounts**, and can't be chan
 | The clone | The same absolute path | writable |
 | `<clone>__worktrees` | The same absolute path | writable |
 | The project's agent home (shown as **Claude home**) | `~/.claude`, where Claude Code looks | writable |
-| The project's **Kumiko folder**: the agent's setup scripts and the sessions' artifacts | `~/.kumiko` | writable |
+| The project's **Kumiko folder**: the agent's setup scripts and the sessions' artifacts | `~/.kumiko/shared` | writable |
 
 **Extra mounts** are up to you. They default to the same path in the sandbox too. A sandbox path of `~/…` means the
 sandbox user's home. Sandbox paths can't be `/` or `~` and can't overlap.

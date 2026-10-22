@@ -25,7 +25,7 @@ describe("widgets", () => {
   let clone: string;
   /** Project "one"'s Claude home on the host, which the fake VM sees as ~/.claude. */
   let claudeHome: string;
-  /** Project "one"'s Kumiko folder on the host, which the fake VM sees as ~/.kumiko. */
+  /** Project "one"'s Kumiko folder on the host, which the fake VM sees as ~/.kumiko/shared. */
   let kumikoHome: string;
   let serverOpts: ServerOptions;
   /** What the window shows of an artifact, as the server keeps it. */
@@ -91,7 +91,7 @@ describe("widgets", () => {
     await waitFor(async () => (await session(id))?.status === "idle");
     return { id: id as string, s: await listen(id) };
   };
-  const docPath = (id: string, name = "plan.md") => `${vmHome}/.kumiko/artifacts/${id}/${name}`;
+  const docPath = (id: string, name = "plan.md") => `${vmHome}/.kumiko/shared/artifacts/${id}/${name}`;
   const write = (path: string, content: string) => `write ${JSON.stringify({ file_path: path, content })}`;
   const widget = (name: string, args: object) => `widget ${name} ${JSON.stringify(args)}`;
 
@@ -112,13 +112,14 @@ describe("widgets", () => {
     const since = events.length;
     await api("/api/projects", { method: "POST", body: JSON.stringify({ name: "one", clonePath: clone, cpus: 1, memoryGiB: 1, diskGiB: 10, mounts: [], env: [] }) });
     await waitFor(() => events.slice(since).find((e) => "sandbox" in e && e.sandbox === "one" && e.op === "creating" && e.type === "done"));
-    // The fake VM is this machine: its ~/.claude is the project's Claude home, and its ~/.kumiko the project's Kumiko
-    // folder, as Lima's mounts make them.
+    // The fake VM is this machine: its ~/.claude is the project's Claude home, and its ~/.kumiko/shared the project's
+    // Kumiko folder, as Lima's mounts make them.
     claudeHome = join(root, "data", "claude", "one");
     kumikoHome = join(root, "data", "sandbox", "one");
-    for (const [host, vm] of [[claudeHome, ".claude"], [kumikoHome, ".kumiko"]]) {
+    for (const [host, vm] of [[claudeHome, ".claude"], [kumikoHome, ".kumiko/shared"]]) {
       await mkdir(host, { recursive: true });
       await rm(join(vmHome, vm), { recursive: true, force: true });
+      await mkdir(dirname(join(vmHome, vm)), { recursive: true });
       await symlink(host, join(vmHome, vm));
     }
   });
@@ -131,11 +132,11 @@ describe("widgets", () => {
   it("tells Claude where its artifacts go, and gives it the tools", async () => {
     const { id, s } = await start();
     assert.ok(existsSync(join(kumikoHome, "artifacts", id)), "the session's folder is made");
-    assert.match(await ask(s, id, "system prompt"), new RegExp(`${vmHome}/\\.kumiko/artifacts/${id}/`));
+    assert.match(await ask(s, id, "system prompt"), new RegExp(`${vmHome}/\\.kumiko/shared/artifacts/${id}/`));
     const tools = JSON.parse(await ask(s, id, "tools")) as { name: string; description: string }[];
     assert.deepEqual(tools.map((t) => t.name).sort(), ["artifact_capture", "artifact_open", "artifact_reload", "artifact_remove", "artifact_share", "session_list", "session_rename", "session_start", "window_close", "window_list"]);
     // The tool names the session's folder itself, so Claude needn't find it in its instructions.
-    assert.ok(tools.find((t) => t.name === "artifact_open")?.description.includes(`${vmHome}/.kumiko/artifacts/${id}/`));
+    assert.ok(tools.find((t) => t.name === "artifact_open")?.description.includes(`${vmHome}/.kumiko/shared/artifacts/${id}/`));
     s.close();
   });
 
@@ -289,7 +290,7 @@ describe("widgets", () => {
 
   it("finds an artifact Claude names in its old folder under ~/.claude in the Kumiko folder", async () => {
     const { id, s } = await start();
-    // Sessions from before the move name their artifacts there; the files have moved to ~/.kumiko.
+    // Sessions from before the move name their artifacts there; the files have moved to ~/.kumiko/shared.
     await writeFile(join(kumikoHome, "artifacts", id, "moved.md"), "# Moved\n");
     const opened = await ask(s, id, widget("artifact_open", { path: `${vmHome}/.claude/kumiko/artifacts/${id}/moved.md` }));
     assert.match(opened, /^Showing .*moved\.md as artifact/);
@@ -637,7 +638,7 @@ describe("widgets", () => {
     await ask(s, id, write(docPath(id, "x.md"), "# X2\n"));
     await waitFor(() => textOf(artifactsOf(s.window())[0][1]) === "# X2\n" || undefined);
 
-    // The whole folder becomes a link to one on the host, as `ln -s /Users/you ~/.kumiko/artifacts/<id>` makes it.
+    // The whole folder becomes a link to one on the host, as `ln -s /Users/you ~/.kumiko/shared/artifacts/<id>` makes it.
     const outside = join(root, `host-${id}`);
     await mkdir(outside);
     await writeFile(join(outside, "secret.md"), "# Secret\n");
@@ -770,7 +771,7 @@ describe("widgets", () => {
     await server.close();
     // As a window saved before the move names it.
     const saved = join(root, "sessions", `${id}.json`);
-    await writeFile(saved, (await readFile(saved, "utf8")).split(`${vmHome}/.kumiko/artifacts/`).join(`${vmHome}/.claude/kumiko/artifacts/`));
+    await writeFile(saved, (await readFile(saved, "utf8")).split(`${vmHome}/.kumiko/shared/artifacts/`).join(`${vmHome}/.claude/kumiko/artifacts/`));
     await boot();
     const again = await listen(id);
     await waitFor(() => artifactsOf(again.window()).length === 1 || undefined);

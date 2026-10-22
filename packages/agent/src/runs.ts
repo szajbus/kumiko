@@ -15,7 +15,7 @@ import type { Exec } from "./driver.js";
  *   atomic in a FIFO, so only one may write at a time.
  * Runs are generic: any agent that speaks lines on stdin and stdout can run in one.
  */
-export const RUNS_DIR = ".kumiko/runs";
+export const RUNS_DIR = ".kumiko/local/runs";
 
 /** A run's id; checked before it goes into a shell command. */
 export const RUN_ID = /^[0-9a-z][0-9a-z-]{0,63}$/;
