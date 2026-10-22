@@ -34,8 +34,8 @@ opens it up into the box.
 
 ## Quoting the chat
 
-Select text in the chat, or in an [artifact](/guide/artifacts/) beside it, and press the button that appears beside it,
-or <kbd>Q</kbd>. It goes into the box as a Markdown quote; text from a code block keeps its fence and language.
+Select text in the chat, or in an [artifact](/guide/artifacts/), and press the **Quote** button that shows up, or
+<kbd>Q</kbd>. It goes into the box as a Markdown quote; text from a code block keeps its fence and language.
 
 ## Suggestions
 

@@ -31,10 +31,9 @@ The agent asks Kumiko to show [artifacts](/guide/artifacts/) by their path in th
 your Mac. It only reads files in the session's artifacts folder, in the agent home the sandbox shares with your Mac
 anyway, and doesn't follow a link that leads out of it, so the agent can't use an artifact to read a file it couldn't
 already. Kumiko writes and deletes only artifacts in that folder: when a rewind puts them back, and when one is
-deleted. SVG
-artifacts and Mermaid diagrams are shown as images, so nothing in them runs or loads, and Mermaid draws in its strict
-mode. The window gets an artifact's content from Kumiko's server as plain text, or as a picture for an image: never
-as a page, so opening that address runs nothing.
+deleted. SVG artifacts and Mermaid diagrams are shown as images, so nothing in them runs or loads, and Mermaid draws in
+its strict mode. The window gets an artifact's content from Kumiko's server as plain text, or as a picture for an
+image: never as a page, so opening that address runs nothing.
 
 Pages run code from the sandbox on your Mac, so they're contained:
 
@@ -52,8 +51,7 @@ Pages run code from the sandbox on your Mac, so they're contained:
   and Chromium resolves them again to connect, so a name that changes its answer in between (DNS rebinding) isn't
   fully covered. Kumiko in a browser can't check this, so there websites only open in a tab of their own.
 - **Pictures of panes** for the agent are taken by the app's main process, of the app's own window or of one of its
-  previews only. The agent's tools
-for this reach Kumiko over the agent's own input and output, not the network.
+  previews only. The agent's tools for this reach Kumiko over the agent's own input and output, not the network.
 
 ## The window
 

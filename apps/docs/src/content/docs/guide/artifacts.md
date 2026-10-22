@@ -54,7 +54,7 @@ For a preview to show up, the dev server in the sandbox has to listen on `127.0.
 - **Copy** puts the artifact's Markdown, or the source of a diagram or SVG, on the clipboard.
 - **Source**, on a diagram, an SVG or an HTML page, shows the file's text instead of what it draws, to read or quote
   from. The same button then says **Diagram**, **Image** or **Page**, and goes back to it.
-- Select text in an artifact and press the button beside it, or <kbd>Q</kbd>, to quote it in your message, as in the
+- Select text in an artifact and press the **Quote** button that shows up, or <kbd>Q</kbd>, to quote it in your message, as in the
   chat. A line before the quote names the artifact, so the agent knows which one you mean. That is the quickest way to ask for a change to one part.
 - The trash in the pane's header, or beside an artifact in that list, deletes it (in the header, it asks
   **Delete?** first, as it sits next to **×**), when it's finished with or was opened by mistake: an
