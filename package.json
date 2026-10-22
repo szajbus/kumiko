@@ -25,7 +25,7 @@
     "roundtrip": "npm run build && node packages/sandbox/dist/scripts/roundtrip.js",
     "projects-check": "npm run build && node packages/server/dist/scripts/projects-check.js",
     "drive": "npm run build && node packages/agent/dist/scripts/drive.js",
-    "widgets-check": "npm run build && node packages/agent/dist/scripts/widgets-check.js",
+    "tools-check": "npm run build && node packages/agent/dist/scripts/tools-check.js",
     "docs:dev": "npm run dev -w @kumiko/docs",
     "docs:build": "npm run build -w @kumiko/docs",
     "docs:preview": "npm run preview -w @kumiko/docs"

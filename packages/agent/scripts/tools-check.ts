@@ -1,7 +1,7 @@
 // Checks the tools the driver hosts for Claude against a real Claude: in a project's sandbox, or with --local on this
 // machine, through the same run (FIFO and log) either way.
 //
-//   node packages/agent/dist/scripts/widgets-check.js --sandbox <name> [--workdir <path>] [--local]
+//   node packages/agent/dist/scripts/tools-check.js --sandbox <name> [--workdir <path>] [--local]
 //
 // 1. Claude calls a tool that is always loaded.
 // 2. It calls a deferred one; says whether it loaded it with its tool search first.
@@ -23,7 +23,7 @@ const { values } = parseArgs({
   },
 });
 if (!values.sandbox && !values.local) {
-  console.error("usage: widgets-check.js --sandbox <name> [--workdir <path>] [--local]");
+  console.error("usage: tools-check.js --sandbox <name> [--workdir <path>] [--local]");
   process.exit(2);
 }
 
@@ -96,7 +96,7 @@ const resultText = () => String(messages.findLast((m) => m.type === "result")?.r
 const checks: [string, boolean][] = [];
 const notes: string[] = [];
 const token = randomUUID().slice(0, 8);
-const file = `$HOME/.claude/kumiko/widgets-check-${token}.md`;
+const file = `$HOME/.claude/kumiko/tools-check-${token}.md`;
 try {
   await turn("Call the mcp__kumiko__echo tool with the text 'one', then reply with exactly what it returned.", { first: true });
   checks.push(["an always-loaded tool is called", calls.includes("echo") && resultText().includes("echo: one")]);
@@ -145,5 +145,5 @@ console.log();
 for (const [what, ok] of checks) console.log(`${ok ? "✓" : "✗"} ${what}`);
 for (const n of notes) console.log(`· ${n}`);
 const ok = checks.every(([, v]) => v);
-console.log(ok ? "\nwidgets-check OK" : "\nwidgets-check FAILED");
+console.log(ok ? "\ntools-check OK" : "\ntools-check FAILED");
 process.exit(ok ? 0 : 1);
