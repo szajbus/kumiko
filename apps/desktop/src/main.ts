@@ -153,7 +153,8 @@ function guardPrivateNetwork(s: Session, pane: "preview" | "site") {
     } catch {
       return callback({ cancel: true });
     }
-    if (["data:", "blob:", "about:"].includes(url.protocol)) return callback({});
+    // DevTools, opened on a page in a pane, loads itself over devtools:, which is Chromium's own.
+    if (["data:", "blob:", "about:", "devtools:"].includes(url.protocol)) return callback({});
     if (!["http:", "https:", "ws:", "wss:"].includes(url.protocol)) return callback({ cancel: true });
     const host = url.hostname.replace(/^\[|\]$/g, "");
     // A page blocked whole goes away without a word from Chromium, so the pane showing it is told.
