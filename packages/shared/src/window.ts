@@ -32,7 +32,8 @@ export interface WindowState {
 /** The chat's slot and widget, which every window has and none can close. */
 export const CHAT = "chat";
 
-export const MAX_SLOTS = 4;
+/** How many panes a window can have. Enough for a large screen; a window too narrow for its panes stacks them. */
+export const MAX_SLOTS = 16;
 /** The smallest and largest share of a split that a new slot can ask for. */
 export const MIN_SIZE = 0.2;
 export const MAX_SIZE = 0.8;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { addWidget, applyWindowOp, artifactTypeOf, imageTypeOf, isExternalUrl, isPrivateHost, urlHost, urlOrigin, CHAT, chatWindow, close, move, remove, resize, show, compactWindow, nextId, slotIds, slotOf, split, windowState, WINDOW, WindowError, type SessionEvent, type WindowOp, type WindowState } from "@kumiko/shared";
+import { addWidget, applyWindowOp, artifactTypeOf, imageTypeOf, isExternalUrl, isPrivateHost, urlHost, urlOrigin, CHAT, chatWindow, close, move, remove, resize, show, compactWindow, nextId, slotIds, slotOf, split, windowState, WINDOW, MAX_SLOTS, WindowError, type SessionEvent, type WindowOp, type WindowState } from "@kumiko/shared";
 
 /** A window with an artifact widget per id, none shown. */
 const withDocs = (...ids: string[]): WindowState => ids.reduce((w, id) => addWidget(w, id, { kind: "artifact" }), chatWindow());
@@ -39,9 +39,11 @@ describe("windows", () => {
     assert.throws(() => split(w, { split: "right", of: "s9" }, "s3", "w3"), WindowError, "an unknown slot");
     assert.throws(() => split(w, { split: "right", size: 0.9 }, "s3", "w3"), WindowError, "too big");
     assert.throws(() => split(w, { split: "right", size: 0.1 }, "s3", "w3"), WindowError, "too small");
-    const full = split(split(w, { split: "below" }, "s3", "w3"), { split: "below", of: "s2" }, "s4", "w4");
-    assert.equal(slotIds(full.layout).length, 4);
-    assert.throws(() => split(full, { split: "right" }, "s5", "w5"), /at most 4/);
+    // Up to MAX_SLOTS, then no more.
+    let full = w;
+    for (let n = 3; n <= MAX_SLOTS; n++) full = split(addWidget(full, `w${n}x`, { kind: "artifact" }), { split: "below", of: "s2" }, `s${n}`, `w${n}x`);
+    assert.equal(slotIds(full.layout).length, MAX_SLOTS);
+    assert.throws(() => split(addWidget(full, "wmore", { kind: "artifact" }), { split: "right" }, "smore", "wmore"), new RegExp(`at most ${MAX_SLOTS}`));
   });
 
   it("closes a slot, giving its room to its sibling and keeping its widget", () => {
