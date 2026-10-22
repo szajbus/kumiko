@@ -36,6 +36,8 @@ const hasFile = (type: ArtifactType) => type !== "preview" && type !== "web";
 
 /** Artifacts drawn from a source that can be shown instead, by the language it is in. */
 const SOURCE_LANG: Partial<Record<ArtifactType, string>> = { mermaid: "mermaid", svg: "xml", html: "html" };
+/** What the button that goes back from the source says: what it shows. */
+const DRAWN_LABEL: Partial<Record<ArtifactType, string>> = { mermaid: "Diagram", svg: "Image", html: "Page" };
 
 /** Artifacts that are web pages: shown in a frame, edge to edge, with a width to show them at and a reload. */
 const isPage = (doc: ArtifactState) => doc.type === "html" || doc.type === "preview" || doc.type === "web";
@@ -91,8 +93,8 @@ export function ArtifactView({ widget, slot, doc, writing }: Props) {
             updated && <span className="artifact-state">Updated</span>
           )}
           {SOURCE_LANG[doc.type] && writing === undefined && (
-            <button type="button" className={`artifact-copy${source ? " is-on" : ""}`} aria-pressed={source} onClick={() => setSource((v) => !v)} title={source ? "Show it drawn" : "Show its source, to read or quote from"}>
-              Source
+            <button type="button" className="artifact-copy" onClick={() => setSource((v) => !v)} title={source ? "Show it drawn" : "Show its source, to read or quote from"}>
+              {source ? DRAWN_LABEL[doc.type] : "Source"}
             </button>
           )}
           {page && (doc.type !== "web" || doc.approved) && (
