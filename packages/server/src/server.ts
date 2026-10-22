@@ -250,7 +250,33 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   sessions.on("changed", () => {
     broadcast({ type: "sessions", sessions: sessions.list() });
     pushListIfChanged();
+    if (serving) restartOutdated();
   });
+
+  /**
+   * Sessions whose Claude was started with other tools than this Kumiko's (it was updated while they ran) get a new
+   * Claude on the same conversation as soon as they are idle: at once, or when their turn ends. Tried once each; if
+   * that fails, the chat offers to restart it by hand.
+   */
+  const restartTried = new Set<string>();
+  /** Set once the server is up: sessions reopened before then are restarted then, as what it takes isn't ready yet. */
+  let serving = false;
+  const restartOutdated = () => {
+    for (const info of sessions.list()) {
+      if (!info.toolsOutdated || info.status !== "idle" || restartTried.has(info.id)) continue;
+      restartTried.add(info.id);
+      void (async () => {
+        try {
+          const ready = await readyProject(info.sandbox);
+          // It may have started a turn, or ended, while the project was checked.
+          if (sessions.get(info.id)?.status === "idle") sessions.relaunch(info.id, ready.env, { keepUnread: true });
+          else restartTried.delete(info.id);
+        } catch (err) {
+          console.error(`Couldn't restart session ${info.id}'s Claude for Kumiko's new tools: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      })();
+    }
+  };
 
   /** Sessions whose sandbox stopped or vanished outside Kumiko end too. */
   const endOrphanedSessions = () => {
@@ -766,6 +792,9 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   app.post("/api/sessions/:id/restart", async (c) => {
     const { id, sandbox } = sessionOf(c);
     const ready = await readyProject(sandbox);
+    // Restarted on its own meanwhile: nothing more to do.
+    if (!sessions.get(id)?.toolsOutdated) return c.json(sessions.get(id));
+    restartTried.add(id);
     return c.json(sessions.relaunch(id, ready.env));
   });
 
@@ -886,6 +915,8 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   const server = await new Promise<Server>((resolve) => {
     const s = serve({ fetch: app.fetch, port: opts.port ?? 4317, hostname: host }, () => resolve(s as Server)) as Server;
   });
+  serving = true;
+  restartOutdated();
 
   const wss = new WebSocketServer({ noServer: true });
   const sessionSockets = new Set<WebSocket>();

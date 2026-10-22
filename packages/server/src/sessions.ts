@@ -75,9 +75,17 @@ const isChainEntry = (e: SessionEvent): e is ChainEntry =>
 
 const isLive = (s: SessionInfo) => LIVE_SESSION_STATUSES.includes(s.status);
 
-/** How to start Claude on the session's history: as it is, or cut where a rewind left it. */
-const continuing = (info: SessionInfo): Pick<StartOptions, "resume" | "fork" | "resumeAt"> =>
-  info.resumeAt ? { resume: info.claudeSessionId, fork: true, resumeAt: info.resumeAt } : { resume: info.claudeSessionId };
+/**
+ * How to start Claude on the session's history: as it is, or cut where a rewind left it; on the model it was using, if
+ * that was chosen rather than the default, since a Claude started again starts on the default.
+ */
+const continuing = (info: SessionInfo): Pick<StartOptions, "resume" | "fork" | "resumeAt" | "model"> => ({
+  ...(info.resumeAt ? { resume: info.claudeSessionId, fork: true, resumeAt: info.resumeAt } : { resume: info.claudeSessionId }),
+  ...keptModel(info),
+});
+
+/** The model the session was using, for a Claude started again on it; none if that was the default. */
+const keptModel = (info: SessionInfo): Pick<StartOptions, "model"> => (info.model && info.model !== info.defaultModel ? { model: info.model } : {});
 
 /** A hash of what Claude is given of Kumiko's: its tools, what it is told of them, and how long it waits for them. */
 const toolsVersion = (given: { tools: ToolHost; appendSystemPrompt?: string } | undefined) =>
@@ -206,7 +214,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     }
     const info: SessionInfo = { id: this.newId(), sandbox, workdir, prompt, model, status: "idle", startedAt: new Date().toISOString() };
     const seed = this.widgets ? this.widgets.forked(from.info, info, chatEvents(events)) : chatEvents(events);
-    return this.launch(info, seed, { sandbox, workdir, env, resume: claudeSessionId, fork: true, ...(resumeAt ? { resumeAt } : {}) });
+    return this.launch(info, seed, { sandbox, workdir, env, resume: claudeSessionId, fork: true, ...(resumeAt ? { resumeAt } : {}), ...keptModel(from.info) });
   }
 
   /**
@@ -363,8 +371,9 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
    * Swaps the session's Claude process for a new one, keeping the chat: for after a login, since a process that
    * started logged out stays that way. It continues Claude's session if a turn ever succeeded in it; otherwise there is
    * nothing of Claude's to continue, and it starts afresh. Works on an ended session too, which becomes live again.
+   * `keepUnread`: a restart the user didn't ask for leaves a finished turn waiting on them.
    */
-  relaunch(id: string, env: string[]): SessionInfo {
+  relaunch(id: string, env: string[], { keepUnread = false }: { keepUnread?: boolean } = {}): SessionInfo {
     const s = this.sessions.get(id);
     if (!s) throw new SessionNotFound(`No session ${id}.`);
     if (s.info.status === "running" || s.info.status === "starting") throw new SessionNotResumable("Wait for Claude to finish, or stop it, first.");
@@ -374,7 +383,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     const live = isLive(s.info);
     const { endedAt: _endedAt, ...rest } = s.info;
     // A fresh start gets a new Claude id from its first init; until then there is nothing to fork or resume.
-    s.info = { ...rest, status: "idle", unread: false, ...(resume ? {} : { claudeSessionId: undefined, resumeAt: undefined }) };
+    s.info = { ...rest, status: "idle", unread: keepUnread ? s.info.unread : false, ...(resume ? {} : { claudeSessionId: undefined, resumeAt: undefined }) };
     s.ending = undefined;
     s.blocks.clear();
     this.startDriver(s, { sandbox: s.info.sandbox, workdir: s.info.workdir, env, ...resume });

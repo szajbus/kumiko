@@ -183,6 +183,24 @@ describe("session windows", () => {
     assert.equal(restarted.toolsVersion, started.toolsVersion);
   });
 
+  it("restarts Claude on the model it was using, leaving a finished turn unread when asked to", async () => {
+    const id = setup();
+    drivers[0].message({ type: "system", subtype: "init", session_id: CLAUDE_ID, model: "claude-sonnet-5-5" });
+    drivers[0].message({ type: "result", subtype: "success", result: "" });
+    // Chosen with /model, not the default.
+    sessions.prompt(id, "/model opus");
+    drivers[0].message({ type: "system", subtype: "init", session_id: CLAUDE_ID, model: "claude-opus-5-5" });
+    drivers[0].message({ type: "result", subtype: "success", result: "Set model to opus" });
+    assert.equal(sessions.get(id)!.unread, true);
+    sessions.relaunch(id, [], { keepUnread: true });
+    assert.equal(drivers[1].started?.model, "opus");
+    assert.equal(drivers[1].started?.resume, CLAUDE_ID);
+    assert.equal(sessions.get(id)!.unread, true);
+    sessions.relaunch(id, []);
+    assert.equal(sessions.get(id)!.unread, false);
+    await sessions.flush();
+  });
+
   it("changes the window of live sessions only", async () => {
     const id = setup();
     await sessions.end(id, "user");

@@ -425,6 +425,29 @@ describe("widgets", () => {
     r.close();
   });
 
+  it("restarts an idle session's Claude on its own when Kumiko's tools changed while it ran", async () => {
+    const { id, s } = await start();
+    const current = (await json(await api("/api/sessions"))).find((x: SessionInfo) => x.id === id).toolsVersion;
+    s.close();
+    ws.close();
+    await server.close();
+    // As a Kumiko with other tools left it.
+    const file = join(root, "sessions", `${id}.json`);
+    const saved = JSON.parse(await readFile(file, "utf8"));
+    saved.info.toolsVersion = "older";
+    await writeFile(file, JSON.stringify(saved));
+    await boot();
+    const info = await waitFor(async () => {
+      const x = (await json(await api("/api/sessions"))).find((y: SessionInfo) => y.id === id) as SessionInfo | undefined;
+      return x && !x.toolsOutdated && x.toolsVersion === current && x.status === "idle" ? x : undefined;
+    });
+    assert.equal(info.toolsVersion, current);
+    // The new Claude carries on the conversation, with the tools.
+    const again = await listen(id);
+    assert.match(await ask(again, id, widget("window_list", {})), /chat \(the chat\)/);
+    again.close();
+  });
+
   it("keeps the window across a server restart", async () => {
     const { id, s } = await start();
     const path = docPath(id);

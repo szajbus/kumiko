@@ -78,6 +78,12 @@ export function SessionView({ session, stream, onForked, composerRef }: Props) {
   const [loggingIn, setLoggingIn] = useState(false);
   // Restarting Claude for Kumiko's new tools: under way, then done, which says so for a moment and fades away.
   const [restart, setRestart] = useState<"pending" | "done" | "fading">();
+  // Restarted by Kumiko on its own, once idle: said the same way.
+  const wasOutdated = useRef(session.toolsOutdated);
+  useEffect(() => {
+    if (wasOutdated.current && !session.toolsOutdated && LIVE_SESSION_STATUSES.includes(session.status)) setRestart("done");
+    wasOutdated.current = session.toolsOutdated;
+  }, [session.toolsOutdated, session.status]);
   useEffect(() => {
     if (restart !== "done" && restart !== "fading") return;
     const t = setTimeout(() => setRestart(restart === "done" ? "fading" : undefined), restart === "done" ? RESTARTED_MS : FADE_MS);
@@ -213,14 +219,19 @@ export function SessionView({ session, stream, onForked, composerRef }: Props) {
           <div className="banner banner-warn">Lost connection to the session. Reconnecting…</div>
         )}
         {error && <div className="banner banner-error">{error}</div>}
-        {session.toolsOutdated && live && restart !== "done" && restart !== "fading" && (
+        {session.toolsOutdated && live && !idle && restart === undefined && (
+          <div className="banner banner-info" role="status">
+            Kumiko's tools for Claude have changed since this session's Claude started. It restarts with them once this turn ends; the conversation carries on.
+          </div>
+        )}
+        {session.toolsOutdated && live && idle && restart !== "done" && restart !== "fading" && (
+          // Kumiko restarts an idle Claude on its own, so this is there for a moment, or if that failed.
           <div className="banner banner-warn">
             <span className="banner-text">Kumiko's tools for Claude have changed since this session's Claude started. Restart it to get them; the conversation carries on.</span>
             <button
               type="button"
               className="btn btn-compact"
-              disabled={!idle || restart === "pending"}
-              title={idle ? undefined : "Once Claude has finished"}
+              disabled={restart === "pending"}
               onClick={async () => {
                 setRestart("pending");
                 setRestart((await call(() => api.restartClaude(session.id))) ? "done" : undefined);
