@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { quote, quoteInsert } from "../src/quote.ts";
+import { quote, quoteFrom, quoteInsert } from "../src/quote.ts";
 
 describe("quote", () => {
   it("puts > before each line, and a bare > on an empty one", () => {
@@ -32,5 +32,13 @@ describe("quoteInsert", () => {
   it("sets the quote off from the draft by one blank line, however the draft ends", () => {
     assert.deepEqual(quoteInsert("hi", "> a"), { from: 2, insert: "\n\n> a\n\n" });
     assert.deepEqual(quoteInsert("> a\n\n", "> b"), { from: 3, insert: "\n\n> b\n\n" });
+  });
+});
+
+describe("quoteFrom", () => {
+  it("says which artifact the quote is from", () => {
+    assert.equal(quoteFrom("> Step one.", "Widgets plan", "plan.md"), 'From the artifact "Widgets plan" (`plan.md`):\n\n> Step one.');
+    assert.equal(quoteFrom("> Hi", "plan.md", "plan.md"), 'From the artifact "plan.md":\n\n> Hi');
+    assert.equal(quoteFrom("", "Widgets plan", "plan.md"), "");
   });
 });

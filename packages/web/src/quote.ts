@@ -29,3 +29,13 @@ export function quoteInsert(draft: string, quoted: string): { from: number; inse
   const kept = draft.trimEnd();
   return { from: kept.length, insert: `${kept ? "\n\n" : ""}${quoted}\n\n` };
 }
+
+/**
+ * A quote of an artifact, with the line before it that says which: by its title and where it is (a file's name, or a
+ * page's address), for the agent to find it.
+ */
+export function quoteFrom(quoted: string, title: string, where: string): string {
+  if (!quoted) return "";
+  const named = where && where !== title ? `"${title}" (\`${where}\`)` : `"${title}"`;
+  return `From the artifact ${named}:\n\n${quoted}`;
+}

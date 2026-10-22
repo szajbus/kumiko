@@ -51,7 +51,7 @@ For a preview to show up, the dev server in the sandbox has to listen on `127.0.
   wide pane, below a tall one.
 - **Copy** puts the artifact's Markdown, or the source of a diagram or SVG, on the clipboard.
 - Select text in an artifact and press the button beside it, or <kbd>Q</kbd>, to quote it in your message, as in the
-  chat. That is the quickest way to ask for a change to one part.
+  chat. A line before the quote names the artifact, so the agent knows which one you mean. That is the quickest way to ask for a change to one part.
 - The trash beside an artifact in that list deletes it, when it's finished with or was opened by mistake: an
   artifact is the session's own, so its file goes too. A preview or a website just leaves the list (the **×**). A pane
   showing it goes back to what it showed before. The agent can delete artifacts too, and rewinding the session to

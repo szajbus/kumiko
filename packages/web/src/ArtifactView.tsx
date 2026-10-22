@@ -6,6 +6,7 @@ import { Diagram } from "./Diagram";
 import { Markdown } from "./Markdown";
 import { PaneGrip } from "./PaneGrip";
 import { QuoteButton } from "./QuoteButton";
+import { quoteFrom } from "./quote";
 import { COLORS } from "./status";
 import { withPolicy } from "./htmlPolicy";
 import { api } from "./api";
@@ -141,7 +142,7 @@ export function ArtifactView({ widget, slot, doc, writing }: Props) {
           )}
         </div>
       </div>
-      <QuoteButton root={body} onQuote={ctx.quote} />
+      <QuoteButton root={body} onQuote={(quoted) => ctx.quote(quoteFrom(quoted, doc.title, hasFile(doc.type) ? (doc.path.split("/").pop() ?? "") : doc.path))} />
     </div>
   );
 }
