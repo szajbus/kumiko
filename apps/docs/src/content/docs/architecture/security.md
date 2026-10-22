@@ -55,10 +55,11 @@ Forwarded values go over stdin, never in arguments.
 
 ## Artifacts
 
-The agent asks Kumiko to show [artifacts](/guide/artifacts/) by their path in the sandbox, and Kumiko reads them on
-your Mac. It reads only files in the session's artifacts folder, which is in the Kumiko folder and shared with your Mac
-anyway, and doesn't follow links out of it. So the agent can't use an artifact to read a file it couldn't already.
-Kumiko writes and deletes only artifacts in that folder: when a rewind puts them back, and when one is deleted.
+The agent names an [artifact](/guide/artifacts/) by its path in the sandbox, as it sees its own files, and Kumiko
+finds the same file on your Mac through the Kumiko folder the sandbox shares with it. It reads only files in the
+session's artifacts folder there, and doesn't follow links out of it. So the agent can't use an artifact to read a file
+it couldn't already. Kumiko writes and deletes only artifacts in that folder: when a rewind puts them back, and when one
+is deleted.
 
 SVG artifacts and Mermaid diagrams are shown as images, so nothing in them runs or loads; Mermaid also draws in its
 strict mode. The window gets an artifact's content from Kumiko's server as plain text, or as a picture for an image,
