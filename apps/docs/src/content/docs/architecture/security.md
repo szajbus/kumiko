@@ -11,8 +11,12 @@ The agent can reach what the project's sandbox has: the clone and its worktrees,
 forwarded variables, and the network, your Mac's loopback included (below). Not the rest of your files, your own agent
 configuration or other projects.
 
-So mounts and variables are the security decision. Note that a writable clone includes its git hooks, which git on the
-host runs.
+So mounts and variables are the security decision. Note that a writable clone includes its git config, hooks and
+`.gitattributes`, which can name commands for git to run: hooks, an fsmonitor, filters, a pager or an SSH command. Git
+on your Mac runs them, whether you run it in a terminal or an editor runs it for you when you open the folder, as VS
+Code and other git apps do. Your global config doesn't stop them, since the clone's own wins. Kumiko's own git on the
+host turns these off, so only reading the clone's state in Kumiko is safe. Run git on the clone from inside the VM when
+you can, or read `.git/config` before running git on your Mac.
 
 The network includes your Mac's own: Lima gives the VM a host address (`host.lima.internal`, 192.168.5.2) that leads
 to your Mac's `127.0.0.1`, so the agent can reach every service listening there, such as databases, dev servers and

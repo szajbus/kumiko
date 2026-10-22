@@ -5,11 +5,8 @@ const TIMEOUT_MS = 10_000;
 
 export class GitError extends Error {}
 
-/**
- * Runs git on the host, without a shell, so paths and branch names are only ever arguments or output.
- * GIT_OPTIONAL_LOCKS=0 keeps `status` from taking the index lock, which would race an agent committing in the VM.
- */
-export function git(cwd: string, args: string[]): Promise<string> {
+/** Runs git on the host as it is, without a shell, so paths and branch names are only ever arguments or output. */
+function run(cwd: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       "git",
@@ -23,6 +20,32 @@ export function git(cwd: string, args: string[]): Promise<string> {
       },
     );
   });
+}
+
+/**
+ * Settings that keep git from running commands the repository's own config names. The agent writes the clone's
+ * config from its VM, and git on the host would run what it names there: an fsmonitor for `status`, hooks, and the
+ * filter drivers `.gitattributes` picks. Settings given with -c beat the repository's, and reading config runs nothing.
+ * A filter's name with "=" in it can't be given with -c, so git isn't run at all then.
+ */
+async function overrides(cwd: string): Promise<string[]> {
+  const out = await run(cwd, ["config", "--null", "--name-only", "--get-regexp", "^filter\\."]).catch(() => "");
+  const filters = new Set(out.split("\0").filter(Boolean).map((key) => key.slice("filter.".length, key.lastIndexOf("."))).filter(Boolean));
+  const args = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"];
+  for (const name of filters) {
+    if (name.includes("=")) throw new GitError(`${cwd} has a git filter named "${name}", which Kumiko can't turn off, so it won't run git there.`);
+    for (const key of ["clean", "smudge", "process"]) args.push("-c", `filter.${name}.${key}=`);
+    args.push("-c", `filter.${name}.required=false`);
+  }
+  return args;
+}
+
+/**
+ * Runs git on the host, with nothing the repository's config names run (see `overrides`).
+ * GIT_OPTIONAL_LOCKS=0 keeps `status` from taking the index lock, which would race an agent committing in the VM.
+ */
+export async function git(cwd: string, args: string[]): Promise<string> {
+  return run(cwd, [...(await overrides(cwd)), ...args]);
 }
 
 /** True when git exits 0; false when it exits with an error. */
@@ -106,7 +129,8 @@ async function status(e: Entry, main: boolean, base: string | undefined): Promis
   }
   try {
     const [porcelain, upstream] = await Promise.all([
-      git(e.path, ["status", "--porcelain", "--untracked-files=normal"]),
+      // Not into submodules' own working trees, whose config the overrides don't cover; new commits in them still show.
+      git(e.path, ["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=dirty"]),
       e.branch ? git(e.path, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]).then((s) => s.trim(), () => "") : Promise.resolve(""),
     ]);
     w.dirty = porcelain.trim().length > 0;
