@@ -40,6 +40,36 @@ interface LimaInstance {
   memory?: number;
   disk?: number;
   sshConfigFile?: string;
+  vmType?: string;
+  config?: { networkOpts?: { hostLoopback?: boolean | null } };
+}
+
+/** The first Lima that can keep a VM off the host's loopback: `networkOpts.hostLoopback`. */
+const HOST_LOOPBACK_SINCE = [2, 3, 0];
+
+/** Whether the VM can reach the host's loopback as Lima has it configured now; Lima's default is that it can. */
+const reachesLoopback = (inst: LimaInstance) => inst.config?.networkOpts?.hostLoopback !== false;
+
+/** The `--set` expression that lets the VM reach the host's loopback, or keeps it off. */
+export const hostLoopbackExpression = (reachable: boolean) => `.networkOpts.hostLoopback = ${reachable}`;
+
+/** A version's numbers from `limactl --version` ("limactl version 2.2.1"), or undefined if there are none. */
+export function parseLimaVersion(out: string): number[] | undefined {
+  const m = /(\d+)\.(\d+)\.(\d+)/.exec(out);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : undefined;
+}
+
+const atLeast = (v: number[], min: number[]) => {
+  for (let i = 0; i < min.length; i++) if (v[i] !== min[i]) return v[i] > min[i];
+  return true;
+};
+
+/** Why Lima can't keep a VM off the host's loopback, or undefined if it can: it takes Lima 2.3 and a vz VM. */
+function unblockable(version: number[] | undefined, inst: LimaInstance): string | undefined {
+  if (!version) return "Kumiko couldn't tell which Lima this is; Lima 2.3 or later can block it.";
+  if (!atLeast(version, HOST_LOOPBACK_SINCE)) return `Lima ${version.join(".")} can't block it; Lima 2.3 or later can.`;
+  if (inst.vmType !== "vz") return `its VM type is ${inst.vmType ?? "unknown"}, and only vz VMs can block it.`;
+  return undefined;
 }
 
 export function parseLimaList(stdout: string): LimaInstance[] {
@@ -160,6 +190,40 @@ export class LimaProvider implements SandboxProvider {
     return runOk(this.limactl, args, { lima: true, cwd: tmpdir(), ...opts });
   }
 
+  /** Lima's version, asked again every few minutes, so an upgrade is noticed without restarting Kumiko. */
+  private version?: { at: number; numbers: Promise<number[] | undefined> };
+  private limaVersion(): Promise<number[] | undefined> {
+    if (this.version && Date.now() - this.version.at < 5 * 60_000) return this.version.numbers;
+    const numbers = this.limactlRun(["--version"], { captureStdout: true }).then((r) => parseLimaVersion(r.stdout), () => undefined);
+    this.version = { at: Date.now(), numbers };
+    return numbers;
+  }
+
+  /** Why Lima can't keep this VM off the host's loopback, or undefined if it can. */
+  private async loopbackUnblockable(inst: LimaInstance): Promise<string | undefined> {
+    return unblockable(await this.limaVersion(), inst);
+  }
+
+
+  /**
+   * Gives a stopped VM the host loopback access its spec asks for, if Lima doesn't have it so already: off unless the
+   * spec allows it. Where Lima can't block it, says so instead.
+   */
+  private async applyHostLoopback(name: string, spec: SandboxSpec, log: Log): Promise<void> {
+    const inst = (await this.instances()).find((i) => i.name === vmName(name));
+    if (!inst || toStatus(inst.status) !== "stopped") return;
+    const want = spec.hostLoopback === true;
+    if (reachesLoopback(inst) === want) return;
+    const why = await this.loopbackUnblockable(inst);
+    if (why) {
+      if (!want) log(`warning: this sandbox can reach services on your Mac's localhost (127.0.0.1): ${why}`);
+      return;
+    }
+    const args = ["edit", "--tty=false", vmName(name), `--set=${hostLoopbackExpression(want)}`];
+    log(`$ ${commandLine("limactl", args)}`, "cmd");
+    await this.limactlRun(args, { log });
+  }
+
   private async instances(): Promise<LimaInstance[]> {
     const res = await this.limactlRun(["list", "--format", "json"], { captureStdout: true });
     return parseLimaList(res.stdout).filter((i) => i.name.startsWith(VM_PREFIX));
@@ -170,13 +234,21 @@ export class LimaProvider implements SandboxProvider {
    * outside Kumiko. Those can be recreated from the record.
    */
   async list(): Promise<SandboxInfo[]> {
-    const [instances, { metas, errors }] = await Promise.all([this.instances(), this.metadata.readAll()]);
+    const [instances, { metas, errors }, version] = await Promise.all([this.instances(), this.metadata.readAll(), this.limaVersion()]);
+    /** Why a VM of Kumiko's reaches the host's loopback though its spec says it shouldn't; a stopped one is set on start. */
+    const loopbackOpen = (i: LimaInstance, spec: SandboxSpec | undefined): string | undefined => {
+      if (!spec || spec.hostLoopback === true || !reachesLoopback(i)) return undefined;
+      const why = unblockable(version, i);
+      if (why) return why;
+      return toStatus(i.status) === "running" ? "Restart the sandbox to block it." : undefined;
+    };
     const absent: SandboxInfo[] = [...metas]
       .filter(([name]) => !instances.some((i) => i.name === vmName(name)))
       .map(([name, meta]) => ({ name, status: "absent", meta }));
     return instances
       .map((i): SandboxInfo => {
         const name = i.name.slice(VM_PREFIX.length);
+        const open = loopbackOpen(i, metas.get(name)?.spec);
         return {
           name,
           status: toStatus(i.status),
@@ -185,6 +257,7 @@ export class LimaProvider implements SandboxProvider {
           diskGiB: gib(i.disk),
           meta: metas.get(name),
           ...(errors.has(name) ? { metaError: errors.get(name) } : {}),
+          ...(open ? { hostLoopbackOpen: open } : {}),
         };
       })
       .concat(absent)
@@ -253,6 +326,8 @@ export class LimaProvider implements SandboxProvider {
    */
   async start(name: string, log: Log): Promise<void> {
     const vm = vmName(name);
+    const known = await this.metadata.read(name).catch(() => undefined);
+    if (known) await this.applyHostLoopback(name, known.spec, log);
     log(`$ limactl start --tty=false ${vm}`, "cmd");
     await this.limactlRun(["start", "--tty=false", vm], { log });
     // An unreadable record doesn't stop the VM from starting; it is only set up as one Kumiko didn't create.
@@ -386,8 +461,8 @@ export class LimaProvider implements SandboxProvider {
     }
 
     // Only these fields can change; an empty provision string clears the script.
-    const { cpus, memoryGiB, diskGiB, mounts, env, provision, workdir } = patch;
-    const defined = Object.fromEntries(Object.entries({ cpus, memoryGiB, diskGiB, mounts, env, provision, workdir }).filter(([, v]) => v !== undefined));
+    const { cpus, memoryGiB, diskGiB, mounts, env, provision, workdir, hostLoopback } = patch;
+    const defined = Object.fromEntries(Object.entries({ cpus, memoryGiB, diskGiB, mounts, env, provision, workdir, hostLoopback }).filter(([, v]) => v !== undefined));
     const merged: SandboxSpec = { ...meta.spec, ...defined, name: meta.spec.name, template: meta.spec.template };
     const v = await validateSpec(merged, this.env());
     const { spec } = v;
@@ -401,10 +476,21 @@ export class LimaProvider implements SandboxProvider {
     const diskNow = inst.disk ?? meta.spec.diskGiB * GiB;
     if (spec.diskGiB * GiB < diskNow) errors.push(`Disk can only grow; it is ${gib(diskNow)} GiB now.`);
     else if (spec.diskGiB * GiB > diskNow) limaArgs.push(`--disk=${spec.diskGiB}`);
-    if (!sameMounts(spec.mounts, meta.spec.mounts)) limaArgs.push(spec.mounts.length ? `--set=${mountsExpression(spec.mounts)}` : "--mount-none");
+    const sets: string[] = [];
+    if (!sameMounts(spec.mounts, meta.spec.mounts)) {
+      if (spec.mounts.length) sets.push(mountsExpression(spec.mounts));
+      else limaArgs.push("--mount-none");
+    }
+    const wantLoopback = spec.hostLoopback === true;
+    if (wantLoopback !== reachesLoopback(inst)) {
+      const why = await this.loopbackUnblockable(inst);
+      if (!why) sets.push(hostLoopbackExpression(wantLoopback));
+      else if (!wantLoopback) v.warnings.push(`This sandbox can reach services on your Mac's localhost (127.0.0.1): ${why}`);
+    }
+    if (sets.length) limaArgs.push(`--set=${sets.join(" | ")}`);
 
     if (limaArgs.length && !restart && toStatus(inst.status) !== "stopped") {
-      errors.push(`Stop ${vm} to change its resources or mounts, or save and restart it. Variables and the provisioning script can change while it runs.`);
+      errors.push(`Stop ${vm} to change its resources, mounts or access to your Mac's localhost, or save and restart it. Variables and the provisioning script can change while it runs.`);
     }
     // A stopped VM gets its new working directory on the next start; a running one right after saving.
     const prepareShells = spec.workdir !== (meta.spec.workdir ?? WORKSPACE_DIR) && toStatus(inst.status) === "running";

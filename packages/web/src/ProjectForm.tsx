@@ -82,6 +82,7 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
   const [envRows, setEnvRows] = useState<EnvRow[]>(() => (was?.env ?? []).map((n) => ({ id: nextId++, name: n })));
   const [envSet, setEnvSet] = useState<Record<string, boolean>>({});
   const [provision, setProvision] = useState(was?.provision ?? "");
+  const [hostLoopback, setHostLoopback] = useState(was?.hostLoopback === true);
   const [submitting, setSubmitting] = useState(false);
   const [confirmRecreate, setConfirmRecreate] = useState(false);
   const [confirmRestart, setConfirmRestart] = useState(false);
@@ -161,6 +162,7 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
     mounts: extraMounts(),
     env: envNames,
     provision: provision.trim() ? provision : undefined,
+    hostLoopback: hostLoopback || undefined,
   });
 
   const diskNow = Math.ceil(editing?.diskGiB ?? was?.diskGiB ?? 0);
@@ -172,7 +174,8 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
       s.cpus !== (editing.cpus ?? was?.cpus) ||
       s.memoryGiB !== (editing.memoryGiB ?? was?.memoryGiB) ||
       s.diskGiB !== diskNow ||
-      !sameMounts(s.mounts, extraWas)
+      !sameMounts(s.mounts, extraWas) ||
+      hostLoopback !== (was?.hostLoopback === true)
     );
   })();
   const needsRestart = vmChanged && editing?.status === "running";
@@ -209,7 +212,7 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
     try {
       if (editing) {
         const { cpus, memoryGiB, diskGiB, mounts, env, provision } = request();
-        await api.edit(editing.name, { cpus, memoryGiB, diskGiB, mounts, env, provision: provision ?? "" }, how);
+        await api.edit(editing.name, { cpus, memoryGiB, diskGiB, mounts, env, provision: provision ?? "", hostLoopback }, how);
         onCreated(editing.name);
       } else {
         const res = await api.create(request());
@@ -235,6 +238,7 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
       "# mounts:",
       ...fixed,
       `limactl create --tty=false --name=${vm} --cpus=${s.cpus} --memory=${s.memoryGiB} --disk=${s.diskGiB} --set '.mounts = […]' ${s.template || "template:default"}`,
+      ...(s.hostLoopback ? [] : [`limactl edit --tty=false ${vm} --set '.networkOpts.hostLoopback = false'   # with Lima 2.3 or later, on vz`]),
       `limactl start --tty=false ${vm}`,
       "# then Claude Code's installer over ssh, linked to /usr/local/bin/claude",
     ];
@@ -244,7 +248,7 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
     }
     return lines.join("\n");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [name, clonePath, template, cpus, memory, disk, mounts, envNames, envSet, provision]);
+  }, [name, clonePath, template, cpus, memory, disk, mounts, envNames, envSet, provision, hostLoopback]);
 
   return (
     <>
@@ -510,6 +514,23 @@ export function ProjectForm({ editing, onCancel, onCreated }: Props) {
             <Plus size={14} color="#8FA6F0" />
             Add variable
           </button>
+        </Section>
+
+        <Section
+          title="This Mac's localhost"
+          id="sec-loopback"
+          description={
+            <>
+              A sandbox can reach what listens on your Mac's <code className="mono">127.0.0.1</code> (databases, dev servers, other apps' local
+              APIs) unless Lima blocks it. Kumiko has it blocked, which takes Lima 2.3 or later.
+              {editing && " A change applies when the sandbox next starts."}
+            </>
+          }
+        >
+          <label className="check">
+            <input type="checkbox" checked={hostLoopback} onChange={(e) => setHostLoopback(e.target.checked)} />
+            Let Claude reach services on this Mac's localhost
+          </label>
         </Section>
 
         <Section

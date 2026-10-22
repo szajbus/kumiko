@@ -8,7 +8,7 @@ sidebar:
 ## The sandbox
 
 The agent can reach what the project's sandbox has: the clone and its worktrees, the agent home, extra mounts,
-forwarded variables, and the network, your Mac's loopback included (below). Not the rest of your files, your own agent
+forwarded variables, and the network, but not your Mac's loopback (below). Not the rest of your files, your own agent
 configuration or other projects.
 
 So mounts and variables are the security decision. Note that a writable clone includes its git config, hooks and
@@ -18,10 +18,16 @@ Code and other git apps do. Your global config doesn't stop them, since the clon
 host turns these off, so the worktree statuses it shows run none of them. Run git on the clone from inside the VM when
 you can, or read `.git/config` before running git on your Mac.
 
-The network includes your Mac's own: Lima gives the VM a host address (`host.lima.internal`, 192.168.5.2) that leads
-to your Mac's `127.0.0.1`, so the agent can reach every service listening there, such as databases, dev servers and
-other apps' local APIs. Many trust anything on localhost. The agent has `sudo` in its VM, so a firewall there wouldn't
-hold. Run nothing on your loopback that you wouldn't let the agent use, or have it ask for a password.
+Lima gives a VM a host address (`host.lima.internal`, 192.168.5.2) that leads to your Mac's `127.0.0.1`, where the
+agent could reach every service listening, such as databases, dev servers and other apps' local APIs, many of which
+trust anything on localhost. Kumiko has Lima block that address for each sandbox, unless its project allows it (**This
+Mac's localhost**). The agent has `sudo` in its VM, so a firewall there wouldn't hold; Lima's block is outside it.
+
+Lima can only block it from version 2.3, and only for `vz` VMs (the default on macOS). Where it can't, the project
+says so, and the sandbox can reach your loopback: run nothing there that you wouldn't let the agent use, or have it
+ask for a password. Either way, a service on your Mac that listens on all interfaces, not just `127.0.0.1`, is
+reachable at your Mac's network address, as from anywhere on your network. A proxy on your Mac's loopback, set for the
+sandbox, isn't reachable once it's blocked.
 
 ## The local server
 

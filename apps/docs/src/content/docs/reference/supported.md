@@ -30,6 +30,9 @@ follows mostly from the sandbox provider.
 - Any Lima template can be chosen; Debian 12 is preselected. Installing the agent uses `curl`, and installs it with
   `apt-get` if it's missing, so a template without `curl` must be Debian- or Ubuntu-based.
 - Kumiko drives it with `limactl` and with `ssh` using the instance's generated config.
+- Lima 2.3 or later, with `vz` VMs, can keep a sandbox off your Mac's loopback (`networkOpts.hostLoopback`), which
+  Kumiko asks for unless a project allows it. With an older Lima, or another VM type, the sandbox can reach it, and
+  the project page says so. Kumiko notices an upgraded Lima within a few minutes; a running sandbox needs a restart.
 - Agents outlive the SSH connection that started them because systemd-logind leaves a user's processes running when
   their session ends (`KillUserProcesses=no`, Debian's default). A template that turns it on stops the agent whenever
   Kumiko's server goes away.

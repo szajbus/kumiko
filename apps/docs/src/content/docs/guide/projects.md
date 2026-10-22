@@ -52,6 +52,13 @@ time it runs a command in the sandbox (provisioning, a session, a usage check) i
 environment and hands them to the command on stdin (over SSH, with Lima), so they never appear in a process list or
 on disk.
 
+### This Mac's localhost
+
+Off by default: the sandbox can't reach services listening on your Mac's `127.0.0.1`, such as databases, dev servers
+and other apps' local APIs. Turn on **Let Claude reach services on this Mac's localhost** when the agent should use one
+of them. Blocking it takes Lima 2.3 or later; with an older Lima, the project page says the sandbox can reach them. A
+change applies the next time the sandbox starts. See the [security model](/architecture/security/).
+
 ### Provisioning script
 
 A shell script run once, in the clone, when the sandbox is first set up. It runs with `set -e`, and each command is

@@ -106,6 +106,11 @@ export interface SandboxSpec {
   provision?: string;      // shell script, run once after first start
   /** Where provisioning and sessions start in the VM, created if missing; "~/…" is the VM user's home. Default /workspace. */
   workdir?: string;
+  /**
+   * Whether the agent may reach services on the host's loopback (its 127.0.0.1), as Lima lets a VM by default through
+   * its host address. Off: Kumiko blocks it where Lima can (Lima 2.3 or later, vmType vz).
+   */
+  hostLoopback?: boolean;
 }
 
 /**
@@ -113,7 +118,7 @@ export interface SandboxSpec {
  * and forwarded variables and the provisioning script can change anytime. Saved with a recreate, anything but
  * name and template can change. Name and template are fixed.
  */
-export type EditSpec = Partial<Pick<SandboxSpec, "cpus" | "memoryGiB" | "diskGiB" | "mounts" | "env" | "provision" | "workdir">>;
+export type EditSpec = Partial<Pick<SandboxSpec, "cpus" | "memoryGiB" | "diskGiB" | "mounts" | "env" | "provision" | "workdir" | "hostLoopback">>;
 
 /** `absent`: a project whose VM doesn't exist (its creation failed, or it was deleted outside Kumiko). */
 export type SandboxStatus = "running" | "stopped" | "broken" | "unknown" | "absent";
@@ -137,6 +142,8 @@ export interface SandboxInfo {
   meta?: SandboxMeta;
   /** Set when Kumiko has a record of this sandbox that it can't read; `meta` is then missing. */
   metaError?: string;
+  /** Set when the sandbox can reach the host's loopback though its spec says it shouldn't: why that isn't blocked. */
+  hostLoopbackOpen?: string;
 }
 
 export type OpKind = "creating" | "starting" | "stopping" | "deleting" | "recreating" | "restarting" | "editing";

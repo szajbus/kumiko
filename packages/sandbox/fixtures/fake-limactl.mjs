@@ -2,6 +2,7 @@
 // A stand-in for limactl, for tests and UI development without real VMs.
 // State lives in $FAKE_LIMA_DIR/<name>.json; every invocation is appended to $FAKE_LIMA_DIR/calls.log.
 // $FAKE_LIMA_DELAY (ms) slows down create/start/stop to make progress visible.
+// $FAKE_LIMA_VERSION is the version it says it is (default 2.3.0); $FAKE_LIMA_VMTYPE the type of VM it creates (default vz).
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -27,12 +28,31 @@ const fatal = (msg) => {
 };
 const flag = (name) => args.find((a) => a.startsWith(`--${name}=`))?.split("=").slice(1).join("=");
 const positional = args.slice(1).filter((a) => !a.startsWith("-"));
+const version = process.env.FAKE_LIMA_VERSION ?? "2.3.0";
+/** The --set expressions, each flag's split at " | ", as limactl applies them in order. */
+const sets = args.filter((a) => a.startsWith("--set=")).flatMap((a) => a.slice("--set=".length).split(" | "));
+const mountsSet = () => sets.find((e) => e.startsWith(".mounts = "));
+const loopbackSet = (inst) => {
+  const e = sets.find((x) => x.startsWith(".networkOpts.hostLoopback = "));
+  if (!e) return undefined;
+  // As Lima 2.3 does: only it knows the field, and only vz VMs support turning it off.
+  const [major, minor] = version.split(".").map(Number);
+  if (major < 2 || (major === 2 && minor < 3)) fatal("field `networkOpts.hostLoopback` not found");
+  if (inst.vmType !== "vz") fatal("`networkOpts.hostLoopback: false` is only supported with vmType vz");
+  return e.endsWith("true");
+};
+
+if (args[0] === "--version") {
+  console.log(`limactl version ${version}`);
+  process.exit(0);
+}
 
 switch (args[0]) {
   case "list": {
     for (const f of readdirSync(dir).filter((f) => f.endsWith(".json")).sort()) {
       const inst = JSON.parse(readFileSync(join(dir, f), "utf8"));
-      process.stdout.write(JSON.stringify({ ...inst, sshConfigFile: `/fake/${inst.name}/ssh.config` }) + "\n");
+      const config = { networkOpts: { hostLoopback: inst.hostLoopback ?? true } };
+      process.stdout.write(JSON.stringify({ ...inst, config, sshConfigFile: `/fake/${inst.name}/ssh.config` }) + "\n");
     }
     if (!readdirSync(dir).some((f) => f.endsWith(".json"))) info("No instance found.");
     break;
@@ -45,8 +65,8 @@ switch (args[0]) {
     const name = flag("name");
     if (read(name)) fatal(`instance "${name}" already exists`);
     if (process.env.FAKE_LIMA_FAIL_CREATE) fatal("simulated create failure");
-    const set = flag("set");
-    const mounts = set?.startsWith(".mounts = ") ? JSON.parse(set.slice(".mounts = ".length)) : [];
+    const set = mountsSet();
+    const mounts = set ? JSON.parse(set.slice(".mounts = ".length)) : [];
     info(`Using the template ${positional.at(-1)}`);
     await sleep(delay);
     write({
@@ -56,6 +76,7 @@ switch (args[0]) {
       memory: Number(flag("memory") ?? 4) * GiB,
       disk: Number(flag("disk") ?? 100) * GiB,
       template: positional.at(-1),
+      vmType: process.env.FAKE_LIMA_VMTYPE ?? "vz",
       mounts,
       mountNone: args.includes("--mount-none"),
     });
@@ -84,14 +105,16 @@ switch (args[0]) {
   case "edit": {
     const inst = read(positional[0]) ?? fatal(`instance "${positional[0]}" does not exist`);
     if (inst.status === "Running") fatal(`cannot edit a running instance "${inst.name}"`);
-    const set = flag("set");
+    const set = mountsSet();
+    const hostLoopback = loopbackSet(inst);
     if (flag("disk") && Number(flag("disk")) * GiB < inst.disk) fatal("field `disk`: shrinking the disk is not supported");
     write({
       ...inst,
       cpus: flag("cpus") ? Number(flag("cpus")) : inst.cpus,
       memory: flag("memory") ? Number(flag("memory")) * GiB : inst.memory,
       disk: flag("disk") ? Number(flag("disk")) * GiB : inst.disk,
-      mounts: set?.startsWith(".mounts = ") ? JSON.parse(set.slice(".mounts = ".length)) : args.includes("--mount-none") ? [] : inst.mounts,
+      mounts: set ? JSON.parse(set.slice(".mounts = ".length)) : args.includes("--mount-none") ? [] : inst.mounts,
+      ...(hostLoopback !== undefined ? { hostLoopback } : {}),
     });
     info(`Instance \`${inst.name}\` configuration edited`);
     break;

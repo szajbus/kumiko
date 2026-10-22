@@ -111,6 +111,6 @@ export async function validateSpec(input: SandboxSpec, env: NodeJS.ProcessEnv = 
   return {
     errors,
     warnings,
-    spec: { name, template, cpus, memoryGiB, diskGiB, mounts, env: envNames, provision, workdir: workdir ?? rawWorkdir },
+    spec: { name, template, cpus, memoryGiB, diskGiB, mounts, env: envNames, provision, workdir: workdir ?? rawWorkdir, ...(input.hostLoopback === true ? { hostLoopback: true } : {}) },
   };
 }

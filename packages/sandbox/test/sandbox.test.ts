@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { execScript, exitCode, mountsExpression, parseLimaList, provisionCommand, tidyLimaLine, validateSpec } from "../src/index.js";
-import { fakeLima } from "./helpers.js";
+import { execScript, exitCode, LimaProvider, mountsExpression, parseLimaList, parseLimaVersion, provisionCommand, tidyLimaLine, validateSpec } from "../src/index.js";
+import { FAKE_LIMACTL, FAKE_SSH, fakeLima } from "./helpers.js";
 
 const spec = (over = {}) => ({ name: "web", cpus: 4, memoryGiB: 4, diskGiB: 100, mounts: [], env: [], ...over });
 
@@ -49,6 +49,14 @@ describe("parsing", () => {
     const cmd = provisionCommand("echo hi");
     assert.match(cmd, /^bash -c "\$\(cat <<'KUMIKO_PROVISION_[0-9a-f]+'\n/);
     assert.match(cmd, /set -e\n/);
+  });
+});
+
+describe("parseLimaVersion", () => {
+  it("reads limactl --version, pre-releases as their release, and nothing from a build without one", () => {
+    assert.deepEqual(parseLimaVersion("limactl version 2.2.1\n"), [2, 2, 1]);
+    assert.deepEqual(parseLimaVersion("limactl version 2.3.0-rc.1"), [2, 3, 0]);
+    assert.equal(parseLimaVersion("limactl version HEAD-284b991"), undefined);
   });
 });
 
@@ -315,7 +323,7 @@ describe("LimaProvider against a fake limactl", () => {
     assert.equal(info.meta?.spec.provision, "echo hi");
     assert.equal(info.meta?.setup, "ready", "editing doesn't change the setup state");
     v = await provider.validateEdit("web", { cpus: 4 });
-    assert.match(v.errors.join(), /Stop km-web to change its resources or mounts/);
+    assert.match(v.errors.join(), /Stop km-web to change its resources, mounts or access to your Mac.s localhost/);
 
     await provider.stop("web", log);
     v = await provider.validateEdit("web", { diskGiB: 10 });
@@ -334,12 +342,78 @@ describe("LimaProvider against a fake limactl", () => {
     assert.equal(info.meta?.spec.provision, "echo hi", "fields left out of the patch are kept");
 
     // Nothing Lima-related changed: no limactl edit at all, and clearing the script works.
-    const before = (await readFile(join(limaDir, "calls.log"), "utf8")).split("\n").length;
+    const edits = async () => (await readFile(join(limaDir, "calls.log"), "utf8")).split("\n").filter((l) => l.includes('"edit"')).length;
+    const before = await edits();
     await provider.edit("web", { provision: "" }, log);
-    assert.equal((await readFile(join(limaDir, "calls.log"), "utf8")).split("\n").filter((l) => l.includes('"edit"')).length, 1);
-    assert.ok(before > 0);
+    assert.equal(await edits(), before);
     [info] = await provider.list();
     assert.equal(info.meta?.spec.provision, undefined);
+  });
+
+  describe("the Mac's localhost", () => {
+    const callsOf = async (limaDir: string) => (await readFile(join(limaDir, "calls.log"), "utf8")).trim().split("\n").map((l) => JSON.parse(l) as string[]);
+    const loopbackEdits = async (limaDir: string) => (await callsOf(limaDir)).filter((c) => c[0] === "edit" && c.some((a) => a.includes(".networkOpts.hostLoopback")));
+    /** Runs `fn` with the fake limactl being another version or making another type of VM. */
+    const as = async <T>(env: { FAKE_LIMA_VERSION?: string; FAKE_LIMA_VMTYPE?: string }, fn: () => Promise<T>): Promise<T> => {
+      Object.assign(process.env, env);
+      try {
+        return await fn();
+      } finally {
+        for (const k of Object.keys(env)) delete process.env[k];
+      }
+    };
+
+    it("is out of a new sandbox's reach where Lima can block it, from its first start", async () => {
+      const { limaDir, provider, log } = await fakeLima();
+      await provider.create(spec(), log);
+      const calls = await callsOf(limaDir);
+      const edit = calls.findIndex((c) => c[0] === "edit");
+      assert.deepEqual(calls[edit], ["edit", "--tty=false", "km-web", "--set=.networkOpts.hostLoopback = false"]);
+      assert.ok(edit < calls.findIndex((c) => c[0] === "start"), "before the VM first starts");
+      const [info] = await provider.list();
+      assert.equal(info.hostLoopbackOpen, undefined);
+    });
+
+    it("stays in reach of a sandbox allowed it, and can be allowed or blocked again while stopped", async () => {
+      const { limaDir, provider, log } = await fakeLima();
+      await provider.create(spec({ hostLoopback: true }), log);
+      assert.deepEqual(await loopbackEdits(limaDir), []);
+      assert.equal((await provider.list())[0].meta?.spec.hostLoopback, true);
+
+      assert.match((await provider.validateEdit("web", { hostLoopback: false })).errors.join(), /Stop km-web to change/);
+      await provider.stop("web", log);
+      await provider.edit("web", { hostLoopback: false }, log);
+      assert.deepEqual((await loopbackEdits(limaDir)).pop()?.at(-1), "--set=.networkOpts.hostLoopback = false");
+      assert.equal((await provider.list())[0].meta?.spec.hostLoopback, undefined);
+      // With a mounts change too, one --set does both.
+      await provider.edit("web", { hostLoopback: true, mounts: [] }, log);
+      assert.deepEqual((await loopbackEdits(limaDir)).pop()?.slice(3), ["--set=.networkOpts.hostLoopback = true"]);
+    });
+
+    it("says why where Lima can't block it, and blocks it once Lima can", async () => {
+      const { limaDir, provider, log, lines } = await fakeLima();
+      await as({ FAKE_LIMA_VERSION: "2.2.1" }, async () => {
+        await provider.create(spec(), log);
+        assert.match((await provider.list())[0].hostLoopbackOpen ?? "", /Lima 2\.2\.1 can't block it; Lima 2\.3 or later can/);
+      });
+      assert.deepEqual(await loopbackEdits(limaDir), []);
+      assert.ok(lines.some((l) => /warning: this sandbox can reach services on your Mac's localhost .*Lima 2\.2\.1 can't block it/.test(l)), lines.join("\n"));
+
+      // Lima is upgraded. Kumiko asks its version again after a while; a new provider on the same VMs asks at once.
+      const upgraded = new LimaProvider({ limactl: FAKE_LIMACTL, ssh: FAKE_SSH, metadata: provider.metadata });
+      assert.equal((await upgraded.list())[0].hostLoopbackOpen, "Restart the sandbox to block it.");
+      await upgraded.stop("web", log);
+      await upgraded.start("web", log);
+      assert.equal((await loopbackEdits(limaDir)).length, 1);
+      assert.equal((await upgraded.list())[0].hostLoopbackOpen, undefined);
+    });
+
+    it("says why on a VM type that can't block it", async () => {
+      const { limaDir, provider, log } = await fakeLima();
+      await as({ FAKE_LIMA_VMTYPE: "qemu" }, () => provider.create(spec(), log));
+      assert.deepEqual(await loopbackEdits(limaDir), []);
+      assert.match((await provider.list())[0].hostLoopbackOpen ?? "", /VM type is qemu, and only vz VMs can block it/);
+    });
   });
 
   it("refuses to edit VMs Kumiko didn't create", async () => {

@@ -68,6 +68,12 @@ export function ProjectPage({ id, live, onBack, onEdit, onNewSession }: Props) {
             <span className="mono">{p.metaError}</span>
           </div>
         )}
+        {p?.hostLoopbackOpen && (
+          <div className="banner banner-warn">
+            <strong>This sandbox can reach services on your Mac's localhost.</strong>
+            <span>{p.hostLoopbackOpen}</span>
+          </div>
+        )}
         {p?.status === "absent" && !p.busy && (
           <div className="banner banner-warn">
             {p.vm} doesn't exist: its creation failed, or it was deleted outside Kumiko. Recreate it from the menu to use this project.
