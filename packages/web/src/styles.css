@@ -133,6 +133,7 @@ code, .mono { font-family: var(--mono); }
 .banner-warn { background: #2a2214; border-color: #5c4a2b; color: #f0cf96; }
 .banner-success { background: #142a1f; border-color: #2b5c43; color: #9fe0bd; animation: banner-in 200ms ease-out; }
 @keyframes banner-in { from { opacity: 0; transform: translateY(4px); } }
+.banner-success.is-fading { opacity: 0; transition: opacity 600ms ease-in; }
 
 .table-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow-x: auto; }
 .table-inner { min-width: 740px; }
