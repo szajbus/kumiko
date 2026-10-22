@@ -62,13 +62,3 @@ Kumiko is back, each session is open again where the agent got to:
 - an agent that exited meanwhile shows its session as ended, with the error if it failed.
 
 A session whose sandbox stopped or restarted meanwhile isn't open again, but stays saved, to resume.
-
-## Tabs across restarts
-
-The open tabs and the active one are saved, and come back the next time the app starts. Their sessions are open again
-as above, or resumed from the saved chat if their agent has gone. The same happens when Kumiko's server restarts under
-an open window.
-
-Tabs coming back don't start a stopped sandbox, as after restarting your Mac. Their sessions come back greyed out,
-with their transcripts. A banner above the box offers **Start sandbox**, and once the sandbox runs, the agent continues
-the conversation. That also happens when the sandbox is started some other way, from the project's page say.

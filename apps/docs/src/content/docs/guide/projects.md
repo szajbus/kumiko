@@ -71,20 +71,13 @@ Before your script, Kumiko installs the agent: Claude Code, with its native inst
 
 ### The agent's setup scripts
 
-The agent installs what its work needs as it goes, and that is lost when the sandbox is recreated. So the agent is told
-to write it down: as shell scripts in its own folder, `provision.d/` in the project's Kumiko folder
-(`~/.kumiko/provision.d/` in the sandbox), one per concern, such as `20-postgres.sh`. They survive a recreate,
-because the Kumiko folder is on your Mac. It is kept apart from the agent home, which is Claude Code's to change.
-
-When the sandbox is created, they run after your provisioning script: each `*.sh` file in name order, in the clone,
-with the same forwarded variables, and each stops at its first failing command. One that fails doesn't stop the others
-or the sandbox: it shows **Running · agent setup failed**, and the project page says which. Files that aren't plain
-`*.sh` files, or are over 1 MB, are left out. If your own script fails, none of them run.
+The agent installs what its work needs as it goes, and writes it down as setup scripts so a recreated sandbox gets it
+again. They run when the sandbox is created, after your provisioning script; if one fails, the sandbox shows
+**Running · agent setup failed**.
 
 The agent manages them; there is nothing you need to do. To see them, open **Agent's setup scripts** on the project
-page, which also says how each went when the sandbox was created. If they go wrong, **Delete scripts** there deletes the
-folder and everything in it: the sandbox keeps what they set up until you recreate it, and then starts from your
-provisioning script only.
+page. To start from scratch, **Delete scripts** there deletes them all: the sandbox keeps what they set up until you
+recreate it, and then starts from your provisioning script only.
 
 ## Editing a project
 
