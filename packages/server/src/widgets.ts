@@ -1,4 +1,4 @@
-import { constants, cpSync, existsSync, mkdirSync, watch, type FSWatcher } from "node:fs";
+import { constants, cpSync, existsSync, mkdirSync, realpathSync, watch, type FSWatcher } from "node:fs";
 import { open, realpath, rm, stat } from "node:fs/promises";
 import { basename, dirname, join, posix, relative, sep } from "node:path";
 import {
@@ -75,14 +75,24 @@ const hostWithin = (path: string, root: string) => path === root || path.startsW
 
 class ToolError extends Error {}
 
+/** Whether a session's artifacts' folder is really where it should be in `claudeHome`, not a link anywhere else. */
+function inPlace(claudeHome: string, id: string): boolean {
+  try {
+    return realpathSync(join(claudeHome, artifactsDir(id))) === join(realpathSync(claudeHome), artifactsDir(id));
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Where `path` really is, if its folder is in `dir`: its folder resolved, so a folder Claude has since swapped for a
- * link doesn't lead out of `dir`. The file itself may be a link; whoever writes or deletes it mustn't follow that.
+ * Where `path` really is, if its folder is in `realDir` (resolved already): its folder resolved, so a folder Claude has
+ * since swapped for a link doesn't lead out of it. The file itself may be a link; whoever writes or deletes it mustn't
+ * follow that.
  */
-async function realWithin(path: string, dir: string): Promise<string | undefined> {
+async function realWithin(path: string, realDir: string): Promise<string | undefined> {
   try {
     const parent = await realpath(dirname(path));
-    return hostWithin(parent, await realpath(dir)) ? join(parent, basename(path)) : undefined;
+    return hostWithin(parent, realDir) ? join(parent, basename(path)) : undefined;
   } catch {
     return undefined;
   }
@@ -164,6 +174,22 @@ export class Widgets implements SessionWidgets {
   private hostDocs(info: SessionInfo): string | undefined {
     const home = this.opts.home(info.sandbox);
     return home && join(home.claudeHome, artifactsDir(info.id));
+  }
+
+  /**
+   * The session's artifacts' folder resolved, or undefined if there isn't one. Claude owns the Claude home, so it can
+   * swap the folder, or one above it, for a link to anywhere on the host; then it isn't the session's folder any more,
+   * and nothing is read, written or deleted through it.
+   */
+  private async realDocs(info: SessionInfo): Promise<string | undefined> {
+    const home = this.opts.home(info.sandbox);
+    if (!home) return undefined;
+    const dir = join(home.claudeHome, artifactsDir(info.id));
+    if (!existsSync(dir)) return undefined;
+    if (!inPlace(home.claudeHome, info.id)) {
+      throw new ToolError(`This session's folder, ${this.vmDocs(info)}, links somewhere else, so Kumiko won't show, write or delete anything in it. Make it a folder again.`);
+    }
+    return realpath(dir);
   }
 
   tools(info: SessionInfo): { tools: ToolHost; appendSystemPrompt: string } {
@@ -348,7 +374,8 @@ export class Widgets implements SessionWidgets {
     let deleted = false;
     const at = artifact && this.hostPath(info, artifact.path);
     const dir = this.hostDocs(info);
-    const real = artifact && at && dir && hostWithin(at.path, dir) && !(artifact.type === "preview" || artifact.type === "web") ? await realWithin(at.path, dir) : undefined;
+    const realDir = dir && (await this.realDocs(info).catch(() => undefined));
+    const real = artifact && at && dir && realDir && hostWithin(at.path, dir) && !(artifact.type === "preview" || artifact.type === "web") ? await realWithin(at.path, realDir) : undefined;
     // A link is deleted itself, not what it points to.
     if (real) deleted = await rm(real).then(() => true, () => false);
     return { window: w, deleted };
@@ -469,10 +496,10 @@ export class Widgets implements SessionWidgets {
     const gone: Read = { data: Buffer.alloc(0), hash: "", text: "", truncated: false, missing: true, stamp: "missing" };
     if (!at) return gone;
     try {
-      const docs = this.hostDocs(info);
+      const docs = await this.realDocs(info);
       if (!docs) return gone;
       const real = await realpath(at.path);
-      if (!hostWithin(real, await realpath(docs))) throw new ToolError(`${vmPath} links to a file outside this session's folder, which Kumiko won't show.`);
+      if (!hostWithin(real, docs)) throw new ToolError(`${vmPath} links to a file outside this session's folder, which Kumiko won't show.`);
       const st = await stat(real);
       if (!st.isFile()) throw new ToolError(`${vmPath} isn't a file.`);
       const stamp = `${st.size}:${st.mtimeMs}`;
@@ -615,7 +642,8 @@ export class Widgets implements SessionWidgets {
   forked(from: SessionInfo, to: SessionInfo, events: SessionEvent[]): SessionEvent[] {
     const src = this.hostDocs(from);
     const dst = this.hostDocs(to);
-    if (src && dst && existsSync(src)) cpSync(src, dst, { recursive: true });
+    // Not from a folder Claude has swapped for a link, which would copy what it points to where Claude can read it.
+    if (src && dst && existsSync(src) && inPlace(this.opts.home(from.sandbox)!.claudeHome, from.id)) cpSync(src, dst, { recursive: true });
     const home = this.homes.get(from.sandbox);
     if (!home) return events;
     const a = JSON.stringify(`${home}/.claude/${artifactsDir(from.id)}/`).slice(1, -1);
@@ -630,15 +658,16 @@ export class Widgets implements SessionWidgets {
 
   private async putBack(info: SessionInfo, w: WindowState): Promise<void> {
     const dir = this.hostDocs(info);
+    const realDir = await this.realDocs(info).catch(() => undefined);
     const home = this.homes.get(info.sandbox);
-    if (!dir || !home) return;
+    if (!dir || !realDir || !home) return;
     const vmDir = `${home}/.claude/${artifactsDir(info.id)}`;
     for (const [widget, d] of artifactsOf(w)) {
       if (d.truncated || d.missing || d.type === "preview" || d.type === "web" || !within(d.path, vmDir)) continue;
       this.seen.delete(`${info.id}:${widget}`);
       // Older sessions kept the content in the window, an image's in base64.
       const data = d.content ? await this.opts.content.get(d.content) : d.text !== undefined ? Buffer.from(d.text, d.type === "image" ? "base64" : "utf8") : undefined;
-      const real = data && (await realWithin(join(dir, relative(vmDir, d.path)), dir));
+      const real = data && (await realWithin(join(dir, relative(vmDir, d.path)), realDir));
       // Not through a link, which Claude could have pointed anywhere on the host.
       if (real) await writeNoFollow(real, data).catch(() => {});
     }

@@ -495,6 +495,41 @@ describe("widgets", () => {
     s.close();
   });
 
+  it("reads, writes, deletes and copies nothing through a session's folder Claude swapped for a link", async () => {
+    const { id, s } = await start();
+    const dir = join(claudeHome, "kumiko", "artifacts", id);
+    await ask(s, id, write(docPath(id, "x.md"), "# X1\n"));
+    await ask(s, id, widget("artifact_open", { path: docPath(id, "x.md") }));
+    await ask(s, id, write(docPath(id, "x.md"), "# X2\n"));
+    await waitFor(() => textOf(artifactsOf(s.window())[0][1]) === "# X2\n" || undefined);
+
+    // The whole folder becomes a link to one on the host, as `ln -s /Users/you ~/.claude/kumiko/artifacts/<id>` makes it.
+    const outside = join(root, `host-${id}`);
+    await mkdir(outside);
+    await writeFile(join(outside, "secret.md"), "# Secret\n");
+    await writeFile(join(outside, "x.md"), "keep me");
+    await rm(dir, { recursive: true });
+    await symlink(outside, dir);
+
+    assert.match(await ask(s, id, widget("artifact_open", { path: docPath(id, "secret.md") })), /links somewhere else/);
+    assert.ok(!artifactsOf(s.window()).some(([, a]) => a.path.endsWith("secret.md")));
+    await ask(s, id, widget("artifact_remove", { artifact: "w2" }));
+    assert.equal(await readFile(join(outside, "x.md"), "utf8"), "keep me", "removing doesn't delete through it");
+
+    const prompt = s.events().flatMap((e) => (e.kind === "user_prompt" && e.payload.text.includes("# X2") ? [e.payload.id!] : []))[0];
+    assert.equal((await api(`/api/sessions/${id}/rewind`, { method: "POST", body: JSON.stringify({ prompt }) })).status, 200);
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(await readFile(join(outside, "x.md"), "utf8"), "keep me", "a rewind doesn't write through it");
+
+    const fork = await json(await api(`/api/sessions/${id}/fork`, { method: "POST", body: "{}" }));
+    assert.equal(existsSync(join(claudeHome, "kumiko", "artifacts", fork.id, "secret.md")), false, "a fork doesn't copy what it points to");
+
+    assert.equal((await api(`/api/sessions/${id}`, { method: "DELETE" })).status, 200);
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(await readFile(join(outside, "secret.md"), "utf8"), "# Secret\n", "deleting the session leaves what it points to");
+    s.close();
+  });
+
   it("forks the artifacts with the window, and rewinds them with it", async () => {
     const { id, s } = await start();
     const path = docPath(id);
