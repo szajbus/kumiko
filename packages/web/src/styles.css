@@ -438,8 +438,8 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
   border: 0; border-radius: 6px; background: hsl(var(--hue) 55% 62% / 0.14); color: hsl(var(--hue) 65% 78%);
   font-size: 12px; font-weight: 600; cursor: pointer;
 }
-/* Its line runs along the tabs' bottom, not its own. */
-.tab-group-label::after { bottom: -7px; }
+/* Its line runs along the tabs' bottom, not its own: 3px lower, less the tabs' border, which theirs is drawn inside. */
+.tab-group-label::after { bottom: -6px; }
 .tab-group-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab-group-label:hover { background: hsl(var(--hue) 55% 62% / 0.24); }
 .tab-group-label.is-dragging { opacity: 0.45; }
