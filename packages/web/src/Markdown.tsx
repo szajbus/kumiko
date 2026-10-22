@@ -1,11 +1,39 @@
-import { memo } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import { memo, useState, type ComponentProps } from "react";
+import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Diagram } from "./Diagram";
+
+/** The text of a hast node and everything in it. */
+type Element = NonNullable<ExtraProps["node"]>;
+
+function textOf(node: Element | undefined): string {
+  if (!node) return "";
+  return node.children.map((c) => (c.type === "text" ? c.value : c.type === "element" ? textOf(c) : "")).join("");
+}
+
+/** A code block, with a button to copy its text that shows when the pointer is over it. */
+function CodeBlock({ node, ...props }: ComponentProps<"pre"> & ExtraProps) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    void navigator.clipboard.writeText(textOf(node).replace(/\n$/, "")).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <div className="md-code">
+      <pre {...props} />
+      <button type="button" className="md-code-copy" onClick={copy} title="Copy the code">
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </div>
+  );
+}
 
 // Links open outside the app (the desktop shell sends new windows to the browser). Raw HTML is never rendered.
 const components: Components = {
   a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
+  pre: CodeBlock,
 };
 
 /** The same, with ```mermaid blocks drawn as diagrams. */
@@ -15,10 +43,9 @@ const withDiagrams: Components = {
     const code = node?.children[0];
     const lang = code?.type === "element" && code.tagName === "code" ? code.properties.className : undefined;
     if (Array.isArray(lang) && lang.includes("language-mermaid")) {
-      const text = code?.type === "element" ? code.children.map((c) => (c.type === "text" ? c.value : "")).join("") : "";
-      return <Diagram source={text} />;
+      return <Diagram source={textOf(node)} />;
     }
-    return <pre {...props} />;
+    return <CodeBlock node={node} {...props} />;
   },
 };
 

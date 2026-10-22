@@ -666,6 +666,15 @@ a.artifact-copy { text-decoration: none; }
 .md code { padding: 1px 5px; border-radius: 4px; background: var(--surface-2); font-size: 12.5px; }
 .md pre { padding: 12px 14px; border-radius: 8px; background: var(--code-bg); border: 1px solid var(--border-soft); overflow-x: auto; }
 .md pre code { padding: 0; background: none; font-size: 12.5px; line-height: 1.55; }
+/* A code block's copy button, over its top right corner while the pointer is on the block. */
+.md-code { position: relative; }
+.md-code-copy {
+  position: absolute; top: 6px; right: 6px; padding: 1px 8px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface-2); color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer;
+  opacity: 0; transition: opacity 0.12s;
+}
+.md-code:hover .md-code-copy, .md-code-copy:focus-visible { opacity: 1; }
+.md-code-copy:hover { color: var(--text); background: var(--border); }
 /* Over the text selected in the chat, to quote it in the message. */
 .quote-btn {
   position: fixed; z-index: 15; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px;
