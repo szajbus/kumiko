@@ -270,6 +270,8 @@ export interface SessionInfo {
   title?: string;
   /** Who set `title`. Missing on sessions saved before Claude could name them, whose title was the user's. */
   titleBy?: "user" | "agent";
+  /** A sentence or two on what the session is about, set by Claude with session_rename; the list of saved sessions shows it. */
+  description?: string;
   startedAt: string;
   endedAt?: string;
   /** When the session was last saved to disk; orders the list of sessions that can be resumed. */

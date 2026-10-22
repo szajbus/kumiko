@@ -151,6 +151,8 @@ export function NewSession({ live, project: initial, onProject, onStarted }: Pro
             {shown.slice(0, RESUME_LIMIT).map((r) => {
               const p = live.projects.find((x) => x.name === r.sandbox);
               const can = p !== undefined && canStart(p);
+              // Under a name, Claude's description of the session, or the prompt it opened with.
+              const about = r.description ?? (r.title ? r.prompt : undefined);
               return (
                 <li
                   key={r.id}
@@ -159,8 +161,15 @@ export function NewSession({ live, project: initial, onProject, onStarted }: Pro
                 >
                   <div className="resume-what">
                     <span className="resume-title" title={r.title ?? r.prompt}>
-                      <span className="resume-project">{r.sandbox}</span> · {r.title ?? r.prompt}
+                      {/* Only when the list isn't one project's. */}
+                      {!sandbox && <span className="resume-project">{r.sandbox} · </span>}
+                      {r.title ?? r.prompt}
                     </span>
+                    {about && (
+                      <span className="muted resume-about" title={about}>
+                        {about}
+                      </span>
+                    )}
                     <span className="dim resume-when">{can ? ago(r.updatedAt ?? r.startedAt) : `${ago(r.updatedAt ?? r.startedAt)} · sandbox can't start`}</span>
                   </div>
                   <div className="resume-actions" onClick={(e) => e.stopPropagation()}>

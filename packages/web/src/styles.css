@@ -791,6 +791,7 @@ a.artifact-copy { text-decoration: none; }
 .resume-item-live:hover .resume-title { color: var(--accent-hover); }
 .resume-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
 .resume-project { font-weight: 500; }
+.resume-about { font-size: 13px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
 .resume-when { font-size: 12px; }
 
 @media (max-width: 640px) {

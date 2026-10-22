@@ -55,7 +55,7 @@ describe("widgets", () => {
       await new Promise((r) => setTimeout(r, 20));
     }
   };
-  const pick = (i: SessionInfo | undefined) => ({ title: i?.title, titleBy: i?.titleBy });
+  const pick = (i: SessionInfo | undefined) => ({ title: i?.title, titleBy: i?.titleBy, ...(i?.description !== undefined && { description: i.description }) });
   const session = async (id: string): Promise<SessionInfo | undefined> => ((await json(await api("/api/sessions"))) as SessionInfo[]).find((s) => s.id === id);
 
   /** A session's events, as a tab gets them, and its window folded from them. */
@@ -146,6 +146,23 @@ describe("widgets", () => {
     assert.deepEqual(pick(await session(id)), { title: "my-name", titleBy: "user" });
     assert.match(await rename("Something else"), /The user named this session "my-name" with \/rename, and their name stands/);
     assert.equal((await session(id))?.title, "my-name");
+    s.close();
+  });
+
+  it("lets Claude describe the session, even once the user has named it", async () => {
+    const { id, s } = await start();
+    const rename = (title: string, description?: string) => ask(s, id, widget("session_rename", { title, description }));
+    assert.match(await rename("Fix composer", "  Pasting an   image attaches it. "), /^Named the session "Fix composer"\. Its tab shows it\. Its description is saved/);
+    assert.deepEqual(pick(await session(id)), { title: "Fix composer", titleBy: "agent", description: "Pasting an image attaches it." });
+    assert.match(await rename("Fix composer", "Pasting an image attaches it."), /named "Fix composer" already, with that description/);
+    assert.match(await rename("Fix composer", "Paste images and files."), /^The session's description is saved/);
+    assert.match(await rename("Fix composer", "x".repeat(161)), /is 161 characters; the list has room for 160/);
+    // Renamed without one, the description stays.
+    await rename("Paste handling");
+    assert.equal((await session(id))?.description, "Paste images and files.");
+    await ask(s, id, "/rename my-name");
+    assert.match(await rename("Other", "Something else entirely."), /their name stands; its description is saved/);
+    assert.deepEqual(pick(await session(id)), { title: "my-name", titleBy: "user", description: "Something else entirely." });
     s.close();
   });
 

@@ -535,10 +535,13 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     return s.window;
   }
 
-  /** Names the session, as Claude does with Kumiko's tool; the user's /rename goes through Claude instead. */
-  rename(id: string, title: string, by: "user" | "agent"): void {
+  /**
+   * Names the session, as Claude does with Kumiko's tool, and with `description` describes it; the user's /rename goes
+   * through Claude instead.
+   */
+  rename(id: string, title: string | undefined, by: "user" | "agent", description?: string): void {
     const s = this.live(id);
-    this.setInfo(s, { title, titleBy: by });
+    this.setInfo(s, { ...(title !== undefined && { title, titleBy: by }), ...(description !== undefined && { description }) });
     // Like a change to the window: saved with the turn's result, or now if there is none to come.
     if (s.info.status === "idle") this.save(s);
   }

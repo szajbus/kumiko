@@ -94,13 +94,16 @@ const FOLDER = "<folder>";
 /** The longest name Claude can give a session: the tab has room for about that much beside the project's name. */
 const MAX_SESSION_TITLE = 20;
 
+/** The longest description Claude can give a session: two lines in the list of saved sessions. */
+const MAX_SESSION_DESCRIPTION = 160;
+
 /** What Claude's system prompt gets about Kumiko, artifacts and the session's name, naming the session's folder. */
 export const systemPrompt = (folder: string) =>
   [
     "You are running in Kumiko, which shows this conversation in a window that can have panes beside the chat.",
     "For an artifact the user will want to look at while it changes, such as a plan, a spec, a report, a diagram or a chart, write it as a file (Markdown, SVG, a Mermaid diagram, or an image you generate) and show it beside the chat with the mcp__kumiko__artifact_open tool; then keep changing the file, and the pane follows it. Unlike artifacts elsewhere, you don't pass the content to the tool: the artifact is the file.",
     `Write artifacts in ${folder}/, the session's folder for them; only files there can be shown.`,
-    `Once the user's message makes clear what this session is about, name it with the mcp__kumiko__session_rename tool: a few words, up to ${MAX_SESSION_TITLE} characters, saying what the work is; the session's tab shows it. Name it again only if the subject really changes.`,
+    `Once the user's message makes clear what this session is about, name it with the mcp__kumiko__session_rename tool: a few words, up to ${MAX_SESSION_TITLE} characters, saying what the work is; the session's tab shows it. Give it a description too, a sentence on what the session is for, which the list of sessions to resume shows. Name it again only if the subject really changes.`,
   ].join(" ");
 
 /** An artifact's file as read: what is shown of it and its hash, and its text, for a title. */
@@ -229,15 +232,27 @@ export class Widgets implements SessionWidgets {
           return { text: await this.open(info, args, toolUseId) };
         case "session_rename": {
           const title = str(args.title, "title").trim().replace(/\s+/g, " ");
+          const description = args.description === undefined ? undefined : str(args.description, "description").trim().replace(/\s+/g, " ") || undefined;
+          if (description && description.length > MAX_SESSION_DESCRIPTION) {
+            throw new ToolError(`The description is ${description.length} characters; the list has room for ${MAX_SESSION_DESCRIPTION}. Make it shorter.`);
+          }
+          const described = description !== undefined && description !== info.description;
           // Sessions saved before Claude could name them have a title without a namer: the user's, from /rename.
-          if (info.title && info.titleBy !== "agent") throw new ToolError(`The user named this session "${info.title}" with /rename, and their name stands.`);
+          if (info.title && info.titleBy !== "agent") {
+            const stands = `The user named this session "${info.title}" with /rename, and their name stands`;
+            if (!described) throw new ToolError(`${stands}.`);
+            this.sessions.rename(id, undefined, "agent", description);
+            return { text: `${stands}; its description is saved. The list of sessions to resume shows it.` };
+          }
           if (!title) throw new ToolError("Give the session a name: a few words saying what the work is.");
           if (title.length > MAX_SESSION_TITLE) {
             throw new ToolError(`"${title}" is ${title.length} characters; the tab has room for ${MAX_SESSION_TITLE}. Pick a shorter name.`);
           }
-          if (title === info.title) return { text: `The session is named "${title}" already.` };
-          this.sessions.rename(id, title, "agent");
-          return { text: `Named the session "${title}". Its tab shows it.` };
+          const named = title !== info.title;
+          if (!named && !described) return { text: `The session is named "${title}" already${description ? ", with that description" : ""}.` };
+          this.sessions.rename(id, named ? title : undefined, "agent", described ? description : undefined);
+          const said = [named && `Named the session "${title}". Its tab shows it.`, described && `${named ? "Its" : "The session's"} description is saved; the list of sessions to resume shows it.`];
+          return { text: said.filter(Boolean).join(" ") };
         }
         default:
           throw new ToolError(`There is no tool ${name}.`);
@@ -779,8 +794,18 @@ const toolsFor = (folder: string): ToolSpec[] => [
   {
     name: "session_rename",
     alwaysLoad: true,
-    description: `Names this session; its tab in the user's window shows the name. Give a few words, up to ${MAX_SESSION_TITLE} characters, saying what the work is, once the user has made that clear; name it again only if the subject really changes. A name the user gave with /rename stands, and can't be changed.`,
-    inputSchema: { type: "object", properties: { title: { type: "string", description: `The name, up to ${MAX_SESSION_TITLE} characters, such as "Fix composer paste".` } }, required: ["title"] },
+    description: `Names this session; its tab in the user's window shows the name. Give a few words, up to ${MAX_SESSION_TITLE} characters, saying what the work is, once the user has made that clear; name it again only if the subject really changes. Describe it too, in a sentence: the list of sessions to resume shows the description under the name. A name the user gave with /rename stands, and can't be changed, but the description still can.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: `The name, up to ${MAX_SESSION_TITLE} characters, such as "Fix composer paste".` },
+        description: {
+          type: "string",
+          description: `What the session is about, up to ${MAX_SESSION_DESCRIPTION} characters, such as "Pasting an image into the composer attaches it instead of inserting its path."`,
+        },
+      },
+      required: ["title"],
+    },
   },
   {
     name: "artifact_remove",

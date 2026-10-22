@@ -60,4 +60,5 @@ Kumiko handles a few itself:
 
 `/rename <title>` gives the tab a title in place of the opening message. Until you do, the agent names the session
 itself, in a few words, once your messages make clear what it is about, and again if the subject changes. A name you
-give with `/rename` stands: the agent can't change it.
+give with `/rename` stands: the agent can't change it. The agent also describes the session in a sentence, which the
+list of sessions to resume shows under its name.
