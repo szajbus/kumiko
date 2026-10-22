@@ -22,7 +22,8 @@ sandbox provider.
 | `home-id` | This home's id, which tags the runs its server starts. |
 | `server.lock` | The running server's pid and port. One server per home: a second refuses to start. |
 
-The agent home's `CLAUDE.md` is yours. It imports `kumiko.md`, which Kumiko rewrites with the worktree convention.
+The agent home's `CLAUDE.md` is yours. It imports `kumiko.md`, which Kumiko rewrites with
+[its instructions to the agent](/reference/agent-instructions/).
 
 In each sandbox, every agent process has a run in `~/.kumiko/runs/<session id>-<n>/`, on the sandbox's own disk: a FIFO
 for its input, its output and errors as files, its pid and, once it exits, its exit code. The run outlives Kumiko's

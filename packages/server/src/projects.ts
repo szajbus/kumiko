@@ -21,13 +21,19 @@ const TEMPLATE_CLAUDE_MD = `@${MANAGED_FILE}
 -->
 `;
 
-/** Kumiko's instructions for a project: the worktree convention, with the project's real paths. */
+/** Kumiko's instructions for a project: the VM is Claude's to change, and the worktree convention, with the project's real paths. */
 export function managedInstructions(p: Project): string {
   return `<!-- Written by Kumiko, and rewritten whenever the sandbox or a session starts: edit CLAUDE.md instead. -->
 
 # Working in this project
 
 The git clone is \`${p.clonePath}\`. Sessions start there.
+
+## This machine
+
+- You are in a VM made for this project, and it is yours: treat it as your own machine.
+- Install packages and tools, start, stop and configure services, and change system settings whenever the task needs it; you don't need to ask first.
+- Folders mounted from the user's computer are shared with it: the clone, the worktrees, \`~/.claude\`, and any others the project adds. Take the usual care with those; the rest of the VM is yours to change.
 
 ## Worktrees
 

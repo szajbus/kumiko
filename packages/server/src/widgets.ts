@@ -92,7 +92,7 @@ async function realWithin(path: string, dir: string): Promise<string | undefined
 const FOLDER = "<folder>";
 
 /** What Claude's system prompt gets about Kumiko and artifacts, naming the session's folder. */
-const systemPrompt = (folder: string) =>
+export const systemPrompt = (folder: string) =>
   [
     "You are running in Kumiko, which shows this conversation in a window that can have panes beside the chat.",
     "For an artifact the user will want to look at while it changes, such as a plan, a spec, a report, a diagram or a chart, write it as a file (Markdown, SVG, a Mermaid diagram, or an image you generate) and show it beside the chat with the mcp__kumiko__artifact_open tool; then keep changing the file, and the pane follows it. Unlike artifacts elsewhere, you don't pass the content to the tool: the artifact is the file.",

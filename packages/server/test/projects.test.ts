@@ -20,6 +20,7 @@ describe("ProjectStore", () => {
       const managed = await readFile(join(home, "kumiko.md"), "utf8");
       assert.match(managed, /Written by Kumiko/);
       assert.match(managed, /\/src\/web__worktrees/);
+      assert.match(managed, /## This machine\n\n- You are in a VM made for this project, and it is yours/);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
