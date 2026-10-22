@@ -7,7 +7,6 @@ contextBridge.exposeInMainWorld("kumiko", {
   platform: process.platform,
   // Page zoom (Cmd +/-/0); the UI counter-scales the macOS header so it stays aligned with the traffic lights.
   getZoomFactor: () => webFrame.getZoomFactor(),
-  // Cmd/Ctrl+W, and with Shift to delete the session too; intercepted in the main process before the menu can close the window.
   // Pictures for Claude of what a pane shows: part of the window, or a preview's <webview>; PNGs in base64.
   capture: (rect) => ipcRenderer.invoke("kumiko:capture", rect),
   captureWebview: (id) => ipcRenderer.invoke("kumiko:capture-webview", id),
@@ -17,6 +16,7 @@ contextBridge.exposeInMainWorld("kumiko", {
     ipcRenderer.on("kumiko:page-blocked", handler);
     return () => ipcRenderer.removeListener("kumiko:page-blocked", handler);
   },
+  // Cmd/Ctrl+W, and with Shift to delete the session too; intercepted in the main process before the menu can close the window.
   onCloseTab: (cb) => {
     const handler = (_event, deleteToo) => cb(Boolean(deleteToo));
     ipcRenderer.on("kumiko:close-tab", handler);

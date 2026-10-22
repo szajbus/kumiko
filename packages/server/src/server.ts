@@ -151,20 +151,28 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       }
     },
   });
-  // What Claude asked of the windows' panes (a reload, a picture), by request id, until one answers.
-  const paneRequests = new Map<string, { resolve(answer: PaneAnswer): void; reject(err: Error): void }>();
+  // What Claude asked of the windows' panes (a reload, a picture), by request id: done by the first window that does it,
+  // or failed once every window has said why it couldn't, since another may yet do it.
+  const paneRequests = new Map<string, { resolve(answer: PaneAnswer): void; fail(err: Error, fallback: boolean): void }>();
   /** How long the server waits for a window's answer: a reload and a wait of up to 10 s each, and the picture. */
   const PANE_MS = 30_000;
   const askPane = (session: string, pane: string, what: { reload: boolean; capture: boolean; wait: number }) =>
     new Promise<PaneAnswer>((resolve, reject) => {
       const request = randomUUID();
+      let waiting = [...clients].filter((ws) => ws.readyState === ws.OPEN).length;
+      // Why it couldn't be done: a window showing the session says more than one that only can't capture, or lacks it.
+      let why: { err: Error; fallback: boolean } | undefined;
+      const done = () => (clearTimeout(timer), paneRequests.delete(request));
       const timer = setTimeout(() => {
-        paneRequests.delete(request);
-        reject(new Error("No window answered: the user needs this session's tab open and on screen in the Kumiko app. Ask them to look at it, then try again."));
+        done();
+        reject(why?.err ?? new Error("No window answered: the user needs this session's tab open and on screen in the Kumiko app. Ask them to look at it, then try again."));
       }, PANE_MS);
       paneRequests.set(request, {
-        resolve: (answer) => (clearTimeout(timer), paneRequests.delete(request), resolve(answer)),
-        reject: (err) => (clearTimeout(timer), paneRequests.delete(request), reject(err)),
+        resolve: (answer) => (done(), resolve(answer)),
+        fail: (err, fallback) => {
+          if (!why || (why.fallback && !fallback)) why = { err, fallback };
+          if (--waiting <= 0) (done(), reject(why.err));
+        },
       });
       broadcast({ type: "pane", session, pane, request, ...what });
     });
@@ -825,14 +833,15 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     return c.json(sessions.changeWindow(sessionOf(c).id, { type: "move", pane: req.pane, to: req.to, side: req.side as Side | "swap" }));
   });
 
-  // A window answering a pane request: the picture, nothing (a reload alone), or why it couldn't. The first answer wins.
+  // A window answering a pane request: the picture, nothing (a reload alone), or why it couldn't, with `fallback` when
+  // another window could do better (it doesn't show the session, or can't take pictures).
   app.post("/api/sessions/:id/window/answer", async (c) => {
-    type Answer = { request?: unknown; data?: unknown; mimeType?: unknown; error?: unknown; note?: unknown };
+    type Answer = { request?: unknown; data?: unknown; mimeType?: unknown; error?: unknown; fallback?: unknown; note?: unknown };
     const req = await c.req.json<Answer>().catch(() => ({}) as Answer);
     const waiting = typeof req.request === "string" ? paneRequests.get(req.request) : undefined;
     if (!waiting) return c.json({ ok: false }, 404);
     const note = typeof req.note === "string" ? req.note.slice(0, 2000) : undefined;
-    if (typeof req.error === "string") waiting.reject(new Error(req.error));
+    if (typeof req.error === "string") waiting.fail(new Error(req.error), req.fallback === true);
     else if (typeof req.data === "string" && typeof req.mimeType === "string" && /^image\/(png|jpeg)$/.test(req.mimeType)) waiting.resolve({ image: { data: req.data, mimeType: req.mimeType }, note });
     else waiting.resolve({ note });
     return c.json({ ok: true });

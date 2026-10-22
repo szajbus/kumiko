@@ -315,10 +315,10 @@ describe("artifact types", () => {
 
 describe("external sites", () => {
   it("are told apart from this machine and private networks", () => {
-    for (const host of ["localhost", "foo.localhost", "127.0.0.1", "10.1.2.3", "172.20.0.1", "192.168.1.1", "169.254.169.254", "100.100.1.1", "0.0.0.0", "[::1]", "[fd12::1]", "[fe80::1]", "[::ffff:192.168.0.1]", "printer.local", "router.lan", "intranet", "db.internal"]) {
+    for (const host of ["localhost", "foo.localhost", "127.0.0.1", "10.1.2.3", "172.20.0.1", "192.168.1.1", "169.254.169.254", "100.100.1.1", "0.0.0.0", "[::1]", "[fd12::1]", "[fe80::1]", "[::ffff:192.168.0.1]", "[::ffff:7f00:1]", "[::ffff:a00:1]", "[::ffff:c0a8:1]", "[::7f00:1]", "::ffff:127.0.0.1", "printer.local", "router.lan", "intranet", "db.internal"]) {
       assert.equal(isPrivateHost(host), true, host);
     }
-    for (const host of ["example.com", "8.8.8.8", "172.32.0.1", "100.128.0.1", "[2606:4700::1111]", "docs.github.com"]) {
+    for (const host of ["example.com", "8.8.8.8", "172.32.0.1", "100.128.0.1", "[2606:4700::1111]", "[::ffff:808:808]", "docs.github.com"]) {
       assert.equal(isPrivateHost(host), false, host);
     }
   });
@@ -329,6 +329,7 @@ describe("external sites", () => {
     assert.equal(isExternalUrl("https://user:pw@example.com/"), true);
     assert.equal(isExternalUrl("http://localhost:5173/"), false);
     assert.equal(isExternalUrl("https://192.168.1.1/"), false);
+    assert.equal(isExternalUrl(new URL("http://[::ffff:127.0.0.1]:4317/").href), false);
     assert.equal(isExternalUrl("https://intranet/wiki"), false);
     assert.equal(isExternalUrl("file:///etc/passwd"), false);
     assert.equal(isExternalUrl("javascript:alert(1)"), false);

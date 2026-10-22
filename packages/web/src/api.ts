@@ -125,7 +125,7 @@ export const api = {
   /** Moves a pane to a side of another, or swaps the two. */
   movePane: (id: string, pane: string, to: string, side: string) => request<WindowState>("POST", `/api/sessions/${id}/window/move`, { pane, to, side }),
   /** Answers a pane request: with a picture, with nothing once done, or with why it couldn't be done. */
-  answerPane: (id: string, answer: { request: string; data?: string; mimeType?: string; error?: string; note?: string }) =>
+  answerPane: (id: string, answer: { request: string; data?: string; mimeType?: string; error?: string; fallback?: boolean; note?: string }) =>
     request("POST", `/api/sessions/${id}/window/answer`, answer),
   /** Allows an external site Claude opened, which then loads, or denies it, which takes it out of the window. */
   approveSite: (id: string, widget: string, allow: boolean) => request<WindowState>("POST", `/api/sessions/${id}/window/approve`, { widget, allow }),
@@ -183,7 +183,7 @@ export function useLiveState(): LiveState {
       };
       ws.onmessage = (msg) => {
         const ev = JSON.parse(String(msg.data)) as ServerEvent;
-        if (ev.type === "pane") for (const l of paneListeners) l(ev);
+        if (ev.type === "pane") answerPaneRequest(ev);
         else setState((s) => apply(s, ev));
       };
       ws.onclose = () => {
@@ -205,12 +205,22 @@ export function useLiveState(): LiveState {
 }
 
 export type PaneRequest = Extract<ServerEvent, { type: "pane" }>;
-const paneListeners = new Set<(ev: PaneRequest) => void>();
+const paneListeners = new Set<(ev: PaneRequest) => boolean>();
 
-/** Listens for the server asking, for Claude, to reload or capture a pane; returns a function that stops listening. */
-export function onPaneRequest(listener: (ev: PaneRequest) => void): () => void {
+/**
+ * Listens for the server asking, for Claude, to reload or capture a pane; the listener says whether it answers it.
+ * Returns a function that stops listening.
+ */
+export function onPaneRequest(listener: (ev: PaneRequest) => boolean): () => void {
   paneListeners.add(listener);
   return () => paneListeners.delete(listener);
+}
+
+/** Every window answers, so the server needn't wait out one that doesn't show the session. */
+function answerPaneRequest(ev: PaneRequest) {
+  let answered = false;
+  for (const l of paneListeners) answered = l(ev) || answered;
+  if (!answered) void api.answerPane(ev.session, { request: ev.request, error: "The session isn't on screen in the user's window. Ask them to open its tab, then try again.", fallback: true }).catch(() => {});
 }
 
 function apply(s: LiveState, ev: ServerEvent): LiveState {

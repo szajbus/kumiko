@@ -34,7 +34,12 @@ describe("widgets", () => {
   const boot = async () => {
     server = await startServer(serverOpts);
     ws = new WebSocket(`${server.url.replace("http", "ws")}/api/events`);
-    ws.on("message", (m) => events.push(JSON.parse(String(m))));
+    ws.on("message", (m) => {
+      const ev = JSON.parse(String(m)) as ServerEvent;
+      events.push(ev);
+      // A page that doesn't show the session says so, as every page does.
+      if (ev.type === "pane") void api(`/api/sessions/${ev.session}/window/answer`, { method: "POST", body: JSON.stringify({ request: ev.request, error: "The session isn't on screen.", fallback: true }) });
+    });
     await new Promise((r) => ws.once("open", r));
   };
   const api = (path: string, init: RequestInit = {}) =>
@@ -279,6 +284,16 @@ describe("widgets", () => {
     assert.equal(asked?.pane, "p2");
     await answer(() => ({ error: "Capturing needs the Kumiko app; the user has Kumiko open in a browser." }));
     assert.match(await ask(s, id, widget("artifact_capture", {})), /needs the Kumiko app/);
+    // A browser that can't take the picture doesn't fail it for the app, which answers after it.
+    await answer(() => ({ error: "Capturing needs the Kumiko app; the user has Kumiko open in a browser.", fallback: true }));
+    const late = new WebSocket(`${server.url.replace("http", "ws")}/api/events`);
+    late.on("message", (m) => {
+      const ev = JSON.parse(String(m)) as ServerEvent;
+      if (ev.type !== "pane") return;
+      setTimeout(() => void api(`/api/sessions/${ev.session}/window/answer`, { method: "POST", body: JSON.stringify({ request: ev.request, data: Buffer.from("app").toString("base64"), mimeType: "image/png" }) }).then(() => late.close()), 200);
+    });
+    await new Promise((r) => late.once("open", r));
+    assert.match(await ask(s, id, widget("artifact_capture", { artifact: "w2" })), /as the user sees it now\. \[image image\/png, 3 bytes\]/);
     assert.match(await ask(s, id, widget("artifact_capture", { artifact: "w9" })), /There is no artifact w9/);
     // A page that didn't load: the window says why, with the picture or without.
     const blocked = "The page didn't load: Blocked: it points to the user's machine or a private network.";
@@ -366,6 +381,10 @@ describe("widgets", () => {
     await writeFile(secret, "top secret");
     await symlink(secret, join(dir, "link.md"));
     assert.match(await ask(s, id, widget("artifact_open", { path: docPath(id, "link.md") })), /links to a file outside/);
+    // Or to another file under ~/.claude.
+    await writeFile(join(claudeHome, "credentials.md"), "token");
+    await symlink(join(claudeHome, "credentials.md"), join(dir, "creds.md"));
+    assert.match(await ask(s, id, widget("artifact_open", { path: docPath(id, "creds.md") })), /links to a file outside this session's folder/);
     // Other types: an image is kept whole; one over 2 MB isn't kept at all.
     const png = Buffer.from("89504e470d0a1a0a0000000d4948445200000001000000010806000000", "hex");
     await writeFile(join(dir, "chart.png"), png);
@@ -396,6 +415,41 @@ describe("widgets", () => {
     const prompt = s.events().flatMap((e) => (e.kind === "user_prompt" && e.payload.text.includes("artifact_remove") ? [e.payload.id!] : []))[0];
     assert.equal((await api(`/api/sessions/${id}/rewind`, { method: "POST", body: JSON.stringify({ prompt }) })).status, 200);
     await waitFor(async () => existsSync(join(dir, "chart.png")) && (await readFile(join(dir, "chart.png"))).equals(png) || undefined);
+    s.close();
+  });
+
+  it("neither deletes nor writes through links Claude swaps in for an artifact or its folder", async () => {
+    const { id, s } = await start();
+    const dir = join(claudeHome, "kumiko", "artifacts", id);
+    const outside = join(root, `outside-${id}`);
+    await mkdir(join(dir, "sub"), { recursive: true });
+    await mkdir(outside);
+    await writeFile(join(dir, "sub", "notes.md"), "# Notes\n");
+    await writeFile(join(outside, "notes.md"), "keep me");
+    await ask(s, id, widget("artifact_open", { path: docPath(id, "sub/notes.md") }));
+    // The folder becomes a link out of the session's folder: removing the artifact doesn't delete what it points to.
+    await rm(join(dir, "sub"), { recursive: true });
+    await symlink(outside, join(dir, "sub"));
+    assert.match(await ask(s, id, widget("artifact_remove", { artifact: "w2" })), /its file was gone already/);
+    assert.equal(await readFile(join(outside, "notes.md"), "utf8"), "keep me");
+
+    // The file becomes a link before a rewind: putting it back doesn't write through it.
+    const victim = join(outside, "victim.md");
+    await writeFile(victim, "untouched");
+    await ask(s, id, write(docPath(id, "x.md"), "# X1\n"));
+    await ask(s, id, write(docPath(id, "y.md"), "# Y1\n"));
+    await ask(s, id, widget("artifact_open", { path: docPath(id, "x.md") }));
+    await ask(s, id, widget("artifact_open", { path: docPath(id, "y.md") }));
+    await ask(s, id, write(docPath(id, "y.md"), "# Y2\n"));
+    await ask(s, id, write(docPath(id, "x.md"), "# X2\n"));
+    await waitFor(() => artifactsOf(s.window()).every(([, a]) => textOf(a).includes("2")) || undefined);
+    await rm(join(dir, "x.md"));
+    await symlink(victim, join(dir, "x.md"));
+    const prompt = s.events().flatMap((e) => (e.kind === "user_prompt" && e.payload.text.includes("# Y2") ? [e.payload.id!] : []))[0];
+    assert.equal((await api(`/api/sessions/${id}/rewind`, { method: "POST", body: JSON.stringify({ prompt }) })).status, 200);
+    await waitFor(async () => (await readFile(join(dir, "y.md"), "utf8")) === "# Y1\n" || undefined);
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(await readFile(victim, "utf8"), "untouched");
     s.close();
   });
 

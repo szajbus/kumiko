@@ -1,6 +1,6 @@
-import { cpSync, existsSync, mkdirSync, watch, type FSWatcher } from "node:fs";
-import { open, realpath, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, join, posix, relative, sep } from "node:path";
+import { constants, cpSync, existsSync, mkdirSync, watch, type FSWatcher } from "node:fs";
+import { open, realpath, rm, stat } from "node:fs/promises";
+import { basename, dirname, join, posix, relative, sep } from "node:path";
 import {
   applyWindowOp,
   isExternalUrl,
@@ -74,6 +74,19 @@ const within = (path: string, root: string) => path === root || path.startsWith(
 const hostWithin = (path: string, root: string) => path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
 
 class ToolError extends Error {}
+
+/**
+ * Where `path` really is, if its folder is in `dir`: its folder resolved, so a folder Claude has since swapped for a
+ * link doesn't lead out of `dir`. The file itself may be a link; whoever writes or deletes it mustn't follow that.
+ */
+async function realWithin(path: string, dir: string): Promise<string | undefined> {
+  try {
+    const parent = await realpath(dirname(path));
+    return hostWithin(parent, await realpath(dir)) ? join(parent, basename(path)) : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Stands for a session's artifacts' folder in `given`. */
 const FOLDER = "<folder>";
@@ -241,6 +254,8 @@ export class Widgets implements SessionWidgets {
         ? ` It is larger than ${MAX_IMAGE_BYTES / 1024 / 1024} MB, so it isn't shown: make it smaller.`
         : ` It is longer than ${MAX_ARTIFACT_BYTES / 1024} KB, so only its start is shown: split it into several artifacts.`;
 
+    // Kept before the window is looked at: from there to the change, nothing waits, so no other change comes between.
+    const content = await this.keepContent(read);
     let w = this.sessions.window(id)!;
     const docs = artifactsOf(w);
     const existing = docs.find(([, d]) => d.path === path);
@@ -250,7 +265,7 @@ export class Widgets implements SessionWidgets {
       widget = existing[0];
       const changed: Partial<ArtifactState> = {};
       if (title && title !== existing[1].title) changed.title = title;
-      if (read.hash !== existing[1].content || read.truncated !== Boolean(existing[1].truncated) || existing[1].missing) Object.assign(changed, { content: await this.keepContent(read), truncated: read.truncated, missing: false });
+      if (read.hash !== existing[1].content || read.truncated !== Boolean(existing[1].truncated) || existing[1].missing) Object.assign(changed, { content, truncated: read.truncated, missing: false });
       if (Object.keys(changed).length) ops.push({ type: "update", widget, op: changed });
       // Shown already, and not asked to go anywhere else: nothing moves.
       const pane = paneOf(w, widget);
@@ -261,7 +276,7 @@ export class Widgets implements SessionWidgets {
     } else {
       if (docs.length >= MAX_ARTIFACTS) throw new ToolError(`A window has at most ${MAX_ARTIFACTS} artifacts.`);
       widget = nextId(w, "w");
-      const state: ArtifactState = { path, type, title: title || titleOf(path, type, read.text), content: await this.keepContent(read), ...(read.truncated ? { truncated: true } : {}) };
+      const state: ArtifactState = { path, type, title: title || titleOf(path, type, read.text), content, ...(read.truncated ? { truncated: true } : {}) };
       ops.push({ type: "add", widget, kind: "artifact", state });
     }
     // By default in the artifact pane used last, so artifacts don't each take a pane; a new one only when there is none.
@@ -302,9 +317,9 @@ export class Widgets implements SessionWidgets {
     let deleted = false;
     const at = artifact && this.hostPath(info, artifact.path);
     const dir = this.hostDocs(info);
-    if (artifact && at && dir && hostWithin(at.path, dir) && !(artifact.type === "preview" || artifact.type === "web")) {
-      deleted = await rm(at.path).then(() => true, () => false);
-    }
+    const real = artifact && at && dir && hostWithin(at.path, dir) && !(artifact.type === "preview" || artifact.type === "web") ? await realWithin(at.path, dir) : undefined;
+    // A link is deleted itself, not what it points to.
+    if (real) deleted = await rm(real).then(() => true, () => false);
     return { window: w, deleted };
   }
 
@@ -416,15 +431,17 @@ export class Widgets implements SessionWidgets {
 
   /**
    * An artifact's file as it is now: what is shown of it (its first MAX_ARTIFACT_BYTES, or an image whole), with its
-   * hash, read on the host. A link out of its folder isn't followed. `text` is the shown part as text, for titles.
+   * hash, read on the host. A link out of the session's folder isn't followed. `text` is the shown part as text, for titles.
    */
   private async read(info: SessionInfo, vmPath: string, type: ArtifactType): Promise<Read> {
     const at = this.hostPath(info, vmPath);
     const gone: Read = { data: Buffer.alloc(0), hash: "", text: "", truncated: false, missing: true, stamp: "missing" };
     if (!at) return gone;
     try {
+      const docs = this.hostDocs(info);
+      if (!docs) return gone;
       const real = await realpath(at.path);
-      if (!hostWithin(real, await realpath(at.root))) throw new ToolError(`${vmPath} links to a file outside ${at.root}, which Kumiko won't show.`);
+      if (!hostWithin(real, await realpath(docs))) throw new ToolError(`${vmPath} links to a file outside this session's folder, which Kumiko won't show.`);
       const st = await stat(real);
       if (!st.isFile()) throw new ToolError(`${vmPath} isn't a file.`);
       const stamp = `${st.size}:${st.mtimeMs}`;
@@ -459,7 +476,9 @@ export class Widgets implements SessionWidgets {
 
   /** One of Claude's messages: once a tool has run, or the turn has ended, the artifacts may have changed. */
   message(info: SessionInfo, m: AgentMessage): void {
-    if (m.type === "result" || (m.type === "user" && JSON.stringify(m.message ?? "").includes('"tool_result"'))) void this.refresh(info.id);
+    const content = (m.message as { content?: unknown } | undefined)?.content;
+    const toolResult = m.type === "user" && Array.isArray(content) && content.some((b: { type?: unknown }) => b?.type === "tool_result");
+    if (m.type === "result" || toolResult) void this.refresh(info.id);
   }
 
   /**
@@ -588,7 +607,9 @@ export class Widgets implements SessionWidgets {
       this.seen.delete(`${info.id}:${widget}`);
       // Older sessions kept the content in the window, an image's in base64.
       const data = d.content ? await this.opts.content.get(d.content) : d.text !== undefined ? Buffer.from(d.text, d.type === "image" ? "base64" : "utf8") : undefined;
-      if (data) await writeFile(join(dir, relative(vmDir, d.path)), data).catch(() => {});
+      const real = data && (await realWithin(join(dir, relative(vmDir, d.path)), dir));
+      // Not through a link, which Claude could have pointed anywhere on the host.
+      if (real) await writeNoFollow(real, data).catch(() => {});
     }
   }
 
@@ -764,4 +785,14 @@ export function removeArtifact(w: WindowState, widget: WidgetId, instead: "anoth
   const other = pane && !back && instead === "another" ? artifactsOf(w).findLast(([id]) => id !== widget && !paneOf(w, id))?.[0] : undefined;
   const next = back ?? other;
   return [...(pane && next ? [{ type: "show" as const, pane, widget: next }] : []), { type: "remove", widget }];
+}
+
+/** Writes `data` to `path`, unless it is a link. */
+async function writeNoFollow(path: string, data: Buffer): Promise<void> {
+  const fh = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW);
+  try {
+    await fh.writeFile(data);
+  } finally {
+    await fh.close();
+  }
 }

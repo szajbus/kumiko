@@ -491,12 +491,13 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     this.emit("changed");
   }
 
-  private push(s: Session, ev: NewEvent) {
+  /** Records an event; a window event's resulting window is `window` when the caller has applied it already. */
+  private push(s: Session, ev: NewEvent, window?: WindowState) {
     // Large tool output is cut before it is kept; Claude's own transcript in the sandbox has all of it.
     const trimmed = (p: AgentMessage) => (this.widgets ? this.widgets.keep(s.info, trimMessage(p)) : trimMessage(p));
     const kept = ev.kind === "claude" ? { ...ev, payload: trimmed(ev.payload) } : ev;
     const full = { ...kept, seq: ++s.seq } as SessionEvent;
-    if (full.kind === "window") s.window = windowState([full], s.window);
+    if (full.kind === "window") s.window = window ?? windowState([full], s.window);
     s.events.push(full);
     s.bytes += sizeOf(full);
     for (const sub of s.subscribers) sub.event(full);
@@ -527,8 +528,8 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
    */
   changeWindow(id: string, op: WindowOp, toolUseId?: string): WindowState {
     const s = this.live(id);
-    applyWindowOp(s.window, op);
-    this.push(s, { kind: "window", payload: toolUseId ? { op, toolUseId } : { op } });
+    const after = applyWindowOp(s.window, op);
+    this.push(s, { kind: "window", payload: toolUseId ? { op, toolUseId } : { op } }, after);
     // A turn's changes are saved with its result; one between turns has nothing else to be saved with.
     if (s.info.status === "idle") this.save(s);
     return s.window;

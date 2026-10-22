@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { CHAT, chatWindow, artifactsOf, edgeShare, WINDOW, LIVE_SESSION_STATUSES, MIN_RATIO, resize, paneOf, windowState, type ArtifactState, type SessionEvent, type SessionInfo, type PaneId, type SplitPath, type WidgetId, type WindowState } from "@kumiko/shared";
-import { api, onPaneRequest, useSessionEvents } from "./api";
+import { api, onPaneRequest, useSessionEvents, type PaneRequest } from "./api";
 import type { ComposerHandle } from "./Composer";
 import { ArtifactView } from "./ArtifactView";
 import { PaneGrip } from "./PaneGrip";
@@ -152,53 +152,58 @@ function reloadPage(pane: Element): Promise<void> {
 /**
  * Answers the server's requests, for Claude, about one of this window's panes: load its page again, then take a picture
  * of it (what a preview's <webview> shows, or the pane's body as it is on screen). Only the desktop app takes pictures;
- * in a browser, the answer says so. Only the active tab's window is mounted, so a session in another tab doesn't
- * answer, and the server says why.
+ * in a browser, the answer says so. Only the active tab's window is mounted; a page without the session's window
+ * answers that it lacks it. The server takes the first window that does it, so a browser can't fail it for the app.
  */
 function usePaneRequests(id: string, box: RefObject<HTMLElement | null>) {
   useEffect(
     () =>
-      onPaneRequest(async (ev) => {
-        if (ev.session !== id) return;
-        const answer = (a: { data?: string; mimeType?: string; error?: string; note?: string }) => void api.answerPane(id, { request: ev.request, ...a }).catch(() => {});
-        const pane = box.current?.querySelector(`[data-pane="${CSS.escape(ev.pane)}"]`);
-        const k = window.kumiko;
-        if (!pane) return answer({ error: "That pane isn't in the user's window." });
-        // Whatever goes wrong, the window answers, rather than leaving Claude to wait for nothing.
-        try {
-          if (ev.reload) await reloadPage(pane);
-        } catch (err) {
-          return answer({ error: `The window couldn't load the page again: ${err instanceof Error ? err.message : String(err)}` });
-        }
-        // A page that didn't load says why, for Claude not to take a blank picture for the page.
-        const webview = pane.querySelector("webview[data-preview]") as (HTMLElement & { getWebContentsId?(): number }) | null;
-        const failed = webview?.dataset.loadError;
-        const note = failed ? `The page didn't load: ${failed}` : undefined;
-        if (!ev.capture) return answer({ note });
-        // For the page to paint what it loaded, or to finish animating, as asked.
-        if (ev.wait > 0) await new Promise((r) => setTimeout(r, ev.wait));
-        if (!k?.capture) return answer({ error: "Capturing needs the Kumiko app; the user has Kumiko open in a browser." });
-        if (document.visibilityState !== "visible") return answer({ error: "The Kumiko window is hidden or minimized; ask the user to bring it up." });
-        // The pane's area of the window: for a page that didn't load (its <webview> has nothing to capture), and anything
-        // that isn't a page.
-        const area = () => {
-          const r = (pane.querySelector(".artifact-body") ?? pane).getBoundingClientRect();
-          const z = k.getZoomFactor?.() ?? 1;
-          return k.capture!({ x: Math.round(r.x * z), y: Math.round(r.y * z), width: Math.round(r.width * z), height: Math.round(r.height * z) });
-        };
-        try {
-          let data: string;
-          // A <webview> that hasn't drawn a page can leave its capture hanging, not failing: given a few seconds, then
-          // the pane's area instead. That one has a limit too, so the window always answers.
-          if (webview?.getWebContentsId && k.captureWebview && !failed) data = await within(k.captureWebview(webview.getWebContentsId()), 3000).catch(() => within(area(), 5000));
-          else data = await within(area(), 5000);
-          answer({ data, mimeType: "image/png", note });
-        } catch (err) {
-          answer({ error: `The window couldn't capture it: ${err instanceof Error ? err.message : String(err)}` });
-        }
+      onPaneRequest((ev) => {
+        if (ev.session !== id) return false;
+        void answerPane(id, box, ev);
+        return true;
       }),
     [id, box],
   );
+}
+
+async function answerPane(id: string, box: RefObject<HTMLElement | null>, ev: PaneRequest) {
+  const answer = (a: { data?: string; mimeType?: string; error?: string; fallback?: boolean; note?: string }) => void api.answerPane(id, { request: ev.request, ...a }).catch(() => {});
+  const pane = box.current?.querySelector(`[data-pane="${CSS.escape(ev.pane)}"]`);
+  const k = window.kumiko;
+  if (!pane) return answer({ error: "That pane isn't in the user's window.", fallback: true });
+  // Whatever goes wrong, the window answers, rather than leaving Claude to wait for nothing.
+  try {
+    if (ev.reload) await reloadPage(pane);
+  } catch (err) {
+    return answer({ error: `The window couldn't load the page again: ${err instanceof Error ? err.message : String(err)}` });
+  }
+  // A page that didn't load says why, for Claude not to take a blank picture for the page.
+  const webview = pane.querySelector("webview[data-preview]") as (HTMLElement & { getWebContentsId?(): number }) | null;
+  const failed = webview?.dataset.loadError;
+  const note = failed ? `The page didn't load: ${failed}` : undefined;
+  if (!ev.capture) return answer({ note });
+  // For the page to paint what it loaded, or to finish animating, as asked.
+  if (ev.wait > 0) await new Promise((r) => setTimeout(r, ev.wait));
+  if (!k?.capture) return answer({ error: "Capturing needs the Kumiko app; the user has Kumiko open in a browser.", fallback: true });
+  if (document.visibilityState !== "visible") return answer({ error: "The Kumiko window is hidden or minimized; ask the user to bring it up." });
+  // The pane's area of the window: for a page that didn't load (its <webview> has nothing to capture), and anything
+  // that isn't a page.
+  const area = () => {
+    const r = (pane.querySelector(".artifact-body") ?? pane).getBoundingClientRect();
+    const z = k.getZoomFactor?.() ?? 1;
+    return k.capture!({ x: Math.round(r.x * z), y: Math.round(r.y * z), width: Math.round(r.width * z), height: Math.round(r.height * z) });
+  };
+  try {
+    let data: string;
+    // A <webview> that hasn't drawn a page can leave its capture hanging, not failing: given a few seconds, then
+    // the pane's area instead. That one has a limit too, so the window always answers.
+    if (webview?.getWebContentsId && k.captureWebview && !failed) data = await within(k.captureWebview(webview.getWebContentsId()), 3000).catch(() => within(area(), 5000));
+    else data = await within(area(), 5000);
+    answer({ data, mimeType: "image/png", note });
+  } catch (err) {
+    answer({ error: `The window couldn't capture it: ${err instanceof Error ? err.message : String(err)}` });
+  }
 }
 
 /** `p`, or a failure once `ms` have passed without it settling. */
