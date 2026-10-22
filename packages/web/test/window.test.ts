@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { addWidget, applyWindowOp, artifactTypeOf, imageTypeOf, isExternalUrl, isLoopbackHost, isPrivateHost, paneMayReach, paneNavigation, urlHost, urlOrigin, CHAT, chatWindow, close, move, remove, resize, show, compactWindow, nextId, paneIds, paneOf, split, windowState, WINDOW, MAX_PANES, WindowError, type SessionEvent, type WindowOp, type WindowState } from "@kumiko/shared";
+import { addWidget, applyWindowOp, artifactTypeOf, imageTypeOf, frameMayLoad, isExternalUrl, isLoopbackHost, isPrivateHost, paneMayReach, paneNavigation, urlHost, urlOrigin, CHAT, chatWindow, close, move, remove, resize, show, compactWindow, nextId, paneIds, paneOf, split, windowState, WINDOW, MAX_PANES, WindowError, type SessionEvent, type WindowOp, type WindowState } from "@kumiko/shared";
 
 /** A window with an artifact widget per id, none shown. */
 const withDocs = (...ids: string[]): WindowState => ids.reduce((w, id) => addWidget(w, id, { kind: "artifact" }), chatWindow());
@@ -324,6 +324,11 @@ describe("external sites", () => {
     // A NAT64 address reaches the IPv4 one it names; site-local IPv6 is a private network's.
     for (const host of ["[64:ff9b::c0a8:101]", "64:ff9b::7f00:1", "[64:ff9b::10.0.0.1]", "[fec0::1]", "[feff::1]"]) assert.equal(isPrivateHost(host), true, host);
     assert.equal(isPrivateHost("[64:ff9b::808:808]"), false, "a public address through NAT64");
+  });
+
+  it("load in a frame in the app's page over HTTPS only, or from what the page makes", () => {
+    for (const url of ["https://example.com/", "about:srcdoc", "about:blank", "data:text/html,x", "blob:https://x/1"]) assert.equal(frameMayLoad(url), true, url);
+    for (const url of ["http://192.168.1.1/", "http://127.0.0.1:4317/api/projects", "file:///etc/hosts", "javascript:alert(1)"]) assert.equal(frameMayLoad(url), false, url);
   });
 
   it("reach this machine from a preview only, and private networks from neither", () => {

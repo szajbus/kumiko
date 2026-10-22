@@ -4,6 +4,8 @@ const { contextBridge, ipcRenderer, webFrame } = require("electron");
 
 contextBridge.exposeInMainWorld("kumiko", {
   pickFolder: () => ipcRenderer.invoke("kumiko:pick-folder"),
+  // Opens a link the user clicked in the browser: the app opens no windows of its own.
+  openLink: (url) => ipcRenderer.send("kumiko:open-link", url),
   platform: process.platform,
   // Page zoom (Cmd +/-/0); the UI counter-scales the macOS header so it stays aligned with the traffic lights.
   getZoomFactor: () => webFrame.getZoomFactor(),

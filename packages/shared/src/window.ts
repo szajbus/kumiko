@@ -329,6 +329,15 @@ export function paneMayReach(pane: "preview" | "site", host: string): boolean {
   return !isPrivateHost(host) || (pane === "preview" && isLoopbackHost(host));
 }
 
+/**
+ * Whether a frame in the app's own page (an HTML artifact, or one it frames) may go to `url`: the web over HTTPS,
+ * or what a page makes itself. Not plain HTTP, which reaches this machine and the user's network; an artifact's
+ * content security policy covers what it loads, but not where its frame goes.
+ */
+export function frameMayLoad(url: string): boolean {
+  return /^(https|about|data|blob):/i.test(url);
+}
+
 /** A host as written in a URL or a DNS answer, lowercased, without brackets or a final dot. */
 const hostOf = (host: string) => host.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
 

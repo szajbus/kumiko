@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { app, BrowserWindow, dialog, ipcMain, session, shell, webContents, type NativeImage, type Session } from "electron";
-import { isExternalUrl, isPreviewUrl, paneMayReach, paneNavigation } from "@kumiko/shared";
+import { frameMayLoad, isExternalUrl, isPreviewUrl, paneMayReach, paneNavigation } from "@kumiko/shared";
 import { startServer, type RunningServer } from "@kumiko/server";
 import { adoptLoginShellEnv } from "./shell-env.js";
 
@@ -80,6 +80,8 @@ function createWindow(url: string) {
     prefs.nodeIntegration = false;
     prefs.contextIsolation = true;
     prefs.sandbox = true;
+    prefs.webSecurity = true;
+    prefs.allowRunningInsecureContent = false;
     if (isPreviewUrl(params.src)) prefs.partition = PREVIEWS;
     else if (isExternalUrl(params.src)) prefs.partition = SITES;
     else e.preventDefault();
@@ -88,9 +90,11 @@ function createWindow(url: string) {
   // Keep the window on the app; anything else opens in the browser.
   // Compared by origin: a prefix check would let http://127.0.0.1:43170 pass for an app on port 4317.
   const origin = new URL(url).origin;
-  win.webContents.setWindowOpenHandler(({ url: target }) => {
-    openOutside(target);
-    return { action: "deny" };
+  // No windows: a page framed in the app's (an HTML artifact) could open them by script, with no click. The app's own
+  // links go to the browser through kumiko:open-link, on a click.
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-frame-navigate", (e) => {
+    if (!e.isMainFrame && !frameMayLoad(e.url)) e.preventDefault();
   });
   win.webContents.on("will-navigate", (e, target) => {
     if (!sameOrigin(target, origin)) {
@@ -207,6 +211,12 @@ if (!app.requestSingleInstanceLock()) {
       e.preventDefault();
       ask(target);
     });
+  });
+
+  // A link the user clicked in the app's own page, not in a frame in it, opens in the browser.
+  ipcMain.on("kumiko:open-link", (e, target: unknown) => {
+    if (e.sender !== win?.webContents || e.senderFrame?.parent !== null || typeof target !== "string") return;
+    openOutside(target);
   });
 
   // Pictures of panes for Claude, as PNGs in base64, no wider than it needs to see them.

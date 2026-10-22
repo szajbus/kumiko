@@ -11,6 +11,21 @@ import { hasFiles } from "./attachments";
 
 if (window.kumiko) document.documentElement.dataset.shell = `electron-${window.kumiko.platform}`;
 
+// In the app, a link that leaves it (target=_blank) goes to the browser when the user clicks it, through the app's own
+// call: the app opens no windows, as a page framed in it could open them by script. Clicks in such a frame stay there.
+const openLink = window.kumiko?.openLink;
+if (openLink) {
+  const clicked = (e: MouseEvent) => {
+    if (!e.isTrusted || e.defaultPrevented || e.button > 1 || (e.type === "auxclick" && e.button !== 1)) return;
+    const a = e.target instanceof Element ? e.target.closest("a[href]") : null;
+    if (!(a instanceof HTMLAnchorElement) || a.target !== "_blank") return;
+    e.preventDefault();
+    openLink(a.href);
+  };
+  document.addEventListener("click", clicked);
+  document.addEventListener("auxclick", clicked);
+}
+
 // Page zoom changes the viewport size, so resize is the hook for tracking it.
 const syncZoom = () => document.documentElement.style.setProperty("--page-zoom", String(window.kumiko?.getZoomFactor?.() ?? 1));
 syncZoom();
