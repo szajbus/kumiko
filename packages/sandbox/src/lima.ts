@@ -64,11 +64,14 @@ const atLeast = (v: number[], min: number[]) => {
   return true;
 };
 
-/** Why Lima can't keep a VM off the host's loopback, or undefined if it can: it takes Lima 2.3 and a vz VM. */
+/**
+ * What the user can do so Lima keeps a VM off the host's loopback, or undefined if it can already: it takes Lima 2.3
+ * and a vz VM.
+ */
 function unblockable(version: number[] | undefined, inst: LimaInstance): string | undefined {
-  if (!version) return "Kumiko couldn't tell which Lima this is; Lima 2.3 or later can block it.";
-  if (!atLeast(version, HOST_LOOPBACK_SINCE)) return `Lima ${version.join(".")} can't block it; Lima 2.3 or later can.`;
-  if (inst.vmType !== "vz") return `its VM type is ${inst.vmType ?? "unknown"}, and only vz VMs can block it.`;
+  if (!version) return "Kumiko couldn't tell which Lima is installed. Upgrade it to 2.3 or later (brew upgrade lima), then restart the sandbox.";
+  if (!atLeast(version, HOST_LOOPBACK_SINCE)) return `Upgrade Lima to 2.3 or later (brew upgrade lima; this is ${version.join(".")}), then restart the sandbox.`;
+  if (inst.vmType !== "vz") return `Lima can only block it in vz VMs, and this one is ${inst.vmType ?? "of an unknown type"}: recreate the sandbox from a template that uses vz.`;
   return undefined;
 }
 
@@ -216,7 +219,7 @@ export class LimaProvider implements SandboxProvider {
     if (reachesLoopback(inst) === want) return;
     const why = await this.loopbackUnblockable(inst);
     if (why) {
-      if (!want) log(`warning: this sandbox can reach services on your Mac's localhost (127.0.0.1): ${why}`);
+      if (!want) log(`warning: this sandbox can reach services on your Mac's localhost (127.0.0.1). ${why}`);
       return;
     }
     const args = ["edit", "--tty=false", vmName(name), `--set=${hostLoopbackExpression(want)}`];
@@ -485,7 +488,7 @@ export class LimaProvider implements SandboxProvider {
     if (wantLoopback !== reachesLoopback(inst)) {
       const why = await this.loopbackUnblockable(inst);
       if (!why) sets.push(hostLoopbackExpression(wantLoopback));
-      else if (!wantLoopback) v.warnings.push(`This sandbox can reach services on your Mac's localhost (127.0.0.1): ${why}`);
+      else if (!wantLoopback) v.warnings.push(`This sandbox can reach services on your Mac's localhost (127.0.0.1). ${why}`);
     }
     if (sets.length) limaArgs.push(`--set=${sets.join(" | ")}`);
 
