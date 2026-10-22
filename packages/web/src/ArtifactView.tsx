@@ -119,6 +119,7 @@ export function ArtifactView({ widget, slot, doc, writing }: Props) {
               {copied ? "Copied" : "Copy"}
             </button>
           )}
+          {ctx.live && hasFile(doc.type) && <DeleteButton title={doc.title} onDelete={() => ctx.remove(widget)} />}
           {ctx.live && (
             <button type="button" className="artifact-close" aria-label={`Close ${doc.title}`} title="Close" onClick={() => ctx.close(slot)}>
               <svg width="10" height="10" viewBox="0 0 14 14" aria-hidden="true">
@@ -289,6 +290,31 @@ export function ArtifactsButton() {
 
 /** The key that goes with Shift+A, as the user's platform names it. */
 const MOD = typeof navigator !== "undefined" && /Mac/.test(navigator.platform) ? "Cmd" : "Ctrl";
+
+/** How long Delete waits for its second click. */
+const CONFIRM_MS = 3000;
+
+/**
+ * Deletes the artifact, file and all, on a second click: the first, which may have been meant for Close beside it, only
+ * asks. Moving away or waiting a few seconds takes the question back.
+ */
+function DeleteButton({ title, onDelete }: { title: string; onDelete(): void }) {
+  const [asking, setAsking] = useState(false);
+  useEffect(() => {
+    if (!asking) return;
+    const t = setTimeout(() => setAsking(false), CONFIRM_MS);
+    return () => clearTimeout(t);
+  }, [asking]);
+  return asking ? (
+    <button type="button" className="artifact-delete is-asking" autoFocus onClick={onDelete} onBlur={() => setAsking(false)} title="Click again to delete the file">
+      Delete?
+    </button>
+  ) : (
+    <button type="button" className="artifact-close" aria-label={`Delete ${title}`} title="Delete" onClick={() => setAsking(true)}>
+      <Trash />
+    </button>
+  );
+}
 
 /** An artifact's text, shown as its type is shown. */
 function Rendered({ doc, text, writing, source }: { doc: ArtifactState; text: string; writing: boolean; source: boolean }) {
