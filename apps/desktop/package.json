@@ -34,7 +34,8 @@
       "runAsNode": false,
       "enableNodeOptionsEnvironmentVariable": false,
       "enableNodeCliInspectArguments": false,
-      "grantFileProtocolExtraPrivileges": false
+      "grantFileProtocolExtraPrivileges": false,
+      "resetAdHocDarwinSignature": true
     },
     "mac": {
       "category": "public.app-category.developer-tools",
