@@ -266,6 +266,16 @@ describe("server", () => {
     assert.equal((await finished("agent", "recreating", since)).type, "done");
     assert.equal(await readFile(marker, "utf8"), "a\na\n");
     assert.deepEqual((await project("agent"))!.meta?.agentSetup?.scripts.map((s) => s.exitCode), [0, 0]);
+
+    // Deleting them leaves the next VM with the user's setup only.
+    assert.equal((await api("/api/projects/agent/agent-setup", { method: "DELETE" })).status, 200);
+    assert.equal(await exists(dir), false);
+    assert.deepEqual(await json(await api("/api/projects/agent/agent-setup")), { scripts: [], ignored: [] });
+    since = events.length;
+    assert.equal((await api("/api/projects/agent/recreate", { method: "POST" })).status, 202);
+    assert.equal((await finished("agent", "recreating", since)).type, "done");
+    assert.equal(await readFile(marker, "utf8"), "a\na\n");
+    assert.equal((await project("agent"))!.meta?.agentSetup, undefined);
     await remove("agent");
   });
 

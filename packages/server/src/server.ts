@@ -9,6 +9,7 @@ import { bodyLimit } from "hono/body-limit";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
+  AGENT_SETUP_DIR,
   ATTACHMENTS_TOTAL_LIMIT,
   DEFAULTS,
   ENV_NAME_PATTERN,
@@ -55,7 +56,7 @@ import {
 } from "@kumiko/shared";
 import { LimaProvider, validateSpec, type Log, type SandboxProvider } from "@kumiko/sandbox";
 import { ClaudeDriver, execOutput, Runs, type AgentDriver } from "@kumiko/agent";
-import { readAgentScripts, withExitCodes } from "./agentSetup.js";
+import { deleteAgentScripts, readAgentScripts, withExitCodes } from "./agentSetup.js";
 import { AttachmentRefused, AttachmentStore } from "./attachments.js";
 import { ArtifactContent } from "./content.js";
 import { GitError, worktreeStatuses } from "./git.js";
@@ -633,6 +634,19 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     const { project, info } = await known(c.req.param("id"));
     const now = await readAgentScripts(projects.claudeHome(project.id), scratch);
     return c.json(withExitCodes(info.meta?.agentSetup, now) satisfies AgentSetupResponse);
+  });
+
+  /**
+   * Deletes the agent's setup scripts, so the next recreate starts from the user's setup only. Not while the VM is being
+   * worked on, since a create reads them. The VM as it is keeps what they installed.
+   */
+  app.delete("/api/projects/:id/agent-setup", async (c) => {
+    const id = c.req.param("id");
+    assertIdle(id);
+    const project = await projectOf(id);
+    const dir = `${projects.claudeHome(project.id)}/${AGENT_SETUP_DIR}`;
+    if (!(await deleteAgentScripts(projects.claudeHome(project.id)))) throw new HttpError(409, `Couldn't delete ${dir}: a folder on the way leads somewhere else.`);
+    return c.json({});
   });
 
   /**

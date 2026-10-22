@@ -373,6 +373,7 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 .agent-script[open] summary::before { content: "▾"; }
 .agent-script summary::-webkit-details-marker { display: none; }
 .agent-script .preview { margin-bottom: 10px; }
+.agent-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-bottom: 16px; }
 .form-actions { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: flex-end; gap: 12px; padding-top: 4px; }
 .form-errors { flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .fieldset-stack { display: flex; flex-direction: column; gap: 12px; }

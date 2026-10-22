@@ -90,6 +90,8 @@ export const api = {
     request<{ warnings: string[] }>("PATCH", `/api/projects/${id}${how ? `?${how}=1` : ""}`, patch),
   /** The agent's setup scripts in the project's Claude home, with how each went when the VM was created. */
   agentSetup: (id: string) => request<AgentSetupResponse>("GET", `/api/projects/${id}/agent-setup`),
+  /** Deletes the agent's setup scripts, folder and all, so the next recreate starts from the user's setup only. */
+  deleteAgentSetup: (id: string) => request("DELETE", `/api/projects/${id}/agent-setup`),
   /** The clone's worktrees, as git on the host sees them. */
   worktrees: (id: string) => request<WorktreesResponse>("GET", `/api/projects/${id}/worktrees`),
   startSession: (project: string, prompt: string, model?: string, attachments?: AttachmentInput[]) =>

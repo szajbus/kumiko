@@ -78,10 +78,12 @@ because the agent home is on your Mac.
 When the sandbox is created, they run after your provisioning script: each `*.sh` file in name order, in the clone,
 with the same forwarded variables, and each stops at its first failing command. One that fails doesn't stop the others
 or the sandbox: it shows **Running · agent setup failed**, and the project page says which. Files that aren't plain
-`*.sh` files, or are over 64 KB, are left out. If your own script fails, none of them run.
+`*.sh` files, or are over 1 MB, are left out. If your own script fails, none of them run.
 
 The agent manages them; there is nothing you need to do. To see them, open **Agent's setup scripts** on the project
-page, which also says how each went when the sandbox was created.
+page, which also says how each went when the sandbox was created. If they go wrong, **Delete scripts** there deletes the
+folder and everything in it: the sandbox keeps what they set up until you recreate it, and then starts from your
+provisioning script only.
 
 ## Editing a project
 

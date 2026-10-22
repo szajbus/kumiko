@@ -145,6 +145,9 @@ export const AGENT_SETUP_DIR = "sandbox/provision.d";
 /** Which files in the agent's setup folder are its scripts; others are left alone. */
 export const AGENT_SCRIPT_PATTERN = /^[A-Za-z0-9][\w.-]*\.sh$/;
 
+/** The largest setup script Kumiko runs; anything bigger is more likely a mistake (a log, a binary) than a script. */
+export const AGENT_SCRIPT_MAX_BYTES = 1024 * 1024;
+
 /** One of the agent's setup scripts as a VM was created with it. `exitCode` is set once it has run. */
 export interface AgentScript {
   file: string;

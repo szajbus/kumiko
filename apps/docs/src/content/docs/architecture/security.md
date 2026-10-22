@@ -31,7 +31,7 @@ sandbox, isn't reachable once it's blocked.
 
 Recreating a sandbox doesn't wipe everything the agent did. The agent home survives it, and with it what the agent
 can make run again in the new VM: its settings and hooks, and its [setup scripts](/guide/projects/#the-agents-setup-scripts),
-which run when the VM is created. All of it runs inside the VM only. Kumiko reads the scripts on your Mac as text, only
+which run when the VM is created (**Delete scripts** on the project page clears them). All of it runs inside the VM only. Kumiko reads the scripts on your Mac as text, only
 as plain files in their folder, not through links.
 
 ## The local server

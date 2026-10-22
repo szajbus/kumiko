@@ -1,10 +1,7 @@
-import { readdir, realpath } from "node:fs/promises";
-import { join } from "node:path";
-import { AGENT_SCRIPT_PATTERN, AGENT_SETUP_DIR, type AgentScript, type AgentSetupResponse, type AgentSetupRun } from "@kumiko/shared";
-import { openIn } from "./files.js";
-
-/** The largest setup script Kumiko runs; anything bigger is more likely a mistake than a script. */
-export const MAX_AGENT_SCRIPT_BYTES = 64 * 1024;
+import { lstat, readdir, realpath } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
+import { AGENT_SCRIPT_MAX_BYTES, AGENT_SCRIPT_PATTERN, AGENT_SETUP_DIR, type AgentScript, type AgentSetupResponse, type AgentSetupRun } from "@kumiko/shared";
+import { openIn, removeIn } from "./files.js";
 
 /**
  * The agent's setup scripts in a Claude home, in the order they run: by name, byte by byte, so `10-…` comes before `20-…`
@@ -34,11 +31,25 @@ async function readScript(dir: string, file: string, scratch: string): Promise<s
   if (!opened) return undefined;
   try {
     const st = await opened.fh.stat();
-    if (!st.isFile() || st.size > MAX_AGENT_SCRIPT_BYTES) return undefined;
+    if (!st.isFile() || st.size > AGENT_SCRIPT_MAX_BYTES) return undefined;
     return (await opened.fh.readFile()).toString("utf8");
   } finally {
     await opened.done();
   }
+}
+
+/**
+ * Deletes the agent's setup folder and all in it, so the next VM starts with only the user's setup. The folder is the
+ * agent's to change, so it is deleted as it really is in the Claude home (see `removeIn`): a link in its place is deleted
+ * itself, and nothing is deleted through a folder on the way that leads elsewhere. Resolves whether it is gone.
+ */
+export async function deleteAgentScripts(claudeHome: string): Promise<boolean> {
+  const home = await realpath(claudeHome).catch(() => undefined);
+  if (!home) return true;
+  const parent = join(home, dirname(AGENT_SETUP_DIR));
+  const name = basename(AGENT_SETUP_DIR);
+  if (!(await lstat(join(parent, name)).then(() => true, () => false))) return true;
+  return removeIn(parent, name, { recursive: true });
 }
 
 /**
