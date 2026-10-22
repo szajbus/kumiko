@@ -235,6 +235,24 @@ describe("window ops", () => {
   });
 });
 
+describe("a window saved in an older shape", () => {
+  it("comes back with its artifacts, and the chat alone on screen", () => {
+    const state = { path: "/a/plan.md", type: "markdown", title: "Plan", content: "0".repeat(64) };
+    // As this branch saved windows before panes were called panes.
+    const events = [
+      { seq: 1, kind: "window", payload: { op: { type: "add", widget: "w2", kind: "artifact", state } } },
+      { seq: 2, kind: "window", payload: { op: { type: "split", place: { split: "right" }, slot: "s2", widget: "w2" } } },
+      { seq: 3, kind: "window", payload: { op: { type: "sync", layout: { kind: "split", dir: "row", ratio: 0.5, a: { kind: "slot", id: "chat" }, b: { kind: "slot", id: "s2" } }, slots: { chat: "chat", s2: "w2" }, active: "s2" } } },
+      { seq: 4, kind: "window", payload: { op: { type: "show", slot: "s2", widget: "w2" } } },
+    ] as unknown as SessionEvent[];
+    const w = windowState(events);
+    assert.deepEqual(paneIds(w.layout), [CHAT]);
+    assert.deepEqual(Object.keys(w.panes), [CHAT]);
+    assert.equal(w.active, undefined);
+    assert.equal(w.widgets.w2?.kind, "artifact");
+  });
+});
+
 describe("compacting a window's log", () => {
   it("brings the ops between two prompts down to one sync, where the last of them was", () => {
     const events = log("one", add("w2"), "reply", right("p2", "w2"), "reply", "two", add("w3"), right("p3", "w3"), "reply");
