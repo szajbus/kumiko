@@ -221,13 +221,13 @@ export function SessionView({ session, stream, onForked, composerRef }: Props) {
         {error && <div className="banner banner-error">{error}</div>}
         {session.toolsOutdated && live && !idle && restart === undefined && (
           <div className="banner banner-info" role="status">
-            Kumiko's tools for Claude have changed since this session's Claude started. It restarts with them once this turn ends; the conversation carries on.
+            Claude restarts after this turn, for Kumiko's new tools.
           </div>
         )}
         {session.toolsOutdated && live && idle && restart !== "done" && restart !== "fading" && (
           // Kumiko restarts an idle Claude on its own, so this is there for a moment, or if that failed.
           <div className="banner banner-warn">
-            <span className="banner-text">Kumiko's tools for Claude have changed since this session's Claude started. Restart it to get them; the conversation carries on.</span>
+            <span className="banner-text">Claude needs a restart for Kumiko's new tools.</span>
             <button
               type="button"
               className="btn btn-compact"
@@ -243,7 +243,7 @@ export function SessionView({ session, stream, onForked, composerRef }: Props) {
         )}
         {(restart === "done" || restart === "fading") && (
           <div className={`banner banner-success${restart === "fading" ? " is-fading" : ""}`} role="status">
-            Claude restarted with Kumiko's current tools. The conversation carries on.
+            Claude restarted with Kumiko's new tools.
           </div>
         )}
         <Composer

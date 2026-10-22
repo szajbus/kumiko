@@ -460,6 +460,8 @@ describe("widgets", () => {
     const again = await listen(id);
     await waitFor(() => artifactsOf(again.window()).length === 1 || undefined);
     assert.deepEqual(slotIds(again.window().layout), ["chat", "s2"]);
+    // Its Claude has the tools this Kumiko has: nothing to restart it for.
+    assert.equal((await json(await api("/api/sessions"))).find((x: SessionInfo) => x.id === id).toolsOutdated, undefined);
     // What it showed is still there, as the window's saved events name it.
     assert.equal(textOf(artifactsOf(again.window())[0][1]), "# Kept\n");
     // Its Claude was picked up, tools and all.

@@ -46,6 +46,8 @@ interface Session {
 export interface SessionWidgets {
   /** The tools for the session's Claude, and what to add to its system prompt. */
   tools(info: SessionInfo): { tools: ToolHost; appendSystemPrompt?: string };
+  /** What Claude is given of the tools, the same for every session: what `toolsVersion` hashes. */
+  given(): string;
   /** One of Claude's messages, after the session has taken it in. */
   message(info: SessionInfo, m: AgentMessage): void;
   /** What the session keeps of one of Claude's messages. */
@@ -88,9 +90,9 @@ const continuing = (info: SessionInfo): Pick<StartOptions, "resume" | "fork" | "
 const keptModel = (info: SessionInfo): Pick<StartOptions, "model"> => (info.model && info.model !== info.defaultModel ? { model: info.model } : {});
 
 /** A hash of what Claude is given of Kumiko's: its tools, what it is told of them, and how long it waits for them. */
-const toolsVersion = (given: { tools: ToolHost; appendSystemPrompt?: string } | undefined) =>
+const toolsVersion = (widgets: SessionWidgets | undefined) =>
   createHash("sha256")
-    .update(JSON.stringify([given?.tools.list() ?? [], given?.appendSystemPrompt ?? "", TOOL_TIMEOUT_MS]))
+    .update(JSON.stringify([widgets?.given() ?? "", TOOL_TIMEOUT_MS]))
     .digest("hex")
     .slice(0, 12);
 
@@ -177,7 +179,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     if (!run?.live) throw new SessionNotResumable("This session's Claude isn't running any more.");
     const { updatedAt: _updatedAt, toolsOutdated: _outdated, ...rest } = saved;
     // The Claude it attaches to keeps the tools it started with, which this Kumiko may have changed since.
-    const info: SessionInfo = { ...rest, ...(saved.toolsVersion !== toolsVersion(this.widgets?.tools(saved)) ? { toolsOutdated: true } : {}) };
+    const info: SessionInfo = { ...rest, ...(saved.toolsVersion !== toolsVersion(this.widgets) ? { toolsOutdated: true } : {}) };
     const s = this.newSession(info, stored.events);
     // Deltas saved mid-turn are dropped like any others once their message is finished.
     for (const e of s.events) if (e.kind === "claude") this.countBlocks(s, e.payload);
@@ -331,7 +333,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     this.wire(s, driver);
     const widgets = this.widgets?.tools(s.info);
     const { toolsOutdated: _outdated, ...info } = s.info;
-    s.info = { ...info, toolsVersion: toolsVersion(widgets) };
+    s.info = { ...info, toolsVersion: toolsVersion(this.widgets) };
     driver.start({ ...driverOpts, run: `${s.info.id}-${randomBytes(4).toString("hex")}`, ...widgets });
   }
 
