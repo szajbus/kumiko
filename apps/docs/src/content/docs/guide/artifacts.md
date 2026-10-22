@@ -9,6 +9,8 @@ A session's tab is a window, and the chat is one pane of it. The agent can open 
 file it makes and keeps changing while you look at it beside the conversation, such as a plan it iterates on with you.
 Ask for one ("draft the plan in an artifact"), or the agent opens one itself when it fits.
 
+![A session with the agent's checkout plan open beside the chat: the chat's lines say it wrote and opened the plan, and Artifacts under the message box lists the session's two artifacts.](../../../assets/screenshots/artifacts.png)
+
 An artifact can be:
 
 - **Markdown** (`.md`): plans, specs, reports. Code blocks in it marked `mermaid` are drawn as diagrams.
@@ -71,6 +73,8 @@ The agent opens a second artifact pane only to show two artifacts side by side. 
 
 With more than one pane open, each has a handle (⠿) in its top-left corner: in an artifact's header, and floating in
 the chat's corner. Drag a pane by it onto another:
+
+![The checkout flow's pane being dragged onto the left of the chat: the left half of the chat is highlighted, where it will land.](../../../assets/screenshots/arrange-panes.png)
 
 - **Near an edge** of the other pane, it goes beside it on that side, and the two share its room. Its old place goes
   to the pane beside it.
