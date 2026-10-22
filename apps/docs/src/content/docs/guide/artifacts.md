@@ -35,8 +35,3 @@ pages and websites can't reach your Mac or your network; see [Security model](/a
 In a folder of the session's own, `~/.kumiko/claude/<project>/kumiko/artifacts/<session>/`, not in your worktree.
 **Rewind** puts them back as they were at that message, **fork** gives the new session its own copy, and deleting a
 saved session deletes them.
-
-## After updating Kumiko
-
-A session's agent keeps the tools it started with. One that was running while you updated Kumiko is restarted on the
-same conversation, at once or when its turn ends, to get the new ones.
