@@ -237,8 +237,9 @@ describe("ClaudeDriver", () => {
       const d = await drive();
       const dir = join(d.home, RUNS_DIR, "s5-a");
       await mkdir(dir, { recursive: true });
-      // As the run's own shell writes its exit while its agent dies: files keep coming for a second.
-      const writer = spawn("sh", ["-c", 'end=$(($(date +%s) + 2)); i=0; while [ "$(date +%s)" -lt "$end" ]; do : > "$1/f$i" 2>/dev/null || exit 0; i=$((i + 1)); done', "sh", dir]);
+      // As the run's own shell writes its exit while its agent dies, only harder: files keep coming for most of a
+      // second, well inside the time removing keeps trying for.
+      const writer = spawn(process.execPath, ["-e", 'const { writeFileSync } = require("node:fs"); const end = Date.now() + 700; for (let i = 0; Date.now() < end; i++) { try { writeFileSync(`${process.argv[1]}/f${i}`, ""); } catch { break; } }', dir]);
       const written = new Promise((r) => writer.once("exit", r));
       await new Promise((r) => setTimeout(r, 100));
       await new Runs(d.exec).remove("test", ["s5-a"]);
