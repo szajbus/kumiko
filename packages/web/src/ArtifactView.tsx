@@ -34,6 +34,9 @@ const WIDTHS = [
 /** Artifacts that are files in the session's folder, as opposed to pages served elsewhere. */
 const hasFile = (type: ArtifactType) => type !== "preview" && type !== "web";
 
+/** Artifacts drawn from a source that can be shown instead, by the language it is in. */
+const SOURCE_LANG: Partial<Record<ArtifactType, string>> = { mermaid: "mermaid", svg: "xml", html: "html" };
+
 /** Artifacts that are web pages: shown in a frame, edge to edge, with a width to show them at and a reload. */
 const isPage = (doc: ArtifactState) => doc.type === "html" || doc.type === "preview" || doc.type === "web";
 
@@ -42,6 +45,9 @@ export function ArtifactView({ widget, slot, doc, writing }: Props) {
   const ctx = useContext(WindowContext)!;
   const [width, setWidth] = useState<(typeof WIDTHS)[number]["id"]>("full");
   const [reloads, setReloads] = useState(0);
+  // Its source as text instead of what it draws, to read or quote from.
+  const [source, setSource] = useState(false);
+  const page = isPage(doc) && !(source && SOURCE_LANG[doc.type]);
   const body = useRef<HTMLDivElement>(null);
   const shown = useContent(doc);
   // What Claude wrote stays until the version the window has of it has come, rather than the one before it.
@@ -84,7 +90,12 @@ export function ArtifactView({ widget, slot, doc, writing }: Props) {
           ) : (
             updated && <span className="artifact-state">Updated</span>
           )}
-          {isPage(doc) && (doc.type !== "web" || doc.approved) && (
+          {SOURCE_LANG[doc.type] && writing === undefined && (
+            <button type="button" className={`artifact-copy${source ? " is-on" : ""}`} aria-pressed={source} onClick={() => setSource((v) => !v)} title={source ? "Show it drawn" : "Show its source, to read or quote from"}>
+              Source
+            </button>
+          )}
+          {page && (doc.type !== "web" || doc.approved) && (
             <>
               <select className="artifact-width" value={width} onChange={(e) => setWidth(e.target.value as typeof width)} aria-label="Width to show the page at" title="Width to show the page at">
                 {WIDTHS.map((w) => (
@@ -120,17 +131,17 @@ export function ArtifactView({ widget, slot, doc, writing }: Props) {
       {doc.missing && <div className="banner banner-warn artifact-banner">The file isn't there any more. This is how it was when last read.</div>}
       <div
         ref={body}
-        className={`artifact-body${isPage(doc) && writing === undefined ? " is-page" : ""}`}
+        className={`artifact-body${page && writing === undefined ? " is-page" : ""}`}
         onScroll={(e) => {
           const el = e.currentTarget;
           follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         }}
       >
-        <div className="artifact-inner" style={isPage(doc) && width !== "full" ? { width: `${width}px` } : undefined}>
+        <div className="artifact-inner" style={page && width !== "full" ? { width: `${width}px` } : undefined}>
           {doc.type === "web" && !doc.approved ? (
             <SiteApproval doc={doc} live={ctx.live} onAnswer={(allow) => ctx.approve(widget, allow)} />
           ) : (
-            <Rendered key={reloads} doc={doc} text={text} writing={writing !== undefined} />
+            <Rendered key={reloads} doc={doc} text={text} writing={writing !== undefined} source={source} />
           )}
           {shown.failed && writing === undefined && <p className="artifact-note">Couldn't get it from Kumiko: {shown.failed}</p>}
           {doc.truncated && writing === undefined && (
@@ -280,16 +291,26 @@ export function ArtifactsButton() {
 const MOD = typeof navigator !== "undefined" && /Mac/.test(navigator.platform) ? "Cmd" : "Ctrl";
 
 /** An artifact's text, shown as its type is shown. */
-function Rendered({ doc, text, writing }: { doc: ArtifactState; text: string; writing: boolean }) {
+function Rendered({ doc, text, writing, source }: { doc: ArtifactState; text: string; writing: boolean; source: boolean }) {
+  // While it is written, and when asked for, the source of what is drawn shows instead, marked with its language so a
+  // quote of it is fenced as code.
+  const lang = SOURCE_LANG[doc.type];
+  if (lang && (writing || source)) {
+    return (
+      <pre className="mono artifact-source">
+        <code className={`language-${lang}`}>{text}</code>
+      </pre>
+    );
+  }
   switch (doc.type) {
     case "markdown":
       // Diagrams wait for the text to be written: half a diagram doesn't draw.
       return <Markdown text={text} diagrams={!writing} />;
     case "svg":
       // As an image, so nothing in it runs. Its source shows while it is being written.
-      return writing ? <pre className="mono artifact-source">{text}</pre> : <img className="artifact-image is-svg" src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(text)}`} alt={doc.title} />;
+      return <img className="artifact-image is-svg" src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(text)}`} alt={doc.title} />;
     case "mermaid":
-      return writing ? <pre className="mono artifact-source">{text}</pre> : <Diagram source={text} />;
+      return <Diagram source={text} />;
     case "image": {
       // Older sessions have the image in the window, in base64.
       const src = doc.content ? api.artifactUrl(doc.content, imageTypeOf(doc.path)) : doc.text && `data:${imageTypeOf(doc.path)};base64,${doc.text}`;
@@ -297,7 +318,7 @@ function Rendered({ doc, text, writing }: { doc: ArtifactState; text: string; wr
     }
     case "html":
       // Written in pieces, a page would load again at every one; its source shows until it's written.
-      return writing ? <pre className="mono artifact-source">{text}</pre> : <HtmlFrame html={text} title={doc.title} />;
+      return <HtmlFrame html={text} title={doc.title} />;
     case "preview":
       return <Preview url={doc.path} title={doc.title} />;
     case "web":
