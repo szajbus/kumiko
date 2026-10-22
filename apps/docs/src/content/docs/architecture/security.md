@@ -56,8 +56,11 @@ Pages run code from the sandbox on your Mac, so they're contained:
   or the server. A content security policy put first in the page lets it load and fetch over HTTPS only: nothing over
   plain HTTP, which is how it would reach your Mac and your network, no form submissions, no base URL.
 - **Previews** only show pages on `localhost`, `127.0.0.1` or `[::1]`. In the app they're in a `<webview>`: a process
-  and storage of their own, no preload or Node, sandboxed, with links elsewhere opened in your browser. The server
-  refuses their requests, as above.
+  and storage of their own, no preload or Node, sandboxed, with links elsewhere opened in your browser. They load from
+  this machine and the web, not from private networks, by the same check as websites below. The server refuses their
+  requests, as above. Lima forwards the sandbox's ports to your Mac's loopback for them, so while nothing of yours
+  listens on a port, the agent can: a tool of yours that expects its own server there, Kumiko's included, may reach
+  the agent's instead.
 - **Websites** load only once you allow them, per site and session: the agent picks the URL, so it doesn't get to
   load a site without you. They run in a `<webview>` with storage of their own, apart from previews', in memory only,
   with no permissions and no downloads. They can't reach your Mac or your networks: the app cancels their requests to
@@ -70,5 +73,8 @@ Pages run code from the sandbox on your Mac, so they're contained:
 
 ## The window
 
-The renderer is sandboxed with no Node access. Only `http(s)` and `mailto` links open, in your browser; navigation off
-the app's origin is refused.
+The renderer is sandboxed with no Node access. Only `http(s)` and `mailto` links open, in your browser, and only ones
+you click in the app's own page: it opens no windows, so a page framed in it, such as an HTML artifact, can't open one
+by script. Navigation off the app's origin is refused, and frames in it go over HTTPS only. Pages, the app's own
+included, use WebRTC only through a proxy, so it can't reach around the checks above. The packaged app ignores
+`ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS` and the inspector's options, so nothing else can start it to run code as it.
