@@ -217,6 +217,45 @@ describe("chat rows", () => {
     assert.deepEqual(shape(rows), ["user", "work[assistant:0-1]", "assistant:1-2", "turn"]);
   });
 
+  const answer = "Yes, this can mostly be secured. ".repeat(12);
+  const answered = [
+    prompt("p1"),
+    assistant("m1", [{ type: "tool_use", id: "t1", name: "Read", input: {} }]),
+    toolResult("t1"),
+    assistant("m2", [{ type: "text", text: answer }, { type: "tool_use", id: "t2", name: "Bash", input: {} }]),
+    toolResult("t2"),
+    assistant("m3", [{ type: "tool_use", id: "t3", name: "Bash", input: {} }]),
+    toolResult("t3"),
+    assistant("m4", [{ type: "text", text: "I've also removed the temporary copy." }]),
+  ];
+
+  it("keeps a long message in the middle of the work out of the fold", () => {
+    const rows = chatRows(fold([...answered, result()]).items);
+    assert.deepEqual(shape(rows), ["user", "work[assistant]", "assistant:0-1", "work[assistant:1-2 assistant]", "assistant", "turn"]);
+    assert.equal((rows[2] as Extract<ChatRow, { type: "item" }>).item.key, "m-m2");
+    assert.equal((rows[3] as Extract<ChatRow, { type: "work" }>).summary, "2 tool calls");
+  });
+
+  it("shows a long message the same way while the turn runs", () => {
+    const rows = chatRows(fold(answered).items);
+    assert.deepEqual(shape(rows), ["user", "work (open)[assistant]", "assistant:0-1", "work (open)[assistant:1-2 assistant assistant]"]);
+  });
+
+  it("keeps short remarks and headed text apart: only the latter stays out", () => {
+    const rows = chatRows(
+      fold([
+        prompt("p1"),
+        assistant("m1", [{ type: "text", text: "Now I'll look." }, { type: "tool_use", id: "t1", name: "Read", input: {} }]),
+        toolResult("t1"),
+        assistant("m2", [{ type: "text", text: "## Findings\nIt's fine." }, { type: "tool_use", id: "t2", name: "Bash", input: {} }]),
+        toolResult("t2"),
+        assistant("m3", [{ type: "text", text: "Done." }]),
+        result(),
+      ]).items,
+    );
+    assert.deepEqual(shape(rows), ["user", "work[assistant]", "assistant:0-1", "work[assistant:1-2]", "assistant", "turn"]);
+  });
+
   it("leaves a turn that only talked as it is", () => {
     const rows = chatRows(fold([prompt("p1"), assistant("m1", [{ type: "text", text: "Hi." }]), result(), prompt("p2")]).items);
     assert.deepEqual(shape(rows), ["user", "assistant", "turn", "user"]);

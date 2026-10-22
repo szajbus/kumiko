@@ -79,11 +79,16 @@ export type ChatRow = ItemRow | WorkRow;
 
 const isWork = (i: ChatItem) => i.type === "assistant" || i.type === "retry" || i.type === "notice";
 
+/** Text this long, or with a heading in it, is meant to be read: an answer, not a remark on the way to one. */
+const SUBSTANTIAL_CHARS = 300;
+const isSubstantial = (b: Block) => b.type === "text" && (b.text.trim().length >= SUBSTANTIAL_CHARS || /^#{1,6} /m.test(b.text));
+
 /**
  * Lays the chat out by turn. Each prompt's run of assistant messages, retries and notices is its work; the text that
- * ends it is the reply. Anything else, like the turn's footer or an error, shows on its own after the work. While the
- * turn runs, all of the work shows, still in its group so nothing jumps when it folds; once it is done, the group is
- * only kept if there is more than text in it.
+ * ends it is the reply. Anything else, like the turn's footer or an error, shows on its own after the work. A long
+ * message in the middle of the work shows too, splitting the work around it, so an answer followed by some tidying up
+ * isn't folded away. While the turn runs, all of the work shows, still in its groups so nothing jumps when they fold;
+ * once it is done, a group is only kept if there is more than text in it.
  */
 export function chatRows(items: readonly ChatItem[]): ChatRow[] {
   const rows: ChatRow[] = [];
@@ -122,13 +127,40 @@ export function chatRows(items: readonly ChatItem[]): ChatRow[] {
         }
       }
     }
-    const blocks = work.flatMap((r) => (r.item.type === "assistant" ? blocksOf(r.item).slice(r.from, r.to) : []));
-    if (done && !blocks.some((b) => b.type !== "text")) {
-      for (let k = start; k < i; k++) rows.push(row(k));
-    } else {
-      rows.push({ type: "work", key: `work-${prompt.key}`, rows: work, done, ...summarize(blocks) });
-      rows.push(...reply);
+
+    // Split what is left at long messages: each run between them is a group of its own.
+    let group: ItemRow[] = [];
+    const flush = () => {
+      if (!group.length) return;
+      const blocks = group.flatMap((r) => (r.item.type === "assistant" ? blocksOf(r.item).slice(r.from, r.to) : []));
+      if (done && !blocks.some((b) => b.type !== "text")) rows.push(...group);
+      else {
+        const first = group[0];
+        rows.push({ type: "work", key: `work-${first.item.key}${first.from ? `-${first.from}` : ""}`, rows: group, done, ...summarize(blocks) });
+      }
+      group = [];
+    };
+    for (const r of work) {
+      if (r.item.type !== "assistant") {
+        group.push(r);
+        continue;
+      }
+      const blocks = blocksOf(r.item);
+      const from = r.from ?? 0;
+      const to = r.to ?? blocks.length;
+      const part = (a: number, b: number) => (a === 0 && b === blocks.length ? row(r.index) : row(r.index, a, b));
+      let at = from;
+      for (let k = from; k < to; k++) {
+        if (!isSubstantial(blocks[k])) continue;
+        if (k > at) group.push(part(at, k));
+        flush();
+        rows.push(part(k, k + 1));
+        at = k + 1;
+      }
+      if (at < to || (from === to && to === 0)) group.push(part(at, to));
     }
+    flush();
+    rows.push(...reply);
     for (; i < end; i++) rows.push(row(i));
   }
   return rows;
