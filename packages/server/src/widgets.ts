@@ -108,7 +108,7 @@ async function realWithin(path: string, realDir: string): Promise<{ dir: string;
 const FOLDER = "<folder>";
 
 /** The longest name Claude can give a session: the tab has room for about that much beside the project's name. */
-const MAX_SESSION_TITLE = 20;
+const MAX_SESSION_TITLE = 32;
 
 /** The longest description Claude can give a session: two lines in the list of saved sessions. */
 const MAX_SESSION_DESCRIPTION = 160;
@@ -1009,7 +1009,11 @@ const toolsFor = (folder: string): ToolSpec[] => [
     inputSchema: {
       type: "object",
       properties: {
-        title: { type: "string", description: `The name, up to ${MAX_SESSION_TITLE} characters, such as "Fix composer paste".` },
+        title: {
+          type: "string",
+          maxLength: MAX_SESSION_TITLE,
+          description: `The name, at most ${MAX_SESSION_TITLE} characters counting spaces, such as "Fix composer paste"; a longer one is refused.`,
+        },
         description: {
           type: "string",
           description: `What the session is about, up to ${MAX_SESSION_DESCRIPTION} characters, such as "Pasting an image into the composer attaches it instead of inserting its path."`,
@@ -1025,7 +1029,11 @@ const toolsFor = (folder: string): ToolSpec[] => [
       type: "object",
       properties: {
         prompt: { type: "string", description: `The new session's opening prompt, up to ${MAX_PROPOSED_PROMPT} characters, as the user would write it.` },
-        title: { type: "string", description: `A name for the new session, up to ${MAX_SESSION_TITLE} characters, as session_rename takes; its tab shows it.` },
+        title: {
+          type: "string",
+          maxLength: MAX_SESSION_TITLE,
+          description: `A name for the new session, at most ${MAX_SESSION_TITLE} characters counting spaces, as session_rename takes; its tab shows it. A longer one is refused.`,
+        },
         artifacts: {
           type: "array",
           items: { type: "string" },

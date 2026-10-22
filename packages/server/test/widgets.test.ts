@@ -140,11 +140,12 @@ describe("widgets", () => {
     assert.match(await rename("  Fix   composer "), /^Named the session "Fix composer"/);
     assert.deepEqual(pick(await session(id)), { title: "Fix composer", titleBy: "agent" });
     assert.match(await rename("Fix composer"), /named "Fix composer" already/);
-    assert.match(await rename("A name far too long for a tab"), /is 29 characters; the tab has room for 20/);
+    assert.match(await rename("A name much too long to fit in a tab"), /is 36 characters; the tab has room for 32/);
     assert.match(await rename("   "), /Give the session a name/);
     assert.equal((await session(id))?.title, "Fix composer", "a refused name changes nothing");
     // Claude may name it again, as the subject changes.
     assert.match(await rename("Paste handling"), /^Named the session "Paste handling"/);
+    assert.match(await rename("Paste images and files in prompt"), /^Named the session "Paste images and files in prompt"/);
     // The user's name wins, and stays.
     await ask(s, id, "/rename my-name");
     assert.deepEqual(pick(await session(id)), { title: "my-name", titleBy: "user" });
@@ -178,7 +179,7 @@ describe("widgets", () => {
     const before = ((await json(await api("/api/sessions"))) as SessionInfo[]).length;
 
     assert.match(await propose({ prompt: "  " }), /Give the new session a prompt/);
-    assert.match(await propose({ prompt: "Fix it", title: "A name far too long for a tab" }), /is 29 characters; the tab has room for 20/);
+    assert.match(await propose({ prompt: "Fix it", title: "A name much too long to fit in a tab" }), /is 36 characters; the tab has room for 32/);
     assert.equal(proposals().length, 0, "a refused ask asks nothing");
     assert.match(await propose({ prompt: " Fix the flaky upload test. ", title: "Flaky upload" }), /^Asked the user to start the session/);
     const [asked] = proposals();
