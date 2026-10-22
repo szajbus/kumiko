@@ -458,6 +458,12 @@ function loadError(code: number, description: string, url: string): string {
 }
 
 /**
+ * `allowpopups` as a string. Its type says boolean, but React drops `true` for an attribute it doesn't know, and without
+ * it Electron drops a page's new windows before the app's handler can open them in the pane or offer them to the browser.
+ */
+const ALLOW_POPUPS = { allowpopups: "" } as object;
+
+/**
  * A page in a <webview>: a preview or a website. When it doesn't load, it says why, over the blank it would leave, and
  * keeps the reason on the element (`data-load-error`) for a picture of the pane to pass on to Claude.
  */
@@ -534,7 +540,7 @@ function PageView({ url, partition }: { url: string; partition: string }) {
   }, [url]);
   return (
     <>
-      <webview ref={ref} className="artifact-frame" src={url} partition={partition} allowpopups data-preview="" />
+      <webview ref={ref} className="artifact-frame" src={url} partition={partition} {...ALLOW_POPUPS} data-preview="" />
       {error && (
         <div className="artifact-ask artifact-failed" role="alert">
           <p className="artifact-ask-title">This page didn't load</p>
