@@ -701,7 +701,7 @@ const Item = memo(function Item({ item, from, to, open, onRewind, onFork, onAnsw
         </div>
       );
     case "ended":
-      return <div className="chat-ended">{endedText(item.reason, item.code, item.asleep)}</div>;
+      return <div className="chat-ended">{endedText(item.reason, item.code)}</div>;
   }
 });
 

@@ -22,6 +22,16 @@ describe("chat", () => {
     assert.equal(applyEvent(s, { seq: 2, kind: "board", payload: {} } as unknown as SessionEvent), s);
   });
 
+  it("leaves out a session's stopping with its sandbox, as Claude continues after it", () => {
+    const s = fold([
+      { kind: "user_prompt", payload: { text: "hi", id: "p1" } },
+      { kind: "ended", payload: { reason: "sandbox", code: 0, asleep: true } },
+      { kind: "user_prompt", payload: { text: "again", id: "p2" } },
+      { kind: "ended", payload: { reason: "sandbox", code: 0 } },
+    ]);
+    assert.deepEqual(s.items.map((i) => i.type), ["user", "user", "ended"]);
+  });
+
   it("shows a logged-out turn as one error, in place of Claude's reply and the failed turn", () => {
     const signedOut: NewEvent = { kind: "error", payload: { message: "Claude isn't logged in.", hint: "Log in to continue.", signedOut: true } };
     const s = fold([

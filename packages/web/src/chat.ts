@@ -26,7 +26,7 @@ export type ChatItem =
   | { type: "proposal"; key: string; id: string; prompt: string; title?: string; artifacts?: string[]; accepted?: boolean; session?: string }
   /** Another session, `name`d then, sharing copies of artifacts with this one; `told` once Claude has heard of it, with a prompt. */
   | { type: "shared"; key: string; name: string; titles: string[]; told?: boolean }
-  | { type: "ended"; key: string; reason: EndReason; code?: number; asleep?: boolean };
+  | { type: "ended"; key: string; reason: EndReason; code?: number };
 
 /** Tokens Claude read and wrote, all models together; `cached` of them read from the prompt cache. */
 export interface Tokens {
@@ -247,7 +247,9 @@ export function applyEvent(s: ChatState, ev: SessionEvent): ChatState {
     case "error":
       return ev.payload.signedOut ? replaceFailedTurn(s, { type: "error", key, ...ev.payload }) : push({ type: "error", key, ...ev.payload });
     case "ended":
-      return push({ type: "ended", key, reason: ev.payload.reason, code: ev.payload.code, asleep: ev.payload.asleep });
+      // Stopping with its sandbox isn't an end: the banner says so while it sleeps, and Claude continues after it.
+      if (ev.payload.asleep) return s;
+      return push({ type: "ended", key, reason: ev.payload.reason, code: ev.payload.code });
     case "claude":
       return applyClaude(s, ev.payload, key);
     case "proposal":
