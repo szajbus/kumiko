@@ -1,4 +1,4 @@
-import { createContext, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { createContext, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { formatBytes, LIVE_SESSION_STATUSES, type AskAnswer, type LoginAccount, type SessionInfo } from "@kumiko/shared";
 import { api, errorMessage, type SessionStream } from "./api";
@@ -6,10 +6,12 @@ import { fromAttachment, toInput } from "./attachments";
 import { ArtifactsButton } from "./ArtifactView";
 import { AskCard, AskContext } from "./AskCard";
 import { applyEvent, backgroundAgents, startsTurn, unpromptedText, blocksOf, chatRows, emptyChat, loginCards, partialToolSummary, summarize, toolState, toolSummary, type Block, type ChatItem, type ChatState, type ItemRow, type LoginAnswer, type Subagent, type ToolState, type WorkRow } from "./chat";
+import { codeWrap } from "./codeWrap";
 import { Composer, type ComposerHandle } from "./Composer";
 import { HeaderCorner } from "./Corner";
 import { Markdown } from "./Markdown";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { fileDiff, lineCount, newText, shortPath, shownRows, workChanges, type Changes, type FileDiff } from "./diff";
 import { drafts } from "./drafts";
 import { endedText, formatCost, formatDuration, formatTokens, planName } from "./format";
 import { Fork, Rewind } from "./icons";
@@ -194,6 +196,7 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
         <Chat
           session={session.id}
           chat={chat}
+          workdir={session.workdir}
           running={busy}
           live={live}
           active={active}
@@ -488,6 +491,8 @@ function LoggedInCard({ account, retried, busy, onRetry }: { account: LoginAccou
 interface ChatProps {
   session: string;
   chat: ChatState;
+  /** Where Claude works: the paths in tool lines are shown relative to it. */
+  workdir?: string;
   running: boolean;
   /** Claude is there: subagents it started in the background may still be working. */
   live: boolean;
@@ -517,10 +522,11 @@ interface AgentsView {
   live: boolean;
   /** Opening a fold, which mustn't scroll it away by following the bottom. */
   onUnfold(): void;
+  workdir?: string;
 }
 const AgentsContext = createContext<AgentsView>({ agents: {}, tasks: emptyTasks(), session: "", live: false, onUnfold: () => {} });
 
-function Chat({ session, chat, running, live, active, onRewind, onFork, onQuote, onAnswer, actions, hidden }: ChatProps) {
+function Chat({ session, chat, workdir, running, live, active, onRewind, onFork, onQuote, onAnswer, actions, hidden }: ChatProps) {
   const box = useRef<HTMLDivElement>(null);
   const inner = useRef<HTMLDivElement>(null);
   // Follows new output while the view is at the bottom; scrolling up stops that until it is back at the bottom.
@@ -556,7 +562,7 @@ function Chat({ session, chat, running, live, active, onRewind, onFork, onQuote,
   // Tool calls after the last turn's end are still in flight while the session runs.
   const lastTurn = chat.items.findLastIndex((i) => i.type === "turn" || i.type === "ended");
   const rows = useMemo(() => foldMonitorTurns(chatRows(chat.items)), [chat.items]);
-  const agents = useMemo<AgentsView>(() => ({ agents: chat.agents, tasks: chat.tasks, session, live, onUnfold: () => (stick.current = false) }), [chat.agents, chat.tasks, session, live]);
+  const agents = useMemo<AgentsView>(() => ({ agents: chat.agents, tasks: chat.tasks, session, live, onUnfold: () => (stick.current = false), workdir }), [chat.agents, chat.tasks, session, live, workdir]);
   const background = live ? backgroundAgents(chat.agents) : [];
   /** The Agent call to bring into view, opening the work it is folded into; `n` tells a second Show from the first. */
   const [reveal, setReveal] = useState<{ id: string; n: number }>();
@@ -569,7 +575,8 @@ function Chat({ session, chat, running, live, active, onRewind, onFork, onQuote,
   }, [reveal]);
   // The Tasks pane's Show in chat, for a subagent.
   useEffect(() => onReveal(session, (id) => setReveal((r) => ({ id, n: (r?.n ?? 0) + 1 }))), [session]);
-  const toolIds = (row: WorkRow) => row.rows.flatMap((r) => (r.item.type === "assistant" ? blocksOf(r.item).slice(r.from, r.to) : [])).flatMap((b) => (b.type === "tool" ? [b.id] : []));
+  const workBlocks = (row: WorkRow) => row.rows.flatMap((r) => (r.item.type === "assistant" ? blocksOf(r.item).slice(r.from, r.to) : []));
+  const toolIds = (row: WorkRow) => workBlocks(row).flatMap((b) => (b.type === "tool" ? [b.id] : []));
   const itemRow = (row: ItemRow) =>
     hidden?.has(row.item.key) ? null : (
       <Item
@@ -605,7 +612,7 @@ function Chat({ session, chat, running, live, active, onRewind, onFork, onQuote,
           // Only for saying which subagents work on in it, or opening it on Show: most renders need neither.
           const ids = background.length || reveal ? toolIds(row) : [];
           return (
-            <Work key={row.key} row={row} onUnfold={agents.onUnfold} agents={ids.filter((id) => background.includes(id)).length} reveal={reveal && ids.includes(reveal.id) ? reveal.n : undefined}>
+            <Work key={row.key} row={row} changes={row.done ? workChanges(workBlocks(row), chat.agents) : undefined} onUnfold={agents.onUnfold} agents={ids.filter((id) => background.includes(id)).length} reveal={reveal && ids.includes(reveal.id) ? reveal.n : undefined}>
               {row.rows.map(itemRow)}
             </Work>
           );
@@ -654,6 +661,8 @@ const FOLD_MS = 360;
  */
 interface WorkProps {
   row: Pick<WorkRow, "done" | "summary" | "tools">;
+  /** The files it changed, which its summary says. */
+  changes?: Changes;
   onUnfold(): void;
   /** Subagents in it still working in the background, which its summary says. */
   agents?: number;
@@ -662,7 +671,7 @@ interface WorkProps {
   children: ReactNode;
 }
 
-function Work({ row, onUnfold, agents, reveal, children }: WorkProps) {
+function Work({ row, changes, onUnfold, agents, reveal, children }: WorkProps) {
   const [folded, setFolded] = useState(row.done);
   const watched = useRef(!row.done);
   useEffect(() => {
@@ -690,6 +699,12 @@ function Work({ row, onUnfold, agents, reveal, children }: WorkProps) {
           }}
         >
           {row.summary}
+          {changes && (
+            <span className="work-changes">
+              <span>{changes.files === 1 ? "1 file changed" : `${changes.files} files changed`}</span>
+              <LineCounts added={changes.added} removed={changes.removed} />
+            </span>
+          )}
           {agents ? (
             <span className="work-agents">
               <span className="spinner" aria-hidden="true" />
@@ -851,6 +866,7 @@ function ToolLine({ block, open }: { block: Extract<Block, { type: "tool" }>; op
   if (!agent) return <ShellToolLine block={block} state={state} tasks={tasks} session={session} live={live} />;
   const blocks = agent.items.flatMap(blocksOf);
   const { summary, tools } = summarize(blocks);
+  const changes = state !== "running" ? workChanges(blocks, agents) : undefined;
   const calls = blocks.filter((b) => b.type === "tool").length || agent.usage?.toolUses || 0;
   // Once it is done, the summary of its work says the rest.
   const meta = [
@@ -872,7 +888,7 @@ function ToolLine({ block, open }: { block: Extract<Block, { type: "tool" }>; op
       />
       {blocks.length > 0 && (
         <div className="agent-work">
-          <Work row={{ done: state !== "running", summary, tools }} onUnfold={onUnfold}>
+          <Work row={{ done: state !== "running", summary, tools }} changes={changes} onUnfold={onUnfold}>
             {blocks.map((b, i) => (
               <BlockView key={i} block={b} open={state === "running"} />
             ))}
@@ -922,6 +938,139 @@ function TaskStopLine({ taskId }: { taskId: string }) {
 
 /** One tool call's line, opening to its input and result; `meta` goes at its right. */
 function ToolCall({ block, state, meta }: { block: Extract<Block, { type: "tool" }>; state: ToolState; meta?: ReactNode }) {
+  const diff = fileDiff(block);
+  if (diff) return <EditCall name={block.name} diff={diff} state={state} />;
+  return <PlainToolCall block={block} state={state} meta={meta} />;
+}
+
+/** A file edit's line: the file and how many lines it added and removed, opening to the diff. */
+function EditCall({ name, diff, state }: { name: string; diff: FileDiff; state: ToolState }) {
+  const { workdir } = useContext(AgentsContext);
+  const [open, setOpen] = useState(false);
+  const { dir, name: file } = shortPath(diff.path, workdir);
+  const failed = diff.error !== undefined;
+  return (
+    <details className={`tool tool-${state} tool-edit`} onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary title={diff.path || undefined}>
+        <ToolIcon state={state} />
+        <span className="tool-name">{name}</span>
+        <span className="mono tool-summary">
+          <span className="tool-path-dir">{dir}</span>
+          <span className="tool-path-name">{file}</span>
+          {diff.cell && <span className="tool-path-dir"> · cell {diff.cell}</span>}
+        </span>
+        <span className="tool-stat">
+          {diff.created && <span className="tool-tag tool-tag-new">new file</span>}
+          {diff.rewrote && <span className="tool-tag">rewrote</span>}
+          {diff.replaceAll && <span className="tool-tag">all occurrences</span>}
+          {diff.userModified && <span className="tool-tag">changed by you</span>}
+          {state === "running" ? (
+            <span>{name === "Write" ? "writing…" : "editing…"}</span>
+          ) : failed ? (
+            <span className="tool-stat-error">{diff.error!.split("\n")[0].replace(/\.$/, "")}</span>
+          ) : (
+            state === "ok" && <LineCounts added={diff.added} removed={diff.removed} />
+          )}
+        </span>
+      </summary>
+      {open && (
+        <div className="tool-body">
+          {failed && <div className="tool-edit-error">{diff.error}</div>}
+          {failed && diff.rows.length > 0 && <div className="eyebrow">What it tried</div>}
+          {diff.rows.length > 0 ? <DiffView diff={diff} dim={failed} /> : !failed && <div className="tool-edit-note">{name === "Write" ? "An empty file." : "Nothing changed."}</div>}
+          {diff.truncated && <div className="tool-edit-note">Kumiko kept only the start of this diff.</div>}
+          {!diff.numbered && !failed && state === "ok" && name === "Edit" && <div className="tool-edit-note">No line numbers: Claude didn't say where in the file this was.</div>}
+        </div>
+      )}
+    </details>
+  );
+}
+
+/** Lines added and removed, as "+12 −3"; a side with none is left out. */
+function LineCounts({ added, removed }: { added: number; removed: number }) {
+  return (
+    <span className="line-counts">
+      {(added > 0 || removed === 0) && <span className="diff-added">+{added}</span>}
+      {removed > 0 && <span className="diff-removed">−{removed}</span>}
+    </span>
+  );
+}
+
+/** A unified diff, cut when it is long, with the code blocks' Wrap and a Copy of its new side. */
+function DiffView({ diff, dim }: { diff: FileDiff; dim: boolean }) {
+  const [all, setAll] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const wrapped = useSyncExternalStore(codeWrap.subscribe, codeWrap.get);
+  const rows = shownRows(diff.rows, all);
+  const total = lineCount(diff.rows);
+  const hidden = total - lineCount(rows);
+  // Old and new line numbers from a patch; a written file has only new ones.
+  const columns = diff.fromPatch ? 2 : diff.numbered ? 1 : 0;
+  const copy = () => {
+    void navigator.clipboard.writeText(newText(diff.rows)).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <div className={`diff md-code${wrapped ? " is-wrapped" : ""}${dim ? " is-dim" : ""}`}>
+      <div className="diff-scroll">
+        <table>
+          <tbody>
+            {rows.map((r, i) =>
+              r.kind === "gap" ? (
+                <tr key={i} className="diff-gap">
+                  <td colSpan={columns + 2}>{r.skipped ? `⋯ ${r.skipped === 1 ? "1 unchanged line" : `${r.skipped} unchanged lines`}` : "⋯"}</td>
+                </tr>
+              ) : (
+                <tr key={i} className={`diff-${r.kind}`}>
+                  {columns === 2 && <td className="diff-n">{r.old}</td>}
+                  {columns > 0 && <td className="diff-n">{r.new}</td>}
+                  <td className="diff-sign">{r.kind === "add" ? "+" : r.kind === "remove" ? "−" : " "}</td>
+                  <td className="diff-code">
+                    {r.mark ? (
+                      <>
+                        {r.text.slice(0, r.mark[0])}
+                        <span className="diff-mark">{r.text.slice(r.mark[0], r.mark[1])}</span>
+                        {r.text.slice(r.mark[1])}
+                      </>
+                    ) : (
+                      r.text || " "
+                    )}
+                  </td>
+                </tr>
+              ),
+            )}
+          </tbody>
+        </table>
+      </div>
+      {hidden > 0 && (
+        <div className="diff-more">
+          <span>{hidden === 1 ? "1 more line" : `${hidden} more lines`}</span>
+          <button type="button" className="link-btn" onClick={() => setAll(true)}>
+            Show all {total} lines
+          </button>
+        </div>
+      )}
+      <div className="md-code-actions">
+        <button
+          type="button"
+          className="md-code-btn"
+          aria-pressed={wrapped}
+          onClick={() => codeWrap.set(!wrapped)}
+          title={wrapped ? "Stop wrapping long lines in code blocks" : "Wrap long lines in code blocks"}
+        >
+          Wrap
+        </button>
+        <button type="button" className="md-code-btn" onClick={copy} title="Copy the new text">
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PlainToolCall({ block, state, meta }: { block: Extract<Block, { type: "tool" }>; state: ToolState; meta?: ReactNode }) {
   const ctx = useContext(WindowContext);
   // A call that opened, changed or closed something in the window says so in words, with a way back to a closed artifact.
   const line = ctx && widgetLine(block.name, block.input, ctx.window, ctx.sessionNames);

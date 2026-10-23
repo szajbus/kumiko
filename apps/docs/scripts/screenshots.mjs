@@ -113,11 +113,13 @@ function seedSession(id) {
   };
   const assistant = (content) =>
     add("claude", { type: "assistant", message: { model: "claude-opus-5-5", id: `msg_${++messages}`, type: "message", role: "assistant", content }, ...base, uuid: randomUUID() });
-  const tool = (name, input, output) => {
+  // `structured` is the tool_use_result Claude sends beside a result, as for a file edit.
+  const tool = (name, input, output, structured) => {
     const id = `toolu_${++tools}`;
     assistant([{ type: "tool_use", id, name, input }]);
-    add("claude", { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: output }] }, ...base, uuid: randomUUID() });
+    add("claude", { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: output }] }, ...base, uuid: randomUUID(), ...(structured ? { tool_use_result: structured } : {}) });
   };
+  const write = (path, content) => tool("Write", { file_path: path, content }, `File created successfully at: ${path}`, { type: "create", structuredPatch: [], userModified: false });
   const result = (ms, cost, output, cached) =>
     add("claude", { type: "result", subtype: "success", is_error: false, duration_ms: ms, num_turns: 6, result: "", ...base, total_cost_usd: cost, usage: { input_tokens: 1200, output_tokens: output, cache_read_input_tokens: cached, cache_creation_input_tokens: 0 } });
 
@@ -125,10 +127,20 @@ function seedSession(id) {
   assistant([{ type: "text", text: "This changes code, so I'll work in a worktree." }]);
   tool("Bash", { command: `git worktree add "${wt}" -b add-checkout`, description: "Create a worktree for the checkout page" }, "Preparing worktree (new branch 'add-checkout')");
   tool("Read", { file_path: `${wt}/src/cart.ts` }, "export function cartTotal(items: Item[]) { … }");
-  tool("Write", { file_path: `${wt}/src/pages/checkout.tsx`, content: "…" }, "File created successfully.");
-  tool("Write", { file_path: `${wt}/test/cart.test.ts`, content: "…" }, "File created successfully.");
+  tool(
+    "Edit",
+    { file_path: `${wt}/src/cart.ts`, old_string: "    total = applyDiscount(total + line, discount);", new_string: "    total += line;", replace_all: false },
+    `The file ${wt}/src/cart.ts has been updated successfully.`,
+    {
+      structuredPatch: [{ oldStart: 9, oldLines: 7, newStart: 9, newLines: 7, lines: [" export function cartTotal(items: Item[], discount?: Discount) {", "   let total = 0;", "   for (const line of items.map(lineTotal)) {", "-    total = applyDiscount(total + line, discount);", "+    total += line;", "   }", "-  return total;", "+  return applyDiscount(total, discount);", " }"] }],
+      userModified: false,
+      replaceAll: false,
+    },
+  );
+  write(`${wt}/src/pages/checkout.tsx`, 'import { cartTotal } from "../cart";\nimport { useCart } from "../useCart";\n\nexport function Checkout() {\n  const { items, discount } = useCart();\n  return (\n    <main>\n      <h1>Checkout</h1>\n      <ul>\n        {items.map((i) => (\n          <li key={i.id}>{i.name} × {i.quantity}</li>\n        ))}\n      </ul>\n      <p>Total: {formatPrice(cartTotal(items, discount))}</p>\n      <button type="submit">Pay</button>\n    </main>\n  );\n}\n');
+  write(`${wt}/test/cart.test.ts`, 'import { cartTotal } from "../src/cart";\n\ntest("cart total sums line items", () => {\n  expect(cartTotal([item(2, 300), item(1, 150)])).toBe(750);\n});\n\ntest("cart total applies the discount once", () => {\n  expect(cartTotal([item(2, 300), item(1, 150)], percent(10))).toBe(675);\n});\n');
   tool("Bash", { command: "npm test", description: "Run the tests" }, "✓ cart total sums line items\n✓ cart total applies the discount once\n✓ checkout shows the total\n\nTests: 3 passed, 3 total");
-  assistant([{ type: "text", text: "Done, in `add-checkout`:\n\n- **`src/pages/checkout.tsx`**: the checkout page, with the cart's lines, the total and a **Pay** button.\n- **`test/cart.test.ts`**: tests for the total, including the discount being applied once, which it wasn't before.\n\nAll 3 tests pass. I haven't committed yet; shall I?" }]);
+  assistant([{ type: "text", text: "Done, in `add-checkout`:\n\n- **`src/pages/checkout.tsx`**: the checkout page, with the cart's lines, the total and a **Pay** button.\n- **`src/cart.ts`**: the discount is applied once, to the total, rather than to every line.\n- **`test/cart.test.ts`**: tests for the total, including the discount.\n\nAll 3 tests pass. I haven't committed yet; shall I?" }]);
   result(84000, 0.42, 3400, 48000);
   prompt("Yes, commit it and push the branch");
   tool("Bash", { command: 'git add -A && git commit -m "Add the checkout page, with tests for the cart total"', description: "Commit" }, "[add-checkout 44e8d69] Add the checkout page, with tests for the cart total");

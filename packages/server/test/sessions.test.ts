@@ -542,6 +542,27 @@ describe("sessions", () => {
     for (const x of [forkId, atId, id]) await api(`/api/sessions/${x}`, { method: "DELETE" });
   });
 
+  it("keeps an edit's patch in the chat it saves, for a resume and a fork, without the whole file", async () => {
+    await writeFile(join(workdir, "greet.txt"), "alpha\nbeta\ngamma\n");
+    const id = await startSession("one", `edit ${JSON.stringify({ file_path: "greet.txt", old_string: "beta", new_string: "BETA" })}`);
+    await waitFor(async () => ((await session(id))?.status === "idle" && (await session(id))?.claudeSessionId ? true : undefined));
+    assert.equal((await api(`/api/sessions/${id}`, { method: "DELETE" })).status, 200);
+    assert.equal((await api(`/api/sessions/${id}/resume`, { method: "POST" })).status, 201);
+    const patchOf = (got: SessionEvent[]) => {
+      const user = got.find((e) => e.kind === "claude" && e.payload.type === "user" && "tool_use_result" in e.payload);
+      return user?.kind === "claude" ? user.payload.tool_use_result : undefined;
+    };
+    const patch = [{ oldStart: 1, oldLines: 3, newStart: 1, newLines: 3, lines: [" alpha", "-beta", "+BETA", " gamma"] }];
+    const resumed = await listen(id);
+    await waitFor(() => resumed.caughtUp() !== undefined || undefined);
+    assert.deepEqual(patchOf(resumed.got), { userModified: false, replaceAll: false, structuredPatch: patch });
+    const forkId = (await json(await api(`/api/sessions/${id}/fork`, { method: "POST" }))).id as string;
+    const copy = await listen(forkId);
+    await waitFor(() => copy.caughtUp() !== undefined || undefined);
+    assert.deepEqual(patchOf(copy.got), { userModified: false, replaceAll: false, structuredPatch: patch });
+    for (const x of [forkId, id]) await api(`/api/sessions/${x}`, { method: "DELETE" });
+  });
+
   it("rewinds in place to just before a prompt", async () => {
     const id = await startSession("one", "first");
     const idle = (x: string) => waitFor(async () => { const i = await session(x); return i?.status === "idle" && i.claudeSessionId ? i : undefined; });

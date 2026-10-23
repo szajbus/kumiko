@@ -11,7 +11,12 @@
 //   "widget N J" calls that server's tool N with the arguments J (JSON), and replies with what it answered; a call
 //                interrupted while waiting is cancelled, as Claude does
 //   "write J"    writes a file as Claude's Write tool does, J being its input as JSON ({ file_path, content });
-//                a path starting with ~/ is in $HOME. "write-slow J" streams the input over ~3s first
+//                a path starting with ~/ is in $HOME. "write-slow J" streams the input over ~3s first. Its result
+//                carries a `tool_use_result` as Claude 2.1.309's does: type "create", or "update" with a structuredPatch
+//   "edit J"     edits a file as Claude's Edit tool does, J being its input as JSON ({ file_path, old_string,
+//                new_string, replace_all }), with Claude's structuredPatch in `tool_use_result`, or its error when the
+//                string isn't there, or is there more than once without replace_all
+//   "agent-edit J"  has a subagent make that edit; as with Claude, its result carries no `tool_use_result`
 //   "agents"     runs two subagents in parallel, their messages interleaved, with the task events Claude sends
 //   "agents-bg"  starts a subagent in the background and replies at once; it works on for ~2s after the turn, then
 //                Claude takes a turn of its own to report on it. $FAKE_CLAUDE_AGENT_MS sets how long a step takes (200ms)
@@ -50,7 +55,7 @@
 // before it exits; SIGTERM kills them, each reported as stopped, and it exits with 143.
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, fstatSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, fstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -170,9 +175,54 @@ async function toolCall(id, name, input, run, slow = false) {
   }
   ev({ type: "content_block_stop", index: 0 }, id);
   out({ type: "assistant", message: { model, id, type: "message", role: "assistant", content: [tool] }, parent_tool_use_id: null, session_id, uuid: randomUUID() });
-  const { text, isError } = await run(tool.id);
-  out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: tool.id, content: text, is_error: isError }] }, parent_tool_use_id: null, session_id, uuid: randomUUID() });
+  const { text, isError, toolUseResult } = await run(tool.id);
+  out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: tool.id, content: text, is_error: isError }] }, parent_tool_use_id: null, session_id, uuid: randomUUID(), ...(toolUseResult !== undefined ? { tool_use_result: toolUseResult } : {}) });
   return { text, isError };
+}
+
+const fileLines = (text) => (text === "" ? [] : text.replace(/\n$/, "").split("\n"));
+
+/** The hunks of a line diff from `before` to `after` with 3 lines of context, shaped as Claude's structuredPatch. */
+function structuredPatch(before, after) {
+  const a = fileLines(before), b = fileLines(after);
+  const lcs = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i = a.length - 1; i >= 0; i--) for (let j = b.length - 1; j >= 0; j--) lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+  const ops = [];
+  for (let i = 0, j = 0; i < a.length || j < b.length; ) {
+    if (i < a.length && j < b.length && a[i] === b[j]) ops.push({ line: ` ${a[i]}`, i: i++, j: j++ });
+    else if (j < b.length && (i === a.length || lcs[i][j + 1] > lcs[i + 1][j])) ops.push({ line: `+${b[j]}`, i, j: j++ });
+    else ops.push({ line: `-${a[i]}`, i: i++, j });
+  }
+  const changed = ops.flatMap((o, k) => (o.line[0] === " " ? [] : [k]));
+  const hunks = [];
+  for (let c = 0; c < changed.length; ) {
+    let last = c;
+    // Changes with up to twice the context between them share a hunk.
+    while (last + 1 < changed.length && changed[last + 1] - changed[last] <= 7) last++;
+    const from = Math.max(0, changed[c] - 3), to = Math.min(ops.length, changed[last] + 4);
+    const lines = ops.slice(from, to).map((o) => o.line);
+    hunks.push({ oldStart: ops[from].i + 1, oldLines: lines.filter((l) => l[0] !== "+").length, newStart: ops[from].j + 1, newLines: lines.filter((l) => l[0] !== "-").length, lines });
+    c = last + 1;
+  }
+  return hunks;
+}
+
+/** What Claude's Edit tool does with `input`: the file changed, its tool_result, and its tool_use_result. */
+function edit(input) {
+  const fail = (message) => ({ text: `<tool_use_error>${message}</tool_use_error>`, isError: true, toolUseResult: `Error: ${message}` });
+  const path = resolve(input.file_path);
+  if (!existsSync(path)) return fail(`File does not exist. Note: your current working directory is ${process.cwd()}.`);
+  const before = readFileSync(path, "utf8");
+  const found = before.split(input.old_string).length - 1;
+  if (!found) return fail(`String to replace not found in file.\nString: ${input.old_string}`);
+  if (found > 1 && !input.replace_all) return fail(`Found ${found} matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, please provide more context to uniquely identify the instance.\nString: ${input.old_string}`);
+  const after = input.replace_all ? before.split(input.old_string).join(input.new_string) : before.replace(input.old_string, () => input.new_string);
+  writeFileSync(path, after);
+  return {
+    text: input.replace_all ? `The file ${input.file_path} has been updated. All occurrences were successfully replaced.` : `The file ${input.file_path} has been updated successfully.`,
+    isError: false,
+    toolUseResult: { filePath: input.file_path, oldString: input.old_string, newString: input.new_string, originalFile: before, structuredPatch: structuredPatch(before, after), userModified: false, replaceAll: Boolean(input.replace_all) },
+  };
 }
 
 function setMode(next) {
@@ -233,12 +283,12 @@ function startAgent(id, description, background = false) {
 }
 
 /** One tool call of a subagent's: progress, the call, its result. */
-async function agentTool(parent, msg, name, input, text, uses) {
+async function agentTool(parent, msg, name, input, text, uses, isError = false) {
   const id = `toolu_${randomUUID().slice(0, 8)}`;
-  task("task_progress", parent, { description: name === "Read" ? `Reading ${input.file_path}` : `Running ${input.command}`, usage: { total_tokens: 16000 + uses * 200, tool_uses: uses, duration_ms: uses * 1500 }, last_tool_name: name });
+  task("task_progress", parent, { description: name === "Read" ? `Reading ${input.file_path}` : input.command ? `Running ${input.command}` : `${name} ${input.file_path}`, usage: { total_tokens: 16000 + uses * 200, tool_uses: uses, duration_ms: uses * 1500 }, last_tool_name: name });
   subOut(parent, { type: "assistant", message: { model, id: msg, type: "message", role: "assistant", content: [{ type: "tool_use", id, name, input }] } });
   await agentStep();
-  subOut(parent, { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: text }] } });
+  subOut(parent, { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: text, ...(isError ? { is_error: true } : {}) }] } });
 }
 
 /** Background shells and monitors, and foreground commands long enough to be tasks, by task id. */
@@ -415,10 +465,35 @@ async function turn({ text, files, auto }) {
     await toolCall(id, "Write", input, async () => {
       const path = input.file_path.startsWith("~/") ? join(homedir(), input.file_path.slice(2)) : resolve(input.file_path);
       mkdirSync(dirname(path), { recursive: true });
+      const before = existsSync(path) ? readFileSync(path, "utf8") : null;
       writeFileSync(path, input.content);
-      return { text: `File created successfully at: ${input.file_path}`, isError: false };
+      const common = { filePath: input.file_path, content: input.content };
+      return before === null
+        ? { text: `File created successfully at: ${input.file_path}`, isError: false, toolUseResult: { type: "create", ...common, structuredPatch: [], originalFile: null, userModified: false } }
+        : { text: `The file ${input.file_path} has been updated successfully.`, isError: false, toolUseResult: { type: "update", ...common, structuredPatch: structuredPatch(before, input.content), originalFile: before, userModified: false } };
     }, slow);
     return result(start, { text: "written" });
+  }
+
+  if (text.startsWith("edit ")) {
+    const input = JSON.parse(text.slice(text.indexOf(" ") + 1));
+    const done = await toolCall(id, "Edit", input, async () => edit(input));
+    const id2 = `msg_${++msgN}`;
+    await streamText(id2, done.isError ? "failed" : "edited", 0, () => cancelled);
+    return result(start, { text: done.isError ? "failed" : "edited" });
+  }
+
+  if (text.startsWith("agent-edit ")) {
+    const input = JSON.parse(text.slice(text.indexOf(" ") + 1));
+    const a = startAgent(id, `Edit ${input.file_path}`);
+    const done = edit(input);
+    await agentTool(a, "msg_sub_edit", "Edit", input, done.text, 1, done.isError);
+    const summary = done.isError ? "The edit failed." : "Edited it.";
+    task("task_notification", a, { status: "completed", summary, usage: { total_tokens: 17000, tool_uses: 1, duration_ms: 1500 } });
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: a, content: [{ type: "text", text: summary }] }] }, parent_tool_use_id: null, session_id, uuid: randomUUID() });
+    const id2 = `msg_${++msgN}`;
+    await streamText(id2, summary, 0, () => cancelled);
+    return result(start, { text: summary });
   }
 
   if (text === "agents") {

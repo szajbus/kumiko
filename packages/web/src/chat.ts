@@ -7,6 +7,33 @@ import { applyTaskEvent, emptyTasks, reportsEnd, type TasksState } from "./tasks
 export interface ToolResult {
   text: string;
   isError: boolean;
+  /** What Claude's own record of a file edit adds, when it sent one: see FileChange. */
+  change?: FileChange;
+}
+
+/** One hunk of Claude's patch of a file: its lines start with " ", "-" or "+", and the numbers are 1-based. */
+export interface Hunk {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: string[];
+}
+
+/**
+ * What the `tool_use_result` of an Edit, a Write or a NotebookEdit says beyond the result's text (Claude sends it for
+ * the main thread's calls, not subagents'): the patch it made, with where in the file, or a cell as it was.
+ */
+export interface FileChange {
+  hunks?: Hunk[];
+  /** A Write that made the file. */
+  created?: boolean;
+  /** The user changed Claude's proposed edit before allowing it. */
+  userModified?: boolean;
+  /** Kumiko kept only the start of the patch. */
+  truncated?: boolean;
+  /** A NotebookEdit's cell before. */
+  oldSource?: string;
 }
 
 export type Block =
@@ -651,7 +678,9 @@ function applyThread<T extends Thread<AssistantItem> | ChatState>(t: T, m: Json 
           const toolId = str(c.tool_use_id) ?? "";
           const index = next.tools[toolId];
           if (index === undefined) continue;
-          const result: ToolResult = { text: resultText(c.content), isError: c.is_error === true };
+          // Claude sends a tool's structured result beside the message; with several results it couldn't say whose.
+          const change = content.length === 1 ? fileChange(m.tool_use_result) : undefined;
+          const result: ToolResult = { text: resultText(c.content), isError: c.is_error === true, ...(change ? { change } : {}) };
           const items: ChatItem[] = [...next.items];
           const it = items[index] as AssistantItem;
           items[index] = { ...it, final: it.final.map((b) => (b.type === "tool" && b.id === toolId ? { ...b, result } : b)) };
@@ -664,6 +693,24 @@ function applyThread<T extends Thread<AssistantItem> | ChatState>(t: T, m: Json 
     default:
       return t;
   }
+}
+
+function fileChange(raw: unknown): FileChange | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = obj(raw);
+  const flags = { ...(r.userModified === true ? { userModified: true } : {}), ...(r.truncated === true ? { truncated: true } : {}) };
+  if (Array.isArray(r.structuredPatch)) {
+    const hunks = r.structuredPatch.map(obj).map((h) => ({
+      oldStart: num(h.oldStart) ?? 0,
+      oldLines: num(h.oldLines) ?? 0,
+      newStart: num(h.newStart) ?? 0,
+      newLines: num(h.newLines) ?? 0,
+      lines: Array.isArray(h.lines) ? h.lines.filter((l): l is string => typeof l === "string") : [],
+    }));
+    return { hunks, ...(r.type === "create" ? { created: true } : {}), ...flags };
+  }
+  if (typeof r.old_source === "string") return { oldSource: r.old_source, ...flags };
+  return undefined;
 }
 
 /** A result's usage as tokens; like its cost, it is a running total for the session. */
@@ -689,16 +736,22 @@ export function toolSummary(input: Record<string, unknown>): string {
 /** The same summary from input JSON that is still streaming in, as far as it has got. */
 export function partialToolSummary(json: string): string {
   for (const k of SUMMARY_KEYS) {
-    const m = new RegExp(`"${k}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)`).exec(json);
-    if (m) {
-      try {
-        return (JSON.parse(`"${m[1].replace(/\\$/, "")}"`) as string).split("\n")[0];
-      } catch {
-        return m[1];
-      }
-    }
+    const v = partialString(json, k);
+    if (v !== undefined) return v.split("\n")[0];
   }
   return "";
+}
+
+/** String `key` of input JSON that is still streaming in, as far as it has got; undefined until it has begun. */
+export function partialString(json: string, key: string): string | undefined {
+  const m = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)`).exec(json);
+  if (!m) return undefined;
+  try {
+    // Cut where an escape has only begun to arrive.
+    return JSON.parse(`"${m[1].replace(/\\(u[0-9a-fA-F]{0,3})?$/, "")}"`) as string;
+  } catch {
+    return m[1];
+  }
 }
 
 /**

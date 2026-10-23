@@ -53,6 +53,7 @@ follows mostly from the sandbox provider.
 | Feature | Uses |
 | --- | --- |
 | Streaming replies, tool calls, cost and tokens | stream-json output with partial messages |
+| Diffs of file edits | `tool_use_result` beside an Edit's or a Write's result: its `structuredPatch`, and for a Write, `type` (`create` or `update`); a NotebookEdit's `old_source`. Subagents' results don't carry it, so theirs are diffed from the input |
 | Subagents' work | their messages, by `parent_tool_use_id` (whole, as Claude Code doesn't stream them), and the `task_*` and `background_tasks_changed` system messages |
 | Working on while Kumiko is away | stream-json input read from a FIFO, which only ends when Kumiko closes it |
 | Stop | an interrupt control request |

@@ -10,6 +10,16 @@ clone, and keeps running between your messages until you close the tab, even whi
 
 ![A session: the first turn's tool calls folded into one line, the agent's reply, and the turn's time, cost and tokens.](../../../assets/screenshots/session.png)
 
+## File edits
+
+When the agent edits or writes a file, its tool line names the file, relative to the project's folder, and how many
+lines it added and removed, e.g. `src/app.py +12 −3`. A new file says so, and a failed edit says why. Open the line to
+see the change as a diff, with line numbers and a few lines around it; a long one shows its first 30 lines, with
+**Show all** for the rest. A turn's folded work says how many files it changed, its subagents' included.
+
+A subagent's edits, and those of sessions from before Kumiko kept them, have no line numbers: Claude Code only says
+where in the file an edit was for the main agent's own.
+
 ## Subagents
 
 When the agent hands work to subagents, each one's thinking, tool calls and messages show under the tool call that
