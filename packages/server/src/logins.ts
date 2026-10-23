@@ -128,7 +128,11 @@ export class Logins {
     return { url };
   }
 
-  /** Hands the code from the sign-in page to the waiting login; resolves with the account once Claude is logged in. */
+  /**
+   * Hands the code from the sign-in page to the waiting login; resolves with the account once Claude is logged in.
+   * The code goes only to `claude auth login`'s stdin: never log it or keep it. Anthropic's terms don't let apps
+   * collect or intermediate Claude sign-in credentials (https://code.claude.com/docs/en/legal-and-compliance).
+   */
   async finish(project: string, code: string): Promise<LoginAccount> {
     const p = this.pending.get(project);
     if (!p) throw new LoginFailed("No login is waiting for a code. Start again.");
