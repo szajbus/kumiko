@@ -8,6 +8,9 @@ sidebar:
 The agent needs a login before it can work. You log in once per project, from Kumiko, and every session of the project
 uses it. It's kept even if you rebuild the sandbox.
 
+You can log in with your own Claude subscription: see [Using your Claude subscription](/guide/subscription/) for why
+that's fine.
+
 ## The login dialog
 
 The first time you send a message in a project, the reply is a card saying **Claude isn't logged in**, and the
