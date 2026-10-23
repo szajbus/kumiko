@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { SessionEvent } from "@kumiko/shared";
-import { applyEvent, blocksOf, chatRows, emptyChat, loginCards, partialToolSummary, toolSummary, type ChatItem, type ChatRow, type ChatState } from "../src/chat.ts";
+import { applyEvent, blocksOf, chatRows, emptyChat, loginCards, partialToolSummary, toolSummary, unpromptedText, type ChatItem, type ChatRow, type ChatState } from "../src/chat.ts";
 
 type NewEvent = SessionEvent extends infer E ? (E extends unknown ? Omit<E, "seq"> : never) : never;
 
@@ -14,6 +14,9 @@ const claude = (payload: Record<string, unknown> & { type: string }): NewEvent =
 const stream = (id: string, event: Record<string, unknown>) => claude({ type: "stream_event", api_message_id: id, event });
 const assistant = (id: string, content: unknown[]) => claude({ type: "assistant", message: { id, content } });
 const result = (extra: Record<string, unknown> = {}) => claude({ type: "result", subtype: "success", duration_ms: 1200, ...extra });
+/** Each row as a short string: the item's type and its block range, or the work's rows in brackets. */
+const shape = (rows: ChatRow[]): string[] =>
+  rows.map((r) => (r.type === "work" ? `work${r.done ? "" : " (open)"}[${shape(r.rows).join(" ")}]` : r.from !== undefined ? `${r.item.type}:${r.from}-${r.to}` : r.item.type));
 const ofType = <T extends ChatItem["type"]>(s: ChatState, type: T) => s.items.filter((i): i is Extract<ChatItem, { type: T }> => i.type === type);
 
 describe("chat", () => {
@@ -303,6 +306,30 @@ describe("subagents", () => {
     assert.equal(done.items, s.items, "the main thread isn't touched");
   });
 
+  it("lays out the turn Claude takes by itself, once a background subagent is done, as a turn of its own", () => {
+    const events = [
+      prompt("p1"),
+      agentCall("m1", "t1", { run_in_background: true }),
+      started("t1", true),
+      toolResult("t1", "Async agent launched successfully."),
+      assistant("m2", [{ type: "text", text: "started" }]),
+      result(),
+      subAssistant("t1", "s1", [tool("Bash", "b1")]),
+      toolResult("b1", "6 a.txt", "t1"),
+      task("task_notification", "t1", { status: "completed" }),
+      assistant("m3", [{ type: "thinking", thinking: "Let me check." }, tool("Read", "r9", { file_path: "a.txt" })]),
+      toolResult("r9", "alpha"),
+      assistant("m4", [{ type: "text", text: "It's 6 bytes." }]),
+    ];
+    const running = fold(events);
+    assert.deepEqual(shape(chatRows(running.items)), ["user", "work[assistant]", "assistant", "turn", "unprompted", "work (open)[assistant assistant]"]);
+    const done = fold([...events, result()]);
+    assert.deepEqual(shape(chatRows(done.items)), ["user", "work[assistant]", "assistant", "turn", "unprompted", "work[assistant]", "assistant", "turn"]);
+    assert.deepEqual(ofType(done, "unprompted").map((u) => unpromptedText(u.after)), ["“do t1” finished in the background"]);
+    // The next prompt starts afresh: what finished was told with the turn it started.
+    assert.deepEqual(fold([prompt("p2")], done, 20).finished, []);
+  });
+
   it("tracks a subagent's own subagent by its task events, and leaves other tasks out", () => {
     const s = fold([
       prompt("p1"),
@@ -320,6 +347,25 @@ describe("subagents", () => {
     assert.equal(s.agents.b5, undefined);
     const stopped = fold([task("task_notification", "t9", { status: "killed" })], s, 8);
     assert.equal(stopped.agents.t9.status, "stopped");
+  });
+});
+
+describe("turns Claude takes by itself", () => {
+  it("say why when it's known", () => {
+    assert.equal(unpromptedText(["Count the bytes"]), "“Count the bytes” finished in the background");
+    assert.equal(unpromptedText(["A", "B", "C"]), "“A”, “B” and “C” finished in the background");
+    assert.equal(unpromptedText([""]), "A subagent finished in the background");
+    assert.equal(unpromptedText([]), "Claude went on by itself");
+  });
+
+  it("only start after a turn has ended", () => {
+    // Messages ahead of any turn, or within one, are that turn's.
+    const s = fold([assistant("m1", [{ type: "text", text: "a" }]), { kind: "user_prompt", payload: { text: "go", id: "p1" } }, assistant("m2", [{ type: "text", text: "b" }])]);
+    assert.deepEqual(ofType(s, "unprompted"), []);
+    // The prompt suggestion that follows a turn isn't Claude starting another.
+    const after = fold([result(), claude({ type: "prompt_suggestion", suggestion: "x" })], s, 3);
+    assert.deepEqual(ofType(after, "unprompted"), []);
+    assert.deepEqual(ofType(fold([assistant("m3", [{ type: "text", text: "c" }])], after, 5), "unprompted").map((u) => u.after), [[]]);
   });
 });
 
@@ -342,9 +388,6 @@ describe("chat rows", () => {
   const prompt = (id: string): NewEvent => ({ kind: "user_prompt", payload: { text: "go", id } });
   const toolResult = (id: string, isError = false) =>
     claude({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: "ok", is_error: isError }] } });
-  /** Each row as a short string: the item's type and its block range, or the work's rows in brackets. */
-  const shape = (rows: ChatRow[]): string[] =>
-    rows.map((r) => (r.type === "work" ? `work${r.done ? "" : " (open)"}[${shape(r.rows).join(" ")}]` : r.from !== undefined ? `${r.item.type}:${r.from}-${r.to}` : r.item.type));
   const work = [
     prompt("p1"),
     assistant("m1", [{ type: "thinking", thinking: "hmm" }, { type: "text", text: "Looking." }, { type: "tool_use", id: "t1", name: "Read", input: {} }]),

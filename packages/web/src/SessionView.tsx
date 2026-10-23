@@ -4,7 +4,7 @@ import { formatBytes, LIVE_SESSION_STATUSES, type LoginAccount, type SessionInfo
 import { api, errorMessage, type SessionStream } from "./api";
 import { fromAttachment, toInput } from "./attachments";
 import { ArtifactsButton } from "./ArtifactView";
-import { applyEvent, backgroundAgents, blocksOf, chatRows, emptyChat, loginCards, partialToolSummary, summarize, toolState, toolSummary, type Block, type ChatItem, type ChatState, type ItemRow, type LoginAnswer, type Subagent, type ToolState, type WorkRow } from "./chat";
+import { applyEvent, backgroundAgents, startsTurn, unpromptedText, blocksOf, chatRows, emptyChat, loginCards, partialToolSummary, summarize, toolState, toolSummary, type Block, type ChatItem, type ChatState, type ItemRow, type LoginAnswer, type Subagent, type ToolState, type WorkRow } from "./chat";
 import { Composer, type ComposerHandle } from "./Composer";
 import { HeaderCorner } from "./Corner";
 import { Markdown } from "./Markdown";
@@ -599,7 +599,7 @@ function Chat({ chat, running, live, active, onRewind, onFork, onQuote, onAnswer
               </button>
             </div>
           ))}
-        {running && chat.items.at(-1)?.type === "user" && (
+        {running && chat.items.length > 0 && startsTurn(chat.items.at(-1)!) && (
           <div className="chat-waiting">
             <span className="spinner" aria-hidden="true" /> Waiting for Claude…
           </div>
@@ -753,6 +753,8 @@ const Item = memo(function Item({ item, from, to, open, onRewind, onFork, onAnsw
       );
     case "notice":
       return <div className="chat-quiet">{item.text}</div>;
+    case "unprompted":
+      return <div className="chat-unprompted">{unpromptedText(item.after)}</div>;
     case "proposal":
       return <ProposalCard item={item} onAnswer={onAnswer} />;
     case "shared":

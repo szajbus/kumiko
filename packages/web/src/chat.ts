@@ -18,6 +18,11 @@ export type ChatItem =
   | { type: "user"; key: string; text: string; id: string; replayed?: boolean; attachments?: Attachment[] }
   /** One assistant message: finished blocks, then the ones still streaming (by content index). */
   | { type: "assistant"; key: string; final: Block[]; drafts: Block[] }
+  /**
+   * Where Claude starts a turn of its own, with no prompt: as it does on hearing that subagents it left working in the
+   * background are done, `after` naming those it heard of (by their descriptions).
+   */
+  | { type: "unprompted"; key: string; after: string[] }
   | { type: "turn"; key: string; status: "ok" | "interrupted" | "error"; durationMs?: number; costUsd?: number; tokens?: Tokens; message?: string }
   | { type: "error"; key: string; message: string; hint?: string; stderr?: string[]; signedOut?: boolean }
   | { type: "retry"; key: string; attempt?: number; max?: number }
@@ -60,6 +65,8 @@ export interface Subagent extends Thread<AssistantItem> {
 export interface ChatState extends Thread {
   /** Subagents by the tool_use id of the Agent call that started them, wherever that call is. */
   agents: Record<string, Subagent>;
+  /** The descriptions of subagents in the background that finished since the last turn began. */
+  finished: string[];
   /** Claude reports cost per session; a turn's cost is the difference. */
   totalCost: number;
   /** Likewise for tokens. */
@@ -69,7 +76,7 @@ export interface ChatState extends Thread {
   suggestion?: string;
 }
 
-export const emptyChat = (): ChatState => ({ items: [], messages: {}, tools: {}, agents: {}, totalCost: 0, totalTokens: { total: 0, cached: 0 }, interruptPending: false });
+export const emptyChat = (): ChatState => ({ items: [], messages: {}, tools: {}, agents: {}, finished: [], totalCost: 0, totalTokens: { total: 0, cached: 0 }, interruptPending: false });
 
 /** The blocks to show for an assistant item: finished ones, then drafts past them. */
 export function blocksOf(item: AssistantItem): Block[] {
@@ -101,6 +108,8 @@ export interface WorkRow {
 
 export type ChatRow = ItemRow | WorkRow;
 
+/** What a turn starts with: a prompt, or Claude going on by itself. */
+export const startsTurn = (i: ChatItem) => i.type === "user" || i.type === "unprompted";
 const isWork = (i: ChatItem) => i.type === "assistant" || i.type === "retry" || i.type === "notice";
 /** Items for the user that come in while Claude works, and stay in view when its work folds. */
 const waitsOnUser = (i: ChatItem) => i.type === "proposal" || i.type === "shared";
@@ -123,11 +132,11 @@ export function chatRows(items: readonly ChatItem[]): ChatRow[] {
   while (i < items.length) {
     const prompt = items[i];
     rows.push(row(i++));
-    if (prompt.type !== "user") continue;
+    if (!startsTurn(prompt)) continue;
     const start = i;
     while (i < items.length && (isWork(items[i]) || waitsOnUser(items[i]))) i++;
     let end = i;
-    while (end < items.length && items[end].type !== "user") end++;
+    while (end < items.length && !startsTurn(items[end])) end++;
     const done = items.slice(start, end).some((it) => it.type === "turn");
     // Claude's asks to start sessions, and shares from other sessions, are for the user: they show after the work
     // rather than fold away with it.
@@ -225,6 +234,14 @@ export function backgroundAgents(agents: Record<string, Subagent>): string[] {
   return Object.keys(agents).filter((id) => agents[id].background && agents[id].status === "running");
 }
 
+/** What the line starting a turn Claude took by itself says: why it did, when that's known. */
+export function unpromptedText(after: readonly string[]): string {
+  const names = after.filter(Boolean).map((d) => `“${d}”`);
+  if (!names.length) return after.length ? "A subagent finished in the background" : "Claude went on by itself";
+  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  return `${list} finished in the background`;
+}
+
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 export function summarize(blocks: Block[]): { summary: string; tools: string } {
@@ -283,7 +300,7 @@ export function applyEvent(s: ChatState, ev: SessionEvent): ChatState {
 
   switch (ev.kind) {
     case "user_prompt": {
-      const next = { ...push({ type: "user", key, text: ev.payload.text, id: ev.payload.id, ...(ev.payload.attachments ? { attachments: ev.payload.attachments } : {}) }), suggestion: undefined };
+      const next = { ...push({ type: "user", key, text: ev.payload.text, id: ev.payload.id, ...(ev.payload.attachments ? { attachments: ev.payload.attachments } : {}) }), suggestion: undefined, finished: [] };
       // Claude hears of what was shared with the first prompt after it that isn't a command; see `sharesWaiting`.
       if (isCommand(ev.payload.text) || !s.items.some((i) => i.type === "shared" && !i.told)) return next;
       return { ...next, items: next.items.map((i) => (i.type === "shared" && !i.told ? { ...i, told: true } : i)) };
@@ -351,6 +368,10 @@ function applyClaude(s: ChatState, m: Json & { type: string }, key: string): Cha
     return next === agent ? s : { ...s, agents: { ...s.agents, [parent]: next } };
   }
 
+  // Claude says something after its turn ended, with no prompt since: it is taking a turn of its own.
+  const speaks = m.type === "stream_event" || m.type === "assistant" || (m.type === "user" && m.isReplay !== true) || (m.type === "system" && m.subtype === "api_retry");
+  if (speaks) s = startUnprompted(s, key);
+
   switch (m.type) {
     case "prompt_suggestion":
       return { ...s, suggestion: str(m.suggestion) || undefined };
@@ -392,6 +413,12 @@ function applyClaude(s: ChatState, m: Json & { type: string }, key: string): Cha
   }
 }
 
+function startUnprompted(s: ChatState, key: string): ChatState {
+  const ended = s.items.findLastIndex((i) => i.type === "turn");
+  if (ended < 0 || s.items.findLastIndex(startsTurn) > ended) return s;
+  return { ...s, items: [...s.items, { type: "unprompted", key: `u-${key}`, after: s.finished }], finished: [] };
+}
+
 /**
  * Claude's reports on its subagents, by the tool_use id of the Agent call that started each: when it starts, what it
  * is doing, and how it ended. Only these tell when one started in the background is done, as its call returns at once.
@@ -414,6 +441,7 @@ function applyTask(s: ChatState, m: Json): ChatState {
   } else if (m.subtype === "task_notification") {
     const status = m.status === "completed" ? "completed" : m.status === "failed" ? "failed" : "stopped";
     next = { ...agent, status, activity: undefined, ...counts };
+    if (agent.background) return { ...s, agents: { ...s.agents, [id]: next }, finished: [...s.finished, agent.description ?? ""] };
   } else {
     return s;
   }

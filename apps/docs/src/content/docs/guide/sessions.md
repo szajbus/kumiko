@@ -17,7 +17,7 @@ started it, while it works. Once it's done they fold behind a line summing them 
 
 A subagent started in the background goes on after the turn is over. Until it's done, the turn's folded work says so,
 a line below the turn says what it is doing, with **Show** to open it, and the tab says Working. When it's done, the
-agent takes a turn of its own to report on it.
+agent takes a turn of its own to report on it, which starts with a line saying what finished, in place of a message.
 
 ## Tabs
 
