@@ -42,7 +42,7 @@ export class MetadataStore {
       throw new MetadataError(file, err instanceof Error ? err.message : String(err));
     }
     const spec = meta?.spec;
-    if (!spec || typeof spec.name !== "string" || !Array.isArray(spec.mounts) || !Array.isArray(spec.env)) {
+    if (!spec || typeof spec.name !== "string" || !Array.isArray(spec.mounts) || !Array.isArray(spec.env) || typeof spec.workdir !== "string") {
       throw new MetadataError(file, "it has no valid spec");
     }
     return meta as SandboxMeta;

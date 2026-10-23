@@ -254,6 +254,7 @@ describe("ClaudeDriver", () => {
       await d.driver.detach();
       const runs = new Runs(d.exec);
       assert.deepEqual([...(await runs.list("test"))], [["s4-a", "alive"]]);
+      assert.deepEqual([...(await new Runs(d.exec, "h1").list("test"))], [], "a home's server leaves out a run with no owner");
       const pid = Number(await readFile(runFile(d.home, "s4-a", "pid"), "utf8"));
       await runs.remove("test", ["s4-a"]);
       assert.deepEqual([...(await runs.list("test"))], []);

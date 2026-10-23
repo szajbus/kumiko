@@ -27,7 +27,7 @@ if (openLink) {
 }
 
 // Page zoom changes the viewport size, so resize is the hook for tracking it.
-const syncZoom = () => document.documentElement.style.setProperty("--page-zoom", String(window.kumiko?.getZoomFactor?.() ?? 1));
+const syncZoom = () => document.documentElement.style.setProperty("--page-zoom", String(window.kumiko?.getZoomFactor() ?? 1));
 syncZoom();
 window.addEventListener("resize", syncZoom);
 

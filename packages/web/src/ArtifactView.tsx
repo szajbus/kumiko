@@ -57,7 +57,7 @@ export function ArtifactView({ widget, pane, doc, writing }: Props) {
   if (writing !== undefined) wrote.current = writing;
   else if (!shown.stale) wrote.current = undefined;
   const text = writing ?? wrote.current ?? shown.text;
-  const updated = useUpdated(doc.content ?? doc.text ?? "");
+  const updated = useUpdated(doc.content ?? "");
   const [copied, setCopied] = useState(false);
   // While Claude writes, the pane follows the end of the text, as long as the reader is there.
   const follow = useRef(false);
@@ -398,8 +398,7 @@ function Rendered({ doc, text, writing, source, loading }: { doc: ArtifactState;
     case "mermaid":
       return <Diagram source={text} />;
     case "image": {
-      // Older sessions have the image in the window, in base64.
-      const src = doc.content ? api.artifactUrl(doc.content, imageTypeOf(doc.path)) : doc.text && `data:${imageTypeOf(doc.path)};base64,${doc.text}`;
+      const src = doc.content && api.artifactUrl(doc.content, imageTypeOf(doc.path));
       return doc.truncated || !src ? null : <img className="artifact-image" src={src} alt={doc.title} />;
     }
     case "html":
@@ -507,10 +506,10 @@ function PageView({ url, partition }: { url: string; partition: string }) {
         return false;
       }
     };
-    const offBlocked = window.kumiko?.onPageBlocked?.((id) => {
+    const offBlocked = window.kumiko?.onPageBlocked((id) => {
       if (isMine(id)) fail(loadError(BLOCKED_BY_CLIENT, "", ""));
     });
-    const offWants = window.kumiko?.onPageWants?.((id, target) => {
+    const offWants = window.kumiko?.onPageWants((id, target) => {
       if (isMine(id)) setWants(target);
     });
     // And any other load that stops with nothing loaded and nothing said.
@@ -624,7 +623,7 @@ function useContent(doc: ArtifactState): { text: string; stale?: boolean; loadin
       live = false;
     };
   }, [hash]);
-  if (!hash) return { text: doc.text ?? "" };
+  if (!hash) return { text: "" };
   // Loading: no version of it has come yet, so there is nothing to show.
   return { ...got, stale: got.hash !== hash, loading: got.hash === undefined && !got.failed };
 }

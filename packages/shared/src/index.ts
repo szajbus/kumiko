@@ -82,20 +82,18 @@ export interface SavedTabs {
   newSessions: string[];
   /** The active tab's id, as the UI names it. */
   active: string;
-  /** The tabs after Projects in the order they were dragged into, named as `active` is; empty if never saved. */
+  /** The tabs after Projects in the order they were dragged into, named as `active` is. */
   order: string[];
 }
 
 /** The saved tabs in `v`, or undefined if it isn't saved tabs. Session ids that can't be ids are dropped. */
 export function parseSavedTabs(v: unknown): SavedTabs | undefined {
   if (typeof v !== "object" || v === null) return undefined;
-  const { sessions, newSessions, newSession, active, order } = v as Partial<Record<keyof SavedTabs | "newSession", unknown>>;
-  if (!Array.isArray(sessions) || typeof active !== "string" || active.length > 100) return undefined;
+  const { sessions, newSessions, active, order } = v as Partial<Record<keyof SavedTabs, unknown>>;
+  if (!Array.isArray(sessions) || !Array.isArray(newSessions) || !Array.isArray(order) || typeof active !== "string" || active.length > 100) return undefined;
   const ids = sessions.filter((x): x is string => typeof x === "string" && SESSION_ID_PATTERN.test(x));
-  // `newSession: true` is how a single New session tab was saved before there could be more.
-  const drafts = Array.isArray(newSessions) ? newSessions : newSession === true ? [""] : [];
-  const projects = drafts.filter((x): x is string => typeof x === "string").map((x) => (NAME_PATTERN.test(x) ? x : ""));
-  const tabs = Array.isArray(order) ? order.filter((x): x is string => typeof x === "string" && x.length <= 100) : [];
+  const projects = newSessions.filter((x): x is string => typeof x === "string").map((x) => (NAME_PATTERN.test(x) ? x : ""));
+  const tabs = order.filter((x): x is string => typeof x === "string" && x.length <= 100);
   return { sessions: ids.slice(0, 200), newSessions: projects.slice(0, 50), active, order: tabs.slice(0, 250) };
 }
 
@@ -134,6 +132,9 @@ export interface SandboxSpec {
  */
 export type EditSpec = Partial<Pick<SandboxSpec, "cpus" | "memoryGiB" | "diskGiB" | "mounts" | "env" | "provision" | "workdir" | "hostLoopback">>;
 
+/** A spec as validated, which has its defaults filled in. */
+export type ValidSpec = SandboxSpec & { workdir: string };
+
 /** `absent`: a project whose VM doesn't exist (its creation failed, or it was deleted outside Kumiko). */
 export type SandboxStatus = "running" | "stopped" | "broken" | "unknown" | "absent";
 
@@ -141,12 +142,12 @@ export type SetupState = "creating" | "ready" | "provision_failed";
 
 /** What Kumiko keeps on disk for each sandbox it created: ~/.kumiko/sandboxes/<name>.json */
 export interface SandboxMeta {
-  spec: SandboxSpec;
+  spec: ValidSpec;
   provider: "lima";
   createdAt: string;
   setup: SetupState;
   provisionExitCode?: number;
-  /** The agent's setup scripts this VM was created with, and how each went; absent for VMs from before them. */
+  /** The agent's setup scripts this VM was created with, and how each went; absent when there were none. */
   agentSetup?: AgentSetupRun;
 }
 
@@ -327,7 +328,7 @@ export interface SessionInfo {
   prompt: string;
   /** Set by /rename, or by Claude with Kumiko's session_rename; replaces the prompt in the tab title. */
   title?: string;
-  /** Who set `title`. Missing on sessions saved before Claude could name them, whose title was the user's. */
+  /** Who set `title`; missing when there is none. */
   titleBy?: "user" | "agent";
   /** A sentence or two on what the session is about, set by Claude with session_rename; the list of saved sessions shows it. */
   description?: string;
@@ -384,7 +385,7 @@ export type EndReason = "user" | "sandbox" | "quit" | "exit";
  */
 export type SessionEvent =
   | { seq: number; kind: "claude"; payload: Record<string, unknown> & { type: string } }
-  | { seq: number; kind: "user_prompt"; payload: { text: string; id?: string; attachments?: Attachment[] } }
+  | { seq: number; kind: "user_prompt"; payload: { text: string; id: string; attachments?: Attachment[] } }
   | { seq: number; kind: "interrupt"; payload: Record<string, never> }
   /** `signedOut`: Claude isn't logged in, so the UI offers to log in instead of only showing the message. */
   | { seq: number; kind: "error"; payload: { message: string; hint?: string; stderr?: string[]; signedOut?: boolean } }

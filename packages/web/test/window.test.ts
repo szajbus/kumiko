@@ -203,7 +203,7 @@ const log = (...items: (string | WindowOp | "reply")[]): SessionEvent[] =>
   items.map((x, i): SessionEvent => {
     const seq = i + 1;
     if (x === "reply") return { seq, kind: "claude", payload: { type: "assistant", message: {} } };
-    if (typeof x === "string") return { seq, kind: "user_prompt", payload: { text: x } };
+    if (typeof x === "string") return { seq, kind: "user_prompt", payload: { text: x, id: "p1" } };
     return { seq, kind: "window", payload: { op: x } };
   });
 
@@ -232,24 +232,6 @@ describe("window ops", () => {
     const w = windowState(log("hi", add("w2"), right("p2", "w2"), right("p3", "w9"), "reply"));
     assert.deepEqual(paneIds(w.layout), [CHAT, "p2"]);
     assert.equal(w.panes.p2, "w2");
-  });
-});
-
-describe("a window saved in an older shape", () => {
-  it("comes back with its artifacts, and the chat alone on screen", () => {
-    const state = { path: "/a/plan.md", type: "markdown", title: "Plan", content: "0".repeat(64) };
-    // As this branch saved windows before panes were called panes.
-    const events = [
-      { seq: 1, kind: "window", payload: { op: { type: "add", widget: "w2", kind: "artifact", state } } },
-      { seq: 2, kind: "window", payload: { op: { type: "split", place: { split: "right" }, slot: "s2", widget: "w2" } } },
-      { seq: 3, kind: "window", payload: { op: { type: "sync", layout: { kind: "split", dir: "row", ratio: 0.5, a: { kind: "slot", id: "chat" }, b: { kind: "slot", id: "s2" } }, slots: { chat: "chat", s2: "w2" }, active: "s2" } } },
-      { seq: 4, kind: "window", payload: { op: { type: "show", slot: "s2", widget: "w2" } } },
-    ] as unknown as SessionEvent[];
-    const w = windowState(events);
-    assert.deepEqual(paneIds(w.layout), [CHAT]);
-    assert.deepEqual(Object.keys(w.panes), [CHAT]);
-    assert.equal(w.active, undefined);
-    assert.equal(w.widgets.w2?.kind, "artifact");
   });
 });
 

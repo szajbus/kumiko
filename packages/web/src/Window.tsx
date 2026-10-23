@@ -194,20 +194,20 @@ async function answerPane(id: string, box: RefObject<HTMLElement | null>, ev: Pa
   if (!ev.capture) return answer({ note });
   // For the page to paint what it loaded, or to finish animating, as asked.
   if (ev.wait > 0) await new Promise((r) => setTimeout(r, ev.wait));
-  if (!k?.capture) return answer({ error: "Capturing needs the Kumiko app; the user has Kumiko open in a browser.", fallback: true });
+  if (!k) return answer({ error: "Capturing needs the Kumiko app; the user has Kumiko open in a browser.", fallback: true });
   if (document.visibilityState !== "visible") return answer({ error: "The Kumiko window is hidden or minimized; ask the user to bring it up." });
   // The pane's area of the window: for a page that didn't load (its <webview> has nothing to capture), and anything
   // that isn't a page.
   const area = () => {
     const r = (pane.querySelector(".artifact-body") ?? pane).getBoundingClientRect();
-    const z = k.getZoomFactor?.() ?? 1;
-    return k.capture!({ x: Math.round(r.x * z), y: Math.round(r.y * z), width: Math.round(r.width * z), height: Math.round(r.height * z) });
+    const z = k.getZoomFactor();
+    return k.capture({ x: Math.round(r.x * z), y: Math.round(r.y * z), width: Math.round(r.width * z), height: Math.round(r.height * z) });
   };
   try {
     let data: string;
     // A <webview> that hasn't drawn a page can leave its capture hanging, not failing: given a few seconds, then
     // the pane's area instead. That one has a limit too, so the window always answers.
-    if (webview?.getWebContentsId && k.captureWebview && !failed) data = await within(k.captureWebview(webview.getWebContentsId()), 3000).catch(() => within(area(), 5000));
+    if (webview?.getWebContentsId && !failed) data = await within(k.captureWebview(webview.getWebContentsId()), 3000).catch(() => within(area(), 5000));
     else data = await within(area(), 5000);
     answer({ data, mimeType: "image/png", note });
   } catch (err) {

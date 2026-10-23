@@ -81,7 +81,7 @@ describe("status", () => {
   const sb = (over: Partial<SandboxView> = {}): SandboxView => ({ name: "web", vm: "km-web", provider: "lima", status: "running", busy: false, sessions: 0, ...over });
   const op = { op: "creating" as const, startedAt: "2026-10-19T12:00:00Z" };
   const meta = (setup: "creating" | "ready" | "provision_failed", provisionExitCode?: number) => ({
-    spec: { name: "web", cpus: 2, memoryGiB: 4, diskGiB: 20, mounts: [], env: [] },
+    spec: { name: "web", cpus: 2, memoryGiB: 4, diskGiB: 20, mounts: [], env: [], workdir: "/workspace" },
     provider: "lima" as const,
     createdAt: "2026-10-19T12:00:00Z",
     setup,

@@ -15,7 +15,7 @@ export type Block =
 
 export type ChatItem =
   /** A prompt we sent. `id` is what Claude knows it by; `replayed` once Claude has echoed it, which means it can be rewound to. */
-  | { type: "user"; key: string; text: string; id?: string; replayed?: boolean; attachments?: Attachment[] }
+  | { type: "user"; key: string; text: string; id: string; replayed?: boolean; attachments?: Attachment[] }
   /** One assistant message: finished blocks, then the ones still streaming (by content index). */
   | { type: "assistant"; key: string; final: Block[]; drafts: Block[] }
   | { type: "turn"; key: string; status: "ok" | "interrupted" | "error"; durationMs?: number; costUsd?: number; tokens?: Tokens; message?: string }
@@ -374,7 +374,7 @@ function applyClaude(s: ChatState, m: Json & { type: string }, key: string): Cha
     case "user": {
       // Claude echoes each prompt back (the sign that it can be rewound to); the chat already shows it.
       if (m.isReplay === true) {
-        const index = s.items.findLastIndex((i) => i.type === "user" && i.id !== undefined && i.id === m.uuid);
+        const index = s.items.findLastIndex((i) => i.type === "user" && i.id === m.uuid);
         if (index < 0) return s;
         const items = [...s.items];
         items[index] = { ...(items[index] as Extract<ChatItem, { type: "user" }>), replayed: true };

@@ -288,19 +288,6 @@ describe("widgets", () => {
     s.close();
   });
 
-  it("finds an artifact Claude names in its old folder under ~/.claude in the Kumiko folder", async () => {
-    const { id, s } = await start();
-    // Sessions from before the move name their artifacts there; the files have moved to ~/.kumiko/shared.
-    await writeFile(join(kumikoHome, "artifacts", id, "moved.md"), "# Moved\n");
-    const opened = await ask(s, id, widget("artifact_open", { path: `${vmHome}/.claude/kumiko/artifacts/${id}/moved.md` }));
-    assert.match(opened, /^Showing .*moved\.md as artifact/);
-    assert.equal(artifactsOf(s.window())[0][1].path, docPath(id, "moved.md"), "the window names it where it is now");
-    assert.equal(textOf(artifactsOf(s.window())[0][1]), "# Moved\n");
-    await writeFile(join(kumikoHome, "artifacts", id, "moved.md"), "# Moved\n\nAnd changed.\n");
-    await waitFor(() => textOf(artifactsOf(s.window())[0][1]).includes("And changed."));
-    s.close();
-  });
-
   it("shows an artifact Claude wrote, and follows the file as it changes", async () => {
     const { id, s } = await start();
     const path = docPath(id);
@@ -312,7 +299,7 @@ describe("widgets", () => {
     const [[, doc]] = artifactsOf(w);
     assert.equal(doc.title, "The plan");
     assert.equal(textOf(doc), "# The plan\n\nStep one.\n");
-    assert.equal(doc.text, undefined, "the window names the content, rather than having it");
+    assert.ok(!("text" in doc), "the window names the content, rather than having it");
     // The window fetches it, as text, whatever the file.
     const served = await api(`/api/artifacts/${doc.content}`);
     assert.equal(served.headers.get("content-type"), "text/plain; charset=utf-8");
@@ -758,28 +745,6 @@ describe("widgets", () => {
     assert.equal(textOf(artifactsOf(again.window())[0][1]), "# Kept\n");
     // Its Claude was picked up, tools and all.
     assert.match(await ask(again, id, widget("window_list", {})), /p2 \(artifact w2 "Kept"/);
-    again.close();
-  });
-
-  it("follows an artifact a saved window names in its old folder under ~/.claude", async () => {
-    const { id, s } = await start();
-    const path = docPath(id);
-    await ask(s, id, write(path, "# Old\n"));
-    await ask(s, id, widget("artifact_open", { path }));
-    s.close();
-    ws.close();
-    await server.close();
-    // As a window saved before the move names it.
-    const saved = join(root, "sessions", `${id}.json`);
-    await writeFile(saved, (await readFile(saved, "utf8")).split(`${vmHome}/.kumiko/shared/artifacts/`).join(`${vmHome}/.claude/kumiko/artifacts/`));
-    await boot();
-    const again = await listen(id);
-    await waitFor(() => artifactsOf(again.window()).length === 1 || undefined);
-    assert.equal(artifactsOf(again.window())[0][1].path, `${vmHome}/.claude/kumiko/artifacts/${id}/plan.md`);
-    await writeFile(join(kumikoHome, "artifacts", id, "plan.md"), "# Old\n\nChanged where it is now.\n");
-    // A turn ending reads the window's artifacts again.
-    await ask(again, id, widget("window_list", {}));
-    await waitFor(() => textOf(artifactsOf(again.window())[0][1]).includes("Changed where it is now."));
     again.close();
   });
 });

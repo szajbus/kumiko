@@ -158,6 +158,17 @@ describe("LimaProvider against a fake limactl", () => {
     assert.ok(lines.some((l) => l.startsWith("warning: Kumiko's record")));
   });
 
+  it("reports a record whose spec has no working directory as one it can't read", async () => {
+    const { root, limaDir, provider } = await fakeLima();
+    await writeFile(join(limaDir, "km-mine.json"), JSON.stringify({ name: "km-mine", status: "Stopped" }));
+    await mkdir(join(root, "sandboxes"), { recursive: true });
+    const meta = { spec: { name: "mine", cpus: 2, memoryGiB: 4, diskGiB: 20, mounts: [], env: [] }, provider: "lima", createdAt: "2026-01-01T00:00:00Z", setup: "ready" };
+    await writeFile(join(root, "sandboxes", "mine.json"), JSON.stringify(meta));
+    const [info] = await provider.list();
+    assert.equal(info.meta, undefined);
+    assert.match(info.metaError!, /mine\.json, can't be read \(it has no valid spec\)/);
+  });
+
   it("creates, provisions once with forwarded variables, stops, starts and deletes", async () => {
     const { limaDir, mountDir, provider, log, lines } = await fakeLima({ TOKEN: "s3cr3t 'quoted'" });
     await provider.create(

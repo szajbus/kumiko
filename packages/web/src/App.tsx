@@ -339,7 +339,7 @@ export function App() {
     };
     addEventListener("keydown", onKey);
     // Electron's menu claims Cmd+W for closing the window, so the shell forwards it instead.
-    const offClose = window.kumiko?.onCloseTab?.((deleteToo) => shortcut.current(deleteToo ? "delete" : "close"));
+    const offClose = window.kumiko?.onCloseTab((deleteToo) => shortcut.current(deleteToo ? "delete" : "close"));
     return () => {
       removeEventListener("keydown", onKey);
       offClose?.();

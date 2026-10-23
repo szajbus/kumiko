@@ -159,7 +159,7 @@ describe("session windows", () => {
   it("keeps events of kinds it doesn't know when saving, as a newer Kumiko's", () => {
     const newer = { seq: 2, kind: "board", payload: {} } as unknown as SessionEvent;
     const events: SessionEvent[] = [
-      { seq: 1, kind: "user_prompt", payload: { text: "hi" } },
+      { seq: 1, kind: "user_prompt", payload: { text: "hi", id: "p1" } },
       newer,
       { seq: 3, kind: "window", payload: { op: add("w2") } },
       { seq: 4, kind: "error", payload: { message: "gone" } },

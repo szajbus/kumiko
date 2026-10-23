@@ -110,14 +110,10 @@ describe("server", () => {
     const kept = { sessions: ["ab12", "cd34"], newSessions: ["web", "", ""], active: "session:ab12", order: ["new-session:0", "session:cd34", "session:ab12"] };
     assert.deepEqual(await json(await api("/api/tabs")), kept);
     assert.deepEqual(JSON.parse(await readFile(join(dataDir, "tabs.json"), "utf8")), kept);
-    for (const bad of ["nope", JSON.stringify({ sessions: "ab12", active: "projects" }), JSON.stringify({ sessions: [] })]) {
+    for (const bad of ["nope", JSON.stringify({ sessions: "ab12", active: "projects" }), JSON.stringify({ sessions: [] }), JSON.stringify({ sessions: [], active: "projects", order: [] })]) {
       assert.equal((await api("/api/tabs", { method: "PUT", body: bad })).status, 400);
     }
     assert.deepEqual(await json(await api("/api/tabs")), kept);
-    // Saved before there could be more than one New session tab.
-    const single = { sessions: [], newSession: true, active: "projects" };
-    assert.equal((await api("/api/tabs", { method: "PUT", body: JSON.stringify(single) })).status, 200);
-    assert.deepEqual(await json(await api("/api/tabs")), { sessions: [], newSessions: [""], active: "projects", order: [] });
   });
 
   it("refuses what can't be a project's clone, leaving nothing behind", async () => {
@@ -219,29 +215,6 @@ describe("server", () => {
     assert.equal(await exists(kumikoHome), false);
     assert.ok(await exists(join(clone, "README")));
     assert.ok(await exists(clone + "__worktrees"));
-  });
-
-  it("gives a VM made before the Kumiko folder its mount when it starts", async () => {
-    await create("old");
-    const stop = events.length;
-    assert.equal((await api("/api/projects/old/stop", { method: "POST" })).status, 202);
-    assert.equal((await finished("old", "stopping", stop)).type, "done");
-    // As Kumiko recorded a VM it made with only the clone, the worktrees and the Claude home.
-    const metadata = new MetadataStore(join(dataDir, "sandboxes"));
-    const was = (await metadata.read("old"))!.spec;
-    await metadata.update("old", { spec: { ...was, mounts: was.mounts.filter((m) => m.guestPath !== "~/.kumiko/shared") } });
-    const before = (await readFile(join(limaDir, "calls.log"), "utf8")).split("\n").length;
-
-    const since = events.length;
-    assert.equal((await api("/api/projects/old/start", { method: "POST" })).status, 202);
-    assert.equal((await finished("old", "starting", since)).type, "done");
-    assert.deepEqual((await project("old"))!.meta?.spec.mounts.map((m) => m.guestPath), [was.mounts[0].hostPath, was.mounts[1].hostPath, "~/.claude", "~/.kumiko/shared"]);
-    const calls = (await readFile(join(limaDir, "calls.log"), "utf8")).split("\n").slice(before - 1).filter(Boolean).map((l) => JSON.parse(l) as string[]);
-    const edit = calls.findIndex((a) => a[0] === "edit" && a.includes("km-old"));
-    assert.ok(edit >= 0 && edit < calls.findIndex((a) => a[0] === "start" && a.includes("km-old")), "Lima gets the mount before the VM starts");
-    assert.ok(calls[edit].some((a) => a.includes(`"location":"${join(dataDir, "sandbox", "old")}","mountPoint":"{{.Home}}/.kumiko/shared"`)));
-
-    await remove("old");
   });
 
   it("reports provisioning failures and recreates with a fixed script", async () => {

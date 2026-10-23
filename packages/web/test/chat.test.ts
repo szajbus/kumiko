@@ -18,7 +18,7 @@ const ofType = <T extends ChatItem["type"]>(s: ChatState, type: T) => s.items.fi
 
 describe("chat", () => {
   it("passes over events of kinds it doesn't know, as a newer Kumiko's", () => {
-    const s = applyEvent(emptyChat(), { seq: 1, kind: "user_prompt", payload: { text: "hi" } });
+    const s = applyEvent(emptyChat(), { seq: 1, kind: "user_prompt", payload: { text: "hi", id: "p1" } });
     assert.equal(applyEvent(s, { seq: 2, kind: "board", payload: {} } as unknown as SessionEvent), s);
   });
 
@@ -45,7 +45,7 @@ describe("chat", () => {
 
   it("shows only the last logged-out card, and only while it has something to say", () => {
     const out = (key: string): ChatItem => ({ type: "error", key, message: "Claude isn't logged in.", signedOut: true });
-    const user = (key: string): ChatItem => ({ type: "user", key, text: "hi" });
+    const user = (key: string): ChatItem => ({ type: "user", key, text: "hi", id: key });
     const ok: ChatItem = { type: "turn", key: "t", status: "ok" };
     const account = { email: "you@example.com", plan: "max" };
     const items = [user("u1"), out("e1"), user("u2"), out("e2")];
@@ -149,11 +149,11 @@ describe("chat", () => {
   it("offers Claude's suggestion until a prompt is sent", () => {
     const s = fold([claude({ type: "prompt_suggestion", suggestion: "run the tests" })]);
     assert.equal(s.suggestion, "run the tests");
-    assert.equal(fold([{ kind: "user_prompt", payload: { text: "x" } }], s, 1).suggestion, undefined);
+    assert.equal(fold([{ kind: "user_prompt", payload: { text: "x", id: "p1" } }], s, 1).suggestion, undefined);
   });
 
   it("keeps the identity of items an event didn't touch, so memoised rows don't re-render", () => {
-    const before = fold([{ kind: "user_prompt", payload: { text: "hi" } }, assistant("m1", [{ type: "text", text: "a" }])]);
+    const before = fold([{ kind: "user_prompt", payload: { text: "hi", id: "p1" } }, assistant("m1", [{ type: "text", text: "a" }])]);
     const after = fold([stream("m2", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } })], before, 2);
     assert.equal(after.items[0], before.items[0]);
     assert.equal(after.items[1], before.items[1]);
@@ -169,8 +169,8 @@ describe("chat", () => {
     // A share is told to Claude with the next prompt that isn't a command.
     const shared = fold([{ kind: "shared", payload: { from: "s1", name: "Upload form", artifacts: [{ path: "/f/plan.md", title: "The plan" }] } }]);
     assert.deepEqual(ofType(shared, "shared"), [{ type: "shared", key: "1", name: "Upload form", titles: ["The plan"] }]);
-    assert.equal(ofType(fold([{ kind: "user_prompt", payload: { text: "/model opus" } }], shared, 1), "shared")[0].told, undefined);
-    assert.equal(ofType(fold([{ kind: "user_prompt", payload: { text: "Go on." } }], shared, 1), "shared")[0].told, true);
+    assert.equal(ofType(fold([{ kind: "user_prompt", payload: { text: "/model opus", id: "p1" } }], shared, 1), "shared")[0].told, undefined);
+    assert.equal(ofType(fold([{ kind: "user_prompt", payload: { text: "Go on.", id: "p1" } }], shared, 1), "shared")[0].told, true);
     // An answer to an ask that isn't there (rewound away) changes nothing.
     assert.equal(fold([{ kind: "proposal_answer", payload: { id: "a2", accepted: false } }], asked, 1), asked);
   });

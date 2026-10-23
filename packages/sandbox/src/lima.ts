@@ -10,12 +10,12 @@ import {
   sameMounts,
   vmName,
   VM_PREFIX,
-  WORKSPACE_DIR,
   type EditSpec,
   type SandboxInfo,
   type SandboxMeta,
   type SandboxSpec,
   type SandboxStatus,
+  type ValidSpec,
 } from "@kumiko/shared";
 import { MetadataError, MetadataStore } from "./metadata.js";
 import { eachLine, exitCode, runOk, type RunOptions } from "./proc.js";
@@ -342,7 +342,7 @@ export class LimaProvider implements SandboxProvider {
       log(`warning: ${err.message}`);
       return undefined;
     });
-    if (meta) await this.prepareShells(name, meta.spec.workdir ?? WORKSPACE_DIR, log);
+    if (meta) await this.prepareShells(name, meta.spec.workdir, log);
     if (meta?.setup === "creating") await this.runProvisioning(name, log);
     else if (meta && (await this.ensureClaude(name, log)) !== 0) log("warning: couldn't reinstall Claude Code; it is missing in the sandbox.");
   }
@@ -443,7 +443,7 @@ export class LimaProvider implements SandboxProvider {
       await this.limactlRun(args, { log });
     }
     await this.metadata.update(name, { spec: plan.spec });
-    if (plan.prepareShells) await this.prepareShells(name, plan.spec.workdir ?? WORKSPACE_DIR, log);
+    if (plan.prepareShells) await this.prepareShells(name, plan.spec.workdir, log);
     log(plan.limaArgs.length ? "Saved. Resource and mount changes apply on the next start." : "Saved.", "ok");
   }
 
@@ -459,12 +459,12 @@ export class LimaProvider implements SandboxProvider {
       meta = await this.metadata.read(name);
     } catch (err) {
       if (!(err instanceof MetadataError)) throw err;
-      return { errors: [err.message], warnings: [], spec: {} as SandboxSpec, limaArgs: [] };
+      return { errors: [err.message], warnings: [], spec: {} as ValidSpec, limaArgs: [] };
     }
     const inst = (await this.instances()).find((i) => i.name === vm);
     if (!meta || !inst) {
       const why = !inst ? `${vm} does not exist.` : `${vm} was not created by Kumiko, so it can't be edited.`;
-      return { errors: [why], warnings: [], spec: meta?.spec ?? ({} as SandboxSpec), limaArgs: [] };
+      return { errors: [why], warnings: [], spec: meta?.spec ?? ({} as ValidSpec), limaArgs: [] };
     }
 
     // Only these fields can change; an empty provision string clears the script.
@@ -500,7 +500,7 @@ export class LimaProvider implements SandboxProvider {
       errors.push(`Stop ${vm} to change its resources, mounts or access to your Mac's localhost, or save and restart it. Variables and the provisioning script can change while it runs.`);
     }
     // A stopped VM gets its new working directory on the next start; a running one right after saving.
-    const prepareShells = spec.workdir !== (meta.spec.workdir ?? WORKSPACE_DIR) && toStatus(inst.status) === "running";
+    const prepareShells = spec.workdir !== (meta.spec.workdir) && toStatus(inst.status) === "running";
     return { errors, warnings: v.warnings, spec, limaArgs, prepareShells };
   }
 
@@ -519,7 +519,7 @@ export class LimaProvider implements SandboxProvider {
 
     const script = meta.spec.provision;
     const forwarded = meta.spec.env.filter((n) => this.env()[n] !== undefined);
-    const workdir = meta.spec.workdir ?? WORKSPACE_DIR;
+    const workdir = meta.spec.workdir;
     if (script) {
       log("— provisioning (runs once, as the sandbox user) —", "note");
       if (forwarded.length) log(`forwarding ${forwarded.join(", ")}`, "note");

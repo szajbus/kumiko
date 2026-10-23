@@ -36,16 +36,16 @@ declare global {
     kumiko?: {
       pickFolder(): Promise<string | null>;
       platform: string;
-      getZoomFactor?(): number;
-      onCloseTab?(cb: (deleteToo: boolean) => void): () => void;
+      getZoomFactor(): number;
+      onCloseTab(cb: (deleteToo: boolean) => void): () => void;
       /** A PNG, in base64, of part of the window, in page coordinates. */
-      capture?(rect: { x: number; y: number; width: number; height: number }): Promise<string>;
+      capture(rect: { x: number; y: number; width: number; height: number }): Promise<string>;
       /** A PNG, in base64, of what a <webview> in the window shows, by its web contents' id. */
-      captureWebview?(id: number): Promise<string>;
+      captureWebview(id: number): Promise<string>;
       /** Calls back when the app blocks a page a <webview> was to show; returns a function that stops listening. */
-      onPageBlocked?(cb: (webContentsId: number, url: string) => void): () => void;
-      onPageWants?(cb: (webContentsId: number, url: string) => void): () => void;
-      openLink?(url: string): void;
+      onPageBlocked(cb: (webContentsId: number, url: string) => void): () => void;
+      onPageWants(cb: (webContentsId: number, url: string) => void): () => void;
+      openLink(url: string): void;
     };
   }
 }

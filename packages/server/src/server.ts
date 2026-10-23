@@ -18,7 +18,6 @@ import {
   NAME_PATTERN,
   parseSavedTabs,
   SESSION_ID_PATTERN,
-  sameMounts,
   artifactsOf,
   IMAGE_TYPES,
   nextId,
@@ -46,6 +45,7 @@ import {
   type RewindResponse,
   type SandboxInfo,
   type SandboxSpec,
+  type ValidSpec,
   type ServerEvent,
   type SessionStreamMessage,
   type SessionInfo,
@@ -583,10 +583,6 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
 
   const startVm: Work = async (p, i, log) => {
     await projects.writeManaged(p, setupOf(i.meta?.spec));
-    // A VM made before the project had all its fixed mounts (the Kumiko folder, say) gets them while it is stopped.
-    const { info } = await known(p.id);
-    const mounts = info.meta?.spec.mounts;
-    if (info.status === "stopped" && mounts && !sameMounts(mounts, projects.mounts(p, mounts))) await provider.edit(p.id, { mounts: projects.mounts(p, mounts) }, log);
     await provider.start(p.id, log);
     // Runs left from before the VM stopped have nothing running in them any more.
     await sweepRuns(p.id, await runs.list(p.id).catch(() => new Map()));
@@ -627,7 +623,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
    * config on start, so resource and mount changes apply; the disk and what provisioning installed stay. `edited` is the
    * spec `between` saves, which the VM starts with rather than the one in `i`.
    */
-  const restart = async (p: Project, i: SandboxInfo, log: Log, between?: () => Promise<void>, edited?: SandboxSpec) => {
+  const restart = async (p: Project, i: SandboxInfo, log: Log, between?: () => Promise<void>, edited?: ValidSpec) => {
     await endSessions(p.id, log);
     if (i.status !== "stopped") await provider.stop(p.id, log);
     await between?.();

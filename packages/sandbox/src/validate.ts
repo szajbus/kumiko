@@ -1,13 +1,13 @@
 import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, normalize, posix, sep } from "node:path";
-import { ENV_NAME_PATTERN, MINIMUMS, NAME_PATTERN, WORKSPACE_DIR, type SandboxSpec } from "@kumiko/shared";
+import { ENV_NAME_PATTERN, MINIMUMS, NAME_PATTERN, WORKSPACE_DIR, type SandboxSpec, type ValidSpec } from "@kumiko/shared";
 
 export interface Validation {
   errors: string[];
   warnings: string[];
   /** The spec with mount paths expanded and normalized. */
-  spec: SandboxSpec;
+  spec: ValidSpec;
 }
 
 export function expandHome(p: string): string {

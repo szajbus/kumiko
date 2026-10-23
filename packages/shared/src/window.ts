@@ -385,8 +385,6 @@ export interface ArtifactState {
    * page, or a file never read.
    */
   content?: string;
-  /** Sessions saved before the content was kept apart have it here: the text, or an image's bytes in base64. */
-  text?: string;
   /** The file is longer than what is shown. */
   truncated?: boolean;
   /** The file wasn't there when it was last read. */
@@ -396,7 +394,7 @@ export interface ArtifactState {
 }
 
 /** What changed in an artifact: its content as read again, or its title. */
-export type ArtifactOp = Partial<Pick<ArtifactState, "title" | "content" | "text" | "truncated" | "missing" | "approved">>;
+export type ArtifactOp = Partial<Pick<ArtifactState, "title" | "content" | "truncated" | "missing" | "approved">>;
 
 /** How much of an artifact's file a window keeps and shows. A safety limit, not one on what Claude writes. */
 export const MAX_ARTIFACT_BYTES = 256 * 1024;
@@ -435,15 +433,7 @@ export type WindowOp =
   | { type: "sync"; layout?: Layout; panes?: Record<PaneId, WidgetId>; active?: PaneId | null; under?: Record<WidgetId, WidgetId>; widgets?: Record<WidgetId, Widget>; removed?: WidgetId[] };
 
 /** The window after `op`; throws WindowError if it doesn't fit. */
-/** The ops that name a pane. */
-const PANE_OPS: readonly WindowOp["type"][] = ["split", "show", "move", "close"];
-
 export function applyWindowOp(w: WindowState, op: WindowOp): WindowState {
-  // An op that names a pane names it by its id; one saved in another shape doesn't, and doesn't fit.
-  if (PANE_OPS.includes(op.type)) {
-    const pane = (op as { pane?: unknown }).pane;
-    if (typeof pane !== "string" || !pane) throw new WindowError("Which pane?");
-  }
   switch (op.type) {
     case "add":
       if (!WIDGET_KINDS[op.kind]) throw new WindowError(`There is no kind of widget ${op.kind}.`);
@@ -471,31 +461,16 @@ export function applyWindowOp(w: WindowState, op: WindowOp): WindowState {
       const widgets = { ...w.widgets, ...op.widgets };
       for (const id of op.removed ?? []) delete widgets[id];
       const under = op.under ?? w.under;
-      // A layout that doesn't hold together (one saved in another shape) is left out; the widgets still come.
-      const panes = op.panes ?? w.panes;
-      const fits = !op.layout || wellFormed(op.layout, panes);
-      const active = !fits || op.active === undefined ? w.active : (op.active ?? undefined);
+      const active = op.active === undefined ? w.active : (op.active ?? undefined);
       return {
-        layout: fits ? (op.layout ?? w.layout) : w.layout,
-        panes: fits ? panes : w.panes,
+        layout: op.layout ?? w.layout,
+        panes: op.panes ?? w.panes,
         widgets,
         ...(active ? { active } : {}),
         ...(under && Object.keys(under).length ? { under } : {}),
       };
     }
   }
-}
-
-/** Whether `l` is a layout of panes that `panes` all name, each once, with the chat among them. */
-function wellFormed(l: unknown, panes: Record<PaneId, WidgetId>): boolean {
-  const seen: PaneId[] = [];
-  const walk = (x: unknown): boolean => {
-    if (!x || typeof x !== "object") return false;
-    const n = x as { kind?: unknown; id?: unknown; dir?: unknown; ratio?: unknown; a?: unknown; b?: unknown };
-    if (n.kind === "pane") return typeof n.id === "string" && n.id in panes && (seen.push(n.id), true);
-    return n.kind === "split" && (n.dir === "row" || n.dir === "column") && typeof n.ratio === "number" && walk(n.a) && walk(n.b);
-  };
-  return walk(l) && seen.includes(CHAT) && new Set(seen).size === seen.length && seen.length === Object.keys(panes).length;
 }
 
 type WindowEvent = Extract<SessionEvent, { kind: "window" }>;

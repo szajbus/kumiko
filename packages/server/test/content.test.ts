@@ -30,7 +30,7 @@ describe("artifacts' content", () => {
       op({ type: "add", widget: "w2", kind: "artifact", state: { path: "/a.md", type: "markdown", title: "A", content: added } }, 1),
       op({ type: "update", widget: "w2", op: { content: updated } }, 2),
       op({ type: "sync", widgets: { w2: { kind: "artifact", state: { path: "/a.md", type: "markdown", title: "A", content: synced } } } }, 3),
-      { seq: 4, kind: "user_prompt", payload: { text: `content ${gone}` } },
+      { seq: 4, kind: "user_prompt", payload: { text: `content ${gone}`, id: "p1" } },
     ]);
     assert.deepEqual((await readdir(store.dir)).sort(), [added, updated, synced].sort());
   });

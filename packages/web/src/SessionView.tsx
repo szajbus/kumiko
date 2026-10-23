@@ -613,7 +613,7 @@ const Item = memo(function Item({ item, from, to, open, onRewind, onFork, onAnsw
       // Only prompts Claude has echoed are in its history, so only those can be branched from.
       return (
         <div className="msg-user-row">
-          {item.replayed && item.id && (onRewind || onFork) && (
+          {item.replayed && (onRewind || onFork) && (
             <div className="msg-actions">
               {onFork && (
                 <button type="button" className="btn btn-secondary btn-compact" title="Fork from here: a new tab with the conversation up to Claude's reply to this message" aria-label="Fork from this message" onClick={() => onFork(item)}>

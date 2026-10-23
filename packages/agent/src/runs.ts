@@ -180,7 +180,7 @@ export function execOutput(exec: Exec, sandbox: string, cmd: string, timeoutMs =
 
 /**
  * The runs in each sandbox, for the server to find its sessions' agents again and to clean up those it has lost. With
- * an `owner`, only that Kumiko home's runs are seen, and those with no owner, which came before runs had one.
+ * an `owner`, only that Kumiko home's runs are seen.
  */
 export class Runs {
   constructor(private readonly exec: Exec, private readonly owner?: string) {}
@@ -191,7 +191,7 @@ export class Runs {
     const runs = new Map<string, RunState>();
     for (const line of out.split("\n")) {
       const [id, state, owner] = line.trim().split(" ");
-      if (this.owner && owner && owner !== this.owner) continue;
+      if (this.owner && owner !== this.owner) continue;
       if (id && RUN_ID.test(id) && (state === "alive" || state === "exited" || state === "lost")) runs.set(id, state);
     }
     return runs;
