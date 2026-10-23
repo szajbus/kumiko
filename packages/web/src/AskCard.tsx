@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, type KeyboardEvent } from "react";
+import { createContext, useContext, useId, useState, type KeyboardEvent } from "react";
 import type { AgentQuestion, AskAnswer } from "@kumiko/shared";
 import { answersOf, askOutcome, noPicks, pick, pickOwn, planTitle, splitAnswer, typeOwn, type Picks } from "./asks";
 import type { ChatItem } from "./chat";
@@ -79,7 +79,8 @@ function QuestionsCard({ item, questions }: { item: AskItem; questions: AgentQue
 
 /** One question: its options, then a box for an answer of the user's own. The digits pick options while it has the focus. */
 function Question({ q, n, picks, disabled, onChange }: { q: AgentQuestion; n: number; picks: Picks; disabled: boolean; onChange(p: Picks): void }) {
-  const name = `ask-${n}-${q.question}`;
+  // Unique on the page: chats in other tabs stay mounted, and may ask the same question, which would share the group.
+  const name = `${useId()}-${n}`;
   const type = q.multiSelect ? "checkbox" : "radio";
   const onKeyDown = (e: KeyboardEvent<HTMLFieldSetElement>) => {
     if (e.target instanceof HTMLInputElement && e.target.type === "text") return;
