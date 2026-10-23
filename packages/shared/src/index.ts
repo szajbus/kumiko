@@ -362,8 +362,9 @@ export interface SessionInfo {
    */
   closing?: { delete: boolean; until: string };
   /**
-   * Opened from its saved chat with no Claude, as its tab came back while its sandbox was stopped: Kumiko doesn't
-   * start a sandbox for that on its own. Its status is `ended` until the sandbox runs and Claude continues it.
+   * No Claude for now, as its sandbox is stopped: it stopped with the sandbox, or its tab came back while the sandbox
+   * was stopped, which Kumiko doesn't start on its own for that. Its status is `ended` until the sandbox runs, however
+   * it is started, and Claude continues it.
    */
   asleep?: boolean;
 }
@@ -389,7 +390,8 @@ export type SessionEvent =
   | { seq: number; kind: "interrupt"; payload: Record<string, never> }
   /** `signedOut`: Claude isn't logged in, so the UI offers to log in instead of only showing the message. */
   | { seq: number; kind: "error"; payload: { message: string; hint?: string; stderr?: string[]; signedOut?: boolean } }
-  | { seq: number; kind: "ended"; payload: { reason: EndReason; code?: number } }
+  /** `asleep`: it stopped with its sandbox, and continues once that runs again (see `SessionInfo.asleep`). */
+  | { seq: number; kind: "ended"; payload: { reason: EndReason; code?: number; asleep?: boolean } }
   /** A change to the session's window. `toolUseId`: the tool call of Claude's that made it, if one did. */
   | { seq: number; kind: "window"; payload: { op: WindowOp; toolUseId?: string } }
   /**

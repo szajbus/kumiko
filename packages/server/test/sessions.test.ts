@@ -315,7 +315,7 @@ describe("sessions", () => {
     await api(`/api/sessions/${id}`, { method: "DELETE" });
   });
 
-  it("ends a sandbox's sessions when it stops, and runs several at once", async () => {
+  it("puts a sandbox's sessions to sleep when it stops, wakes them when it starts, and runs several at once", async () => {
     await create("two");
     const a = await startSession("one", "first");
     const b = await startSession("two", "second");
@@ -328,19 +328,29 @@ describe("sessions", () => {
     assert.equal((await api("/api/projects/two/stop", { method: "POST" })).status, 202);
     assert.equal((await finished("two", "stopping", since)).type, "done");
     const logs = events.slice(since).filter((e) => e.type === "log").map((e) => (e as { data: { text: string } }).data.text);
-    assert.ok(logs.includes("Ending 2 agent sessions…"));
+    assert.ok(logs.includes("Pausing 2 agent sessions…"));
     assert.deepEqual([(await session(b))?.status, (await session(c))?.status, (await session(a))?.status], ["ended", "ended", "idle"]);
-    assert.deepEqual(sb.got.at(-1)?.kind === "ended" && sb.got.at(-1)?.payload, { reason: "sandbox", code: 0 });
+    assert.deepEqual([(await session(b))?.asleep, (await session(c))?.asleep], [true, true]);
+    assert.deepEqual(sb.got.at(-1)?.kind === "ended" && sb.got.at(-1)?.payload, { reason: "sandbox", code: 0, asleep: true });
     assert.equal((await sandbox("two")).sessions, 0);
+
+    // Started from the project, not from their tabs, the sandbox wakes them, and Claude carries on.
+    assert.equal((await api("/api/projects/two/start", { method: "POST" })).status, 202);
+    for (const id of [b, c]) await waitFor(async () => { const i = await session(id); return (i?.status === "idle" && !i.asleep) || undefined; });
+    await api(`/api/sessions/${b}/prompt`, { method: "POST", body: JSON.stringify({ text: "back?" }) });
+    await waitFor(() => sb.got.some((e) => e.kind === "claude" && e.payload.type === "result" && e.payload.result === "You said: back?") || undefined);
+    for (const id of [a, b, c]) await api(`/api/sessions/${id}`, { method: "DELETE" });
   });
 
-  it("ends sessions whose sandbox stops outside Kumiko", async () => {
-    await api("/api/projects/two/start", { method: "POST" });
+  it("puts sessions to sleep when their sandbox stops outside Kumiko", async () => {
     await waitFor(async () => { const sb = await sandbox("two"); return (sb.status === "running" && !sb.busy) || undefined; });
     const id = await startSession("two", "hello");
     await waitFor(async () => (await session(id))?.status === "idle" || undefined);
     await writeFile(join(limaDir, "km-two.json"), JSON.stringify({ name: "km-two", status: "Stopped" }));
-    await waitFor(async () => (await session(id))?.status === "ended" || undefined);
+    await waitFor(async () => { const i = await session(id); return (i?.status === "ended" && i.asleep) || undefined; });
+    await writeFile(join(limaDir, "km-two.json"), JSON.stringify({ name: "km-two", status: "Running" }));
+    await waitFor(async () => { const i = await session(id); return (i?.status === "idle" && !i.asleep) || undefined; });
+    await api(`/api/sessions/${id}`, { method: "DELETE" });
   });
 
   it("resumes a closed session with its chat, and forks one", async () => {
@@ -516,12 +526,20 @@ describe("sessions", () => {
     let since = events.length;
     await api("/api/projects/doomed/recreate", { method: "POST" });
     assert.equal((await finished("doomed", "recreating", since)).type, "done");
-    assert.equal((await session(doomed))?.status, "ended");
+    // Asleep while it is recreated, it continues in the new VM.
+    await idle(doomed);
+    assert.equal((await session(doomed))?.asleep, undefined);
     await api(`/api/sessions/${doomed}`, { method: "DELETE" });
     assert.ok((await saved()).includes(doomed), "a recreated project keeps its saved sessions");
+    const last = await startSession("doomed", "the end");
+    await idle(last);
     since = events.length;
     await api("/api/projects/doomed", { method: "DELETE" });
     assert.equal((await finished("doomed", "deleting", since)).type, "done");
+    const gone = await session(last);
+    assert.equal(gone?.status, "ended", "a deleted project's sessions end");
+    assert.equal(gone?.asleep, undefined, "with no sandbox to wait for");
+    await api(`/api/sessions/${last}`, { method: "DELETE" });
     const left = await saved();
     assert.ok(!left.includes(doomed), "a deleted project takes its saved sessions with it");
     assert.ok(left.includes(kept), "other projects keep theirs");

@@ -31,6 +31,8 @@ interface Session {
   blocks: Map<string, { started: number; finished: number }>;
   /** Set by `end`, so the exit that follows is recorded with the right reason. */
   ending?: EndReason;
+  /** Set by `endSandbox` for a sandbox that is to run again: the session falls asleep instead of ending, if it can. */
+  sleeping?: boolean;
   /** The model named by the latest /model sent; Claude confirms it in words only, not with an id. */
   pendingModel?: string;
   exited: Promise<void>;
@@ -223,6 +225,8 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     if (!s.info.asleep) return s.info;
     const { asleep: _asleep, ...rest } = s.info;
     s.info = { ...rest, status: "idle" };
+    s.ending = undefined;
+    s.sleeping = undefined;
     this.startDriver(s, { sandbox: s.info.sandbox, workdir: s.info.workdir, env, ...continuing(s.info) });
     this.emit("changed");
     this.save(s);
@@ -444,8 +448,10 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
           const failed = !s.ending && (ev.code !== 0 || s.info.status === "starting");
           // A session that stopped by itself needs the user to look; one they ended doesn't.
           const unread = s.ending ? s.info.unread : true;
-          this.setInfo(s, { status: failed ? "failed" : "ended", endedAt: new Date().toISOString(), bufferBytes: s.bytes, unread });
-          this.push(s, { kind: "ended", payload: { reason, code: ev.code } });
+          // Stopped with its sandbox, it continues once that runs again, if it has anything of Claude's to continue.
+          const asleep = s.sleeping === true && !s.info.closing && s.info.claudeSessionId !== undefined;
+          this.setInfo(s, { status: failed ? "failed" : "ended", endedAt: new Date().toISOString(), bufferBytes: s.bytes, unread, ...(asleep ? { asleep } : {}) });
+          this.push(s, { kind: "ended", payload: { reason, code: ev.code, ...(asleep ? { asleep } : {}) } });
           this.save(s);
           resolveExit();
           if (s.info.closing) void this.finish(s);
@@ -473,6 +479,7 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     // A fresh start gets a new Claude id from its first init; until then there is nothing to fork or resume.
     s.info = { ...rest, status: "idle", unread: keepUnread ? s.info.unread : false, ...(resume ? {} : { claudeSessionId: undefined, resumeAt: undefined }) };
     s.ending = undefined;
+    s.sleeping = undefined;
     s.blocks.clear();
     this.startDriver(s, { sandbox: s.info.sandbox, workdir: s.info.workdir, env, ...resume });
     if (live) void old.stop();
@@ -493,8 +500,10 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     // Only its run made it worth keeping, and that has ended with nothing of Claude's to resume.
     if (!s.info.claudeSessionId && !live) return this.forget(s);
     const unfinished = new Set([...s.blocks].filter(([, c]) => c.finished < c.started).map(([id]) => id));
+    // Asleep is how its tab is, while open: opened again, it is asleep only if its sandbox is stopped then.
+    const { asleep: _asleep, ...info } = s.info;
     const stored: StoredSession = {
-      info: { ...s.info, updatedAt: new Date().toISOString() },
+      info: { ...info, updatedAt: new Date().toISOString() },
       events: chatEvents(s.events, live ? unfinished : undefined),
       ...(at ? { run: { id: at.run, offset: at.offset, live, ...(live && s.driver.pendingCalls().length ? { pending: s.driver.pendingCalls() } : {}) } } : {}),
     };
@@ -770,11 +779,15 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     return true;
   }
 
-  /** Ends every live session in a sandbox; returns how many there were. */
-  async endSandbox(sandbox: string, reason: EndReason): Promise<number> {
-    const ids = [...this.sessions.values()].filter((s) => s.info.sandbox === sandbox && isLive(s.info)).map((s) => s.info.id);
-    await Promise.all(ids.map((id) => this.end(id, reason)));
-    return ids.length;
+  /**
+   * Ends every live session in a sandbox; returns how many there were. With `sleep`, for a sandbox that is to run
+   * again, they fall asleep instead (see `SessionInfo.asleep`), and continue once it runs.
+   */
+  async endSandbox(sandbox: string, reason: EndReason, { sleep = false }: { sleep?: boolean } = {}): Promise<number> {
+    const live = [...this.sessions.values()].filter((s) => s.info.sandbox === sandbox && isLive(s.info));
+    for (const s of live) s.sleeping = sleep;
+    await Promise.all(live.map((s) => this.end(s.info.id, reason)));
+    return live.length;
   }
 
   async endAll(reason: EndReason): Promise<void> {

@@ -76,8 +76,9 @@ export function ago(iso: string, now = Date.now()): string {
   return `${d} ${d === 1 ? "day" : "days"} ago`;
 }
 
-/** The line that closes an ended session's chat. */
-export function endedText(reason: EndReason, code?: number): string {
+/** The line that closes an ended session's chat, or, `asleep`, one that stopped with its sandbox and continues when it runs. */
+export function endedText(reason: EndReason, code?: number, asleep?: boolean): string {
+  if (asleep) return "Claude stopped with the sandbox. It continues when the sandbox starts again.";
   switch (reason) {
     case "user":
       return "Session ended.";

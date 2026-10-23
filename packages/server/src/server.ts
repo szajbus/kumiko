@@ -311,10 +311,11 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     }
   };
 
-  /** Sessions whose sandbox stopped or vanished outside Kumiko end too. */
+  /** Sessions whose sandbox stopped outside Kumiko fall asleep too; those whose sandbox vanished end. */
   const endOrphanedSessions = () => {
     for (const [name] of sessions.liveCounts()) {
-      if (infos.find((i) => i.name === name)?.status !== "running") void sessions.endSandbox(name, "sandbox");
+      const info = infos.find((i) => i.name === name);
+      if (info?.status !== "running") void sessions.endSandbox(name, "sandbox", { sleep: info !== undefined });
     }
   };
 
@@ -340,12 +341,15 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     }
   };
 
-  /** Ends a sandbox's sessions before an operation takes it down, noting it in the operation's log. */
-  const endSessions = async (name: string, log: Log) => {
+  /**
+   * Ends a sandbox's sessions before an operation takes it down, noting it in the operation's log. With `sleep`, for a
+   * sandbox that is to run again, they fall asleep instead, and continue once it runs, however it is started.
+   */
+  const endSessions = async (name: string, log: Log, { sleep = false }: { sleep?: boolean } = {}) => {
     const n = sessions.liveCounts().get(name) ?? 0;
     if (!n) return;
-    log(`Ending ${n} agent session${n === 1 ? "" : "s"}…`, "note");
-    await sessions.endSandbox(name, "sandbox");
+    log(`${sleep ? "Pausing" : "Ending"} ${n} agent session${n === 1 ? "" : "s"}…`, "note");
+    await sessions.endSandbox(name, "sandbox", { sleep });
   };
 
   /**
@@ -614,17 +618,17 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     return readyProject(id);
   };
   app.post("/api/projects/:id/stop", action("stopping", async (p, _i, log) => {
-    await endSessions(p.id, log);
+    await endSessions(p.id, log, { sleep: true });
     await provider.stop(p.id, log);
   }));
 
   /**
-   * Stops the VM (ending its sessions) and starts it again, running `between` while it is stopped. Lima reads its
+   * Stops the VM (its sessions fall asleep) and starts it again, running `between` while it is stopped. Lima reads its
    * config on start, so resource and mount changes apply; the disk and what provisioning installed stay. `edited` is the
    * spec `between` saves, which the VM starts with rather than the one in `i`.
    */
   const restart = async (p: Project, i: SandboxInfo, log: Log, between?: () => Promise<void>, edited?: ValidSpec) => {
-    await endSessions(p.id, log);
+    await endSessions(p.id, log, { sleep: true });
     if (i.status !== "stopped") await provider.stop(p.id, log);
     await between?.();
     await startVm(p, edited && i.meta ? { ...i, meta: { ...i.meta, spec: edited } } : i, log);
@@ -642,11 +646,11 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   }));
 
   /**
-   * Deletes the VM and creates it again from `spec`, ending its sessions first. Saved sessions stay resumable: Claude's
+   * Deletes the VM and creates it again from `spec`, its sessions asleep meanwhile. They can continue: Claude's
    * history is in the project's Claude home, on the host.
    */
   const recreate = async (project: Project, spec: SandboxSpec, log: Log) => {
-    await endSessions(project.id, log);
+    await endSessions(project.id, log, { sleep: true });
     await provider.delete(project.id, log);
     await projects.writeManaged(project, setupOf(spec));
     await provider.create(spec, log, await agentSetup(project));
