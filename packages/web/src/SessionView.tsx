@@ -591,7 +591,8 @@ function Chat({ chat, running, live, active, onRewind, onFork, onQuote, onAnswer
         <AgentsContext.Provider value={agents}>
         {rows.map((row) => {
           if (row.type !== "work") return itemRow(row);
-          const ids = toolIds(row);
+          // Only for saying which subagents work on in it, or opening it on Show: most renders need neither.
+          const ids = background.length || reveal ? toolIds(row) : [];
           return (
             <Work key={row.key} row={row} onUnfold={agents.onUnfold} agents={ids.filter((id) => background.includes(id)).length} reveal={reveal && ids.includes(reveal.id) ? reveal.n : undefined}>
               {row.rows.map(itemRow)}
