@@ -172,9 +172,9 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
   const fork = (prompt?: string) => call(() => api.forkSession(session.id, prompt).then(({ id }) => onForked(id)));
   const canBranch = idle && Boolean(session.claudeSessionId);
   /** The user's answer to Claude asking to start a session; accepted, its tab opens. */
-  const answerProposal = (item: ProposalItem, accept: boolean) =>
+  const answerProposal = (item: ProposalItem, accept: boolean, prompt?: string) =>
     call(() =>
-      api.answerProposal(session.id, item.id, accept).then(({ id, skipped }) => {
+      api.answerProposal(session.id, item.id, accept, prompt).then(({ id, skipped }) => {
         if (id) onForked(id);
         // Started, but without some of what it was to be given.
         if (skipped?.length) setError(`The session started without some artifacts: ${skipped.join(" ")}`);
@@ -375,19 +375,37 @@ function useChat(events: SessionStream["events"]): ChatState {
 
 type UserItem = Extract<ChatItem, { type: "user" }>;
 type ProposalItem = Extract<ChatItem, { type: "proposal" }>;
+/** Answers a proposal; `prompt` is the one to start it on, if the user changed Claude's. */
+type AnswerProposal = (item: ProposalItem, accept: boolean, prompt?: string) => Promise<boolean>;
 
-/** Claude asking to start a new session on a prompt: the prompt, and Start or Decline until the user answers. */
-function ProposalCard({ item, onAnswer }: { item: ProposalItem; onAnswer?: (item: ProposalItem, accept: boolean) => Promise<boolean> }) {
+/**
+ * Claude asking to start a new session on a prompt: the prompt, which the user can change, and Start or Decline until
+ * they answer.
+ */
+function ProposalCard({ item, onAnswer }: { item: ProposalItem; onAnswer?: AnswerProposal }) {
   const [sending, setSending] = useState<boolean | undefined>();
+  const [prompt, setPrompt] = useState(item.prompt);
+  const edited = prompt !== item.prompt;
   const answer = async (accept: boolean) => {
     setSending(accept);
-    if (!(await onAnswer!(item, accept))) setSending(undefined);
+    if (!(await onAnswer!(item, accept, accept && edited ? prompt : undefined))) setSending(undefined);
   };
   const answered = item.accepted !== undefined;
+  const editable = !answered && onAnswer;
   return (
     <div className={`chat-proposal${answered ? " is-answered" : ""}`} role={answered ? undefined : "group"} aria-label="Claude asks to start a new session">
       <strong>{item.title ? `Claude asks to start a new session, "${item.title}":` : "Claude asks to start a new session:"}</strong>
-      <div className="chat-proposal-prompt">{item.prompt}</div>
+      {editable ? (
+        <textarea
+          className="chat-proposal-prompt"
+          aria-label="The new session's prompt"
+          value={prompt}
+          disabled={sending !== undefined}
+          onChange={(e) => setPrompt(e.target.value)}
+        />
+      ) : (
+        <div className="chat-proposal-prompt">{item.prompt}</div>
+      )}
       {item.artifacts && (
         <span className="chat-proposal-artifacts">
           With {item.artifacts.length > 1 ? "copies of these artifacts" : "a copy of this artifact"}: {item.artifacts.map((p) => p.split("/").pop()).join(", ")}
@@ -398,13 +416,15 @@ function ProposalCard({ item, onAnswer }: { item: ProposalItem; onAnswer?: (item
       ) : (
         onAnswer && (
           <div className="chat-error-actions">
-            <span>It starts in this project, in a tab of its own, with nothing of this conversation but the prompt.</span>
-            <button type="button" className="btn btn-primary btn-compact" disabled={sending !== undefined} onClick={() => void answer(true)}>
-              {sending === true ? "Starting…" : "Start session"}
-            </button>
-            <button type="button" className="btn btn-secondary btn-compact" disabled={sending !== undefined} onClick={() => void answer(false)}>
-              Decline
-            </button>
+            <span>It starts in this project, in a tab of its own, with nothing of this conversation but the prompt, which you can change first.</span>
+            <span className="chat-proposal-buttons">
+              <button type="button" className="btn btn-secondary btn-compact" disabled={sending !== undefined} onClick={() => void answer(false)}>
+                Decline
+              </button>
+              <button type="button" className="btn btn-primary btn-compact" disabled={sending !== undefined || !prompt.trim()} onClick={() => void answer(true)}>
+                {sending === true ? "Starting…" : "Start session"}
+              </button>
+            </span>
           </div>
         )
       )}
@@ -458,7 +478,7 @@ interface ChatProps {
   /** Text selected in the chat, quoted, to go in the message. */
   onQuote(quoted: string): void;
   /** Answers Claude asking to start a session; resolves to whether that went through. */
-  onAnswer?: (item: ProposalItem, accept: boolean) => Promise<boolean>;
+  onAnswer?: AnswerProposal;
   /** Shown in place of one item: the logged-out card, with Log in, or once logged in, the green one with Retry. */
   actions?: { key: string; node: ReactNode };
   /** Items not to show at all. */
@@ -602,7 +622,7 @@ interface ItemProps {
   open: boolean;
   onRewind?: (item: UserItem) => void;
   onFork?: (item: UserItem) => void;
-  onAnswer?: (item: ProposalItem, accept: boolean) => Promise<boolean>;
+  onAnswer?: AnswerProposal;
   actions?: ReactNode;
 }
 

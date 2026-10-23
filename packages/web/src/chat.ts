@@ -263,7 +263,13 @@ export function applyEvent(s: ChatState, ev: SessionEvent): ChatState {
       const index = s.items.findIndex((i) => i.type === "proposal" && i.id === ev.payload.id);
       if (index < 0) return s;
       const items = [...s.items];
-      items[index] = { ...(items[index] as Extract<ChatItem, { type: "proposal" }>), accepted: ev.payload.accepted, ...(ev.payload.session ? { session: ev.payload.session } : {}) };
+      items[index] = {
+        ...(items[index] as Extract<ChatItem, { type: "proposal" }>),
+        accepted: ev.payload.accepted,
+        ...(ev.payload.session ? { session: ev.payload.session } : {}),
+        // The prompt it started on, when the user changed Claude's.
+        ...(ev.payload.prompt !== undefined ? { prompt: ev.payload.prompt } : {}),
+      };
       return { ...s, items };
     }
     default:

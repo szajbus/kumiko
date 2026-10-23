@@ -152,7 +152,9 @@ export const api = {
   /** Starts a new session from a copy of this one's conversation: all of it, or up to the end of a prompt's turn. */
   forkSession: (id: string, prompt?: string) => request<{ id: string }>("POST", `/api/sessions/${id}/fork`, { prompt } satisfies ForkRequest),
   /** Answers Claude asking to start a new session; accepted, returns the session it started. */
-  answerProposal: (id: string, proposal: string, accept: boolean) => request<{ id?: string; skipped?: string[] }>("POST", `/api/sessions/${id}/proposals/${proposal}`, { accept }),
+  /** `prompt`: the one to start it on, if the user changed Claude's. */
+  answerProposal: (id: string, proposal: string, accept: boolean, prompt?: string) =>
+    request<{ id?: string; skipped?: string[] }>("POST", `/api/sessions/${id}/proposals/${proposal}`, { accept, ...(prompt !== undefined ? { prompt } : {}) }),
   /** Takes the session back to just before a prompt, optionally with the files put back too. */
   rewindSession: (id: string, prompt: string, files: boolean) =>
     request<RewindResponse>("POST", `/api/sessions/${id}/rewind`, { prompt, files } satisfies RewindRequest & { prompt: string }),

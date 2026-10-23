@@ -216,6 +216,30 @@ describe("widgets", () => {
     s.close();
   });
 
+  it("starts a session Claude asked for on the prompt as the user changed it", async () => {
+    const { id, s } = await start();
+    await ask(s, id, widget("session_start", { prompt: "Fix the flaky upload test." }));
+    const asked = s.events().findLast((e) => e.kind === "proposal");
+    const proposal = asked?.kind === "proposal" ? asked.payload.id : "";
+    const answer = (body: object) => api(`/api/sessions/${id}/proposals/${proposal}`, { method: "POST", body: JSON.stringify(body) });
+
+    assert.equal((await answer({ accept: true, prompt: "  " })).status, 400);
+    assert.equal((await answer({ accept: true, prompt: 7 })).status, 400);
+    const res = await answer({ accept: true, prompt: " Fix the flaky upload test, and the download one. " });
+    assert.equal(res.status, 201);
+    const { id: started } = await json(res);
+    assert.equal((await session(started))?.prompt, "Fix the flaky upload test, and the download one.");
+    // The chat shows the prompt it started on.
+    assert.deepEqual(s.events().findLast((e) => e.kind === "proposal_answer")?.payload, {
+      id: proposal,
+      accepted: true,
+      session: started,
+      prompt: "Fix the flaky upload test, and the download one.",
+    });
+    await api(`/api/sessions/${started}`, { method: "DELETE" });
+    s.close();
+  });
+
   it("lists the project's sessions for Claude, by their names and descriptions", async () => {
     const a = await start();
     const b = await start();

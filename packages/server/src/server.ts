@@ -843,14 +843,17 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   const accepting = new Set<string>();
   /**
    * The user's answer to Claude asking to start a new session (its session_start tool): accepted, it starts in the
-   * project on the proposed prompt, named as proposed, with copies of the artifacts asked for, and its id is returned,
-   * with what couldn't be copied; declined, nothing starts.
+   * project on the proposed prompt, or on `prompt` if the user changed it, named as proposed, with copies of the
+   * artifacts asked for, and its id is returned, with what couldn't be copied; declined, nothing starts.
    */
   app.post("/api/sessions/:id/proposals/:proposal", async (c) => {
     const from = sessionOf(c);
     const proposalId = c.req.param("proposal");
-    const req = await c.req.json<{ accept?: unknown }>().catch(() => ({}) as { accept?: unknown });
-    if (typeof req.accept !== "boolean") throw new HttpError(400, "Body must be JSON: { accept }.");
+    const req = await c.req.json<{ accept?: unknown; prompt?: unknown }>().catch(() => ({}) as { accept?: unknown; prompt?: unknown });
+    if (typeof req.accept !== "boolean") throw new HttpError(400, "Body must be JSON: { accept, prompt? }.");
+    if (req.prompt !== undefined && typeof req.prompt !== "string") throw new HttpError(400, "The prompt must be a string.");
+    const edited = req.prompt?.trim();
+    if (req.accept && edited === "") throw new HttpError(400, "Give the new session a prompt.");
     const proposal = sessions.openProposal(from.id, proposalId);
     if (!proposal || accepting.has(proposalId)) throw new HttpError(409, "That has been answered already.");
     if (!req.accept) {
@@ -860,7 +863,10 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     accepting.add(proposalId);
     try {
       const ready = await startedProject(from.sandbox);
-      const { prompt, title, artifacts = [] } = proposal;
+      const { title, artifacts = [] } = proposal;
+      // The prompt the user started it on, said in the answer only when it isn't Claude's.
+      const prompt = edited ?? proposal.prompt;
+      const changed = prompt !== proposal.prompt ? prompt : undefined;
       // The artifacts it is given go in its folder before its Claude starts, and the prompt says where they are.
       const id = sessions.newId();
       const { copied, skipped } = artifacts.length ? await widgets.copyArtifacts(from, { id, sandbox: from.sandbox }, artifacts) : { copied: [], skipped: [] };
@@ -868,7 +874,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
         ? `\n\nCopies of artifacts from the session that asked for this one are in your artifacts folder, and your window shows them: ${copied.map((c) => `${c.path} ("${c.title}")`).join(", ")}.`
         : "";
       const session = sessions.start({ sandbox: from.sandbox, workdir: ready.workdir, env: ready.env, prompt: prompt + given, id });
-      sessions.answerProposal(from.id, proposalId, true, session.id);
+      sessions.answerProposal(from.id, proposalId, true, session.id, changed);
       if (title) sessions.rename(session.id, title, "agent");
       if (copied.length) await widgets.addCopies(session, copied, true);
       return c.json({ id: session.id, ...(skipped.length ? { skipped } : {}) }, 201);

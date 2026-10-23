@@ -660,6 +660,10 @@ a.artifact-copy { text-decoration: none; }
 /* Claude asking to start a new session */
 .chat-proposal { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface-2); overflow-wrap: anywhere; }
 .chat-proposal-prompt { padding: 8px 10px; border-radius: 6px; background: rgba(0, 0, 0, 0.25); white-space: pre-wrap; max-height: 240px; overflow: auto; }
+/* Editable until answered: as tall as its text, up to the same height */
+textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 1px solid var(--border); line-height: inherit; resize: vertical; }
+/* Decline, then Start: at the right, on the sentence's line if there is room */
+.chat-proposal-buttons { display: flex; gap: 12px; margin-left: auto; }
 .chat-proposal-answer, .chat-proposal-artifacts { color: var(--muted); font-size: 12.5px; }
 .chat-proposal.is-answered { border-color: var(--border); }
 .chat-ended { align-self: center; padding: 4px 12px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 12.5px; }

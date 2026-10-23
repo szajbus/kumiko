@@ -397,8 +397,8 @@ export type SessionEvent =
    * the artifacts whose files are `artifacts` (paths in the VM); see `proposal_answer`.
    */
   | { seq: number; kind: "proposal"; payload: { id: string; prompt: string; title?: string; artifacts?: string[]; toolUseId?: string } }
-  /** The user's answer to proposal `id`: accepted, starting `session`, or declined. */
-  | { seq: number; kind: "proposal_answer"; payload: { id: string; accepted: boolean; session?: string } }
+  /** The user's answer to proposal `id`: accepted, starting `session` (on `prompt`, when they changed Claude's), or declined. */
+  | { seq: number; kind: "proposal_answer"; payload: { id: string; accepted: boolean; session?: string; prompt?: string } }
   /**
    * Session `from`, named `name` then, sharing copies of artifacts with this one (its artifact_share tool): their files
    * in this session's folder. Claude is told with the user's next message; see `sharesWaiting`.

@@ -666,11 +666,11 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
     if (s.info.status === "idle") this.save(s);
   }
 
-  /** Records the user's answer to a proposal: accepted, having started `session`, or declined. */
-  answerProposal(id: string, proposalId: string, accepted: boolean, session?: string): void {
+  /** Records the user's answer to a proposal: accepted, having started `session` (on `prompt`, if they changed it), or declined. */
+  answerProposal(id: string, proposalId: string, accepted: boolean, session?: string, prompt?: string): void {
     const s = this.sessions.get(id);
     if (!s) throw new SessionNotFound(`No session ${id}.`);
-    this.push(s, { kind: "proposal_answer", payload: { id: proposalId, accepted, ...(session ? { session } : {}) } });
+    this.push(s, { kind: "proposal_answer", payload: { id: proposalId, accepted, ...(session ? { session } : {}), ...(prompt !== undefined ? { prompt } : {}) } });
     if (s.info.status !== "running" && s.info.status !== "starting") this.save(s);
   }
 

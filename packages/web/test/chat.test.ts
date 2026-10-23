@@ -164,6 +164,9 @@ describe("chat", () => {
     assert.deepEqual(ofType(asked, "proposal"), [{ type: "proposal", key: "1", id: "a1", prompt: "Fix the test.", title: "Flaky test" }]);
     const accepted = fold([{ kind: "proposal_answer", payload: { id: "a1", accepted: true, session: "s2" } }], asked, 1);
     assert.deepEqual(ofType(accepted, "proposal")[0], { type: "proposal", key: "1", id: "a1", prompt: "Fix the test.", title: "Flaky test", accepted: true, session: "s2" });
+    // Started on a prompt the user changed, it shows that one.
+    const changed = fold([{ kind: "proposal_answer", payload: { id: "a1", accepted: true, session: "s2", prompt: "Fix both tests." } }], asked, 1);
+    assert.equal(ofType(changed, "proposal")[0].prompt, "Fix both tests.");
     const withCopies = fold([{ kind: "proposal", payload: { id: "a3", prompt: "Go.", artifacts: ["/f/plan.md"] } }]);
     assert.deepEqual(ofType(withCopies, "proposal")[0].artifacts, ["/f/plan.md"]);
     // A share is told to Claude with the next prompt that isn't a command.
