@@ -19,6 +19,29 @@ A subagent started in the background goes on after the turn is over. Until it's 
 a line below the turn says what it is doing, with **Show** to open it, and the tab says Working. When it's done, the
 agent takes a turn of its own to report on it, which starts with a line saying what finished, in place of a message.
 
+## Background tasks
+
+The agent can leave commands running in the background: a dev server, a build, a test run it moved there, or a
+**Monitor** watching a log. Their tool call says **background** (or **watching**) while they run, with **Show**.
+
+**Tasks** by the message box, or **Cmd+Shift+B**, opens the Tasks pane beside the chat. It lists what runs in the
+background, subagents too, with the shells a subagent started under it, then what has ended. Pick one to see its
+command, how long it has run, when the agent will stop it (30 minutes by default), and its output as it comes. **Stop**
+stops it; the agent hears of it with your next message. Reading the output costs no tokens. Ended tasks stay listed, with
+the end of their output, until you **Clear ended**.
+
+When a command ends by itself, the agent takes a turn to report on it, which starts with a line saying how it ended,
+with **Output**. A command you stop gets that line, and no turn. A Monitor wakes the agent each time it prints a line,
+and that turn starts with the line; when the agent had nothing to say but a short reply, those turns fold into one line
+per monitor, which opens to show each line and the reply to it.
+
+While the agent waits on a long command, **Move to background** on its line, or **Ctrl+B**, lets it go on while the
+command runs, as Ctrl+B does in Claude Code.
+
+Commands in the background don't make the tab say Working: a server left running isn't work. The tab shows how many
+tasks run in the background, and closing it asks first, as that stops them. Stopping a turn leaves them running; they end with
+the agent, or when the subagent that started them is done.
+
 ## When the agent asks you something
 
 The agent works without asking for permission, but it can stop in the middle of a turn to ask you something. It waits

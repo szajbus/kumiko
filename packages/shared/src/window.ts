@@ -12,7 +12,7 @@ export type Layout =
   | { kind: "split"; dir: "row" | "column"; ratio: number; a: Layout; b: Layout };
 
 export interface Widget {
-  /** Which kind of widget: "chat", for now the only one. */
+  /** Which kind of widget: "chat", "artifact" or "tasks". */
   kind: string;
   state?: unknown;
 }
@@ -31,6 +31,9 @@ export interface WindowState {
 
 /** The chat's pane and widget, which every window has and none can close. */
 export const CHAT = "chat";
+
+/** The widget listing Claude's background tasks; a window has it once the user first opens it. */
+export const TASKS = "tasks";
 
 /** How many panes a window can have. Enough for a large screen; a window too narrow for its panes stacks them. */
 export const MAX_PANES = 16;
@@ -404,6 +407,7 @@ export const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 /** Every kind of widget a window can show. */
 export const WIDGET_KINDS: Record<string, WidgetKind> = {
   chat: {},
+  tasks: {},
   artifact: {
     apply: (state, op) => ({ ...(state as ArtifactState), ...(op as ArtifactOp) }),
   },

@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { answerFits, applyWindowOp, chatWindow, compactWindow, isBusy, isCommand, LIVE_SESSION_STATUSES, sharedNote, sharesWaiting, windowState, type Attachment, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo, type WindowOp, type WindowState, type AgentAsk, type AskAnswer, type AskClosedReason } from "@kumiko/shared";
-import { TOOL_TIMEOUT_MS, type AgentDriver, type AgentFile, type AgentMessage, type StartOptions, type ToolHost } from "@kumiko/agent";
+import { TOOL_TIMEOUT_MS, type AgentDriver, type AgentFile, type AgentMessage, type StartOptions, type TaskOutput, type ToolHost } from "@kumiko/agent";
 import { chatEvents, type SessionStore, type StoredSession } from "./store.js";
 import { trimMessage } from "./trim.js";
 
@@ -46,6 +46,25 @@ interface Session {
   closeTimer?: NodeJS.Timeout;
   /** Ending and forgetting a closed session, once it is under way. */
   finishing?: Promise<void>;
+  /** What this Claude process has said of its background shells and monitors; see `TaskWatch`. */
+  tasks?: TaskWatch;
+  /** Prompts sent whose turns haven't started: a turn that starts with none waiting is one Claude took by itself. */
+  waiting?: number;
+}
+
+/**
+ * The shells and monitors of one Claude process, as far as the session follows them: to keep a task's output once it
+ * ends, and to tell which monitor woke Claude for a turn of its own.
+ */
+interface TaskWatch {
+  /** Shell and monitor tasks by Claude's task id. */
+  shells: Map<string, { running: boolean }>;
+  /** The tool_use ids of Claude's Monitor calls; a task started by one is a monitor. */
+  monitorCalls: Set<string>;
+  /** Running monitors, by task id, with how much they had printed when last looked at. */
+  monitors: Map<string, number>;
+  /** A task ended since Claude's last turn ended: the turn Claude takes next is for that, not a monitor's line. */
+  ended: boolean;
 }
 
 /** What sessions' windows need beyond the window itself: the tools Claude changes them with, and the files they show. */
@@ -91,6 +110,9 @@ const isLive = (s: SessionInfo) => LIVE_SESSION_STATUSES.includes(s.status);
  */
 const isWorking = isBusy;
 
+/** How long after Claude says a task ended its output is read to be kept, so the line saying how it ended is in it. */
+const OUTPUT_SETTLE_MS = 500;
+
 /** How long Claude may go on with its turn after its session is closed, before it is stopped. */
 export const FINISH_MS = 30 * 60_000;
 
@@ -115,6 +137,25 @@ const toolsVersion = (widgets: SessionWidgets | undefined) =>
 
 const sizeOf = (e: SessionEvent) => Buffer.byteLength(JSON.stringify(e));
 
+/** Claude's task ids that the events say started and haven't said ended or were lost. */
+function openTasks(events: readonly SessionEvent[]): string[] {
+  const open = new Set<string>();
+  for (const e of events) {
+    if (e.kind === "tasks_lost") for (const id of e.payload.taskIds) open.delete(id);
+    if (e.kind !== "claude" || e.payload.type !== "system" || typeof e.payload.task_id !== "string") continue;
+    if (e.payload.subtype === "task_started") open.add(e.payload.task_id);
+    else if (e.payload.subtype === "task_notification") open.delete(e.payload.task_id);
+  }
+  return [...open];
+}
+
+/**
+ * Claude's message, with when it arrived for a task's start or end, which Claude doesn't say, so the chat can tell how
+ * long a task has run. Messages read again after a restart get the time they were read.
+ */
+const stamped = (m: AgentMessage): AgentMessage =>
+  m.type === "system" && (m.subtype === "task_started" || m.subtype === "task_notification") ? { ...m, received_at: new Date().toISOString() } : m;
+
 /** The driver of a session opened asleep: there is no Claude behind it, so it says nothing and has nothing to stop. */
 const noDriver: AgentDriver = {
   start: () => {
@@ -128,6 +169,9 @@ const noDriver: AgentDriver = {
     throw new SessionEnded("Claude isn't running in this session.");
   },
   rewindFiles: () => Promise.reject(new SessionEnded("Claude isn't running in this session.")),
+  taskOutput: () => Promise.reject(new SessionEnded("Claude isn't running in this session.")),
+  stopTask: () => Promise.reject(new SessionEnded("Claude isn't running in this session.")),
+  backgroundTasks: () => Promise.reject(new SessionEnded("Claude isn't running in this session.")),
   interrupt: () => {},
   stop: () => Promise.resolve(),
   detach: () => Promise.resolve(),
@@ -214,7 +258,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     const { info: saved } = stored;
     if (this.sessions.has(saved.id)) throw new SessionNotResumable("This session is already open.");
     if (!saved.claudeSessionId) throw new SessionNotResumable("This session has nothing of Claude's to resume.");
-    const { endedAt: _endedAt, updatedAt: _updatedAt, unread: _unread, closing: _closing, agents: _agents, asking: _asking, ...rest } = saved;
+    const { endedAt: _endedAt, updatedAt: _updatedAt, unread: _unread, closing: _closing, agents: _agents, shells: _shells, asking: _asking, ...rest } = saved;
     const info: SessionInfo = { ...rest, status: "idle" };
     return this.launch(info, stored.events, { sandbox: info.sandbox, workdir: info.workdir, env, ...continuing(saved) });
   }
@@ -227,7 +271,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     const { info: saved } = stored;
     if (this.sessions.has(saved.id)) throw new SessionNotResumable("This session is already open.");
     if (!saved.claudeSessionId) throw new SessionNotResumable("This session has nothing of Claude's to resume.");
-    const { endedAt: _endedAt, updatedAt: _updatedAt, closing: _closing, toolsOutdated: _outdated, agents: _agents, asking: _asking, ...rest } = saved;
+    const { endedAt: _endedAt, updatedAt: _updatedAt, closing: _closing, toolsOutdated: _outdated, agents: _agents, shells: _shells, asking: _asking, ...rest } = saved;
     const s = this.newSession({ ...rest, status: "ended", asleep: true }, stored.events);
     this.closeAsks(s, "exited");
     s.driver = noDriver;
@@ -445,6 +489,11 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     const widgets = this.widgets?.tools(s.info);
     const { toolsOutdated: _outdated, ...info } = s.info;
     s.info = { ...info, toolsVersion: toolsVersion(this.widgets) };
+    // Tasks the last process never said were over went with it.
+    const lost = openTasks(s.events);
+    if (lost.length) this.push(s, { kind: "tasks_lost", payload: { taskIds: lost } });
+    s.tasks = undefined;
+    s.waiting = driverOpts.prompt !== undefined ? 1 : 0;
     driver.start({ ...driverOpts, run: `${s.info.id}-${randomBytes(4).toString("hex")}`, ...widgets });
     if (s.info.planMode) driver.setPlanMode(true);
   }
@@ -486,7 +535,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
       if (s.driver !== driver || s.detached) return;
       switch (ev.kind) {
         case "message":
-          this.push(s, { kind: "claude", payload: ev.payload });
+          this.push(s, { kind: "claude", payload: stamped(ev.payload) });
           this.onMessage(s, ev.payload);
           this.widgets?.message(s.info, ev.payload);
           break;
@@ -512,7 +561,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
           const unread = s.ending ? s.info.unread : true;
           // Stopped with its sandbox, it continues once that runs again, if it has anything of Claude's to continue.
           const asleep = s.sleeping === true && !s.info.closing && s.info.claudeSessionId !== undefined;
-          this.setInfo(s, { status: failed ? "failed" : "ended", endedAt: new Date().toISOString(), bufferBytes: s.bytes, unread, agents: undefined, ...(asleep ? { asleep } : {}) });
+          this.setInfo(s, { status: failed ? "failed" : "ended", endedAt: new Date().toISOString(), bufferBytes: s.bytes, unread, agents: undefined, shells: undefined, ...(asleep ? { asleep } : {}) });
           this.push(s, { kind: "ended", payload: { reason, code: ev.code, ...(asleep ? { asleep } : {}) } });
           this.save(s);
           resolveExit();
@@ -537,7 +586,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     const resume = succeeded && s.info.claudeSessionId ? continuing(s.info) : undefined;
     const old = s.driver;
     const live = isLive(s.info);
-    const { endedAt: _endedAt, asleep: _asleep, agents: _agents, ...rest } = s.info;
+    const { endedAt: _endedAt, asleep: _asleep, agents: _agents, shells: _shells, ...rest } = s.info;
     // A fresh start gets a new Claude id from its first init; until then there is nothing to fork or resume.
     s.info = { ...rest, status: "idle", unread: keepUnread ? s.info.unread : false, ...(resume ? {} : { claudeSessionId: undefined, resumeAt: undefined }) };
     s.ending = undefined;
@@ -602,7 +651,11 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
   private onMessage(s: Session, m: AgentMessage) {
     this.countBlocks(s, m);
 
+    this.watchTasks(s, m);
     if (m.type === "system" && m.subtype === "init") {
+      // A turn nobody prompted, with no task ended to report on: a monitor's line may have woken Claude.
+      if (s.waiting) s.waiting--;
+      else if (s.tasks && !s.tasks.ended && s.tasks.monitors.size) void this.findMonitorEvent(s);
       // Claude sends init at the start of every turn, so it also marks a queued prompt's turn starting.
       const isNew = typeof m.session_id === "string" && m.session_id !== s.info.claudeSessionId;
       this.setInfo(s, {
@@ -622,10 +675,12 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     } else if (m.type === "rate_limit_event") {
       this.emit("rateLimit", s.info.sandbox, m.rate_limit_info);
     } else if (m.type === "system" && m.subtype === "background_tasks_changed") {
-      // Claude lists what it has running in the background whenever that changes; background shells don't count.
-      const tasks = Array.isArray(m.tasks) ? (m.tasks as { task_type?: unknown }[]) : [];
+      // Claude lists what it has running in the background whenever that changes. Subagents are work; shells and
+      // monitors are counted apart, and watchers Claude marks ambient not at all.
+      const tasks = Array.isArray(m.tasks) ? (m.tasks as { task_type?: unknown; ambient?: unknown }[]) : [];
       const agents = tasks.filter((t) => t?.task_type === "local_agent").length;
-      this.setInfo(s, { agents: agents || undefined });
+      const shells = tasks.filter((t) => t?.task_type !== "local_agent" && t?.ambient !== true).length;
+      this.setInfo(s, { agents: agents || undefined, shells: shells || undefined });
     } else if (m.type === "system" && m.subtype === "session_title_changed") {
       // /rename; saved with the turn's result that follows.
       if (typeof m.title === "string" && m.title.trim()) this.setInfo(s, { title: m.title.trim(), titleBy: "user" });
@@ -642,6 +697,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
       s.events = compactWindow(s.events);
       s.bytes = s.events.reduce((n, e) => n + sizeOf(e), 0);
       s.blocks.clear();
+      if (s.tasks) s.tasks.ended = false;
       const switched = s.pendingModel && typeof m.result === "string" && m.result.startsWith("Set model to");
       // Claude is done and waits for the user, until they look.
       this.setInfo(s, { status: "idle", bufferBytes: s.bytes, unread: true, ...(switched ? { model: s.pendingModel } : {}) });
@@ -695,6 +751,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     const note = isCommand(text) ? "" : sharedNote(sharesWaiting(s.events));
     this.push(s, { kind: "user_prompt", payload: { text, id: promptId, ...(attachments.length ? { attachments } : {}) } });
     s.pendingModel = /^\/model\s+(\S+)/.exec(text)?.[1];
+    s.waiting = (s.waiting ?? 0) + 1;
     s.driver.send(text + note, promptId, files);
     if (s.info.status === "idle") this.setInfo(s, { status: "running" });
     // Kumiko's own record of the prompt is nowhere in Claude's output, so it is saved now.
@@ -788,6 +845,71 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     const s = this.sessions.get(id);
     if (!s) throw new SessionNotFound(`No session ${id}.`);
     if (s.info.unread) this.setInfo(s, { unread: false });
+  }
+
+  /** Follows what Claude says of its shells and monitors; see `TaskWatch`. */
+  private watchTasks(s: Session, m: AgentMessage) {
+    const w = (s.tasks ??= { shells: new Map(), monitorCalls: new Set(), monitors: new Map(), ended: false });
+    if (m.type === "assistant" && !m.parent_tool_use_id) {
+      const content = (m.message as { content?: unknown } | undefined)?.content;
+      for (const b of Array.isArray(content) ? (content as { type?: unknown; name?: unknown; id?: unknown }[]) : [])
+        if (b?.type === "tool_use" && b.name === "Monitor" && typeof b.id === "string") w.monitorCalls.add(b.id);
+    }
+    if (m.type !== "system" || typeof m.task_id !== "string") return;
+    const id = m.task_id;
+    if (m.subtype === "task_started" && m.task_type === "local_bash") {
+      w.shells.set(id, { running: true });
+      if (typeof m.tool_use_id === "string" && w.monitorCalls.has(m.tool_use_id)) w.monitors.set(id, 0);
+    } else if (m.subtype === "task_notification") {
+      w.ended = true;
+      w.monitors.delete(id);
+      const shell = w.shells.get(id);
+      if (!shell?.running) return;
+      shell.running = false;
+      // Claude deletes a task's output soon after, and all of it when it exits: what it printed is kept with the session.
+      // It adds how the task ended ("[killed]") just after it says so, hence the wait.
+      const driver = s.driver;
+      void new Promise((r) => setTimeout(r, OUTPUT_SETTLE_MS)).then(() => driver.taskOutput(id)).then(
+        (o) => {
+          if (isLive(s.info)) this.push(s, { kind: "task_output", payload: { taskId: id, output: o.output, totalBytes: o.totalBytes, truncated: o.truncated } });
+        },
+        () => {},
+      );
+    }
+  }
+
+  /**
+   * Which monitor woke Claude for the turn it is starting, if one did: the one whose output grew since it was last looked
+   * at. Claude's stream doesn't say, so its newest line is recorded for the chat to start that turn with.
+   */
+  private async findMonitorEvent(s: Session) {
+    const w = s.tasks!;
+    const driver = s.driver;
+    for (const [id, seen] of [...w.monitors]) {
+      const o = await driver.taskOutput(id).catch(() => undefined);
+      if (!o || o.totalBytes <= seen || s.driver !== driver) continue;
+      w.monitors.set(id, o.totalBytes);
+      const line = o.output.split("\n").map((l) => l.trim()).filter(Boolean).at(-1) ?? "";
+      if (isLive(s.info)) this.push(s, { kind: "monitor_event", payload: { taskId: id, line } });
+      return;
+    }
+  }
+
+  /** The end of what background task `taskId` has printed, from Claude, which keeps it. */
+  taskOutput(id: string, taskId: string): Promise<TaskOutput> {
+    return this.live(id).driver.taskOutput(taskId);
+  }
+
+  /** Stops a background task, as the user asked; recorded first, so the chat can say who stopped it. */
+  async stopTask(id: string, taskId: string): Promise<void> {
+    const s = this.live(id);
+    this.push(s, { kind: "task_stop", payload: { taskId } });
+    await s.driver.stopTask(taskId);
+  }
+
+  /** Moves foreground tasks to the background: the one tool call `toolUseId` started, or all of them. */
+  backgroundTasks(id: string, toolUseId?: string): Promise<void> {
+    return this.live(id).driver.backgroundTasks(toolUseId);
   }
 
   interrupt(id: string): void {

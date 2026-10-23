@@ -109,6 +109,7 @@ export function Header({ sessions, newSessions, order, active, onSelect, onClose
         dot: st.color,
         pulse: isBusy(s),
         asleep: s.asleep,
+        background: (s.agents ?? 0) + (s.shells ?? 0) || undefined,
       };
     }
     const n = newSessions.find((x) => `new-session:${x.key}` === id);
@@ -290,6 +291,8 @@ interface TabLook {
   pulse?: boolean;
   /** Its session waits for its sandbox to start: the tab is greyed. */
   asleep?: boolean;
+  /** How many subagents, shells and monitors Claude has running in the background. */
+  background?: number;
 }
 
 type TabProps = TabLook & { id: TabId; active: TabId } & (
@@ -299,7 +302,7 @@ type TabProps = TabLook & { id: TabId; active: TabId } & (
 );
 
 function Tab(props: TabProps) {
-  const { id, active, label, title, dot, pulse, asleep } = props;
+  const { id, active, label, title, dot, pulse, asleep, background } = props;
   const selected = id === active && !props.closing;
   const onSelect = props.closing ? () => {} : props.onSelect;
   const onClose = props.closing ? () => {} : props.onClose;
@@ -326,6 +329,11 @@ function Tab(props: TabProps) {
       <button type="button" role="tab" aria-selected={selected} className="tab-main" title={title ?? label} onClick={() => onSelect(id)}>
         {dot && <span className={`dot dot-small${pulse ? " dot-pulse" : ""}`} style={{ background: dot }} aria-hidden="true" />}
         <span className="tab-label">{label}</span>
+        {background ? (
+          <span className="tab-background" aria-label={`${background} running in the background`}>
+            {background}
+          </span>
+        ) : null}
       </button>
       <button type="button" className="tab-close" aria-label={`Close ${label}`} title="Close" onClick={() => onClose(id)}>
         <svg width="10" height="10" viewBox="0 0 14 14" aria-hidden="true">

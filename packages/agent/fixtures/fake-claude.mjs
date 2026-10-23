@@ -20,6 +20,14 @@
 //   "plan"       calls ExitPlanMode with a short plan, and replies with the tool result; outside plan mode that fails
 //   "enter plan" calls EnterPlanMode, which switches to plan mode without asking, as with permissions bypassed
 //   "ask bash"   calls Bash in a way that asks for permission, as a permissions.ask rule would, and runs it if allowed
+//   "bg-shell [N]" starts a Bash command with run_in_background and replies at once. It prints "line i" every step
+//                ($FAKE_CLAUDE_SHELL_MS, 100ms) for N steps, then exits 0, and Claude takes a turn of its own to report
+//                on it; without N it runs until it is stopped. "bg-fail" prints a line, then exits 3
+//   "monitor N"  starts a Monitor that prints "event i" every step for N steps: each line wakes Claude for a short turn
+//                of its own ("No action is needed."), and once it ends, Claude takes one more
+//   "fg-shell"   runs a Bash command in the foreground for 30 steps, reported as a task after the first; moved to the
+//                background, its call returns at once and it goes on there
+//   "agent-shell" runs a subagent that starts a background shell and finishes, which kills the shell
 //   anything else is echoed back as "You said: …", followed by " [with …]" naming the files that came with it
 // With a `.require-login` file in $CLAUDE_CONFIG_DIR, every prompt is answered as "signed out" until there is a
 // `.credentials.json` beside it. `claude auth status` and `claude auth login` work against that folder: the login
@@ -35,6 +43,10 @@
 // as Claude 2.1.309 does: an interrupt, or the end of stdin, cancels it with a `control_cancel_request`, and an answer
 // to a request that isn't waiting any more is ignored. Without the flag they fail. A `set_permission_mode` request
 // switches the mode, which Claude reports in a `system/status` message and in every init.
+// Background shells and monitors are tasks as in Claude 2.1.309: task_started, task_updated, task_notification and
+// background_tasks_changed. `get_task_output` answers with the end of a task's output, `stop_task` kills one, and
+// `background_tasks` moves a foreground one to the background. With stdin closed, Claude waits for its shells to end
+// before it exits; SIGTERM kills them, each reported as stopped, and it exits with 143.
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { existsSync, fstatSync, mkdirSync, writeFileSync } from "node:fs";
@@ -228,7 +240,85 @@ async function agentTool(parent, msg, name, input, text, uses) {
   subOut(parent, { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: text }] } });
 }
 
-async function turn({ text, files }) {
+/** Background shells and monitors, and foreground commands long enough to be tasks, by task id. */
+const shells = new Map();
+const shellStep = () => sleep(Number(process.env.FAKE_CLAUDE_SHELL_MS ?? 100));
+const OUTPUT_TAIL = 8192;
+const liveShells = () => [...shells.values()].filter((t) => t.status === "running");
+const tasksChanged = () =>
+  out({ type: "system", subtype: "background_tasks_changed", tasks: liveShells().filter((t) => t.background).map((t) => ({ task_id: t.id, task_type: "local_bash", description: t.description, ...(t.parent ? { parent_task_id: t.parent } : {}) })), session_id, uuid: randomUUID() });
+const taskEvent = (subtype, t, extra) => out({ type: "system", subtype, task_id: t.id, session_id, uuid: randomUUID(), ...extra });
+const outputFile = (t) => `/tmp/claude-1000/fake/${session_id}/tasks/${t.id}.output`;
+
+/** A turn Claude takes by itself, queued behind any other. */
+function autoTurn(text) {
+  queue.push({ auto: text });
+  void pump();
+}
+
+/**
+ * Starts a shell task (`kind` "shell" or "monitor") that prints one line per step from `lines`, then exits with `code`;
+ * `steps` Infinity runs until stopped. Returns it; `t.done` resolves once it has ended, however it did.
+ */
+function startShell({ toolUseId, description, kind = "shell", background = true, steps, line = (i) => `line ${i}`, code = 0, parent, onLine }) {
+  const t = { id: `b${randomUUID().replace(/-/g, "").slice(0, 8)}`, toolUseId, description, kind, background, status: "running", output: "", parent };
+  let finish;
+  t.done = new Promise((r) => (finish = r));
+  t.end = (status, how) => {
+    if (t.status !== "running") return;
+    t.status = status === "completed" ? "completed" : status === "failed" ? "failed" : "killed";
+    // As Claude does, the line saying how it ended lands in its output just after Claude says it ended.
+    setTimeout(() => (t.output += how), 100);
+    taskEvent("task_updated", t, { patch: { status: t.status, end_time: Date.now() } });
+    const summary =
+      status === "stopped"
+        ? description
+        : kind === "monitor"
+          ? `Monitor "${description}" stream ended`
+          : status === "failed"
+            ? `Background command "${description}" failed with exit code ${code}`
+            : `Background command "${description}" completed (exit code 0)`;
+    taskEvent("task_notification", t, { tool_use_id: toolUseId, status, output_file: t.background ? outputFile(t) : "", summary });
+    if (t.background) tasksChanged();
+    finish(status);
+  };
+  shells.set(t.id, t);
+  if (background) tasksChanged();
+  taskEvent("task_started", t, { tool_use_id: toolUseId, description, is_backgrounded: background, task_type: "local_bash", ...(parent ? { owned_by_subagent: true, parent_task_id: parent } : {}) });
+  void (async () => {
+    for (let i = 1; i <= steps && t.status === "running"; i++) {
+      await shellStep();
+      if (t.status !== "running") return;
+      t.output += line(i) + "\n";
+      onLine?.(i);
+    }
+    if (t.status !== "running") return;
+    await shellStep();
+    t.end(code ? "failed" : "completed", `\n[exited with code ${code}]\n`);
+    // Claude hears of a background task's end, and takes a turn to report on it; a foreground one returns to its call.
+    if (t.background && !parent) autoTurn(kind === "monitor" ? "The monitor has stopped." : code ? `The command failed with exit code ${code}.` : "The command finished.");
+  })();
+  return t;
+}
+
+/** Kills a running task, as `stop_task` does, or a signal; Claude takes no turn for it. */
+const killShell = (t) => t.end("stopped", "\n[killed]\n");
+
+/** The tool call of a shell task: Bash or Monitor in the background, with the result Claude gives it. */
+function backgroundCall(id, name, input, opts) {
+  const tool = { type: "tool_use", id: `toolu_${randomUUID().slice(0, 8)}`, name, input };
+  out({ type: "assistant", message: { model, id, type: "message", role: "assistant", content: [tool] }, parent_tool_use_id: opts.parentToolUseId ?? null, session_id, uuid: randomUUID() });
+  const t = startShell({ ...opts, toolUseId: tool.id, description: input.description });
+  const text =
+    name === "Monitor"
+      ? `Monitor started (task ${t.id}, expires in 30m unless the source ends first). You will be notified on each event.`
+      : `Command running in background with ID: ${t.id}. Output is being written to: ${outputFile(t)}. You will be notified when it completes.`;
+  const result = name === "Monitor" ? { taskId: t.id, timeoutMs: 1800000, persistent: false } : { stdout: "", stderr: "", interrupted: false, backgroundTaskId: t.id };
+  out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: tool.id, content: text }] }, parent_tool_use_id: opts.parentToolUseId ?? null, tool_use_result: result, session_id, uuid: randomUUID() });
+  return t;
+}
+
+async function turn({ text, files, auto }) {
   let cancelled = false;
   let onCancel;
   current = { cancel: () => ((cancelled = true), onCancel?.()) };
@@ -236,6 +326,13 @@ async function turn({ text, files }) {
   await handshake;
   const mcpNames = mcpTools.map((t) => `mcp__${mcpServer}__${t.name}`);
   out({ type: "system", subtype: "init", cwd: process.cwd(), session_id, model, tools: ["Bash", "Read", "Write", ...mcpNames], permissionMode: mode, slash_commands: ["compact", "model", "context"] });
+
+  if (auto !== undefined) {
+    const id = `msg_${++msgN}`;
+    ev({ type: "message_start", message: { model, id, type: "message", role: "assistant", content: [] } }, id);
+    await streamText(id, auto, 0, () => false);
+    return result(start, { text: auto });
+  }
 
   if (text.startsWith("/model ")) {
     model = `claude-${text.slice(7).trim()}-5-5`;
@@ -354,6 +451,61 @@ async function turn({ text, files }) {
     return result(after, { text: "reported" });
   }
 
+  if (/^bg-shell( \d+)?$/.test(text) || text === "bg-fail") {
+    const fail = text === "bg-fail";
+    const steps = fail ? 1 : text.length > 8 ? Number(text.slice(9)) : Infinity;
+    const command = fail ? "sleep 1; echo about to fail >&2; exit 3" : "npm run dev";
+    backgroundCall(id, "Bash", { command, description: fail ? "Fail after a line" : "Start the dev server", run_in_background: true }, { steps, code: fail ? 3 : 0, line: fail ? () => "about to fail" : undefined });
+    const id2 = `msg_${++msgN}`;
+    await streamText(id2, "started", 0, () => cancelled);
+    return result(start, { text: "started" });
+  }
+
+  if (/^monitor \d+$/.test(text)) {
+    backgroundCall(id, "Monitor", { command: "tail -F build.log", description: "Watch the build log" }, { kind: "monitor", steps: Number(text.slice(8)), line: (i) => `event ${i}`, onLine: () => autoTurn("No action is needed.") });
+    const id2 = `msg_${++msgN}`;
+    await streamText(id2, "watching", 0, () => cancelled);
+    return result(start, { text: "watching" });
+  }
+
+  if (text === "fg-shell") {
+    const input = { command: "npm test", description: "Run the tests" };
+    const call = await toolCall(id, "Bash", input, async (toolUseId) => {
+      // Claude reports a foreground command as a task once it has run a while.
+      await shellStep();
+      const t = startShell({ toolUseId, description: input.description, background: false, steps: 30, line: (i) => `test ${i}` });
+      const moved = new Promise((r) => (t.moved = r));
+      const how = await Promise.race([t.done, moved, new Promise((r) => (onCancel = () => r("cancelled")))]);
+      if (how === "cancelled") {
+        killShell(t);
+        return { text: "Interrupted", isError: true };
+      }
+      if (how === "moved") return { text: `Command was manually backgrounded by user with ID: ${t.id}. Output is being written to: ${outputFile(t)}.`, isError: false };
+      return { text: t.output.replace(/\n+\[exited with code \d+\]\n$/, ""), isError: false };
+    });
+    if (cancelled) return result(start, { subtype: "error_during_execution" });
+    const id2 = `msg_${++msgN}`;
+    const reply = call.text.startsWith("Command was manually backgrounded") ? "moved" : "tests done";
+    await streamText(id2, reply, 0, () => cancelled);
+    return result(start, { text: reply });
+  }
+
+  if (text === "agent-shell") {
+    const a = startAgent(id, "Start a server, then report");
+    task("task_progress", a, { description: "Running Start a server", usage: { total_tokens: 16000, tool_uses: 1, duration_ms: 1500 }, last_tool_name: "Bash" });
+    const t = backgroundCall("msg_sub_shell", "Bash", { command: "python3 -m http.server", description: "Serve files", run_in_background: true }, { steps: Infinity, parent: `task-${a}`, parentToolUseId: a });
+    await shellStep();
+    await shellStep();
+    subOut(a, { type: "assistant", message: { model, id: "msg_sub_shell2", type: "message", role: "assistant", content: [{ type: "text", text: "The server is up." }] } });
+    // A subagent's shells end with it.
+    killShell(t);
+    task("task_notification", a, { status: "completed", summary: "The server is up.", usage: { total_tokens: 17000, tool_uses: 1, duration_ms: 2000 } });
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: a, content: [{ type: "text", text: "The server is up." }] }] }, parent_tool_use_id: null, session_id, uuid: randomUUID() });
+    const id2 = `msg_${++msgN}`;
+    await streamText(id2, "done", 0, () => cancelled);
+    return result(start, { text: "done" });
+  }
+
   if (text === "ask" || text.startsWith("ask {") || text === "plan" || text === "ask bash") {
     const [name, input] =
       text === "plan"
@@ -440,6 +592,24 @@ rl.on("line", (line) => {
   } else if (msg.type === "control_request" && msg.request?.subtype === "set_permission_mode") {
     setMode(msg.request.mode);
     out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: { mode } } });
+  } else if (msg.type === "control_request" && msg.request?.subtype === "get_task_output") {
+    const t = shells.get(msg.request.task_id);
+    const all = Buffer.from(t?.output ?? "");
+    out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: { output: all.subarray(-OUTPUT_TAIL).toString("utf8"), total_bytes: all.length, truncated: all.length > OUTPUT_TAIL } } });
+  } else if (msg.type === "control_request" && msg.request?.subtype === "stop_task") {
+    const t = shells.get(msg.request.task_id);
+    if (t) killShell(t);
+    out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: {} } });
+  } else if (msg.type === "control_request" && msg.request?.subtype === "background_tasks") {
+    const want = msg.request.tool_use_id;
+    const moving = [...shells.values()].filter((t) => t.status === "running" && !t.background && (!want || t.toolUseId === want));
+    for (const t of moving) {
+      t.background = true;
+      tasksChanged();
+      taskEvent("task_updated", t, { patch: { is_backgrounded: true } });
+      t.moved?.("moved");
+    }
+    out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: want ? { backgrounded: moving.length > 0 } : {} } });
   } else if (msg.type === "control_request" && msg.request?.subtype === "interrupt") {
     current?.cancel();
     out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: { still_queued: [] } } });
@@ -449,6 +619,11 @@ rl.on("close", async () => {
   // Nobody is left to answer: Claude cancels what it asked, and exits with an error once the turn is over.
   const gaveUp = asking;
   if (gaveUp) current?.cancel();
-  while (current) await sleep(10);
+  // Background shells keep Claude alive: it waits for them, and for the turns they bring, before it exits.
+  while (current || liveShells().some((t) => t.background) || queue.length) await sleep(10);
   process.exit(gaveUp ? 1 : 0);
+});
+process.on("SIGTERM", () => {
+  for (const t of liveShells()) killShell(t);
+  process.exit(143);
 });

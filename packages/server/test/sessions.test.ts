@@ -698,6 +698,44 @@ describe("sessions", () => {
     await api(`/api/sessions/saved/${stopped}`, { method: "DELETE" });
   });
 
+  it("lists background shells, reads their output, stops one and keeps what it printed, over HTTP", async () => {
+    const id = await startSession("one", "bg-shell");
+    const chat = await listen(id);
+    const shell = await waitFor(() => chat.got.find((e) => e.kind === "claude" && e.payload.subtype === "task_started"));
+    const taskId = String(shell.kind === "claude" && shell.payload.task_id);
+    const running = await waitFor(async () => { const i = await session(id); return i?.status === "idle" && i.shells === 1 ? i : undefined; });
+    assert.ok(!isBusy(running), "a shell running on isn't work");
+    assert.deepEqual(server.working(), [], "quitting wouldn't cut work short");
+    const out = await waitFor(async () => { const o = await json(await api(`/api/sessions/${id}/tasks/${taskId}/output`)); return /line 2/.test(o.output) ? o : undefined; });
+    assert.equal(out.truncated, false);
+    assert.equal((await api(`/api/sessions/${id}/tasks/not%20an%20id/output`)).status, 400);
+
+    assert.equal((await api(`/api/sessions/${id}/tasks/${taskId}/stop`, { method: "POST" })).status, 200);
+    const kept = await waitFor(() => chat.got.find((e) => e.kind === "task_output"));
+    assert.ok(kept.kind === "task_output" && /\[killed\]\n$/.test(kept.payload.output), "what it printed is kept");
+    assert.ok(chat.got.findIndex((e) => e.kind === "task_stop") < chat.got.findIndex((e) => e.kind === "claude" && e.payload.subtype === "task_notification"), "who stopped it comes first");
+    await waitFor(async () => (await session(id))?.shells === undefined);
+    assert.equal(chat.results().length, 1, "Claude took no turn for the stop");
+
+    // The Tasks pane opens beside the chat, and closes again.
+    const opened = await json(await api(`/api/sessions/${id}/window/tasks`, { method: "POST", body: "{}" }));
+    assert.equal(opened.widgets.tasks.kind, "tasks");
+    assert.ok(Object.values(opened.panes).includes("tasks"));
+    assert.ok(Object.values((await json(await api(`/api/sessions/${id}/window/tasks`, { method: "POST", body: JSON.stringify({ open: true }) }))).panes).includes("tasks"), "open leaves it open");
+    assert.ok(!Object.values((await json(await api(`/api/sessions/${id}/window/tasks`, { method: "POST", body: "{}" }))).panes).includes("tasks"));
+    await api(`/api/sessions/${id}?stop`, { method: "DELETE" });
+  });
+
+  it("says which line of a monitor woke Claude", async () => {
+    const id = await startSession("one", "monitor 2");
+    const chat = await listen(id);
+    // Two lines, a turn each, then one more turn as the monitor ends.
+    await waitFor(() => chat.results().length === 4);
+    await new Promise((r) => setTimeout(r, 100));
+    assert.deepEqual(chat.got.flatMap((e) => (e.kind === "monitor_event" ? [e.payload.line] : [])), ["event 1", "event 2"]);
+    await api(`/api/sessions/${id}?stop`, { method: "DELETE" });
+  });
+
   it("lets subagents working in the background finish after the tab closes, and Claude report on them", async () => {
     const id = await startSession("one", "agents-bg");
     const chat = await listen(id);

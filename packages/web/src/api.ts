@@ -123,6 +123,14 @@ export const api = {
   /** The Claude account behind a session and how much of its subscription is used. */
   usage: (id: string) => request<AccountUsage>("GET", `/api/sessions/${id}/usage`),
   interrupt: (id: string) => request("POST", `/api/sessions/${id}/interrupt`),
+  /** The end of what one of Claude's background shells or monitors has printed; asking costs Claude no turn. */
+  taskOutput: (id: string, task: string) => request<{ output: string; totalBytes: number; truncated: boolean }>("GET", `/api/sessions/${id}/tasks/${encodeURIComponent(task)}/output`),
+  /** Stops one of Claude's background tasks. */
+  stopTask: (id: string, task: string) => request("POST", `/api/sessions/${id}/tasks/${encodeURIComponent(task)}/stop`),
+  /** Moves a command Claude waits on to the background: the one `toolUseId` started, or all of them. */
+  backgroundTasks: (id: string, toolUseId?: string) => request("POST", `/api/sessions/${id}/tasks/background`, toolUseId ? { toolUseId } : {}),
+  /** Opens the Tasks pane beside the chat, or closes it; with `open`, only opens it. */
+  toggleTasks: (id: string, open?: boolean) => request<WindowState>("POST", `/api/sessions/${id}/window/tasks`, open ? { open } : {}),
   /** Answers what Claude asked mid-turn: its questions, or its plan. */
   answerAsk: (id: string, ask: string, answer: AskAnswer) => request("POST", `/api/sessions/${id}/asks/${encodeURIComponent(ask)}`, answer),
   /** Has Claude plan first and wait for approval, or work without asking. */

@@ -371,6 +371,11 @@ export interface SessionInfo {
   asleep?: boolean;
   /** Subagents Claude started in the background that are still working, its turn over or not; none when missing. */
   agents?: number;
+  /**
+   * Shells and monitors Claude left running in the background; none when missing. Unlike subagents, they aren't work:
+   * a dev server can run for as long as Claude lets it without the session being busy.
+   */
+  shells?: number;
   /** Claude waits, mid-turn, for the user to answer its questions or approve its plan; see the `ask` event. */
   asking?: AgentAsk["kind"];
   /** Claude is in plan mode: it plans, and waits for the user to approve the plan before it changes anything. */
@@ -428,7 +433,21 @@ export type SessionEvent =
   | { seq: number; kind: "ask"; payload: AgentAsk }
   | { seq: number; kind: "ask_answer"; payload: { id: string; answer: AskAnswer } }
   /** Claude stopped waiting for ask `id` without an answer. */
-  | { seq: number; kind: "ask_closed"; payload: { id: string; reason: AskClosedReason } };
+  | { seq: number; kind: "ask_closed"; payload: { id: string; reason: AskClosedReason } }
+  /**
+   * The end of what background task `taskId` (Claude's id: a shell or a monitor) printed, read once it ended, so it can
+   * still be read once Claude, which keeps it, is gone. `totalBytes` it printed in all; `truncated` if this is only the end.
+   */
+  | { seq: number; kind: "task_output"; payload: { taskId: string; output: string; totalBytes: number; truncated: boolean } }
+  /** The user stopped background task `taskId`; Claude's own report of it follows, and Claude hears of it with the next prompt. */
+  | { seq: number; kind: "task_stop"; payload: { taskId: string } }
+  /**
+   * Background tasks the last Claude process reported started but never ended, gone with it as a new one starts: it
+   * was killed, or crashed. By Claude's task ids.
+   */
+  | { seq: number; kind: "tasks_lost"; payload: { taskIds: string[] } }
+  /** What woke Claude for the turn of its own that follows: monitor `taskId` printed `line`. */
+  | { seq: number; kind: "monitor_event"; payload: { taskId: string; line: string } };
 
 /** A prompt that is one of Claude's commands, such as /model, to which nothing can be added. */
 export const isCommand = (text: string) => text.trimStart().startsWith("/");

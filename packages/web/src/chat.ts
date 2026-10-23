@@ -1,4 +1,5 @@
 import { isCommand, type AgentAsk, type AskAnswer, type AskClosedReason, type Attachment, type EndReason, type LoginAccount, type SessionEvent } from "@kumiko/shared";
+import { applyTaskEvent, emptyTasks, reportsEnd, type TasksState } from "./tasks.ts";
 
 // Turns a session's events into what the chat shows. Claude's stream-json is read loosely: only the fields the
 // chat needs, and anything unexpected is skipped rather than breaking the view.
@@ -20,9 +21,12 @@ export type ChatItem =
   | { type: "assistant"; key: string; final: Block[]; drafts: Block[] }
   /**
    * Where Claude starts a turn of its own, with no prompt: as it does on hearing that subagents it left working in the
-   * background are done, `after` naming those it heard of (by their descriptions).
+   * background are done, `after` naming those it heard of (by their descriptions), or that shells and monitors ended,
+   * `ended` (by task id); or on a monitor printing a line, `monitor`.
    */
-  | { type: "unprompted"; key: string; after: string[] }
+  | { type: "unprompted"; key: string; after: string[]; ended?: string[]; monitor?: { taskId: string; line: string } }
+  /** The user stopped background task `taskId`. */
+  | { type: "task_stop"; key: string; taskId: string }
   | { type: "turn"; key: string; status: "ok" | "interrupted" | "error"; durationMs?: number; costUsd?: number; tokens?: Tokens; message?: string }
   | { type: "error"; key: string; message: string; hint?: string; stderr?: string[]; signedOut?: boolean }
   | { type: "retry"; key: string; attempt?: number; max?: number }
@@ -81,9 +85,15 @@ export interface ChatState extends Thread {
   pending: number;
   /** Claude's guess at the next prompt, sent after a turn; gone once any prompt is sent. */
   suggestion?: string;
+  /** Claude's background tasks; see tasks.ts. */
+  tasks: TasksState;
+  /** The shells and monitors in the background that ended since the last turn began, which Claude reports on. */
+  endedTasks: string[];
+  /** The monitor line that woke Claude, heard before the turn it woke it for showed. */
+  monitorLine?: { taskId: string; line: string };
 }
 
-export const emptyChat = (): ChatState => ({ items: [], messages: {}, tools: {}, agents: {}, finished: [], totalCost: 0, totalTokens: { total: 0, cached: 0 }, interruptPending: false, pending: 0 });
+export const emptyChat = (): ChatState => ({ items: [], messages: {}, tools: {}, agents: {}, finished: [], totalCost: 0, totalTokens: { total: 0, cached: 0 }, interruptPending: false, pending: 0, tasks: emptyTasks(), endedTasks: [] });
 
 /** The blocks to show for an assistant item: finished ones, then drafts past them. */
 export function blocksOf(item: AssistantItem): Block[] {
@@ -308,18 +318,44 @@ function resultText(content: unknown): string {
 
 /** Applies one event; returns a new state, sharing every item that didn't change. */
 export function applyEvent(s: ChatState, ev: SessionEvent): ChatState {
+  const next = applyChatEvent(s, ev);
+  const tasks = applyTaskEvent(next.tasks, ev);
+  if (tasks === next.tasks) return next;
+  // Subagents lost with the Claude process before this one aren't working any more.
+  if (ev.kind === "tasks_lost") {
+    const lost = new Set(ev.payload.taskIds.flatMap((id) => (tasks.byId[id]?.toolUseId ? [tasks.byId[id].toolUseId!] : [])));
+    return { ...next, tasks, agents: stopAgents(next.agents, (id) => lost.has(id)) };
+  }
+  // A shell or monitor ended that Claude takes a turn to report on: that turn starts by saying so.
+  const ended = ev.kind === "claude" && ev.payload.subtype === "task_notification" ? tasks.byId[String(ev.payload.task_id)] : undefined;
+  return { ...next, tasks, ...(ended && ended.kind !== "agent" && reportsEnd(ended) ? { endedTasks: [...next.endedTasks, ended.id] } : {}) };
+}
+
+function applyChatEvent(s: ChatState, ev: SessionEvent): ChatState {
   const key = String(ev.seq);
   const push = (item: ChatItem): ChatState => ({ ...s, items: [...s.items, item] });
 
   switch (ev.kind) {
     case "user_prompt": {
-      const next = { ...push({ type: "user", key, text: ev.payload.text, id: ev.payload.id, ...(ev.payload.attachments ? { attachments: ev.payload.attachments } : {}) }), suggestion: undefined, finished: [], pending: s.pending + 1 };
+      const next = { ...push({ type: "user", key, text: ev.payload.text, id: ev.payload.id, ...(ev.payload.attachments ? { attachments: ev.payload.attachments } : {}) }), suggestion: undefined, finished: [], pending: s.pending + 1, endedTasks: [], monitorLine: undefined };
       // Claude hears of what was shared with the first prompt after it that isn't a command; see `sharesWaiting`.
       if (isCommand(ev.payload.text) || !s.items.some((i) => i.type === "shared" && !i.told)) return next;
       return { ...next, items: next.items.map((i) => (i.type === "shared" && !i.told ? { ...i, told: true } : i)) };
     }
     case "shared":
       return push({ type: "shared", key, name: ev.payload.name, titles: ev.payload.artifacts.map((a) => a.title) });
+    case "task_stop":
+      return push({ type: "task_stop", key, taskId: ev.payload.taskId });
+    case "monitor_event": {
+      // It comes as the turn starts: onto that turn's first line if it shows already, or kept for it.
+      const line = { taskId: ev.payload.taskId, line: ev.payload.line };
+      const at = s.items.findLastIndex(startsTurn);
+      const start = s.items[at];
+      if (start?.type !== "unprompted" || start.monitor || start.ended?.length || start.after.length) return { ...s, monitorLine: line };
+      const items = [...s.items];
+      items[at] = { ...start, monitor: line };
+      return { ...s, items };
+    }
     case "interrupt":
       return { ...s, interruptPending: true };
     case "error":
@@ -444,7 +480,8 @@ function applyClaude(s: ChatState, m: Json & { type: string }, key: string): Cha
 function startUnprompted(s: ChatState, key: string): ChatState {
   // Before the first turn ends, or while one is under way or a prompt waits for its turn, Claude is answering.
   if (s.pending > 0 || !s.items.some((i) => i.type === "turn")) return s;
-  return { ...s, items: [...s.items, { type: "unprompted", key: `u-${key}`, after: s.finished }], finished: [], pending: 1 };
+  const item: ChatItem = { type: "unprompted", key: `u-${key}`, after: s.finished, ...(s.endedTasks.length ? { ended: s.endedTasks } : {}), ...(s.monitorLine ? { monitor: s.monitorLine } : {}) };
+  return { ...s, items: [...s.items, item], finished: [], endedTasks: [], monitorLine: undefined, pending: 1 };
 }
 
 /**

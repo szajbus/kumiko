@@ -511,4 +511,63 @@ describe("ClaudeDriver", () => {
     });
   });
 
+
+  describe("background tasks", () => {
+    const system = (d: Awaited<ReturnType<typeof drive>>, subtype: string) => d.messages().filter((m) => m.type === "system" && m.subtype === subtype);
+
+    it("reads a background shell's output as it goes, and stops it, with no turn for either", async () => {
+      const d = await drive({ FAKE_CLAUDE_SHELL_MS: "40" });
+      d.start("bg-shell");
+      await d.waitFor(() => d.results().length === 1);
+      const started = system(d, "task_started")[0];
+      assert.equal(started.task_type, "local_bash");
+      await new Promise((r) => setTimeout(r, 100));
+      const first = await d.driver.taskOutput(String(started.task_id));
+      await new Promise((r) => setTimeout(r, 200));
+      const later = await d.driver.taskOutput(String(started.task_id));
+      assert.ok(later.totalBytes > first.totalBytes, "the output grows");
+      assert.match(later.output, /^line 1\n/);
+      assert.ok(!d.messages().some((m) => m.type === "control_response"), "answers to requests aren't passed on as messages");
+
+      await d.driver.stopTask(String(started.task_id));
+      const ended = await d.waitFor(() => system(d, "task_notification")[0]);
+      assert.equal(ended.status, "stopped");
+      await new Promise((r) => setTimeout(r, 150));
+      assert.match((await d.driver.taskOutput(String(started.task_id))).output, /\[killed\]\n$/);
+      await new Promise((r) => setTimeout(r, 150));
+      assert.equal(d.results().length, 1, "Claude takes no turn for a stop");
+      await d.driver.stop();
+    });
+
+    it("moves a foreground command to the background", async () => {
+      const d = await drive({ FAKE_CLAUDE_SHELL_MS: "40" });
+      d.start("fg-shell");
+      const started = await d.waitFor(() => system(d, "task_started")[0]);
+      assert.equal(started.is_backgrounded, false);
+      await d.driver.backgroundTasks(String(started.tool_use_id));
+      const result = await d.waitFor(() => d.results()[0]);
+      assert.equal(result.result, "moved", "the call returned at once");
+      assert.deepEqual(system(d, "task_updated")[0].patch, { is_backgrounded: true });
+      await d.driver.stop();
+    });
+
+    it("drops an answer about a task that an earlier driver asked for", async () => {
+      const d = await drive({ FAKE_CLAUDE_SHELL_MS: "40" });
+      d.driver.start({ sandbox: "test", workdir: d.home, env: [], prompt: "bg-shell 3", run: "t1-a" });
+      await d.waitFor(() => d.results().length === 1);
+      const id = String(system(d, "task_started")[0].task_id);
+      const asked = d.driver.taskOutput(id).catch(() => undefined);
+      await d.driver.detach();
+      await asked;
+      const e = await drive({}, { exec: { exec: d.exec, home: d.home } });
+      e.driver.attach({ sandbox: "test", run: "t1-a", offset: 0 });
+      try {
+        await e.waitFor(() => e.results().length === 2);
+        assert.ok(!e.messages().some((m) => m.type === "control_response"));
+      } finally {
+        await e.driver.stop();
+      }
+    });
+  });
+
 });

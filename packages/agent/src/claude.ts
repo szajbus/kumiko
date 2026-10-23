@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { eachLine, shellQuote } from "@kumiko/sandbox";
 import type { AskAnswer } from "@kumiko/shared";
 import { AskBridge, type PendingAsk } from "./asks.js";
-import type { AgentDriver, AgentEvent, AgentFile, AgentMessage, AttachOptions, Exec, RunPosition, StartOptions } from "./driver.js";
+import type { AgentDriver, AgentEvent, AgentFile, AgentMessage, AttachOptions, Exec, RunPosition, StartOptions, TaskOutput } from "./driver.js";
 import { mcpConfig, ToolBridge, type PendingCall } from "./tools.js";
 import { ATTACHED, attachCommand, closeInputCommand, execOutput, launchCommand, removeCommand, RUN_EXIT_TYPE, RUN_GONE, RUN_LOST, signalCommand, stderrCommand } from "./runs.js";
 
@@ -43,6 +43,11 @@ export function claudeCommand(resume?: string, fork?: boolean, resumeAt?: string
 }
 
 const STDERR_TAIL = 20;
+/**
+ * What the ids of control requests about background tasks start with. Their answers are only for the driver that asked,
+ * so one that comes after a detach is dropped rather than reported.
+ */
+const TASK_REQUEST = "task-";
 const REQUEST_TIMEOUT_MS = 15_000;
 /** Waits between attempts to attach again after an attachment drops, in ms; the last repeats. */
 const REATTACH_MS = [250, 500, 1000, 2000, 5000];
@@ -119,7 +124,7 @@ export class ClaudeDriver implements AgentDriver {
   private removed: Promise<void> = Promise.resolve();
   private requests = 0;
   /** Control requests waiting for Claude's answer, by request id. */
-  private pending = new Map<string, { resolve(): void; reject(err: Error): void }>();
+  private pending = new Map<string, { resolve(response: unknown): void; reject(err: Error): void }>();
   /** Answers Claude's calls to the caller's tools, if it was given any. */
   private tools?: ToolBridge;
   /** What Claude asks the user, mid-turn. */
@@ -347,26 +352,48 @@ export class ClaudeDriver implements AgentDriver {
     const response = msg.response as { request_id?: unknown; subtype?: unknown; error?: unknown } | undefined;
     const id = typeof response?.request_id === "string" ? response.request_id : undefined;
     const waiting = id ? this.pending.get(id) : undefined;
+    // An answer about a task that an earlier driver asked for: nobody waits for it, and it is no news for the session.
+    if (id && !waiting && id.startsWith(TASK_REQUEST)) return true;
     if (!id || !waiting) return false;
     this.pending.delete(id);
     if (response?.subtype === "error") waiting.reject(new Error(typeof response.error === "string" ? response.error : "Claude refused the request."));
-    else waiting.resolve();
+    else waiting.resolve((response as { response?: unknown }).response);
     return true;
   }
 
   rewindFiles(id: string): Promise<void> {
+    return this.request("rewind", { subtype: "rewind_files", user_message_id: id }).then(() => {});
+  }
+
+  taskOutput(taskId: string): Promise<TaskOutput> {
+    return this.request(`${TASK_REQUEST}output`, { subtype: "get_task_output", task_id: taskId }).then((r) => {
+      const o = (r ?? {}) as { output?: unknown; total_bytes?: unknown; truncated?: unknown };
+      return { output: typeof o.output === "string" ? o.output : "", totalBytes: typeof o.total_bytes === "number" ? o.total_bytes : 0, truncated: o.truncated === true };
+    });
+  }
+
+  stopTask(taskId: string): Promise<void> {
+    return this.request(`${TASK_REQUEST}stop`, { subtype: "stop_task", task_id: taskId }).then(() => {});
+  }
+
+  backgroundTasks(toolUseId?: string): Promise<void> {
+    return this.request(`${TASK_REQUEST}background`, { subtype: "background_tasks", ...(toolUseId ? { tool_use_id: toolUseId } : {}) }).then(() => {});
+  }
+
+  /** Sends a control request, and resolves with Claude's answer to it; rejects if Claude refuses, or doesn't answer in time. */
+  private request(kind: string, request: Record<string, unknown>): Promise<unknown> {
     if (!this.sandbox || this.done || this.requested) return Promise.reject(new Error("Claude isn't running."));
-    const request_id = `rewind-${++this.requests}`;
-    return new Promise<void>((resolve, reject) => {
+    const request_id = `${kind}-${++this.requests}`;
+    return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(request_id);
         reject(new Error("Claude didn't answer in time. Try again."));
       }, REQUEST_TIMEOUT_MS);
       this.pending.set(request_id, {
-        resolve: () => (clearTimeout(timer), resolve()),
+        resolve: (r) => (clearTimeout(timer), resolve(r)),
         reject: (err) => (clearTimeout(timer), reject(err)),
       });
-      this.write(JSON.stringify({ type: "control_request", request_id, request: { subtype: "rewind_files", user_message_id: id } }) + "\n");
+      this.write(JSON.stringify({ type: "control_request", request_id, request }) + "\n");
     });
   }
 

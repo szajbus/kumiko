@@ -20,6 +20,8 @@ import { COLORS } from "./status";
 import { UsageStrip } from "./UsageStrip";
 import { widgetLine } from "./widgets";
 import { WindowContext } from "./windowContext";
+import { MonitorEvents, MonitorLine, MoveToBackground, onReveal, TaskEndLine, TasksButton, TaskToolMeta } from "./TasksPane";
+import { emptyTasks, foldMonitorTurns, type TasksState } from "./tasks";
 
 /** How long the note that Claude restarted, or that the sandbox started, stays. */
 const RESTARTED_MS = 4000;
@@ -190,6 +192,7 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
 
       <AskContext.Provider value={live ? answerAsk : undefined}>
         <Chat
+          session={session.id}
           chat={chat}
           running={busy}
           live={live}
@@ -364,6 +367,7 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
                   void call(() => api.prompt(session.id, `/model ${v}`));
                 }}
               />
+              <TasksButton session={session.id} tasks={chat.tasks} live={live} active={active} />
               <ArtifactsButton />
             </>
           }
@@ -482,6 +486,7 @@ function LoggedInCard({ account, retried, busy, onRetry }: { account: LoginAccou
 }
 
 interface ChatProps {
+  session: string;
   chat: ChatState;
   running: boolean;
   /** Claude is there: subagents it started in the background may still be working. */
@@ -506,13 +511,16 @@ interface ChatProps {
  */
 interface AgentsView {
   agents: Record<string, Subagent>;
+  /** Claude's background tasks, and the session they are in. */
+  tasks: TasksState;
+  session: string;
   live: boolean;
   /** Opening a fold, which mustn't scroll it away by following the bottom. */
   onUnfold(): void;
 }
-const AgentsContext = createContext<AgentsView>({ agents: {}, live: false, onUnfold: () => {} });
+const AgentsContext = createContext<AgentsView>({ agents: {}, tasks: emptyTasks(), session: "", live: false, onUnfold: () => {} });
 
-function Chat({ chat, running, live, active, onRewind, onFork, onQuote, onAnswer, actions, hidden }: ChatProps) {
+function Chat({ session, chat, running, live, active, onRewind, onFork, onQuote, onAnswer, actions, hidden }: ChatProps) {
   const box = useRef<HTMLDivElement>(null);
   const inner = useRef<HTMLDivElement>(null);
   // Follows new output while the view is at the bottom; scrolling up stops that until it is back at the bottom.
@@ -547,8 +555,8 @@ function Chat({ chat, running, live, active, onRewind, onFork, onQuote, onAnswer
 
   // Tool calls after the last turn's end are still in flight while the session runs.
   const lastTurn = chat.items.findLastIndex((i) => i.type === "turn" || i.type === "ended");
-  const rows = useMemo(() => chatRows(chat.items), [chat.items]);
-  const agents = useMemo<AgentsView>(() => ({ agents: chat.agents, live, onUnfold: () => (stick.current = false) }), [chat.agents, live]);
+  const rows = useMemo(() => foldMonitorTurns(chatRows(chat.items)), [chat.items]);
+  const agents = useMemo<AgentsView>(() => ({ agents: chat.agents, tasks: chat.tasks, session, live, onUnfold: () => (stick.current = false) }), [chat.agents, chat.tasks, session, live]);
   const background = live ? backgroundAgents(chat.agents) : [];
   /** The Agent call to bring into view, opening the work it is folded into; `n` tells a second Show from the first. */
   const [reveal, setReveal] = useState<{ id: string; n: number }>();
@@ -559,6 +567,8 @@ function Chat({ chat, running, live, active, onRewind, onFork, onQuote, onAnswer
     const t = setTimeout(() => box.current?.querySelector(`[data-tool="${CSS.escape(reveal.id)}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" }), FOLD_MS);
     return () => clearTimeout(t);
   }, [reveal]);
+  // The Tasks pane's Show in chat, for a subagent.
+  useEffect(() => onReveal(session, (id) => setReveal((r) => ({ id, n: (r?.n ?? 0) + 1 }))), [session]);
   const toolIds = (row: WorkRow) => row.rows.flatMap((r) => (r.item.type === "assistant" ? blocksOf(r.item).slice(r.from, r.to) : [])).flatMap((b) => (b.type === "tool" ? [b.id] : []));
   const itemRow = (row: ItemRow) =>
     hidden?.has(row.item.key) ? null : (
@@ -590,6 +600,7 @@ function Chat({ chat, running, live, active, onRewind, onFork, onQuote, onAnswer
       <div ref={inner} className="chat-inner">
         <AgentsContext.Provider value={agents}>
         {rows.map((row) => {
+          if (row.type === "monitor") return <MonitorEvents key={row.key} session={session} row={row} task={chat.tasks.byId[row.taskId]} />;
           if (row.type !== "work") return itemRow(row);
           // Only for saying which subagents work on in it, or opening it on Show: most renders need neither.
           const ids = background.length || reveal ? toolIds(row) : [];
@@ -767,7 +778,9 @@ const Item = memo(function Item({ item, from, to, open, onRewind, onFork, onAnsw
     case "notice":
       return <div className="chat-quiet">{item.text}</div>;
     case "unprompted":
-      return <div className="chat-unprompted">{unpromptedText(item.after)}</div>;
+      return <UnpromptedLine item={item} />;
+    case "task_stop":
+      return <TaskStopLine taskId={item.taskId} />;
     case "proposal":
       return <ProposalCard item={item} onAnswer={onAnswer} />;
     case "ask":
@@ -825,10 +838,10 @@ function BlockView({ block, open }: { block: Block; open: boolean }) {
 }
 
 function ToolLine({ block, open }: { block: Extract<Block, { type: "tool" }>; open: boolean }) {
-  const { agents, live, onUnfold } = useContext(AgentsContext);
+  const { agents, live, onUnfold, tasks, session } = useContext(AgentsContext);
   const agent = agents[block.id];
   const state = toolState(block, open, live, agent);
-  if (!agent) return <ToolCall block={block} state={state} />;
+  if (!agent) return <ShellToolLine block={block} state={state} tasks={tasks} session={session} live={live} />;
   const blocks = agent.items.flatMap(blocksOf);
   const { summary, tools } = summarize(blocks);
   const calls = blocks.filter((b) => b.type === "tool").length || agent.usage?.toolUses || 0;
@@ -861,6 +874,43 @@ function ToolLine({ block, open }: { block: Extract<Block, { type: "tool" }>; op
       )}
     </div>
   );
+}
+
+/**
+ * A tool call that isn't a subagent's: a Bash or Monitor call running in the background says so, with Show; one Claude
+ * waits on can be moved there.
+ */
+function ShellToolLine({ block, state, tasks, session, live }: { block: Extract<Block, { type: "tool" }>; state: ToolState; tasks: TasksState; session: string; live: boolean }) {
+  const task = tasks.byId[tasks.byTool[block.id] ?? ""];
+  if (!task || task.kind === "agent") return <ToolCall block={block} state={state} />;
+  if (task.background) {
+    const own: ToolState = task.status === "running" ? (live ? "running" : "stopped") : task.status === "completed" ? "ok" : task.status === "failed" ? "error" : "stopped";
+    return <ToolCall block={block} state={own} meta={<TaskToolMeta session={session} task={task} />} />;
+  }
+  if (task.status === "running" && state === "running" && !task.parent) return <ToolCall block={block} state={state} meta={<MoveToBackground session={session} toolUseId={block.id} />} />;
+  return <ToolCall block={block} state={state} />;
+}
+
+/** Where Claude starts a turn of its own: what woke it, when that's known. */
+function UnpromptedLine({ item }: { item: Extract<ChatItem, { type: "unprompted" }> }) {
+  const { tasks, session } = useContext(AgentsContext);
+  const ended = (item.ended ?? []).map((id) => tasks.byId[id]).filter(Boolean);
+  return (
+    <>
+      {(item.after.length > 0 || (!ended.length && !item.monitor)) && <div className="chat-unprompted">{unpromptedText(item.after)}</div>}
+      {ended.map((t) => (
+        <TaskEndLine key={t.id} session={session} task={t} />
+      ))}
+      {item.monitor && <MonitorLine session={session} task={tasks.byId[item.monitor.taskId]} line={item.monitor.line} />}
+    </>
+  );
+}
+
+/** The user stopped a background task. */
+function TaskStopLine({ taskId }: { taskId: string }) {
+  const { tasks, session } = useContext(AgentsContext);
+  const task = tasks.byId[taskId];
+  return task ? <TaskEndLine session={session} task={{ ...task, stoppedByUser: true, status: task.status === "running" ? "stopped" : task.status }} /> : null;
 }
 
 /** One tool call's line, opening to its input and result; `meta` goes at its right. */

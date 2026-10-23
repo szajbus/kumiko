@@ -21,6 +21,15 @@ class StubDriver implements AgentDriver {
     return undefined;
   }
   send() {}
+  taskOutput() {
+    return Promise.resolve({ output: "", totalBytes: 0, truncated: false });
+  }
+  stopTask() {
+    return Promise.resolve();
+  }
+  backgroundTasks() {
+    return Promise.resolve();
+  }
   rewindFiles() {
     return Promise.resolve();
   }

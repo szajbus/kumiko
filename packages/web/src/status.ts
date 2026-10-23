@@ -113,7 +113,13 @@ const SESSION_STATUS: Record<SessionStatus, { text: string; color: string }> = {
 export const sessionStatus = (s: SessionStatus) => SESSION_STATUS[s];
 
 /** A session's state for its tab and lists: waiting on the user stands out from merely ready. */
-export const sessionState = (s: SessionInfo) =>
+export const sessionState = (s: SessionInfo) => {
+  const st = ownState(s);
+  // Shells and monitors aren't work, so they leave the state as it is, and are said beside it.
+  return s.shells && !s.asleep ? { ...st, text: `${st.text.replace(/…$/, "")} · ${s.shells} running in the background` } : st;
+};
+
+const ownState = (s: SessionInfo) =>
   s.asleep
     ? { text: "Sandbox stopped", color: COLORS.stopped }
     : s.asking

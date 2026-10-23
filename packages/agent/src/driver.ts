@@ -61,6 +61,14 @@ export interface AgentFile {
   data: Buffer;
 }
 
+/** The end of a background task's output, as the agent keeps it: at most its last few KiB, of `totalBytes` in all. */
+export interface TaskOutput {
+  output: string;
+  totalBytes: number;
+  /** `output` is only the end of it. */
+  truncated: boolean;
+}
+
 /** One parsed protocol message; every one has a `type`. */
 export type AgentMessage = Record<string, unknown> & { type: string };
 
@@ -99,6 +107,15 @@ export interface AgentDriver {
   send(text: string, id?: string, files?: AgentFile[]): void;
   /** Puts the files the agent changed back as they were before prompt `id`. Rejects if the agent has no checkpoint for it. */
   rewindFiles(id: string): Promise<void>;
+  /**
+   * The end of what a background shell or monitor (by the agent's task id) has printed so far, or all of it once it
+   * ended. Asking costs the agent no turn.
+   */
+  taskOutput(taskId: string): Promise<TaskOutput>;
+  /** Stops a background task: a shell, a monitor or a subagent. The agent hears of it with the next prompt. */
+  stopTask(taskId: string): Promise<void>;
+  /** Moves foreground tasks to the background, letting their tool calls return: the one `toolUseId` started, or all. */
+  backgroundTasks(toolUseId?: string): Promise<void>;
   /** Ends the current turn but keeps the process. */
   interrupt(): void;
   /** Closes stdin and kills the process if it is still alive after a grace period. Resolves once it has exited. */

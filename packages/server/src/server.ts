@@ -23,6 +23,7 @@ import {
   IMAGE_TYPES,
   nextId,
   paneOf,
+  TASKS,
   urlOrigin,
   vmName,
   WindowError,
@@ -1074,6 +1075,39 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     const shown = sessions.changeWindow(id, op);
     void widgets.refresh(id);
     return c.json(shown);
+  });
+
+  // Claude's background shells and monitors: what one has printed so far, and stopping one (subagents too). Asking costs
+  // Claude no turn. Task ids are Claude's, such as "b9yuskb88".
+  const TASK_ID = /^[A-Za-z0-9_-]{1,64}$/;
+  const taskOf = (c: { req: { param(name: string): string } }) => {
+    const task = c.req.param("task");
+    if (!TASK_ID.test(task)) throw new HttpError(400, `Not a task id: ${task}`);
+    return task;
+  };
+  app.get("/api/sessions/:id/tasks/:task/output", async (c) => c.json(await sessions.taskOutput(sessionOf(c).id, taskOf(c))));
+  app.post("/api/sessions/:id/tasks/:task/stop", async (c) => {
+    await sessions.stopTask(sessionOf(c).id, taskOf(c));
+    return c.json({ ok: true });
+  });
+
+  /** Moves a command Claude is waiting on to the background, as Ctrl+B does in Claude: the one `toolUseId` started, or all. */
+  app.post("/api/sessions/:id/tasks/background", async (c) => {
+    const req = await c.req.json<{ toolUseId?: unknown }>().catch(() => ({}) as { toolUseId?: unknown });
+    if (req.toolUseId !== undefined && (typeof req.toolUseId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(req.toolUseId))) throw new HttpError(400, "toolUseId is a tool call's id.");
+    await sessions.backgroundTasks(sessionOf(c).id, req.toolUseId);
+    return c.json({ ok: true });
+  });
+
+  // The Tasks pane: opened beside the chat, or closed if it is open; with `open`, only opened.
+  app.post("/api/sessions/:id/window/tasks", async (c) => {
+    const req = await c.req.json<{ open?: unknown }>().catch(() => ({}) as { open?: unknown });
+    const { id } = sessionOf(c);
+    let w = sessions.window(id)!;
+    if (!w.widgets[TASKS]) w = sessions.changeWindow(id, { type: "add", widget: TASKS, kind: "tasks" });
+    const pane = paneOf(w, TASKS);
+    if (pane) return c.json(req.open === true ? w : sessions.changeWindow(id, { type: "close", pane }));
+    return c.json(sessions.changeWindow(id, { type: "split", place: { split: "right", size: 0.4 }, pane: nextId(w, "p"), widget: TASKS }));
   });
 
   /** Answers what Claude asked mid-turn: its questions, or its plan. 409 once it isn't waiting for that any more. */

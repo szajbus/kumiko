@@ -5,6 +5,7 @@ import type { ComposerHandle } from "./Composer";
 import { ArtifactView } from "./ArtifactView";
 import { PaneGrip } from "./PaneGrip";
 import { SessionView } from "./SessionView";
+import { TasksPane } from "./TasksPane";
 import { columns, dividers, dropPreview, dropZone, lastChanges, paneRects, streamingWrites, windowEdge, type Divider, type DropZone, type PaneRect } from "./widgets";
 import { WindowContext, type ArtifactEntry, type WindowApi } from "./windowContext";
 
@@ -83,6 +84,8 @@ export function Window({ session, onForked, active = true, sessionNames = NO_NAM
         const writing = write && (changed.get(id) ?? 0) < write.seq ? write.text : undefined;
         return <ArtifactView key={id} widget={id} pane={pane} doc={doc} writing={writing} />;
       }
+      case "tasks":
+        return <TasksPane session={session.id} events={stream.events} pane={pane} live={live} />;
       default:
         return null;
     }

@@ -95,6 +95,8 @@ export function App() {
   const [order, setOrder] = useState<TabId[]>([]);
   // The session whose Cmd+Shift+W is waiting for confirmation.
   const [deleting, setDeleting] = useState<SessionInfo | undefined>();
+  /** A session asked to close while commands Claude left running in the background would go with it. */
+  const [stopping, setStopping] = useState<SessionInfo | undefined>();
   // The title bar's corner, where the open session shows its usage.
   const [corner, setCorner] = useState<HTMLDivElement | null>(null);
   // The project whose page or session tab was last active, which a New session tab opened from elsewhere starts in.
@@ -297,13 +299,15 @@ export function App() {
     }
     const s = sessions.find((x) => `session:${x.id}` === tab);
     if (!s) return leave(tab);
+    // Closing stops them; while subagents work, the session finishes first, and they run on until it has.
+    if (s.shells && !isBusy(s)) return setStopping(s);
     void closeSession(s);
   };
 
   // Keyboard shortcuts act on the latest render's state, so the listeners below are installed once.
   const shortcut = useRef<(action: "new" | "reopen" | "next" | "prev" | "close" | "delete" | number) => void>(() => {});
   shortcut.current = (action) => {
-    if (deleting) return;
+    if (deleting || stopping) return;
     if (action === "delete") {
       const current = tabOf(route);
       return setDeleting(sessions.find((x) => `session:${x.id}` === current));
@@ -380,6 +384,25 @@ export function App() {
           <NewSession live={live} project={n.project} onProject={(name) => pickedIn(n.key, name)} onStarted={(id) => onSessionStarted(id, n.key)} />
         </div>
       ))}
+      {stopping && (
+        <ConfirmDialog
+          title={`Close “${sessionTitle(stopping)}”?`}
+          confirmLabel="Stop them and close"
+          danger
+          enterConfirms
+          onCancel={() => setStopping(undefined)}
+          onConfirm={() => {
+            const s = stopping;
+            setStopping(undefined);
+            void closeSession(s);
+          }}
+        >
+          <p>
+            Claude has {stopping.shells === 1 ? "a command" : `${stopping.shells} commands`} running in the background. Closing the session stops{" "}
+            {stopping.shells === 1 ? "it" : "them"}.
+          </p>
+        </ConfirmDialog>
+      )}
       {deleting && (
         <ConfirmDialog
           title={`Close “${sessionTitle(deleting)}” and delete it from history?`}
