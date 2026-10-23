@@ -12,9 +12,10 @@ function textOf(node: Element | undefined): string {
   return node.children.map((c) => (c.type === "text" ? c.value : c.type === "element" ? textOf(c) : "")).join("");
 }
 
-/** A code block, with a button to copy its text that shows when the pointer is over it. */
-function CodeBlock({ node, ...props }: ComponentProps<"pre"> & ExtraProps) {
+/** A code block, with buttons that show when the pointer is over it: one to copy its text, one to wrap its long lines. */
+function CodeBlock({ node, className, ...props }: ComponentProps<"pre"> & ExtraProps) {
   const [copied, setCopied] = useState(false);
+  const [wrapped, setWrapped] = useState(false);
   const copy = () => {
     void navigator.clipboard.writeText(textOf(node).replace(/\n$/, "")).then(() => {
       setCopied(true);
@@ -23,10 +24,21 @@ function CodeBlock({ node, ...props }: ComponentProps<"pre"> & ExtraProps) {
   };
   return (
     <div className="md-code">
-      <pre {...props} />
-      <button type="button" className="md-code-copy" onClick={copy} title="Copy the code">
-        {copied ? "Copied" : "Copy"}
-      </button>
+      <pre {...props} className={wrapped ? `${className ?? ""} md-code-wrapped`.trim() : className} />
+      <div className="md-code-actions">
+        <button
+          type="button"
+          className="md-code-btn"
+          aria-pressed={wrapped}
+          onClick={() => setWrapped((w) => !w)}
+          title={wrapped ? "Stop wrapping long lines" : "Wrap long lines"}
+        >
+          Wrap
+        </button>
+        <button type="button" className="md-code-btn" onClick={copy} title="Copy the code">
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
     </div>
   );
 }
