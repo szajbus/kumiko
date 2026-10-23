@@ -135,7 +135,8 @@ const noDriver: AgentDriver = {
  * or reconnects can replay it. Sessions that end stay listed until they are removed, so their tab keeps the transcript.
  * Emits `changed` whenever a session starts, changes status or goes away.
  */
-export class Sessions extends EventEmitter<{ changed: [] }> {
+/** `rateLimit`: Claude in `sandbox` reported how much of its subscription is used, with a turn. */
+export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: string, info: unknown] }> {
   private sessions = new Map<string, Session>();
 
   constructor(
@@ -557,6 +558,8 @@ export class Sessions extends EventEmitter<{ changed: [] }> {
       if (isNew) this.save(s);
       // A prompt queued in a session that was closed: the turn it was waiting for is all Claude finishes.
       if (s.finishing) s.driver.interrupt();
+    } else if (m.type === "rate_limit_event") {
+      this.emit("rateLimit", s.info.sandbox, m.rate_limit_info);
     } else if (m.type === "system" && m.subtype === "session_title_changed") {
       // /rename; saved with the turn's result that follows.
       if (typeof m.title === "string" && m.title.trim()) this.setInfo(s, { title: m.title.trim(), titleBy: "user" });

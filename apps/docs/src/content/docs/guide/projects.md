@@ -49,7 +49,7 @@ sandbox user's home. Sandbox paths can't be `/` or `~` and can't overlap.
 ### Forwarded variables
 
 List the **names** of host variables the sandbox should see, such as `GITHUB_TOKEN`. Kumiko stores only the names. Each
-time it runs a command in the sandbox (provisioning, a session, a usage check) it reads the values from its own
+time it runs a command in the sandbox (provisioning, a session, an account check) it reads the values from its own
 environment and hands them to the command on stdin (over SSH, with Lima), so they never appear in a process list or
 on disk.
 

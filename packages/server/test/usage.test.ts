@@ -1,9 +1,20 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { parseAccount, parseUsage, UsageCache, type Account, type UsageReading } from "../src/usage.js";
+import { parseAccount, parseRateLimit, UsageCache, type Account } from "../src/usage.js";
 
 const account = `{"loggedIn":true,"email":"a@b.c","subscriptionType":"max"}`;
-const usage = `{"five_hour":{"utilization":7.0,"resets_at":"2026-10-19T17:09:59+00:00"},"seven_day":{"utilization":120},"seven_day_opus":null}`;
+
+/** A `rate_limit_event`'s info, as Claude 2.1.304 sends it, with the 5-hour window `used` (a fraction) and resetting at `resetsAt`. */
+const info = (used: number, resetsAt = 1792768800) => ({
+  status: "allowed",
+  resetsAt,
+  rateLimitType: "five_hour",
+  overageStatus: "rejected",
+  isUsingOverage: false,
+  unifiedWindows: { five_hour: { utilization: used, resetsAt }, seven_day: { utilization: 1.2 }, seven_day_opus: null },
+});
+
+const later = () => Math.floor(Date.now() / 1000) + 3600;
 
 describe("parseAccount", () => {
   it("reads the email and plan", () => {
@@ -15,77 +26,72 @@ describe("parseAccount", () => {
   });
 });
 
-describe("parseUsage", () => {
-  it("reads the usage windows, clamped to 100%", () => {
-    const u = parseUsage(`${usage}\n---status---200\n`);
-    assert.ok("windows" in u);
-    assert.deepEqual(u.windows.map((w) => [w.id, w.usedPercent]), [["five_hour", 7], ["seven_day", 100]]);
-    assert.equal(u.windows[0].resetsAt, "2026-10-19T17:09:59+00:00");
+describe("parseRateLimit", () => {
+  it("reads the windows as percentages, clamped to 100%, with when they reset", () => {
+    const windows = parseRateLimit(info(0.07))!;
+    assert.deepEqual(windows.map((w) => [w.id, Math.round(w.usedPercent)]), [["five_hour", 7], ["seven_day", 100]]);
+    assert.equal(windows[0].resetsAt, "2026-10-23T15:20:00.000Z");
+    assert.equal(windows[1].resetsAt, undefined);
   });
 
-  it("tells a missing login from a rate limit, an expired token and a network failure", () => {
-    const error = (out: string, failure?: string) => (parseUsage(out, failure) as { error: string }).error;
-    assert.match(error("---no-token---"), /no subscription login/);
-    assert.match(error(`{"error":{"type":"rate_limit_error"}}\n---status---429`), /limiting/);
-    assert.match(error(`{}\n---status---401`), /expired/);
-    assert.match(error(`\n---status---000`, "curl: (6) Could not resolve host"), /Could not resolve host/);
-    assert.match(error(`<html>\n---status---200`), /format/);
+  it("finds nothing in info without windows", () => {
+    assert.equal(parseRateLimit(undefined), undefined);
+    assert.equal(parseRateLimit({ status: "allowed" }), undefined);
+    assert.equal(parseRateLimit({ unifiedWindows: {} }), undefined);
   });
 });
 
-/** A source that answers from `readings` in turn and counts what it was asked. */
-function source(accounts: Record<string, Account>, readings: UsageReading[]) {
-  const calls = { account: 0, usage: [] as string[] };
-  return {
-    calls,
-    account: async (sandbox: string) => (calls.account++, accounts[sandbox] ?? {}),
-    usage: async (sandbox: string) => (calls.usage.push(sandbox), readings.shift() ?? { error: "no more readings" }),
-  };
+/** A source that answers with `accounts` and counts what it was asked. */
+function source(accounts: Record<string, Account>) {
+  const calls = { account: 0 };
+  return { calls, account: async (sandbox: string) => (calls.account++, accounts[sandbox] ?? {}) };
 }
 
-const win = (usedPercent: number) => ({ windows: [{ id: "five_hour", label: "Session (5h)", usedPercent }] });
+const used = async (cache: UsageCache, sandbox: string) => (await cache.get(sandbox)).windows.map((w) => Math.round(w.usedPercent));
 
 describe("UsageCache", () => {
-  it("reads usage once for sandboxes on the same account", async () => {
-    const s = source({ a: { email: "x@y.z" }, b: { email: "x@y.z" } }, [win(7)]);
-    const cache = new UsageCache(s);
-    const [a, b] = await Promise.all([cache.get("a"), cache.get("b")]);
-    await cache.get("a");
-    assert.deepEqual(s.calls.usage, ["a"]);
-    assert.equal(a.windows[0].usedPercent, 7);
-    assert.deepEqual(b.windows, a.windows);
-    assert.equal(s.calls.account, 2);
+  it("has no usage until Claude reports some", async () => {
+    const cache = new UsageCache(source({ a: { email: "x@y.z", plan: "max" } }));
+    assert.deepEqual(await cache.get("a"), { email: "x@y.z", plan: "max", windows: [] });
+    await cache.record("a", { status: "allowed" });
+    assert.deepEqual((await cache.get("a")).windows, []);
   });
 
-  it("keeps sandboxes on different accounts apart", async () => {
-    const s = source({ a: { email: "1@y.z" }, b: { email: "2@y.z" } }, [win(1), win(2)]);
+  it("shares a report between sandboxes on the same account, and the latest wins", async () => {
+    const s = source({ a: { email: "x@y.z" }, b: { email: "x@y.z" } });
     const cache = new UsageCache(s);
-    assert.equal((await cache.get("a")).windows[0].usedPercent, 1);
-    assert.equal((await cache.get("b")).windows[0].usedPercent, 2);
+    await cache.record("a", info(0.07, later()));
+    assert.deepEqual(await used(cache, "b"), [7, 100]);
+    assert.ok((await cache.get("b")).fetchedAt);
+    await cache.record("b", info(0.09, later()));
+    assert.deepEqual(await used(cache, "a"), [9, 100]);
+    assert.equal(s.calls.account, 2, "each sandbox's account is asked once");
   });
 
-  it("keeps the last windows after a failed reading, with the reason, and reads again once it expires", async () => {
-    const s = source({ a: { email: "x@y.z" } }, [win(7), { error: "rate limited" }, win(9)]);
-    const cache = new UsageCache(s, { usageTtlMs: 10, retryMs: 10 });
-    const first = await cache.get("a");
-    await new Promise((r) => setTimeout(r, 20));
-    const stale = await cache.get("a");
-    assert.equal(stale.error, "rate limited");
-    assert.equal(stale.windows[0].usedPercent, 7);
-    assert.equal(stale.fetchedAt, first.fetchedAt);
-    assert.equal((await cache.get("a")).error, "rate limited", "waits before retrying");
-    await new Promise((r) => setTimeout(r, 20));
-    const fresh = await cache.get("a");
-    assert.equal(fresh.error, undefined);
-    assert.equal(fresh.windows[0].usedPercent, 9);
+  it("keeps sandboxes on different accounts, or unknown ones, apart", async () => {
+    const cache = new UsageCache(source({ a: { email: "1@y.z" }, b: { email: "2@y.z" } }));
+    await cache.record("a", info(0.01, later()));
+    await cache.record("b", info(0.02, later()));
+    await cache.record("c", info(0.03, later()));
+    assert.deepEqual(await used(cache, "a"), [1, 100]);
+    assert.deepEqual(await used(cache, "b"), [2, 100]);
+    assert.deepEqual(await used(cache, "c"), [3, 100]);
+    assert.deepEqual(await used(cache, "d"), []);
   });
 
-  it("reads again after forgetting a sandbox's login", async () => {
-    const s = source({ a: { email: "x@y.z" } }, [win(7), win(8)]);
+  it("shows a window that has reset since as unused", async () => {
+    const cache = new UsageCache(source({ a: { email: "x@y.z" } }));
+    await cache.record("a", info(0.5, Math.floor(Date.now() / 1000) - 60));
+    const [five] = (await cache.get("a")).windows;
+    assert.deepEqual(five, { id: "five_hour", label: "Session (5h)", usedPercent: 0 });
+  });
+
+  it("drops a sandbox's usage and account when its login is forgotten", async () => {
+    const s = source({ a: { email: "x@y.z" } });
     const cache = new UsageCache(s);
-    await cache.get("a");
+    await cache.record("a", info(0.07, later()));
     cache.forget("a");
-    assert.equal((await cache.get("a")).windows[0].usedPercent, 8);
+    assert.deepEqual(await used(cache, "a"), []);
     assert.equal(s.calls.account, 2);
   });
 });

@@ -60,7 +60,7 @@ follows mostly from the sandbox provider.
 | Slash commands | `slash_commands` from `system/init` |
 | Model picker | `--model` and `/model` |
 | Login | `claude auth status`, `claude auth login` |
-| Usage in the title bar | the subscription usage endpoint, with the agent home's credentials |
+| Usage in the title bar | `rate_limit_event` messages, which come with each turn, and `claude auth status` for the account |
 | Artifacts, and the other tools Kumiko gives the agent | an SDK MCP server over the control protocol (`--mcp-config`), some tools deferred until `ToolSearch` loads them; `npm run tools-check` checks it against a real Claude |
 
 ## Adding another
@@ -93,7 +93,7 @@ reads lines on stdin and writes them on stdout, so `attach`, `position` and `det
 
 - session events carry Claude Code's stream-json as-is (`kind: "claude"`), and both the server (`sessions.ts`) and the
   UI (`chat.ts`) read its message shapes,
-- login (`logins.ts`) and the usage check (`usage.ts`) run `claude` commands directly,
+- login (`logins.ts`) and the account check (`usage.ts`) run `claude` commands directly,
 - installing the agent is part of the Lima provider's provisioning,
 - the agent home is mounted at `~/.claude` and pointed to by `CLAUDE_CONFIG_DIR`.
 

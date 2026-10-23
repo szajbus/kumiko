@@ -72,7 +72,7 @@ import { docPaneTarget, Widgets, type PaneAnswer } from "./widgets.js";
 import { SessionStore, type StoredSession } from "./store.js";
 import { TabsStore } from "./tabs.js";
 import { serveWeb } from "./static.js";
-import { sandboxUsageSource, UsageCache, type UsageSource } from "./usage.js";
+import { sandboxAccountSource, UsageCache, type AccountSource } from "./usage.js";
 
 /** The largest request body: a prompt's attachments, a third bigger in base64, and room for its text. */
 const MAX_BODY_BYTES = Math.ceil((ATTACHMENTS_TOTAL_LIMIT * 4) / 3) + 1024 * 1024;
@@ -100,8 +100,8 @@ export interface ServerOptions {
   runs?: Pick<Runs, "list" | "remove">;
   /** How long to wait for another server to let go of the Kumiko home before refusing to start, in ms. */
   lockWaitMs?: number;
-  /** Reads the account and usage of the Claude in a sandbox; defaults to asking Claude inside it. Usage is cached per account. */
-  usage?: UsageSource;
+  /** Finds out who the Claude in a sandbox is signed in as; defaults to asking Claude inside it. */
+  accounts?: AccountSource;
   /** The secret every API request must carry (see `hasToken`); a random one by default. */
   token?: string;
   /** How long Claude may finish its turn after its session's tab closes, in ms; 30 minutes by default. */
@@ -205,7 +205,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   const runs = opts.runs ?? new Runs(provider.exec.bind(provider), owner);
   const clients = new Set<WebSocket>();
   const usage = new UsageCache(
-    opts.usage ?? sandboxUsageSource(provider.exec.bind(provider), (sandbox) => infos.find((i) => i.name === sandbox)?.meta?.spec.env ?? []),
+    opts.accounts ?? sandboxAccountSource(provider.exec.bind(provider), (sandbox) => infos.find((i) => i.name === sandbox)?.meta?.spec.env ?? []),
   );
 
   // ---- list state -------------------------------------------------------------------------
@@ -280,6 +280,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   });
   ops.on("settled", () => void refresh());
 
+  sessions.on("rateLimit", (sandbox, info) => void usage.record(sandbox, info));
   sessions.on("changed", () => {
     broadcast({ type: "sessions", sessions: sessions.list() });
     pushListIfChanged();

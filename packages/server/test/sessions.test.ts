@@ -625,6 +625,11 @@ describe("sessions", () => {
       const runs = async () => (await readdir(join(limaDir, "vm-home", RUNS_DIR))).filter((r) => r.startsWith(`${id}-`));
       assert.notDeepEqual(await waitFor(async () => { const r = await runs(); return r.length === 1 ? r : undefined; }), runsBefore);
       assert.equal(s.got.filter((e) => e.kind === "ended").length, 0, "the swap doesn't end the session");
+
+      // The turn reported the subscription's usage, which the title bar reads.
+      const usage = await json(await api(`/api/sessions/${id}/usage`));
+      assert.equal(usage.email, "you@example.com");
+      assert.deepEqual(usage.windows.map((w: { id: string; usedPercent: number }) => [w.id, Math.round(w.usedPercent)]), [["five_hour", 7], ["seven_day", 42]]);
       await api(`/api/sessions/${id}`, { method: "DELETE" });
     } finally {
       await rm(join(claudeHome, ".require-login"), { force: true });

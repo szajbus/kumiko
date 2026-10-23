@@ -15,7 +15,8 @@
 //   anything else is echoed back as "You said: …", followed by " [with …]" naming the files that came with it
 // With a `.require-login` file in $CLAUDE_CONFIG_DIR, every prompt is answered as "signed out" until there is a
 // `.credentials.json` beside it. `claude auth status` and `claude auth login` work against that folder: the login
-// prints a sign-in URL, reads a code from stdin, and logs in for the code "good-code".
+// prints a sign-in URL, reads a code from stdin, and logs in for the code "good-code". Logged in, every turn reports
+// the subscription's usage in a `rate_limit_event` before its result: 7% of the 5-hour limit, 42% of the week's.
 // Prompts carrying a uuid are echoed back as `isReplay` user messages, as with --replay-user-messages, and every
 // assistant message has a uuid. A `rewind_files` control request is answered with success, or with an error for a uuid
 // the session never saw. --resume-session-at <uuid> keeps only the messages up to that one.
@@ -96,6 +97,11 @@ async function streamText(id, text, index, cancelled, delay = 0) {
 
 function result(start, { subtype = "success", is_error = false, text = "", cost = 0.01, num_turns = 1 } = {}) {
   total += cost;
+  if (loggedIn()) {
+    const resetsAt = Math.floor(Date.now() / 1000) + 3600;
+    const unifiedWindows = { five_hour: { utilization: 0.07, resetsAt }, seven_day: { utilization: 0.42, resetsAt: resetsAt + 86400 } };
+    out({ type: "rate_limit_event", rate_limit_info: { status: "allowed", resetsAt, rateLimitType: "five_hour", isUsingOverage: false, unifiedWindows }, uuid: randomUUID(), session_id });
+  }
   out({ type: "result", subtype, is_error, duration_ms: Date.now() - start, num_turns, result: text, session_id, total_cost_usd: total });
 }
 
