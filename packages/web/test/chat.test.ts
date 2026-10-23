@@ -194,6 +194,135 @@ describe("chat", () => {
   });
 });
 
+describe("subagents", () => {
+  // Shaped as Claude Code 2.1.304 sends them: a subagent's messages carry the id of the Agent call that started it,
+  // come whole (no deltas), and start with its prompt; task events say how it is getting on.
+  const prompt = (id: string): NewEvent => ({ kind: "user_prompt", payload: { text: "go", id } });
+  const sub = (parent: string, payload: Record<string, unknown> & { type: string }) => claude({ ...payload, parent_tool_use_id: parent });
+  const subAssistant = (parent: string, id: string, content: unknown[]) => sub(parent, { type: "assistant", message: { id, content } });
+  const subPrompt = (parent: string) => sub(parent, { type: "user", message: { role: "user", content: [{ type: "text", text: "Read the file." }] } });
+  const toolResult = (id: string, text = "ok", parent?: string) =>
+    claude({ type: "user", ...(parent ? { parent_tool_use_id: parent } : {}), message: { content: [{ type: "tool_result", tool_use_id: id, content: text }] } });
+  const agentCall = (msg: string, id: string, input: Record<string, unknown> = {}) => assistant(msg, [{ type: "tool_use", id, name: "Agent", input: { description: `do ${id}`, prompt: "Read the file.", ...input } }]);
+  const task = (subtype: string, toolUseId: string, extra: Record<string, unknown> = {}) => claude({ type: "system", subtype, task_id: `task-${toolUseId}`, tool_use_id: toolUseId, ...extra });
+  const started = (id: string, background = false) => task("task_started", id, { task_type: "local_agent", description: `do ${id}`, is_backgrounded: background });
+  const usage = (toolUses: number) => ({ usage: { total_tokens: 17000, tool_uses: toolUses, duration_ms: 2400 } });
+  const tool = (name: string, id: string, input: Record<string, unknown> = {}) => ({ type: "tool_use", id, name, input });
+  const toolNames = (s: ChatState, parent: string) => s.agents[parent].items.flatMap((i) => blocksOf(i)).map((b) => (b.type === "tool" ? `${b.name}${b.result ? ":" + b.result.text : ""}` : b.type));
+
+  const oneAgent = [
+    prompt("p1"),
+    agentCall("m1", "t1"),
+    started("t1"),
+    subPrompt("t1"),
+    task("task_progress", "t1", { description: "Reading a.txt", ...usage(1) }),
+    subAssistant("t1", "s1", [tool("Read", "r1", { file_path: "a.txt" })]),
+    toolResult("r1", "alpha", "t1"),
+    subAssistant("t1", "s1", [tool("Bash", "b1", { command: "wc -c a.txt" })]),
+    toolResult("b1", "6 a.txt", "t1"),
+    task("task_notification", "t1", { status: "completed", summary: "6 bytes", ...usage(2) }),
+    toolResult("t1", "a.txt is 6 bytes"),
+    assistant("m2", [{ type: "text", text: "It's 6 bytes." }]),
+    result(),
+  ];
+
+  it("puts a subagent's tool calls and their results under the Agent call that started it", () => {
+    const s = fold(oneAgent);
+    assert.deepEqual(toolNames(s, "t1"), ["Read:alpha", "Bash:6 a.txt"]);
+    assert.equal(s.agents.t1.status, "completed");
+    assert.equal(s.agents.t1.activity, undefined, "what it was doing is over");
+    assert.deepEqual(s.agents.t1.usage, { tokens: 17000, toolUses: 2, durationMs: 2400 });
+    assert.deepEqual(ofType(s, "notice"), [], "its prompt is in the Agent call's input, and isn't shown again");
+    const [call] = blocksOf(ofType(s, "assistant")[0]);
+    assert.ok(call.type === "tool");
+    assert.equal(call.result?.text, "a.txt is 6 bytes");
+  });
+
+  it("shows what a running subagent is doing", () => {
+    const s = fold(oneAgent.slice(0, 7));
+    assert.equal(s.agents.t1.status, "running");
+    assert.equal(s.agents.t1.description, "do t1");
+    assert.equal(s.agents.t1.activity, "Reading a.txt");
+    assert.deepEqual(toolNames(s, "t1"), ["Read:alpha"]);
+  });
+
+  it("keeps subagents running in parallel apart, however their messages interleave", () => {
+    const s = fold([
+      prompt("p1"),
+      assistant("m1", [tool("Agent", "t1", { description: "a" })]),
+      started("t1"),
+      subPrompt("t1"),
+      assistant("m1", [tool("Agent", "t2", { description: "b" })]),
+      started("t2"),
+      subPrompt("t2"),
+      subAssistant("t1", "s1", [tool("Read", "r1")]),
+      subAssistant("t2", "s2", [{ type: "thinking", thinking: "" }]),
+      subAssistant("t2", "s2", [tool("Read", "r2")]),
+      toolResult("r2", "beta", "t2"),
+      toolResult("r1", "alpha", "t1"),
+      subAssistant("t1", "s1", [tool("Bash", "b1")]),
+      task("task_notification", "t2", { status: "completed" }),
+      toolResult("t2", "b done"),
+      subAssistant("t2", "s3", [{ type: "text", text: "beta it is" }]),
+    ]);
+    assert.deepEqual(toolNames(s, "t1"), ["Read:alpha", "Bash"]);
+    assert.deepEqual(toolNames(s, "t2"), ["thinking", "Read:beta", "text"]);
+    assert.deepEqual([s.agents.t1.status, s.agents.t2.status], ["running", "completed"]);
+  });
+
+  it("leaves the main thread as it was without them: its items, rows and summary", () => {
+    const main = oneAgent.filter((e) => !(e.kind === "claude" && (e.payload.parent_tool_use_id || e.payload.type === "system")));
+    const without = fold(main);
+    const withAgents = fold(oneAgent);
+    // Keys are the events' numbers, which the left-out events shift.
+    const unkeyed = (v: unknown) => JSON.parse(JSON.stringify(v, (k, x) => (k === "key" && typeof x === "string" && /^\d+$/.test(x) ? undefined : x)));
+    assert.deepEqual(unkeyed(withAgents.items), unkeyed(without.items));
+    assert.deepEqual(unkeyed(chatRows(withAgents.items)), unkeyed(chatRows(without.items)));
+    const work = chatRows(withAgents.items).find((r) => r.type === "work");
+    assert.ok(work?.type === "work");
+    assert.equal(work.summary, "1 tool call", "the Agent call counts once; its subagent's calls aren't the turn's");
+  });
+
+  it("follows a background subagent after its call returns and the turn ends", () => {
+    const s = fold([
+      prompt("p1"),
+      agentCall("m1", "t1", { run_in_background: true }),
+      started("t1", true),
+      toolResult("t1", "Async agent launched successfully."),
+      subAssistant("t1", "s1", [{ type: "text", text: "I'll count the bytes." }]),
+      assistant("m2", [{ type: "text", text: "started" }]),
+      result(),
+      subAssistant("t1", "s1", [tool("Bash", "b1")]),
+      toolResult("b1", "6 a.txt", "t1"),
+    ]);
+    assert.equal(s.agents.t1.background, true);
+    assert.equal(s.agents.t1.status, "running", "its call returning doesn't make it done");
+    assert.deepEqual(toolNames(s, "t1"), ["text", "Bash:6 a.txt"]);
+    const done = fold([task("task_notification", "t1", { status: "completed" })], s, 9);
+    assert.equal(done.agents.t1.status, "completed");
+    assert.equal(done.items, s.items, "the main thread isn't touched");
+  });
+
+  it("tracks a subagent's own subagent by its task events, and leaves other tasks out", () => {
+    const s = fold([
+      prompt("p1"),
+      agentCall("m1", "t1"),
+      started("t1"),
+      subAssistant("t1", "s1", [tool("Agent", "t9", { description: "inner" })]),
+      task("task_started", "t9", { task_type: "local_agent", description: "inner" }),
+      task("task_progress", "t9", { description: "Reading a.txt", ...usage(1) }),
+      task("task_started", "b5", { task_type: "local_bash", description: "Wait 15 seconds" }),
+      task("task_notification", "b5", { status: "completed" }),
+    ]);
+    assert.deepEqual(toolNames(s, "t1"), ["Agent"]);
+    assert.equal(s.agents.t9.status, "running");
+    assert.equal(s.agents.t9.activity, "Reading a.txt");
+    assert.equal(s.agents.b5, undefined);
+    const stopped = fold([task("task_notification", "t9", { status: "killed" })], s, 8);
+    assert.equal(stopped.agents.t9.status, "stopped");
+  });
+});
+
 describe("tool summaries", () => {
   it("prefers the path or command, first line only", () => {
     assert.equal(toolSummary({ description: "list", command: "ls -la\necho" }), "ls -la");

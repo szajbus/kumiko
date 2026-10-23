@@ -1,4 +1,4 @@
-import { isWaiting, type LogLine, type OpKind, type SandboxInfo, type SandboxView, type SessionInfo, type SessionStatus } from "@kumiko/shared";
+import { isBusy, isWaiting, type LogLine, type OpKind, type SandboxInfo, type SandboxView, type SessionInfo, type SessionStatus } from "@kumiko/shared";
 
 export const COLORS = {
   running: "#4CC38A",
@@ -118,6 +118,8 @@ export const sessionState = (s: SessionInfo) =>
     ? { text: "Sandbox stopped", color: COLORS.stopped }
     : isWaiting(s) && s.status === "idle"
       ? { text: "Waiting on you", color: COLORS.warn }
-      : SESSION_STATUS[s.status];
+      : isBusy(s)
+        ? SESSION_STATUS.running
+        : SESSION_STATUS[s.status];
 
 export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;

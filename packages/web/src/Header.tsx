@@ -1,5 +1,5 @@
 import { useRef, useState, type AnimationEvent, type CSSProperties, type DragEvent } from "react";
-import type { SessionInfo } from "@kumiko/shared";
+import { isBusy, type SessionInfo } from "@kumiko/shared";
 import { Corner } from "./Corner";
 import { Logo, Plus } from "./icons";
 import { projectHues, sessionName, sessionTitle } from "./format";
@@ -107,7 +107,7 @@ export function Header({ sessions, newSessions, order, active, onSelect, onClose
         title: `${sessionTitle(s)} · ${st.text}`,
         group: s.sandbox,
         dot: st.color,
-        pulse: s.status === "running" || s.status === "starting",
+        pulse: isBusy(s),
         asleep: s.asleep,
       };
     }

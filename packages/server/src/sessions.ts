@@ -198,7 +198,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     const { info: saved } = stored;
     if (this.sessions.has(saved.id)) throw new SessionNotResumable("This session is already open.");
     if (!saved.claudeSessionId) throw new SessionNotResumable("This session has nothing of Claude's to resume.");
-    const { endedAt: _endedAt, updatedAt: _updatedAt, unread: _unread, closing: _closing, ...rest } = saved;
+    const { endedAt: _endedAt, updatedAt: _updatedAt, unread: _unread, closing: _closing, agents: _agents, ...rest } = saved;
     const info: SessionInfo = { ...rest, status: "idle" };
     return this.launch(info, stored.events, { sandbox: info.sandbox, workdir: info.workdir, env, ...continuing(saved) });
   }
@@ -211,7 +211,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     const { info: saved } = stored;
     if (this.sessions.has(saved.id)) throw new SessionNotResumable("This session is already open.");
     if (!saved.claudeSessionId) throw new SessionNotResumable("This session has nothing of Claude's to resume.");
-    const { endedAt: _endedAt, updatedAt: _updatedAt, closing: _closing, toolsOutdated: _outdated, ...rest } = saved;
+    const { endedAt: _endedAt, updatedAt: _updatedAt, closing: _closing, toolsOutdated: _outdated, agents: _agents, ...rest } = saved;
     const s = this.newSession({ ...rest, status: "ended", asleep: true }, stored.events);
     s.driver = noDriver;
     this.sessions.set(saved.id, s);
@@ -451,7 +451,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
           const unread = s.ending ? s.info.unread : true;
           // Stopped with its sandbox, it continues once that runs again, if it has anything of Claude's to continue.
           const asleep = s.sleeping === true && !s.info.closing && s.info.claudeSessionId !== undefined;
-          this.setInfo(s, { status: failed ? "failed" : "ended", endedAt: new Date().toISOString(), bufferBytes: s.bytes, unread, ...(asleep ? { asleep } : {}) });
+          this.setInfo(s, { status: failed ? "failed" : "ended", endedAt: new Date().toISOString(), bufferBytes: s.bytes, unread, agents: undefined, ...(asleep ? { asleep } : {}) });
           this.push(s, { kind: "ended", payload: { reason, code: ev.code, ...(asleep ? { asleep } : {}) } });
           this.save(s);
           resolveExit();
@@ -476,7 +476,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     const resume = succeeded && s.info.claudeSessionId ? continuing(s.info) : undefined;
     const old = s.driver;
     const live = isLive(s.info);
-    const { endedAt: _endedAt, asleep: _asleep, ...rest } = s.info;
+    const { endedAt: _endedAt, asleep: _asleep, agents: _agents, ...rest } = s.info;
     // A fresh start gets a new Claude id from its first init; until then there is nothing to fork or resume.
     s.info = { ...rest, status: "idle", unread: keepUnread ? s.info.unread : false, ...(resume ? {} : { claudeSessionId: undefined, resumeAt: undefined }) };
     s.ending = undefined;
@@ -560,6 +560,11 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
       if (s.finishing) s.driver.interrupt();
     } else if (m.type === "rate_limit_event") {
       this.emit("rateLimit", s.info.sandbox, m.rate_limit_info);
+    } else if (m.type === "system" && m.subtype === "background_tasks_changed") {
+      // Claude lists what it has running in the background whenever that changes; background shells don't count.
+      const tasks = Array.isArray(m.tasks) ? (m.tasks as { task_type?: unknown }[]) : [];
+      const agents = tasks.filter((t) => t?.task_type === "local_agent").length;
+      this.setInfo(s, { agents: agents || undefined });
     } else if (m.type === "system" && m.subtype === "session_title_changed") {
       // /rename; saved with the turn's result that follows.
       if (typeof m.title === "string" && m.title.trim()) this.setInfo(s, { title: m.title.trim(), titleBy: "user" });

@@ -10,6 +10,15 @@ clone, and keeps running between your messages until you close the tab, even whi
 
 ![A session: the first turn's tool calls folded into one line, the agent's reply, and the turn's time, cost and tokens.](../../../assets/screenshots/session.png)
 
+## Subagents
+
+When the agent hands work to subagents, each one's thinking, tool calls and messages show under the tool call that
+started it, while it works. Once it's done they fold behind a line summing them up, as a turn's work does.
+
+A subagent started in the background goes on after the turn is over. Until it's done, the turn's folded work says so,
+a line below the turn says what it is doing, with **Show** to open it, and the tab says Working. When it's done, the
+agent takes a turn of its own to report on it.
+
 ## Tabs
 
 Each project's tabs sit together, behind a label with the project's name in a colour of its own, so a tab only needs

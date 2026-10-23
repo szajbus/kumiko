@@ -27,6 +27,7 @@ import {
   WindowError,
   type AgentSetupResponse,
   type AgentSetupRun,
+  isBusy,
   type ApiError,
   type CreateProjectRequest,
   type CreateResponse,
@@ -1148,7 +1149,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     port,
     token,
     loginUrl: `${url}/api/login?token=${token}`,
-    working: () => sessions.list().filter((s) => s.status === "running" || s.status === "starting"),
+    working: () => sessions.list().filter(isBusy),
     close: async ({ endSessions = false } = {}) => {
       clearInterval(timer);
       logins.cancelAll();

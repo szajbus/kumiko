@@ -367,6 +367,8 @@ export interface SessionInfo {
    * it is started, and Claude continues it.
    */
   asleep?: boolean;
+  /** Subagents Claude started in the background that are still working, its turn over or not; none when missing. */
+  agents?: number;
 }
 
 /**
@@ -374,7 +376,15 @@ export interface SessionInfo {
  * since. Claude runs with permissions bypassed, so a finished turn is the only way it waits for an answer.
  */
 export function isWaiting(s: SessionInfo): boolean {
-  return s.unread === true && s.status !== "running" && s.status !== "starting";
+  return s.unread === true && !isBusy(s);
+}
+
+/**
+ * Whether Claude is at work in a session: on a turn, or with subagents it left working in the background after one.
+ * Once those finish, Claude takes a turn of its own to report on them.
+ */
+export function isBusy(s: SessionInfo): boolean {
+  return s.status === "running" || s.status === "starting" || (s.status === "idle" && (s.agents ?? 0) > 0);
 }
 
 /** Why a session ended: its tab closing, its sandbox stopping, the app quitting, or the process exiting by itself. */

@@ -746,6 +746,25 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
   font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto;
 }
 .tool-error summary .tool-name { color: var(--danger); }
+/* A subagent: its Agent call's line, and under it, indented, what it did, folding once it is done */
+.agent { display: flex; flex-direction: column; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--surface); }
+.agent > .tool { border: 0; background: none; }
+.agent > .tool .tool-summary { font-family: inherit; font-size: 13px; color: var(--text-2); }
+.agent-meta { flex: none; display: flex; align-items: center; gap: 8px; margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.agent-badge { padding: 0 7px; border: 1px solid var(--border); border-radius: 999px; font-size: 11.5px; color: var(--text-2); }
+.agent-work { margin: 0 12px 12px 19px; padding-left: 14px; border-left: 2px solid var(--border); }
+.agent-work .work-items { gap: 8px; }
+.agent-work .work-summary + .work-body .work-items { padding-top: 8px; }
+.agent-work .thinking, .agent-work .tool, .agent-work .agent { background: var(--bg); }
+.agent-work .md { font-size: 13.5px; }
+/* Subagents still working in the background once the turn is over */
+.work-agents { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); }
+.work-agents::before { content: "·"; color: var(--muted); }
+.work-agents .spinner, .agent-background .spinner { width: 10px; height: 10px; }
+.agent-background { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--muted); font-size: 13px; }
+.agent-background-name { flex: none; color: var(--text-2); font-weight: 500; }
+.agent-background-what { flex: none; }
+.agent-background-now { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
 
 /* Composer */
 .composer {

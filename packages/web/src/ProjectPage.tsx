@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { isWaiting, projectMountRole, vmName, type LogLine, type ProjectView, type SessionInfo, type WorktreeStatus, type WorktreesResponse } from "@kumiko/shared";
+import { isBusy, isWaiting, projectMountRole, vmName, type LogLine, type ProjectView, type SessionInfo, type WorktreeStatus, type WorktreesResponse } from "@kumiko/shared";
 import { SandboxActions, useActions } from "./actions";
 import { AgentSetupCard } from "./AgentSetup";
 import { api, errorMessage, useHome, type LiveState } from "./api";
@@ -151,7 +151,7 @@ function SessionsCard({ sessions: all, onOpened }: { sessions: SessionInfo[]; on
                 <span className="item-title">{sessionTitle(s)}</span>
               </a>
               <span className="row-status item-state" style={{ color: st.color }}>
-                <span className={`dot dot-small${s.status === "running" || s.status === "starting" ? " dot-pulse" : ""}`} style={{ background: st.color }} aria-hidden="true" />
+                <span className={`dot dot-small${isBusy(s) ? " dot-pulse" : ""}`} style={{ background: st.color }} aria-hidden="true" />
                 {st.text}
               </span>
             </li>

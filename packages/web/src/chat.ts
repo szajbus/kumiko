@@ -34,12 +34,32 @@ export interface Tokens {
   cached: number;
 }
 
-export interface ChatState {
-  items: ChatItem[];
+type AssistantItem = Extract<ChatItem, { type: "assistant" }>;
+
+/** A run of Claude's messages: the main thread's, or a subagent's. */
+interface Thread<T extends ChatItem = ChatItem> {
+  items: T[];
   /** Assistant message id → index in items. */
   messages: Record<string, number>;
   /** tool_use id → index of the assistant item holding it. */
   tools: Record<string, number>;
+}
+
+/** What a subagent did, kept apart from the main thread: its own messages, and what Claude reports of its progress. */
+export interface Subagent extends Thread<AssistantItem> {
+  /** From Claude's task events; unknown for a subagent whose events weren't kept. */
+  status?: "running" | "completed" | "failed" | "stopped";
+  /** Started with `run_in_background`: it goes on after its Agent call returns. */
+  background?: boolean;
+  description?: string;
+  /** What it is doing now, while it runs: "Reading b.txt". */
+  activity?: string;
+  usage?: { tokens: number; toolUses: number; durationMs: number };
+}
+
+export interface ChatState extends Thread {
+  /** Subagents by the tool_use id of the Agent call that started them, wherever that call is. */
+  agents: Record<string, Subagent>;
   /** Claude reports cost per session; a turn's cost is the difference. */
   totalCost: number;
   /** Likewise for tokens. */
@@ -49,10 +69,10 @@ export interface ChatState {
   suggestion?: string;
 }
 
-export const emptyChat = (): ChatState => ({ items: [], messages: {}, tools: {}, totalCost: 0, totalTokens: { total: 0, cached: 0 }, interruptPending: false });
+export const emptyChat = (): ChatState => ({ items: [], messages: {}, tools: {}, agents: {}, totalCost: 0, totalTokens: { total: 0, cached: 0 }, interruptPending: false });
 
 /** The blocks to show for an assistant item: finished ones, then drafts past them. */
-export function blocksOf(item: Extract<ChatItem, { type: "assistant" }>): Block[] {
+export function blocksOf(item: AssistantItem): Block[] {
   return [...item.final, ...item.drafts.slice(item.final.length).filter(Boolean)];
 }
 
@@ -177,9 +197,37 @@ export function chatRows(items: readonly ChatItem[]): ChatRow[] {
   return rows;
 }
 
+export type ToolState = "ok" | "error" | "running" | "stopped";
+
+/**
+ * How a tool call stands: done, failed, under way, or cut short. `open` while the turn it is in goes on, `live` while
+ * Claude is there at all. An Agent call goes by its subagent, which runs on after its call returns when it was started
+ * in the background, until Claude reports it done.
+ */
+export function toolState(block: Extract<Block, { type: "tool" }>, open: boolean, live: boolean, agent?: Subagent): ToolState {
+  const own: ToolState = block.result ? (block.result.isError ? "error" : "ok") : open ? "running" : "stopped";
+  switch (agent?.status) {
+    case "running":
+      return (agent.background ? live : open) ? "running" : own === "ok" ? "stopped" : own;
+    case "completed":
+      return block.result?.isError ? "error" : "ok";
+    case "failed":
+      return "error";
+    case "stopped":
+      return "stopped";
+    default:
+      return own;
+  }
+}
+
+/** Subagents started in the background that Claude hasn't reported done, by their Agent call's tool_use id. */
+export function backgroundAgents(agents: Record<string, Subagent>): string[] {
+  return Object.keys(agents).filter((id) => agents[id].background && agents[id].status === "running");
+}
+
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-function summarize(blocks: Block[]): { summary: string; tools: string } {
+export function summarize(blocks: Block[]): { summary: string; tools: string } {
   const tools = blocks.filter((b) => b.type === "tool");
   const failed = tools.filter((b) => b.result?.isError).length;
   const thoughts = blocks.filter((b) => b.type === "thinking").length;
@@ -295,24 +343,13 @@ function replaceFailedTurn(s: ChatState, error: ChatItem): ChatState {
 }
 
 function applyClaude(s: ChatState, m: Json & { type: string }, key: string): ChatState {
-  // Subagents' own messages would interleave with the main thread; their tool call shows as one line instead.
-  if (m.parent_tool_use_id) return s;
-
-  /** Replaces the assistant item for `id` (creating it if needed) with `fn` of it. */
-  const withMessage = (id: string, fn: (it: Extract<ChatItem, { type: "assistant" }>) => Extract<ChatItem, { type: "assistant" }>, extra?: (index: number) => Partial<ChatState>): ChatState => {
-    let index = s.messages[id];
-    let items = s.items;
-    let messages = s.messages;
-    if (index === undefined) {
-      index = items.length;
-      items = [...items, { type: "assistant", key: `m-${id}`, final: [], drafts: [] }];
-      messages = { ...messages, [id]: index };
-    } else {
-      items = [...items];
-    }
-    items[index] = fn(items[index] as Extract<ChatItem, { type: "assistant" }>);
-    return { ...s, items, messages, ...extra?.(index) };
-  };
+  // A subagent's messages go to it, not the main thread, where they would interleave with Claude's own.
+  const parent = str(m.parent_tool_use_id);
+  if (parent) {
+    const agent = s.agents[parent] ?? { items: [], messages: {}, tools: {} };
+    const next = applyThread(agent, m, key);
+    return next === agent ? s : { ...s, agents: { ...s.agents, [parent]: next } };
+  }
 
   switch (m.type) {
     case "prompt_suggestion":
@@ -320,17 +357,100 @@ function applyClaude(s: ChatState, m: Json & { type: string }, key: string): Cha
 
     case "system":
       if (m.subtype === "api_retry") return { ...s, items: [...s.items, { type: "retry", key, attempt: num(m.attempt), max: num(m.max_retries) }] };
-      return s;
+      return applyTask(s, m);
 
+    case "user": {
+      // Claude echoes each prompt back (the sign that it can be rewound to); the chat already shows it.
+      if (m.isReplay === true) {
+        const index = s.items.findLastIndex((i) => i.type === "user" && i.id === m.uuid);
+        if (index < 0) return s;
+        const items = [...s.items];
+        items[index] = { ...(items[index] as Extract<ChatItem, { type: "user" }>), replayed: true };
+        return { ...s, items };
+      }
+      return applyThread(s, m, key);
+    }
+
+    case "result": {
+      const total = num(m.total_cost_usd);
+      // The running total starts over when a session is resumed, so a drop means this turn's cost is all of it.
+      const costUsd = total !== undefined ? (total >= s.totalCost ? total - s.totalCost : total) : undefined;
+      const usage = tokensOf(m.usage);
+      const tokens = usage && (usage.total >= s.totalTokens.total ? { total: usage.total - s.totalTokens.total, cached: Math.max(0, usage.cached - s.totalTokens.cached) } : usage);
+      const ok = m.subtype === "success" && m.is_error !== true;
+      const base = { ...s, totalCost: total ?? s.totalCost, totalTokens: usage ?? s.totalTokens, interruptPending: false };
+      // A slash command like /model is a turn of its own with nothing to sum up.
+      if (ok && m.num_turns === 0) return base;
+      const status = ok ? "ok" : s.interruptPending && m.subtype === "error_during_execution" ? "interrupted" : "error";
+      const errors = Array.isArray(m.errors) ? m.errors.map(String).join("\n") : undefined;
+      const message = status === "error" ? str(m.result) || errors || String(m.subtype ?? "error") : undefined;
+      return { ...base, items: [...base.items, { type: "turn", key, status, durationMs: num(m.duration_ms), costUsd, tokens, message }] };
+    }
+
+    default:
+      return applyThread(s, m, key);
+  }
+}
+
+/**
+ * Claude's reports on its subagents, by the tool_use id of the Agent call that started each: when it starts, what it
+ * is doing, and how it ended. Only these tell when one started in the background is done, as its call returns at once.
+ */
+function applyTask(s: ChatState, m: Json): ChatState {
+  const id = str(m.tool_use_id);
+  if (!id) return s;
+  const agent = s.agents[id];
+  const usage = obj(m.usage);
+  const counts = num(usage.total_tokens) !== undefined ? { usage: { tokens: num(usage.total_tokens) ?? 0, toolUses: num(usage.tool_uses) ?? 0, durationMs: num(usage.duration_ms) ?? 0 } } : {};
+  let next: Subagent;
+  if (m.subtype === "task_started") {
+    // Claude reports some tool calls of its own as tasks too, like a Bash command that runs long.
+    if (m.task_type !== "local_agent") return s;
+    next = { ...(agent ?? { items: [], messages: {}, tools: {} }), status: "running", background: m.is_backgrounded === true, description: str(m.description) };
+  } else if (!agent) {
+    return s;
+  } else if (m.subtype === "task_progress") {
+    next = { ...agent, activity: str(m.description), ...counts };
+  } else if (m.subtype === "task_notification") {
+    const status = m.status === "completed" ? "completed" : m.status === "failed" ? "failed" : "stopped";
+    next = { ...agent, status, activity: undefined, ...counts };
+  } else {
+    return s;
+  }
+  return { ...s, agents: { ...s.agents, [id]: next } };
+}
+
+/** Applies one of Claude's messages to a thread: the main one, or a subagent's. Returns `t` when nothing changed. */
+function applyThread<T extends Thread<AssistantItem> | ChatState>(t: T, m: Json & { type: string }, key: string): T {
+  // A subagent's thread only has Claude's messages; its prompt is in the input of the call that started it.
+  const main = "agents" in t;
+
+  /** Replaces the assistant item for `id` (creating it if needed) with `fn` of it. */
+  const withMessage = (id: string, fn: (it: AssistantItem) => AssistantItem, extra?: (index: number) => Partial<Thread>): T => {
+    let index = t.messages[id];
+    let items: ChatItem[] = t.items;
+    let messages = t.messages;
+    if (index === undefined) {
+      index = items.length;
+      items = [...items, { type: "assistant", key: `m-${id}`, final: [], drafts: [] }];
+      messages = { ...messages, [id]: index };
+    } else {
+      items = [...items];
+    }
+    items[index] = fn(items[index] as AssistantItem);
+    return { ...t, items, messages, ...extra?.(index) };
+  };
+
+  switch (m.type) {
     case "stream_event": {
       const e = obj(m.event);
       if (e.type === "message_start") return withMessage(str(obj(e.message).id) ?? key, (it) => it);
       const id = str(m.api_message_id);
       const index = num(e.index);
-      if (!id || index === undefined) return s;
+      if (!id || index === undefined) return t;
       if (e.type === "content_block_start") {
         const block = toBlock(e.content_block);
-        if (!block) return s;
+        if (!block) return t;
         if (block.type === "tool") block.partialInput = "";
         return withMessage(id, (it) => {
           const drafts = [...it.drafts];
@@ -353,14 +473,14 @@ function applyClaude(s: ChatState, m: Json & { type: string }, key: string): Cha
           return { ...it, drafts };
         });
       }
-      return s;
+      return t;
     }
 
     case "assistant": {
       const msg = obj(m.message);
       const id = str(msg.id) ?? key;
       const blocks = (Array.isArray(msg.content) ? msg.content : []).map(toBlock).filter((b): b is Block => Boolean(b));
-      if (!blocks.length) return s;
+      if (!blocks.length) return t;
       return withMessage(
         id,
         (it) => {
@@ -372,7 +492,7 @@ function applyClaude(s: ChatState, m: Json & { type: string }, key: string): Cha
           return { ...it, final: [...it.final, ...merged] };
         },
         (index) => {
-          const tools = { ...s.tools };
+          const tools = { ...t.tools };
           for (const b of blocks) if (b.type === "tool") tools[b.id] = index;
           return { tools };
         },
@@ -380,31 +500,23 @@ function applyClaude(s: ChatState, m: Json & { type: string }, key: string): Cha
     }
 
     case "user": {
-      // Claude echoes each prompt back (the sign that it can be rewound to); the chat already shows it.
-      if (m.isReplay === true) {
-        const index = s.items.findLastIndex((i) => i.type === "user" && i.id === m.uuid);
-        if (index < 0) return s;
-        const items = [...s.items];
-        items[index] = { ...(items[index] as Extract<ChatItem, { type: "user" }>), replayed: true };
-        return { ...s, items };
-      }
       // Text Claude adds on its own, like a skill's instructions after the Skill tool runs, is for Claude, not the reader.
-      const synthetic = m.isSynthetic === true;
+      const quiet = m.isSynthetic === true || !main;
       const content = obj(m.message).content;
-      if (typeof content === "string") return synthetic ? s : { ...s, items: [...s.items, { type: "notice", key, text: content }] };
-      if (!Array.isArray(content)) return s;
-      let next = s;
+      if (typeof content === "string") return quiet ? t : { ...t, items: [...t.items, { type: "notice", key, text: content }] };
+      if (!Array.isArray(content)) return t;
+      let next = t;
       for (const raw of content) {
         const c = obj(raw);
-        if (c.type === "text" && str(c.text) && !synthetic) {
+        if (c.type === "text" && str(c.text) && !quiet) {
           next = { ...next, items: [...next.items, { type: "notice", key: `${key}-${next.items.length}`, text: str(c.text)! }] };
         } else if (c.type === "tool_result") {
           const toolId = str(c.tool_use_id) ?? "";
           const index = next.tools[toolId];
           if (index === undefined) continue;
           const result: ToolResult = { text: resultText(c.content), isError: c.is_error === true };
-          const items = [...next.items];
-          const it = items[index] as Extract<ChatItem, { type: "assistant" }>;
+          const items: ChatItem[] = [...next.items];
+          const it = items[index] as AssistantItem;
           items[index] = { ...it, final: it.final.map((b) => (b.type === "tool" && b.id === toolId ? { ...b, result } : b)) };
           next = { ...next, items };
         }
@@ -412,24 +524,8 @@ function applyClaude(s: ChatState, m: Json & { type: string }, key: string): Cha
       return next;
     }
 
-    case "result": {
-      const total = num(m.total_cost_usd);
-      // The running total starts over when a session is resumed, so a drop means this turn's cost is all of it.
-      const costUsd = total !== undefined ? (total >= s.totalCost ? total - s.totalCost : total) : undefined;
-      const usage = tokensOf(m.usage);
-      const tokens = usage && (usage.total >= s.totalTokens.total ? { total: usage.total - s.totalTokens.total, cached: Math.max(0, usage.cached - s.totalTokens.cached) } : usage);
-      const ok = m.subtype === "success" && m.is_error !== true;
-      const base = { ...s, totalCost: total ?? s.totalCost, totalTokens: usage ?? s.totalTokens, interruptPending: false };
-      // A slash command like /model is a turn of its own with nothing to sum up.
-      if (ok && m.num_turns === 0) return base;
-      const status = ok ? "ok" : s.interruptPending && m.subtype === "error_during_execution" ? "interrupted" : "error";
-      const errors = Array.isArray(m.errors) ? m.errors.map(String).join("\n") : undefined;
-      const message = status === "error" ? str(m.result) || errors || String(m.subtype ?? "error") : undefined;
-      return { ...base, items: [...base.items, { type: "turn", key, status, durationMs: num(m.duration_ms), costUsd, tokens, message }] };
-    }
-
     default:
-      return s;
+      return t;
   }
 }
 

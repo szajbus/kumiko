@@ -1,10 +1,10 @@
-import { memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { createContext, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { formatBytes, LIVE_SESSION_STATUSES, type LoginAccount, type SessionInfo } from "@kumiko/shared";
 import { api, errorMessage, type SessionStream } from "./api";
 import { fromAttachment, toInput } from "./attachments";
 import { ArtifactsButton } from "./ArtifactView";
-import { applyEvent, blocksOf, chatRows, emptyChat, loginCards, partialToolSummary, toolSummary, type Block, type ChatItem, type ChatState, type ItemRow, type LoginAnswer, type WorkRow } from "./chat";
+import { applyEvent, backgroundAgents, blocksOf, chatRows, emptyChat, loginCards, partialToolSummary, summarize, toolState, toolSummary, type Block, type ChatItem, type ChatState, type ItemRow, type LoginAnswer, type Subagent, type ToolState, type WorkRow } from "./chat";
 import { Composer, type ComposerHandle } from "./Composer";
 import { HeaderCorner } from "./Corner";
 import { Markdown } from "./Markdown";
@@ -188,6 +188,7 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
       <Chat
         chat={chat}
         running={busy}
+        live={live}
         active={active}
         onRewind={canBranch ? setRewinding : undefined}
         onFork={canBranch ? (item) => void fork(item.id) : undefined}
@@ -471,6 +472,8 @@ function LoggedInCard({ account, retried, busy, onRetry }: { account: LoginAccou
 interface ChatProps {
   chat: ChatState;
   running: boolean;
+  /** Claude is there: subagents it started in the background may still be working. */
+  live: boolean;
   /** On screen; a chat kept in a background tab isn't. */
   active: boolean;
   onRewind?: (item: UserItem) => void;
@@ -485,7 +488,19 @@ interface ChatProps {
   hidden?: ReadonlySet<string>;
 }
 
-function Chat({ chat, running, active, onRewind, onFork, onQuote, onAnswer, actions, hidden }: ChatProps) {
+/**
+ * What tool lines need to show subagents: theirs is kept apart from the items, so memoised rows needn't re-render for
+ * each of their messages.
+ */
+interface AgentsView {
+  agents: Record<string, Subagent>;
+  live: boolean;
+  /** Opening a fold, which mustn't scroll it away by following the bottom. */
+  onUnfold(): void;
+}
+const AgentsContext = createContext<AgentsView>({ agents: {}, live: false, onUnfold: () => {} });
+
+function Chat({ chat, running, live, active, onRewind, onFork, onQuote, onAnswer, actions, hidden }: ChatProps) {
   const box = useRef<HTMLDivElement>(null);
   const inner = useRef<HTMLDivElement>(null);
   // Follows new output while the view is at the bottom; scrolling up stops that until it is back at the bottom.
@@ -521,6 +536,18 @@ function Chat({ chat, running, active, onRewind, onFork, onQuote, onAnswer, acti
   // Tool calls after the last turn's end are still in flight while the session runs.
   const lastTurn = chat.items.findLastIndex((i) => i.type === "turn" || i.type === "ended");
   const rows = useMemo(() => chatRows(chat.items), [chat.items]);
+  const agents = useMemo<AgentsView>(() => ({ agents: chat.agents, live, onUnfold: () => (stick.current = false) }), [chat.agents, live]);
+  const background = live ? backgroundAgents(chat.agents) : [];
+  /** The Agent call to bring into view, opening the work it is folded into; `n` tells a second Show from the first. */
+  const [reveal, setReveal] = useState<{ id: string; n: number }>();
+  useEffect(() => {
+    if (!reveal) return;
+    stick.current = false;
+    // After the work has unfolded, so the line is where it will stay.
+    const t = setTimeout(() => box.current?.querySelector(`[data-tool="${CSS.escape(reveal.id)}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" }), FOLD_MS);
+    return () => clearTimeout(t);
+  }, [reveal]);
+  const toolIds = (row: WorkRow) => row.rows.flatMap((r) => (r.item.type === "assistant" ? blocksOf(r.item).slice(r.from, r.to) : [])).flatMap((b) => (b.type === "tool" ? [b.id] : []));
   const itemRow = (row: ItemRow) =>
     hidden?.has(row.item.key) ? null : (
       <Item
@@ -549,15 +576,29 @@ function Chat({ chat, running, active, onRewind, onFork, onQuote, onAnswer, acti
       }}
     >
       <div ref={inner} className="chat-inner">
-        {rows.map((row) =>
-          row.type === "work" ? (
-            <Work key={row.key} row={row} onUnfold={() => (stick.current = false)}>
+        <AgentsContext.Provider value={agents}>
+        {rows.map((row) => {
+          if (row.type !== "work") return itemRow(row);
+          const ids = toolIds(row);
+          return (
+            <Work key={row.key} row={row} onUnfold={agents.onUnfold} agents={ids.filter((id) => background.includes(id)).length} reveal={reveal && ids.includes(reveal.id) ? reveal.n : undefined}>
               {row.rows.map(itemRow)}
             </Work>
-          ) : (
-            itemRow(row)
-          ),
-        )}
+          );
+        })}
+        </AgentsContext.Provider>
+        {!running &&
+          background.map((id) => (
+            <div key={id} className="agent-background">
+              <span className="spinner" aria-hidden="true" />
+              <span className="agent-background-name">{chat.agents[id].description || "A subagent"}</span>
+              <span className="agent-background-what">is working in the background</span>
+              {chat.agents[id].activity && <span className="agent-background-now">· {chat.agents[id].activity}</span>}
+              <button type="button" className="tool-show" onClick={() => setReveal((r) => ({ id, n: (r?.n ?? 0) + 1 }))}>
+                Show
+              </button>
+            </div>
+          ))}
         {running && chat.items.at(-1)?.type === "user" && (
           <div className="chat-waiting">
             <span className="spinner" aria-hidden="true" /> Waiting for Claude…
@@ -573,12 +614,24 @@ function Chat({ chat, running, active, onRewind, onFork, onQuote, onAnswer, acti
 
 /** How long a finished turn's work stays open before folding, so the reply is seen to arrive first. */
 const FOLD_DELAY_MS = 250;
+/** How long folding and unfolding take; as `.work-body`'s transition does. */
+const FOLD_MS = 360;
 
 /**
  * A turn's work. Open while the turn runs; once it is done it folds, with an animation if it was watched running, and
  * shows a line summing it up that opens it again.
  */
-function Work({ row, onUnfold, children }: { row: WorkRow; onUnfold(): void; children: ReactNode }) {
+interface WorkProps {
+  row: Pick<WorkRow, "done" | "summary" | "tools">;
+  onUnfold(): void;
+  /** Subagents in it still working in the background, which its summary says. */
+  agents?: number;
+  /** Opens it when it changes. */
+  reveal?: number;
+  children: ReactNode;
+}
+
+function Work({ row, onUnfold, agents, reveal, children }: WorkProps) {
   const [folded, setFolded] = useState(row.done);
   const watched = useRef(!row.done);
   useEffect(() => {
@@ -587,6 +640,9 @@ function Work({ row, onUnfold, children }: { row: WorkRow; onUnfold(): void; chi
     const t = setTimeout(() => setFolded(true), FOLD_DELAY_MS);
     return () => clearTimeout(t);
   }, [row.done]);
+  useEffect(() => {
+    if (reveal !== undefined) setFolded(false);
+  }, [reveal]);
 
   return (
     <div className={`work${folded ? " is-folded" : ""}`}>
@@ -603,6 +659,12 @@ function Work({ row, onUnfold, children }: { row: WorkRow; onUnfold(): void; chi
           }}
         >
           {row.summary}
+          {agents ? (
+            <span className="work-agents">
+              <span className="spinner" aria-hidden="true" />
+              {agents === 1 ? "1 agent working" : `${agents} agents working`}
+            </span>
+          ) : null}
         </button>
       )}
       <div className="work-body" inert={folded}>
@@ -746,18 +808,58 @@ function BlockView({ block, open }: { block: Block; open: boolean }) {
 }
 
 function ToolLine({ block, open }: { block: Extract<Block, { type: "tool" }>; open: boolean }) {
+  const { agents, live, onUnfold } = useContext(AgentsContext);
+  const agent = agents[block.id];
+  const state = toolState(block, open, live, agent);
+  if (!agent) return <ToolCall block={block} state={state} />;
+  const blocks = agent.items.flatMap(blocksOf);
+  const { summary, tools } = summarize(blocks);
+  const calls = blocks.filter((b) => b.type === "tool").length || agent.usage?.toolUses || 0;
+  // Once it is done, the summary of its work says the rest.
+  const meta = [
+    state === "running" && agent.activity,
+    (state === "running" || !blocks.length) && calls > 0 && (calls === 1 ? "1 tool call" : `${calls} tool calls`),
+    state !== "running" && agent.background && agent.usage?.durationMs && formatDuration(agent.usage.durationMs),
+  ].filter(Boolean);
+  return (
+    <div className="agent" data-tool={block.id}>
+      <ToolCall
+        block={block}
+        state={state}
+        meta={
+          <span className="agent-meta">
+            {agent.background && <span className="agent-badge">background</span>}
+            {meta.length > 0 && <span>{meta.join(" · ")}</span>}
+          </span>
+        }
+      />
+      {blocks.length > 0 && (
+        <div className="agent-work">
+          <Work row={{ done: state !== "running", summary, tools }} onUnfold={onUnfold}>
+            {blocks.map((b, i) => (
+              <BlockView key={i} block={b} open={state === "running"} />
+            ))}
+          </Work>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One tool call's line, opening to its input and result; `meta` goes at its right. */
+function ToolCall({ block, state, meta }: { block: Extract<Block, { type: "tool" }>; state: ToolState; meta?: ReactNode }) {
   const ctx = useContext(WindowContext);
   // A call that opened, changed or closed something in the window says so in words, with a way back to a closed artifact.
   const line = ctx && widgetLine(block.name, block.input, ctx.window, ctx.sessionNames);
   const hidden = line?.widget && !Object.values(ctx!.window.panes).includes(line.widget);
   const summary = toolSummary(block.input) || partialToolSummary(block.partialInput ?? "");
-  const state = block.result ? (block.result.isError ? "error" : "ok") : open ? "running" : "stopped";
   return (
     <details className={`tool tool-${state}${line ? " tool-widget" : ""}`}>
       <summary>
         <ToolIcon state={state} />
         <span className="tool-name">{line?.label ?? block.name}</span>
         {line ? <span className="tool-summary tool-title">{line.title}</span> : <span className="mono tool-summary">{summary}</span>}
+        {meta}
         {hidden && ctx!.live && (
           <button
             type="button"
@@ -786,7 +888,7 @@ function ToolLine({ block, open }: { block: Extract<Block, { type: "tool" }>; op
   );
 }
 
-function ToolIcon({ state }: { state: "ok" | "error" | "running" | "stopped" }) {
+function ToolIcon({ state }: { state: ToolState }) {
   if (state === "running") return <span className="spinner" aria-label="Running" />;
   if (state === "ok")
     return (

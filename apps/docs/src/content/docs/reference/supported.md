@@ -53,6 +53,7 @@ follows mostly from the sandbox provider.
 | Feature | Uses |
 | --- | --- |
 | Streaming replies, tool calls, cost and tokens | stream-json output with partial messages |
+| Subagents' work | their messages, by `parent_tool_use_id` (whole, as Claude Code doesn't stream them), and the `task_*` and `background_tasks_changed` system messages |
 | Working on while Kumiko is away | stream-json input read from a FIFO, which only ends when Kumiko closes it |
 | Stop | an interrupt control request |
 | Resume, fork | `--resume`, `--fork-session`, `--resume-session-at` |

@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 import WebSocket from "ws";
-import type { ProjectView, ServerEvent, SessionEvent, SessionInfo, SessionStreamMessage } from "@kumiko/shared";
+import { isBusy, isWaiting, type ProjectView, type ServerEvent, type SessionEvent, type SessionInfo, type SessionStreamMessage } from "@kumiko/shared";
 import { RUNS_DIR, userMessage } from "@kumiko/agent";
 import { LimaProvider, MetadataStore, shellQuote } from "@kumiko/sandbox";
 import { startServer, type RunningServer, type ServerOptions } from "../src/index.js";
@@ -350,6 +350,29 @@ describe("sessions", () => {
     await waitFor(async () => { const i = await session(id); return (i?.status === "ended" && i.asleep) || undefined; });
     await writeFile(join(limaDir, "km-two.json"), JSON.stringify({ name: "km-two", status: "Running" }));
     await waitFor(async () => { const i = await session(id); return (i?.status === "idle" && !i.asleep) || undefined; });
+    await api(`/api/sessions/${id}`, { method: "DELETE" });
+  });
+
+  it("stays busy while a subagent works in the background, and keeps its task events when saved", async () => {
+    const id = await startSession("one", "agents-bg");
+    const s = await listen(id);
+    // The turn is over at once, but the subagent works on: the session waits for a prompt, and is busy.
+    const during = await waitFor(async () => { const i = await session(id); return i?.status === "idle" && i.agents === 1 ? i : undefined; });
+    assert.ok(isBusy(during));
+    assert.ok(!isWaiting(during), "the reply isn't the last word: Claude reports on the subagent once it's done");
+    assert.deepEqual(server.working().map((x) => x.id), [id], "quitting would cut the subagent short");
+    // Done, it reports to Claude, who takes a turn of its own to say so.
+    await waitFor(() => s.results().length === 2);
+    const done = await waitFor(async () => { const i = await session(id); return i?.status === "idle" && i.agents === undefined ? i : undefined; });
+    assert.ok(!isBusy(done));
+    // Saved with the turn's result, as the save is written.
+    const saved = await waitFor(async () => {
+      const stored = JSON.parse(await readFile(join(sessionsDir, `${id}.json`), "utf8").catch(() => "{}")) as Partial<StoredSession>;
+      return stored.events?.filter((e) => e.kind === "claude" && e.payload.type === "result").length === 2 ? (stored as StoredSession) : undefined;
+    });
+    const tasks = saved.events.flatMap((e) => (e.kind === "claude" && e.payload.type === "system" ? [e.payload.subtype] : []));
+    assert.deepEqual(tasks, ["task_started", "task_notification"], "the subagent's start and end, and no other system events");
+    assert.ok(saved.events.some((e) => e.kind === "claude" && e.payload.type === "assistant" && e.payload.parent_tool_use_id), "and its messages");
     await api(`/api/sessions/${id}`, { method: "DELETE" });
   });
 

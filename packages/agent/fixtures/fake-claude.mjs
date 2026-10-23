@@ -12,6 +12,9 @@
 //                interrupted while waiting is cancelled, as Claude does
 //   "write J"    writes a file as Claude's Write tool does, J being its input as JSON ({ file_path, content });
 //                a path starting with ~/ is in $HOME. "write-slow J" streams the input over ~3s first
+//   "agents"     runs two subagents in parallel, their messages interleaved, with the task events Claude sends
+//   "agents-bg"  starts a subagent in the background and replies at once; it works on for ~2s after the turn, then
+//                Claude takes a turn of its own to report on it. $FAKE_CLAUDE_AGENT_MS sets how long a step takes (200ms)
 //   anything else is echoed back as "You said: …", followed by " [with …]" naming the files that came with it
 // With a `.require-login` file in $CLAUDE_CONFIG_DIR, every prompt is answered as "signed out" until there is a
 // `.credentials.json` beside it. `claude auth status` and `claude auth login` work against that folder: the login
@@ -146,6 +149,30 @@ async function toolCall(id, name, input, run, slow = false) {
   return { text, isError };
 }
 
+/** A subagent's message: whole, as Claude sends them, never streamed. */
+const subOut = (parent, o) => out({ ...o, parent_tool_use_id: parent, session_id, uuid: randomUUID() });
+const task = (subtype, toolUseId, extra) => out({ type: "system", subtype, task_id: `task-${toolUseId}`, tool_use_id: toolUseId, session_id, uuid: randomUUID(), ...extra });
+const agentStep = () => sleep(Number(process.env.FAKE_CLAUDE_AGENT_MS ?? 200));
+
+/** Starts a subagent from main-thread message `id`: its Agent call, its task, and its prompt. Returns the call's id. */
+function startAgent(id, description, background = false) {
+  const tool = { type: "tool_use", id: `toolu_agent_${randomUUID().slice(0, 8)}`, name: "Agent", input: { description, prompt: `${description}, then report.`, subagent_type: "general-purpose", ...(background ? { run_in_background: true } : {}) } };
+  out({ type: "assistant", message: { model, id, type: "message", role: "assistant", content: [tool] }, parent_tool_use_id: null, session_id, uuid: randomUUID() });
+  if (background) out({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: `task-${tool.id}`, task_type: "local_agent", description }], session_id, uuid: randomUUID() });
+  task("task_started", tool.id, { description, task_type: "local_agent", is_backgrounded: background, prompt: tool.input.prompt });
+  subOut(tool.id, { type: "user", message: { role: "user", content: [{ type: "text", text: tool.input.prompt }] } });
+  return tool.id;
+}
+
+/** One tool call of a subagent's: progress, the call, its result. */
+async function agentTool(parent, msg, name, input, text, uses) {
+  const id = `toolu_${randomUUID().slice(0, 8)}`;
+  task("task_progress", parent, { description: name === "Read" ? `Reading ${input.file_path}` : `Running ${input.command}`, usage: { total_tokens: 16000 + uses * 200, tool_uses: uses, duration_ms: uses * 1500 }, last_tool_name: name });
+  subOut(parent, { type: "assistant", message: { model, id: msg, type: "message", role: "assistant", content: [{ type: "tool_use", id, name, input }] } });
+  await agentStep();
+  subOut(parent, { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: text }] } });
+}
+
 async function turn({ text, files }) {
   let cancelled = false;
   let onCancel;
@@ -232,6 +259,44 @@ async function turn({ text, files }) {
       return { text: `File created successfully at: ${input.file_path}`, isError: false };
     }, slow);
     return result(start, { text: "written" });
+  }
+
+  if (text === "agents") {
+    const a = startAgent(id, "Read a.txt and count its bytes");
+    const b = startAgent(id, "Read b.txt");
+    subOut(b, { type: "assistant", message: { model, id: "msg_sub_b", type: "message", role: "assistant", content: [{ type: "text", text: "I'll read the file and report what's in it." }] } });
+    await agentTool(a, "msg_sub_a", "Read", { file_path: "a.txt" }, "1\talpha", 1);
+    await agentTool(b, "msg_sub_b", "Read", { file_path: "b.txt" }, "1\tbeta", 1);
+    await agentTool(a, "msg_sub_a", "Bash", { command: "wc -c a.txt", description: "Count bytes in a.txt" }, "6 a.txt", 2);
+    for (const [parent, summary, uses] of [[b, "b.txt holds beta.", 1], [a, "a.txt holds alpha, 6 bytes.", 2]]) {
+      task("task_notification", parent, { status: "completed", summary, usage: { total_tokens: 18000, tool_uses: uses, duration_ms: uses * 2000 } });
+      out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: parent, content: [{ type: "text", text: summary }] }] }, parent_tool_use_id: null, session_id, uuid: randomUUID() });
+    }
+    const id2 = `msg_${++msgN}`;
+    await streamText(id2, "a.txt holds alpha (6 bytes), and b.txt holds beta.", 0, () => cancelled);
+    return result(start, { text: "agents" });
+  }
+
+  if (text === "agents-bg") {
+    const a = startAgent(id, "Count the bytes in a.txt slowly", true);
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: a, content: [{ type: "text", text: "Async agent launched successfully." }] }] }, parent_tool_use_id: null, session_id, uuid: randomUUID() });
+    const id2 = `msg_${++msgN}`;
+    await streamText(id2, "started", 0, () => cancelled);
+    result(start, { text: "started" });
+    // It works on once the turn is over; when it is done, Claude takes a turn of its own to say so.
+    subOut(a, { type: "assistant", message: { model, id: "msg_sub_bg", type: "message", role: "assistant", content: [{ type: "text", text: "I'll wait, then count the bytes." }] } });
+    await agentStep();
+    await agentTool(a, "msg_sub_bg", "Bash", { command: "sleep 2; wc -c a.txt", description: "Wait, then count bytes" }, "6 a.txt", 1);
+    await agentStep();
+    subOut(a, { type: "assistant", message: { model, id: "msg_sub_bg2", type: "message", role: "assistant", content: [{ type: "text", text: "a.txt is 6 bytes." }] } });
+    task("task_notification", a, { status: "completed", summary: "a.txt is 6 bytes.", usage: { total_tokens: 18000, tool_uses: 1, duration_ms: 2400 } });
+    out({ type: "system", subtype: "background_tasks_changed", tasks: [], session_id, uuid: randomUUID() });
+    const after = Date.now();
+    out({ type: "system", subtype: "init", cwd: process.cwd(), session_id, model, tools: ["Bash", "Read", "Write"], permissionMode: "bypassPermissions", slash_commands: ["compact", "model", "context"] });
+    const id3 = `msg_${++msgN}`;
+    ev({ type: "message_start", message: { model, id: id3, type: "message", role: "assistant", content: [] } }, id3);
+    await streamText(id3, "The background agent finished: a.txt is 6 bytes.", 0, () => false);
+    return result(after, { text: "reported" });
   }
 
   if (text === "where") {
