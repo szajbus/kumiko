@@ -17,3 +17,11 @@ describe("the docs' copy of what the agent is told", () => {
     assert.ok(page.includes("```text wrap\n" + systemPrompt("<folder>") + "\n```\n"), "the system prompt in the docs differs from systemPrompt()");
   });
 });
+
+describe("the system prompt", () => {
+  it("says Markdown artifacts can't show local images, and how to show one", () => {
+    const prompt = systemPrompt("<folder>");
+    assert.match(prompt, /Images in a Markdown artifact load only from https addresses: local files and relative paths aren't shown/);
+    assert.match(prompt, /open its file as an artifact of its own, or put it in an HTML artifact as a data: URI/);
+  });
+});
