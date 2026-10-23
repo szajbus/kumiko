@@ -41,6 +41,11 @@ class StubDriver implements AgentDriver {
   pendingCalls() {
     return [];
   }
+  answer() {}
+  pendingAsks() {
+    return [];
+  }
+  setPlanMode() {}
   onEvent(l: (ev: AgentEvent) => void) {
     this.listeners.add(l);
     return () => this.listeners.delete(l);

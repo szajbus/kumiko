@@ -668,6 +668,43 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
 .chat-proposal-buttons { display: flex; gap: 12px; margin-left: auto; }
 .chat-proposal-answer, .chat-proposal-artifacts { color: var(--muted); font-size: 12.5px; }
 .chat-proposal.is-answered { border-color: var(--border); }
+
+/* What Claude asks mid-turn: questions to answer, or a plan to approve. Built on .chat-proposal. */
+.chat-ask { gap: 10px; }
+.ask-q { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ask-q + .ask-q { padding-top: 10px; border-top: 1px solid var(--border); }
+.ask-q-head { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 0; margin-bottom: 4px; font-weight: 500; }
+.ask-q-head .badge { flex: none; }
+.ask-q-kind { margin-left: auto; flex: none; color: var(--muted); font-size: 12px; font-weight: 400; }
+.ask-option { display: grid; grid-template-columns: 18px 1fr; gap: 2px 8px; align-items: start; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.ask-option:hover { background: rgba(255, 255, 255, 0.03); }
+.ask-option:has(> input:checked) { background: rgba(143, 166, 240, 0.09); }
+.ask-q:disabled .ask-option { cursor: default; opacity: 0.7; }
+.ask-option > input[type="radio"], .ask-option > input[type="checkbox"] { margin: 3px 0 0; accent-color: var(--accent); }
+.ask-label { color: var(--text); }
+.ask-key { display: inline-block; min-width: 14px; margin-right: 6px; color: var(--muted); font-family: var(--mono); font-size: 11.5px; }
+.ask-desc { grid-column: 2; color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+.ask-other-input, .plan-feedback { box-sizing: border-box; width: 100%; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: rgba(0, 0, 0, 0.25); color: var(--text); font: inherit; }
+.ask-other-input:focus, .plan-feedback:focus { outline: none; border-color: #4a5a8a; }
+.plan-feedback { field-sizing: content; min-height: 3lh; padding: 8px 10px; resize: vertical; }
+.ask-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; color: var(--muted); font-size: 12.5px; }
+.ask-foot .chat-proposal-buttons { margin-left: auto; }
+.ask-done { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13px; }
+.ask-done-row { display: contents; }
+.ask-done-q { color: var(--muted); }
+.ask-done-a { color: var(--text); }
+.ask-own, .ask-outcome { color: var(--muted); }
+.ask-outcome { font-size: 12.5px; }
+.plan-box { padding: 10px 12px; border-radius: 6px; background: rgba(0, 0, 0, 0.25); max-height: 340px; overflow: auto; }
+.plan-box.is-folded { max-height: none; overflow: hidden; display: flex; align-items: baseline; gap: 10px; }
+.plan-first { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.plan-hide { display: block; margin-top: 8px; }
+.plan-quote { padding-left: 10px; border-left: 2px solid var(--border-strong); color: var(--text-2); white-space: pre-wrap; }
+.link-btn { flex: none; padding: 0; border: 0; background: none; color: var(--accent); font: inherit; font-size: 12.5px; cursor: pointer; }
+.link-btn:hover { color: var(--accent-hover); }
+/* The permission mode, in the composer's footer: bypassing as the badge it replaces, planning in the accent. */
+.select-trigger.select-compact.mode-bypass { border-color: #6b4a2a; color: #e0a96d; }
+.select-trigger.select-compact.mode-plan { border-color: #3a4a78; color: var(--accent); }
 .chat-ended { align-self: center; padding: 4px 12px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 12.5px; }
 
 /* A turn's work: folds behind a summary line once the turn is done */

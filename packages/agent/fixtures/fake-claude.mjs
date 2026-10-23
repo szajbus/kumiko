@@ -15,6 +15,11 @@
 //   "agents"     runs two subagents in parallel, their messages interleaved, with the task events Claude sends
 //   "agents-bg"  starts a subagent in the background and replies at once; it works on for ~2s after the turn, then
 //                Claude takes a turn of its own to report on it. $FAKE_CLAUDE_AGENT_MS sets how long a step takes (200ms)
+//   "ask J"      calls AskUserQuestion with input J (JSON; a question on a color when there is none) and replies with
+//                the tool result its answer gives
+//   "plan"       calls ExitPlanMode with a short plan, and replies with the tool result; outside plan mode that fails
+//   "enter plan" calls EnterPlanMode, which switches to plan mode without asking, as with permissions bypassed
+//   "ask bash"   calls Bash in a way that asks for permission, as a permissions.ask rule would, and runs it if allowed
 //   anything else is echoed back as "You said: …", followed by " [with …]" naming the files that came with it
 // With a `.require-login` file in $CLAUDE_CONFIG_DIR, every prompt is answered as "signed out" until there is a
 // `.credentials.json` beside it. `claude auth status` and `claude auth login` work against that folder: the login
@@ -26,6 +31,10 @@
 // With --mcp-config naming a server of type "sdk", it does that server's MCP handshake over control requests on
 // start, as Claude does, and lists its tools in init as mcp__<server>__<tool>. --append-system-prompt is taken and
 // replied to by the prompt "system prompt".
+// With --permission-prompt-tool stdio, the asking tools send a `can_use_tool` control request and wait for its answer
+// as Claude 2.1.309 does: an interrupt, or the end of stdin, cancels it with a `control_cancel_request`, and an answer
+// to a request that isn't waiting any more is ignored. Without the flag they fail. A `set_permission_mode` request
+// switches the mode, which Claude reports in a `system/status` message and in every init.
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { existsSync, fstatSync, mkdirSync, writeFileSync } from "node:fs";
@@ -81,6 +90,10 @@ const systemPrompt = args.includes("--append-system-prompt") ? args[args.indexOf
 let mcpTools = [];
 let mcpRequests = 0;
 const answers = new Map(); // control request id -> resolve(response)
+const promptTool = args.includes("--permission-prompt-tool");
+let mode = args.includes("--permission-mode") ? args[args.indexOf("--permission-mode") + 1] : "default";
+let modeBeforePlan = mode;
+let asking = false; // a permission request is waiting for its answer
 
 const out = (o) => process.stdout.write(JSON.stringify(o) + "\n");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -149,6 +162,48 @@ async function toolCall(id, name, input, run, slow = false) {
   return { text, isError };
 }
 
+function setMode(next) {
+  if (next === "plan" && mode !== "plan") modeBeforePlan = mode;
+  mode = next;
+  out({ type: "system", subtype: "status", status: null, permissionMode: mode, uuid: randomUUID(), session_id });
+}
+
+/**
+ * Asks the host to approve tool `name`'s call `toolUseId`, as Claude does with --permission-prompt-tool stdio. Resolves
+ * with the host's answer, or with undefined once the request is cancelled (see `turn`'s onCancel).
+ */
+function permission(name, input, toolUseId, onCancel) {
+  const request_id = randomUUID();
+  out({ type: "control_request", request_id, request: { subtype: "can_use_tool", tool_name: name, display_name: name, input, tool_use_id: toolUseId, requires_user_interaction: true } });
+  asking = true;
+  return new Promise((resolve) => {
+    answers.set(request_id, (r) => ((asking = false), resolve(r)));
+    onCancel(() => {
+      answers.delete(request_id);
+      asking = false;
+      out({ type: "control_cancel_request", request_id });
+      resolve(undefined);
+    });
+  });
+}
+
+const REJECTED = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.";
+
+/** AskUserQuestion's tool result for what the host answered, worded as Claude words it. */
+function questionsResult(input, r) {
+  if (r.behavior === "deny") return { text: r.message, isError: true };
+  const given = r.updatedInput;
+  if (!Array.isArray(given?.questions)) return { text: "<tool_use_error>The permission handler returned updatedInput for AskUserQuestion that failed schema validation: The required parameter `questions` is missing</tool_use_error>", isError: true };
+  const answered = Object.entries(given.answers ?? {});
+  if (!answered.length) return { text: "The user did not answer the questions.", isError: false };
+  const labels = (q) => new Set(input.questions.find((x) => x.question === q)?.options.map((o) => o.label) ?? []);
+  const picked = answered.every(([q, a]) => a.split(", ").every((l) => labels(q).has(l)));
+  const list = answered.map(([q, a]) => `"${q}"="${a}"`).join(", ");
+  return picked
+    ? { text: `Your questions have been answered: ${list}. You can now continue with these answers in mind.`, isError: false }
+    : { text: `The user answered: ${list}. Read the answers carefully — they may request clarification, changes, or that you not proceed — and follow what they actually say.`, isError: false };
+}
+
 /** A subagent's message: whole, as Claude sends them, never streamed. */
 const subOut = (parent, o) => out({ ...o, parent_tool_use_id: parent, session_id, uuid: randomUUID() });
 const task = (subtype, toolUseId, extra) => out({ type: "system", subtype, task_id: `task-${toolUseId}`, tool_use_id: toolUseId, session_id, uuid: randomUUID(), ...extra });
@@ -180,7 +235,7 @@ async function turn({ text, files }) {
   const start = Date.now();
   await handshake;
   const mcpNames = mcpTools.map((t) => `mcp__${mcpServer}__${t.name}`);
-  out({ type: "system", subtype: "init", cwd: process.cwd(), session_id, model, tools: ["Bash", "Read", "Write", ...mcpNames], permissionMode: "bypassPermissions", slash_commands: ["compact", "model", "context"] });
+  out({ type: "system", subtype: "init", cwd: process.cwd(), session_id, model, tools: ["Bash", "Read", "Write", ...mcpNames], permissionMode: mode, slash_commands: ["compact", "model", "context"] });
 
   if (text.startsWith("/model ")) {
     model = `claude-${text.slice(7).trim()}-5-5`;
@@ -299,6 +354,42 @@ async function turn({ text, files }) {
     return result(after, { text: "reported" });
   }
 
+  if (text === "ask" || text.startsWith("ask {") || text === "plan" || text === "ask bash") {
+    const [name, input] =
+      text === "plan"
+        ? ["ExitPlanMode", { plan: "# Add a cache\n\n1. Put Redis in front of the pricing API.\n2. Drop entries after 5 minutes.", planFilePath: join(homedir(), ".claude/plans/fake-plan.md") }]
+        : text === "ask bash"
+          ? ["Bash", { command: "echo asked", description: "Print asked" }]
+          : ["AskUserQuestion", text === "ask" ? { questions: [{ question: "Which color do you prefer?", header: "Color", multiSelect: false, options: [{ label: "Red", description: "The color red" }, { label: "Green", description: "The color green" }] }] } : JSON.parse(text.slice(4))];
+    const call = await toolCall(id, name, input, async (toolUseId) => {
+      if (name === "ExitPlanMode" && mode !== "plan") return { text: "<tool_use_error>You are not in plan mode. To enter plan mode, call the EnterPlanMode tool first. If your plan was already approved, continue with implementation.</tool_use_error>", isError: true };
+      if (!promptTool) return { text: "Answer questions?", isError: true };
+      const r = await permission(name, input, toolUseId, (cancel) => (onCancel = cancel));
+      if (!r) return { text: REJECTED, isError: true };
+      if (name === "AskUserQuestion") return questionsResult(input, r);
+      if (r.behavior === "deny") return { text: r.message, isError: true };
+      if (name === "Bash") return { text: "asked", isError: false };
+      setMode(modeBeforePlan);
+      const plan = r.updatedInput?.plan ?? input.plan;
+      return { text: `User has approved your plan. You can now start coding. Start with updating your todo list if applicable\n\n## ${r.updatedInput?.plan ? "Approved Plan (edited by user)" : "Approved Plan"}:\n${plan}`, isError: false };
+    });
+    if (cancelled) {
+      out({ type: "user", message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user for tool use]" }] }, parent_tool_use_id: null, session_id, uuid: randomUUID() });
+      return result(start, { subtype: "error_during_execution" });
+    }
+    const id2 = `msg_${++msgN}`;
+    await streamText(id2, call.text, 0, () => cancelled);
+    return result(start, { text: call.text });
+  }
+
+  if (text === "enter plan") {
+    await toolCall(id, "EnterPlanMode", {}, async () => {
+      setMode("plan");
+      return { text: "Entered plan mode. You should now focus on exploring the codebase and designing an implementation approach.", isError: false };
+    });
+    return result(start, { text: "planning" });
+  }
+
   if (text === "where") {
     await streamText(id, `resumed at ${resumeAt ?? "nothing"}`, 0, () => cancelled);
     return result(start, { text: "where" });
@@ -346,12 +437,18 @@ rl.on("line", (line) => {
     const answer = answers.get(msg.response.request_id);
     answers.delete(msg.response.request_id);
     answer(msg.response.response);
+  } else if (msg.type === "control_request" && msg.request?.subtype === "set_permission_mode") {
+    setMode(msg.request.mode);
+    out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: { mode } } });
   } else if (msg.type === "control_request" && msg.request?.subtype === "interrupt") {
     current?.cancel();
     out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: { still_queued: [] } } });
   }
 });
 rl.on("close", async () => {
+  // Nobody is left to answer: Claude cancels what it asked, and exits with an error once the turn is over.
+  const gaveUp = asking;
+  if (gaveUp) current?.cancel();
   while (current) await sleep(10);
-  process.exit(0);
+  process.exit(gaveUp ? 1 : 0);
 });

@@ -1,4 +1,6 @@
 import type { SandboxProvider } from "@kumiko/sandbox";
+import type { AgentAsk, AskAnswer, AskClosedReason } from "@kumiko/shared";
+import type { PendingAsk } from "./asks.js";
 import type { PendingCall, ToolHost } from "./tools.js";
 
 /** How a driver runs its agent: the base provider's `exec`, so the sandbox's forwarded variables apply. */
@@ -42,6 +44,8 @@ export interface AttachOptions {
   tools?: ToolHost;
   /** Calls to them the driver that detached left unanswered, to answer now. */
   pending?: PendingCall[];
+  /** What the agent asked the user that the driver that detached left open; see `pendingAsks`. */
+  asks?: PendingAsk[];
 }
 
 /** A driver's place in its run's output: everything before `offset` has been reported. */
@@ -64,10 +68,16 @@ export type AgentMessage = Record<string, unknown> & { type: string };
  * What an agent reports.
  * - `message`: one line of the agent's own protocol, parsed (for Claude, a stream-json object).
  * - `error`: something the user should see, with a hint where one exists. `signedOut` when the agent isn't logged in.
+ * - `ask`: the agent waits on the user, mid-turn, for an answer to give with `answer`.
+ * - `ask_closed`: it stopped waiting without one: the turn was stopped, or the agent exited.
+ * - `mode`: the agent is planning (it waits for the user to approve a plan before changing anything), or not.
  * - `exit`: the process is gone; always the last event, unless the driver detaches. `requested` is true after `stop()`.
  */
 export type AgentEvent =
   | { kind: "message"; payload: AgentMessage }
+  | { kind: "ask"; ask: AgentAsk }
+  | { kind: "ask_closed"; id: string; reason: AskClosedReason }
+  | { kind: "mode"; plan: boolean }
   | { kind: "error"; message: string; hint?: string; stderr?: string[]; signedOut?: boolean }
   | { kind: "exit"; code: number; requested: boolean };
 
@@ -97,6 +107,15 @@ export interface AgentDriver {
   detach(): Promise<void>;
   /** Calls to the caller's tools the agent is waiting on; after a detach, the ones the next driver should answer. */
   pendingCalls(): PendingCall[];
+  /**
+   * Answers what the agent asked (an `ask` event). The answer is kept until the agent is seen to have it, so a driver
+   * that attaches later sends it again. Throws if the agent isn't waiting for it, or the answer doesn't fit the ask.
+   */
+  answer(id: string, answer: AskAnswer): void;
+  /** What the agent asked that it hasn't had an answer to; after a detach, what the next driver takes over. */
+  pendingAsks(): PendingAsk[];
+  /** Has the agent plan before it changes anything, or not; a `mode` event follows once it has switched. */
+  setPlanMode(plan: boolean): void;
   /** Returns a function that removes the listener. */
   onEvent(listener: (ev: AgentEvent) => void): () => void;
 }

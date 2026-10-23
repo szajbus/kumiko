@@ -19,6 +19,10 @@ interface Props {
   mono?: boolean;
   /** Small, like a badge, sized to its text. */
   compact?: boolean;
+  /** Added to the trigger's classes. */
+  className?: string;
+  /** The trigger's tooltip. */
+  title?: string;
 }
 
 const Chevron = () => (
@@ -34,10 +38,10 @@ const Check = () => (
 );
 
 /** A styled dropdown; the list opens below the trigger at its width and scrolls when long. */
-export function Select({ id, value, onValueChange, groups, labels, placeholder, disabled, mono, compact }: Props) {
+export function Select({ id, value, onValueChange, groups, labels, placeholder, disabled, mono, compact, className, title }: Props) {
   return (
     <RS.Root value={value} onValueChange={onValueChange} disabled={disabled}>
-      <RS.Trigger id={id} className={`select-trigger${mono ? " mono" : ""}${compact ? " select-compact" : ""}`}>
+      <RS.Trigger id={id} title={title} className={`select-trigger${mono ? " mono" : ""}${compact ? " select-compact" : ""}${className ? ` ${className}` : ""}`}>
         <RS.Value placeholder={placeholder} />
         <RS.Icon className="select-chevron">
           <Chevron />

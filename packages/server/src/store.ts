@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { PendingCall } from "@kumiko/agent";
+import type { PendingAsk, PendingCall } from "@kumiko/agent";
 import { SESSION_ID_PATTERN, type SessionEvent, type SessionInfo } from "@kumiko/shared";
 
 export function defaultSessionsDir(): string {
@@ -18,6 +18,8 @@ export interface StoredRun {
   live: boolean;
   /** Calls to Kumiko's tools Claude was waiting on, for the next server to answer. */
   pending?: PendingCall[];
+  /** What Claude asked the user that it is still waiting on, for the next server to take over. */
+  asks?: PendingAsk[];
 }
 
 /** What is kept of a session: its info and the chat, which is all that is shown again when it is resumed. */

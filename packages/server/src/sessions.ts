@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { applyWindowOp, chatWindow, compactWindow, isBusy, isCommand, LIVE_SESSION_STATUSES, sharedNote, sharesWaiting, windowState, type Attachment, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo, type WindowOp, type WindowState } from "@kumiko/shared";
+import { answerFits, applyWindowOp, chatWindow, compactWindow, isBusy, isCommand, LIVE_SESSION_STATUSES, sharedNote, sharesWaiting, windowState, type Attachment, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo, type WindowOp, type WindowState, type AgentAsk, type AskAnswer, type AskClosedReason } from "@kumiko/shared";
 import { TOOL_TIMEOUT_MS, type AgentDriver, type AgentFile, type AgentMessage, type StartOptions, type ToolHost } from "@kumiko/agent";
 import { chatEvents, type SessionStore, type StoredSession } from "./store.js";
 import { trimMessage } from "./trim.js";
@@ -74,6 +74,8 @@ export class SessionEnded extends Error {}
 export class SessionNotResumable extends Error {}
 /** A rewind can't be done: the prompt isn't in the session, a turn is running, or Claude couldn't restore the files. */
 export class RewindRefused extends Error {}
+/** An answer to something Claude asked that it isn't waiting for any more, or that doesn't fit what it asked. */
+export class AskRefused extends Error {}
 
 type ChainEntry = Extract<SessionEvent, { kind: "claude" }> & { payload: { uuid: string } };
 
@@ -130,8 +132,19 @@ const noDriver: AgentDriver = {
   stop: () => Promise.resolve(),
   detach: () => Promise.resolve(),
   pendingCalls: () => [],
+  answer: () => {
+    throw new SessionEnded("Claude isn't running in this session.");
+  },
+  pendingAsks: () => [],
+  setPlanMode: () => {},
   onEvent: () => () => {},
 };
+
+/** What Claude asked in the session that hasn't been answered, and that it hasn't stopped waiting for, oldest first. */
+function openAsks(events: readonly SessionEvent[]): AgentAsk[] {
+  const settled = new Set(events.flatMap((e) => (e.kind === "ask_answer" || e.kind === "ask_closed" ? [e.payload.id] : [])));
+  return events.flatMap((e) => (e.kind === "ask" && !settled.has(e.payload.id) ? [e.payload] : []));
+}
 
 /**
  * Agent sessions, kept in memory: one driver per session and a buffer of everything it said, so a tab that opens
@@ -201,7 +214,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     const { info: saved } = stored;
     if (this.sessions.has(saved.id)) throw new SessionNotResumable("This session is already open.");
     if (!saved.claudeSessionId) throw new SessionNotResumable("This session has nothing of Claude's to resume.");
-    const { endedAt: _endedAt, updatedAt: _updatedAt, unread: _unread, closing: _closing, agents: _agents, ...rest } = saved;
+    const { endedAt: _endedAt, updatedAt: _updatedAt, unread: _unread, closing: _closing, agents: _agents, asking: _asking, ...rest } = saved;
     const info: SessionInfo = { ...rest, status: "idle" };
     return this.launch(info, stored.events, { sandbox: info.sandbox, workdir: info.workdir, env, ...continuing(saved) });
   }
@@ -214,8 +227,9 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     const { info: saved } = stored;
     if (this.sessions.has(saved.id)) throw new SessionNotResumable("This session is already open.");
     if (!saved.claudeSessionId) throw new SessionNotResumable("This session has nothing of Claude's to resume.");
-    const { endedAt: _endedAt, updatedAt: _updatedAt, closing: _closing, toolsOutdated: _outdated, agents: _agents, ...rest } = saved;
+    const { endedAt: _endedAt, updatedAt: _updatedAt, closing: _closing, toolsOutdated: _outdated, agents: _agents, asking: _asking, ...rest } = saved;
     const s = this.newSession({ ...rest, status: "ended", asleep: true }, stored.events);
+    this.closeAsks(s, "exited");
     s.driver = noDriver;
     this.sessions.set(saved.id, s);
     this.emit("changed");
@@ -255,7 +269,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     this.sessions.set(info.id, s);
     const driver = this.makeDriver();
     this.wire(s, driver);
-    driver.attach({ sandbox: info.sandbox, run: run.id, offset: run.offset, tools: this.widgets?.tools(s.info).tools, pending: run.pending });
+    driver.attach({ sandbox: info.sandbox, run: run.id, offset: run.offset, tools: this.widgets?.tools(s.info).tools, pending: run.pending, asks: run.asks });
     this.emit("changed");
     // Closed while Claude worked: it goes on finishing, or, if its turn was over already, ends now.
     if (info.closing) {
@@ -420,14 +434,46 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     return s.info;
   }
 
-  /** Starts a Claude process for the session, in a run of its own. */
+  /**
+   * Starts a Claude process for the session, in a run of its own. Nothing the last one asked can be answered now; a
+   * session that was planning goes on planning, as Claude starts with permissions bypassed.
+   */
   private startDriver(s: Session, driverOpts: StartOptions) {
     const driver = this.makeDriver();
+    this.closeAsks(s, "exited");
     this.wire(s, driver);
     const widgets = this.widgets?.tools(s.info);
     const { toolsOutdated: _outdated, ...info } = s.info;
     s.info = { ...info, toolsVersion: toolsVersion(this.widgets) };
     driver.start({ ...driverOpts, run: `${s.info.id}-${randomBytes(4).toString("hex")}`, ...widgets });
+    if (s.info.planMode) driver.setPlanMode(true);
+  }
+
+  /** Records that Claude stopped waiting for everything it asked, for `reason`. */
+  private closeAsks(s: Session, reason: AskClosedReason) {
+    for (const ask of openAsks(s.events)) this.push(s, { kind: "ask_closed", payload: { id: ask.id, reason } });
+    if (s.info.asking) this.setInfo(s, { asking: undefined });
+  }
+
+  /** Claude asked the user something, as `driver` reports it. */
+  private onAsk(s: Session, driver: AgentDriver, ask: AgentAsk) {
+    if (s.events.some((e) => e.kind === "ask" && e.payload.id === ask.id)) {
+      // Read again, after a server went away without saving how far it had read: if the user has answered it since, the
+      // answer may never have reached Claude, so it goes again.
+      const answered = s.events.find((e) => e.kind === "ask_answer" && e.payload.id === ask.id);
+      if (answered?.kind === "ask_answer") {
+        try {
+          driver.answer(ask.id, answered.payload.answer);
+        } catch {
+          // It knows the ask already, with its answer: Claude has had it.
+        }
+      }
+      return;
+    }
+    this.push(s, { kind: "ask", payload: ask });
+    this.setInfo(s, { asking: ask.kind });
+    // Saved at once, with the ask among the run's, so a server that goes away now leaves it for the next.
+    this.save(s);
   }
 
   /** Makes `driver` the session's. Once another replaces it, or the session is detached, nothing it says reaches the session. */
@@ -447,7 +493,19 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
         case "error":
           this.push(s, { kind: "error", payload: { message: ev.message, hint: ev.hint, stderr: ev.stderr, ...(ev.signedOut ? { signedOut: true } : {}) } });
           break;
+        case "ask":
+          this.onAsk(s, driver, ev.ask);
+          break;
+        case "ask_closed":
+          if (!openAsks(s.events).some((a) => a.id === ev.id)) break;
+          this.push(s, { kind: "ask_closed", payload: { id: ev.id, reason: ev.reason } });
+          this.setInfo(s, { asking: openAsks(s.events).at(-1)?.kind });
+          break;
+        case "mode":
+          this.setInfo(s, { planMode: ev.plan || undefined });
+          break;
         case "exit": {
+          this.closeAsks(s, "exited");
           const reason = s.ending ?? "exit";
           const failed = !s.ending && (ev.code !== 0 || s.info.status === "starting");
           // A session that stopped by itself needs the user to look; one they ended doesn't.
@@ -509,7 +567,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     const stored: StoredSession = {
       info: { ...info, updatedAt: new Date().toISOString() },
       events: chatEvents(s.events, live ? unfinished : undefined),
-      ...(at ? { run: { id: at.run, offset: at.offset, live, ...(live && s.driver.pendingCalls().length ? { pending: s.driver.pendingCalls() } : {}) } } : {}),
+      ...(at ? { run: { id: at.run, offset: at.offset, live, ...(live && s.driver.pendingCalls().length ? { pending: s.driver.pendingCalls() } : {}), ...(live && s.driver.pendingAsks().length ? { asks: s.driver.pendingAsks() } : {}) } } : {}),
     };
     s.saving = s.saving.then(() => store.write(stored)).catch(() => {});
   }
@@ -624,6 +682,14 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
   /** Sends a prompt; `attachments` are what the session records of `files`, which Claude gets. */
   prompt(id: string, text: string, attachments: Attachment[] = [], files: AgentFile[] = []): void {
     const s = this.live(id);
+    // Claude reads nothing more until what it asked is settled: a message sent meanwhile answers it, and comes next.
+    for (const ask of openAsks(s.events)) {
+      try {
+        this.answerAsk(id, ask.id, { kind: "message" });
+      } catch {
+        // Claude isn't waiting for it after all: the message goes as it is.
+      }
+    }
     const promptId = randomUUID();
     // Artifacts other sessions shared since the last message: Claude hears of them with this one, unless it is a command.
     const note = isCommand(text) ? "" : sharedNote(sharesWaiting(s.events));
@@ -694,6 +760,27 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     if (!s) throw new SessionNotFound(`No session ${id}.`);
     this.push(s, { kind: "proposal_answer", payload: { id: proposalId, accepted, ...(session ? { session } : {}), ...(prompt !== undefined ? { prompt } : {}) } });
     if (s.info.status !== "running" && s.info.status !== "starting") this.save(s);
+  }
+
+  /** Answers what Claude asked, ask `askId`. Throws AskRefused if it isn't waiting for that, or the answer doesn't fit. */
+  answerAsk(id: string, askId: string, answer: AskAnswer): void {
+    const s = this.live(id);
+    const ask = openAsks(s.events).find((a) => a.id === askId);
+    if (!ask) throw new AskRefused("That has been answered already, or Claude stopped waiting for it.");
+    if (!answerFits(ask.kind, answer)) throw new AskRefused("That isn't an answer to this.");
+    try {
+      s.driver.answer(askId, answer);
+    } catch (err) {
+      throw new AskRefused(err instanceof Error ? err.message : String(err));
+    }
+    this.push(s, { kind: "ask_answer", payload: { id: askId, answer } });
+    this.setInfo(s, { asking: openAsks(s.events).at(-1)?.kind });
+    this.save(s);
+  }
+
+  /** Has Claude plan, and wait for the user to approve the plan, before it changes anything; or not. */
+  setPlanMode(id: string, plan: boolean): void {
+    this.live(id).driver.setPlanMode(plan);
   }
 
   /** The user has looked at the session: it no longer waits on them. */

@@ -19,6 +19,26 @@ A subagent started in the background goes on after the turn is over. Until it's 
 a line below the turn says what it is doing, with **Show** to open it, and the tab says Working. When it's done, the
 agent takes a turn of its own to report on it, which starts with a line saying what finished, in place of a message.
 
+## When the agent asks you something
+
+The agent works without asking for permission, but it can stop in the middle of a turn to ask you something. It waits
+for your answer for as long as it takes, even while Kumiko isn't running. Meanwhile its tab says **Has a question for
+you** or **Plan to review**, and counts as waiting on you.
+
+- **Questions.** It asks one to four questions, each with options to pick from: one, or any number where it says
+  **Pick any**. You can answer in your own words in the box below the options, which picks it. The number keys pick
+  options while a question has the focus. **Send answers** sends what you picked, and the agent carries on with it;
+  **Skip** tells it you didn't want to answer.
+- **Plans.** With **Plan first** chosen in the footer, below the message box, the agent explores and writes a plan
+  before it changes anything, then shows it to you. **Approve** lets it carry on, and the footer goes back to
+  **Bypass permissions**. **Keep planning…** sends the plan back with what you want changed, and the agent asks again
+  with a new plan. The agent can switch to planning by itself, too, and the footer shows it.
+- **A message instead.** Sending a message while the agent waits answers it: the agent is told you replied with a
+  message instead, and reads the message next.
+- **Stop** ends the turn, and the agent stops waiting.
+
+Once answered, the card stays in the chat, with your answers.
+
 ## Tabs
 
 Each project's tabs sit together, behind a label with the project's name in a colour of its own, so a tab only needs

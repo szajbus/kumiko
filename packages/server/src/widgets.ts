@@ -382,7 +382,7 @@ export class Widgets implements SessionWidgets {
     const line = (s: SessionInfo, state: string) =>
       `- ${s.id}${s.id === info.id ? " (this session)" : ""}: "${nameOf(s)}", ${state}, started ${s.startedAt.slice(0, 16).replace("T", " ")} UTC.${s.description ? ` ${s.description}` : ""}`;
     const stateOf = (s: SessionInfo) =>
-      !LIVE_SESSION_STATUSES.includes(s.status) ? "ended, its tab still open" : s.status === "idle" ? (isWaiting(s) ? "open, waiting for the user" : "open, idle") : "open, working";
+      !LIVE_SESSION_STATUSES.includes(s.status) ? "ended, its tab still open" : s.asking === "plan" ? "open, waiting for the user to approve its plan" : s.asking ? "open, waiting for the user to answer its questions" : s.status === "idle" ? (isWaiting(s) ? "open, waiting for the user" : "open, idle") : "open, working";
     const lines = [
       ...open.map((s) => line(s, stateOf(s))),
       ...saved.slice(0, MAX_LISTED_SAVED).map((s) => line(s, "closed; the user can resume it")),

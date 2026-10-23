@@ -2,7 +2,9 @@
 // Nothing in here may import Node or browser APIs.
 
 export * from "./window.js";
+export * from "./asks.js";
 import type { WindowOp } from "./window.js";
+import type { AgentAsk, AskAnswer, AskClosedReason } from "./asks.js";
 
 export const VM_PREFIX = "km-";
 
@@ -369,21 +371,27 @@ export interface SessionInfo {
   asleep?: boolean;
   /** Subagents Claude started in the background that are still working, its turn over or not; none when missing. */
   agents?: number;
+  /** Claude waits, mid-turn, for the user to answer its questions or approve its plan; see the `ask` event. */
+  asking?: AgentAsk["kind"];
+  /** Claude is in plan mode: it plans, and waits for the user to approve the plan before it changes anything. */
+  planMode?: boolean;
 }
 
 /**
- * Whether a session is waiting on the user: Claude finished (or the session stopped by itself) and nobody has looked
- * since. Claude runs with permissions bypassed, so a finished turn is the only way it waits for an answer.
+ * Whether a session is waiting on the user: Claude asked something mid-turn, or it finished (or the session stopped by
+ * itself) and nobody has looked since.
  */
 export function isWaiting(s: SessionInfo): boolean {
-  return s.unread === true && !isBusy(s);
+  return s.asking !== undefined || (s.unread === true && !isBusy(s));
 }
 
 /**
  * Whether Claude is at work in a session: on a turn, or with subagents it left working in the background after one.
- * Once those finish, Claude takes a turn of its own to report on them.
+ * Once those finish, Claude takes a turn of its own to report on them. A turn that waits on the user's answer isn't
+ * work: nothing happens until they answer.
  */
 export function isBusy(s: SessionInfo): boolean {
+  if (s.asking !== undefined) return false;
   return s.status === "running" || s.status === "starting" || (s.status === "idle" && (s.agents ?? 0) > 0);
 }
 
@@ -415,7 +423,12 @@ export type SessionEvent =
    * Session `from`, named `name` then, sharing copies of artifacts with this one (its artifact_share tool): their files
    * in this session's folder. Claude is told with the user's next message; see `sharesWaiting`.
    */
-  | { seq: number; kind: "shared"; payload: { from: string; name: string; artifacts: { path: string; title: string }[] } };
+  | { seq: number; kind: "shared"; payload: { from: string; name: string; artifacts: { path: string; title: string }[] } }
+  /** Claude asking the user something mid-turn, and waiting for the answer: see `ask_answer` and `ask_closed`. */
+  | { seq: number; kind: "ask"; payload: AgentAsk }
+  | { seq: number; kind: "ask_answer"; payload: { id: string; answer: AskAnswer } }
+  /** Claude stopped waiting for ask `id` without an answer. */
+  | { seq: number; kind: "ask_closed"; payload: { id: string; reason: AskClosedReason } };
 
 /** A prompt that is one of Claude's commands, such as /model, to which nothing can be added. */
 export const isCommand = (text: string) => text.trimStart().startsWith("/");

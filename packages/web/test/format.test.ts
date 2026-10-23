@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { LogLine, SandboxView } from "@kumiko/shared";
+import { isBusy, isWaiting, type LogLine, type SandboxView, type SessionInfo } from "@kumiko/shared";
 import { matchCommands } from "../src/commands.ts";
 import { ago, endedText, formatBytes, formatCost, formatDuration, planName, projectHue, projectHues, resetText, sessionName, sessionTitle } from "../src/format.ts";
-import { COLORS, failedAgentScripts, opPill, resources, sandboxCreatedAt, statusOf } from "../src/status.ts";
+import { COLORS, failedAgentScripts, opPill, resources, sandboxCreatedAt, sessionState, statusOf } from "../src/status.ts";
 
 describe("format", () => {
   it("titles a session by its /rename name, else the opening prompt cut at a word", () => {
@@ -78,6 +78,15 @@ describe("matchCommands", () => {
 });
 
 describe("status", () => {
+  it("shows a session whose Claude asks something as waiting on the user, not working", () => {
+    const s: SessionInfo = { id: "a1b2c3", sandbox: "web", workdir: "/w", status: "running", prompt: "x", startedAt: "2026-10-23T00:00:00Z" };
+    assert.deepEqual(sessionState(s), { text: "Working…", color: COLORS.busy });
+    const asking = { ...s, asking: "questions" as const };
+    assert.deepEqual(sessionState(asking), { text: "Has a question for you", color: COLORS.warn });
+    assert.deepEqual(sessionState({ ...s, asking: "plan" }), { text: "Plan to review", color: COLORS.warn });
+    assert.ok(isWaiting(asking) && !isBusy(asking));
+  });
+
   const sb = (over: Partial<SandboxView> = {}): SandboxView => ({ name: "web", vm: "km-web", provider: "lima", status: "running", busy: false, sessions: 0, ...over });
   const op = { op: "creating" as const, startedAt: "2026-10-19T12:00:00Z" };
   const meta = (setup: "creating" | "ready" | "provision_failed", provisionExitCode?: number) => ({

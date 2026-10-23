@@ -367,4 +367,148 @@ describe("ClaudeDriver", () => {
       assert.equal(claudeCommand(undefined, undefined, undefined, undefined, {}), CLAUDE_COMMAND);
     });
   });
+  describe("what Claude asks the user", () => {
+    const COLOR = "Which color do you prefer?";
+    const runFile = (home: string, run: string, file: string) => join(home, RUNS_DIR, run, file);
+    const asked = (d: Awaited<ReturnType<typeof drive>>, n = 0) =>
+      d.waitFor(() => d.events.filter((e): e is Extract<AgentEvent, { kind: "ask" }> => e.kind === "ask")[n]?.ask);
+    const closed = (d: Awaited<ReturnType<typeof drive>>) => d.events.filter((e) => e.kind === "ask_closed");
+
+    it("asks for permission only from the host, with permissions still bypassed", () => {
+      assert.match(CLAUDE_COMMAND, /--permission-mode bypassPermissions --permission-prompt-tool stdio/);
+    });
+
+    it("asks questions, and answers them with labels or the user's own words", async () => {
+      const d = await drive();
+      d.start("ask");
+      const ask = await asked(d);
+      assert.equal(ask.kind, "questions");
+      assert.ok(ask.kind === "questions");
+      assert.deepEqual(ask.questions, [{ question: COLOR, header: "Color", options: [{ label: "Red", description: "The color red" }, { label: "Green", description: "The color green" }] }]);
+      assert.match(String(ask.toolUseId), /^toolu_/);
+      assert.ok(!d.messages().some((m) => m.type === "control_request"), "Claude's permission requests aren't passed on");
+      assert.equal(d.driver.pendingAsks().length, 1);
+      d.driver.answer(ask.id, { kind: "answers", answers: { [COLOR]: ["Green"] } });
+      assert.equal((await d.waitFor(() => d.results()[0])).result, `Your questions have been answered: "${COLOR}"="Green". You can now continue with these answers in mind.`);
+      assert.deepEqual(d.driver.pendingAsks(), [], "settled once Claude has the answer");
+      assert.throws(() => d.driver.answer(ask.id, { kind: "skip" }), /isn't waiting/);
+
+      d.driver.send(`ask {"questions":[{"question":"Toppings?","multiSelect":true,"options":[{"label":"Ham"},{"label":"Olives"}]},{"question":"Crust?","options":[{"label":"Thin"},{"label":"Thick"}]}]}`);
+      const two = await asked(d, 1);
+      assert.ok(two.kind === "questions");
+      assert.equal(two.questions[0].multiSelect, true);
+      assert.throws(() => d.driver.answer(two.id, { kind: "approve" }), /isn't an answer/);
+      d.driver.answer(two.id, { kind: "answers", answers: { "Toppings?": ["Ham", "Olives"], "Crust?": ["Gluten-free, please"] } });
+      assert.match(String((await d.waitFor(() => d.results()[1])).result), /^The user answered: "Toppings\?"="Ham, Olives", "Crust\?"="Gluten-free, please"/);
+
+      d.driver.send("ask");
+      d.driver.answer((await asked(d, 2)).id, { kind: "skip" });
+      assert.match(String((await d.waitFor(() => d.results()[2])).result), /skipped these questions/);
+      assert.deepEqual(closed(d), []);
+      await d.driver.stop();
+    });
+
+    it("allows any other tool that asks, at once", async () => {
+      const d = await drive();
+      d.start("ask bash");
+      assert.equal((await d.waitFor(() => d.results()[0])).result, "asked");
+      assert.ok(!d.events.some((e) => e.kind === "ask"));
+      await d.driver.stop();
+    });
+
+    it("switches to plan mode, sends a plan back, and approves it", async () => {
+      const d = await drive();
+      d.start("hello");
+      await d.waitFor(() => d.results()[0]);
+      assert.deepEqual(d.events.filter((e) => e.kind === "mode"), [{ kind: "mode", plan: false }], "Claude starts with permissions bypassed");
+      d.driver.setPlanMode(true);
+      await d.waitFor(() => d.events.find((e) => e.kind === "mode" && e.plan));
+      d.driver.send("plan");
+      const plan = await asked(d);
+      assert.ok(plan.kind === "plan");
+      assert.match(plan.plan, /^# Add a cache/);
+      d.driver.answer(plan.id, { kind: "feedback", text: "Use SQLite instead." });
+      assert.match(String((await d.waitFor(() => d.results()[1])).result), /changes to the plan before approving it:\n\nUse SQLite instead\.$/);
+      assert.deepEqual(d.events.filter((e) => e.kind === "mode").at(-1), { kind: "mode", plan: true }, "still planning");
+
+      d.driver.send("plan");
+      d.driver.answer((await asked(d, 1)).id, { kind: "approve" });
+      assert.match(String((await d.waitFor(() => d.results()[2])).result), /^User has approved your plan/);
+      assert.deepEqual(d.events.filter((e) => e.kind === "mode").at(-1), { kind: "mode", plan: false }, "back to bypassing permissions");
+
+      d.driver.send("enter plan");
+      await d.waitFor(() => d.results()[3]);
+      assert.deepEqual(d.events.filter((e) => e.kind === "mode").at(-1), { kind: "mode", plan: true }, "Claude can plan on its own");
+      await d.driver.stop();
+    });
+
+    it("closes an ask when the turn is stopped, and refuses an answer after", async () => {
+      const d = await drive();
+      d.start("ask");
+      const ask = await asked(d);
+      d.driver.interrupt();
+      assert.equal((await d.waitFor(() => d.results()[0])).subtype, "error_during_execution");
+      assert.deepEqual(closed(d), [{ kind: "ask_closed", id: ask.id, reason: "interrupted" }]);
+      assert.throws(() => d.driver.answer(ask.id, { kind: "skip" }), /isn't waiting/);
+      assert.deepEqual(d.driver.pendingAsks(), []);
+      await d.driver.stop();
+    });
+
+    it("closes an ask when Claude goes", async () => {
+      const d = await drive();
+      d.driver.start({ sandbox: "test", workdir: d.home, env: [], prompt: "ask", run: "a5-a" });
+      const ask = await asked(d);
+      process.kill(Number(await readFile(runFile(d.home, "a5-a", "pid"), "utf8")), "SIGKILL");
+      await d.waitFor(() => d.events.find((e) => e.kind === "exit"));
+      assert.deepEqual(closed(d), [{ kind: "ask_closed", id: ask.id, reason: "exited" }]);
+    });
+
+    it("hands an open ask to the next driver, which answers it", async () => {
+      const d = await drive();
+      d.driver.start({ sandbox: "test", workdir: d.home, env: [], prompt: "ask", run: "a1-a" });
+      const ask = await asked(d);
+      await d.driver.detach();
+      const asks = d.driver.pendingAsks();
+      assert.deepEqual(asks.map((a) => a.ask), [ask]);
+      assert.deepEqual(closed(d), [], "Claude goes on waiting");
+
+      const e = await drive({}, { exec: { exec: d.exec, home: d.home } });
+      e.driver.attach({ sandbox: "test", ...d.driver.position()!, asks });
+      e.driver.answer(ask.id, { kind: "answers", answers: { [COLOR]: ["Red"] } });
+      assert.match(String((await e.waitFor(() => e.results()[0])).result), /"Red"/);
+      assert.ok(!e.events.some((x) => x.kind === "ask"), "the ask isn't reported again");
+      await e.driver.stop();
+    });
+
+    it("sends an answer again that Claude may not have had", async () => {
+      const d = await drive();
+      d.driver.start({ sandbox: "test", workdir: d.home, env: [], prompt: "ask", run: "a2-a" });
+      await asked(d);
+      await d.driver.detach();
+      // As if it was answered just as the attachment dropped, with the answer lost on the way.
+      const asks = d.driver.pendingAsks().map((a) => ({ ...a, answer: { kind: "answers" as const, answers: { [COLOR]: ["Green"] } } }));
+      const e = await drive({}, { exec: { exec: d.exec, home: d.home } });
+      e.driver.attach({ sandbox: "test", ...d.driver.position()!, asks });
+      assert.match(String((await e.waitFor(() => e.results()[0])).result), /"Green"/);
+      assert.deepEqual(e.driver.pendingAsks(), []);
+      await e.driver.stop();
+    });
+
+    it("doesn't report an ask twice when it reads it again", async () => {
+      const d = await drive();
+      d.driver.start({ sandbox: "test", workdir: d.home, env: [], prompt: "ask", run: "a3-a" });
+      const ask = await asked(d);
+      await d.driver.detach();
+      // From the start of the run, as when a server went away without saving how far it had read.
+      const e = await drive({}, { exec: { exec: d.exec, home: d.home } });
+      e.driver.attach({ sandbox: "test", run: "a3-a", offset: 0, asks: d.driver.pendingAsks() });
+      await e.waitFor(() => e.messages().some((m) => m.type === "assistant"));
+      await new Promise((r) => setTimeout(r, 200));
+      assert.ok(!e.events.some((x) => x.kind === "ask"));
+      e.driver.answer(ask.id, { kind: "skip" });
+      assert.match(String((await e.waitFor(() => e.results()[0])).result), /skipped/);
+      await e.driver.stop();
+    });
+  });
+
 });

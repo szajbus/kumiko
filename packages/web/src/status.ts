@@ -116,7 +116,9 @@ export const sessionStatus = (s: SessionStatus) => SESSION_STATUS[s];
 export const sessionState = (s: SessionInfo) =>
   s.asleep
     ? { text: "Sandbox stopped", color: COLORS.stopped }
-    : isWaiting(s) && s.status === "idle"
+    : s.asking
+      ? { text: s.asking === "plan" ? "Plan to review" : "Has a question for you", color: COLORS.warn }
+      : isWaiting(s) && s.status === "idle"
       ? { text: "Waiting on you", color: COLORS.warn }
       : isBusy(s)
         ? SESSION_STATUS.running

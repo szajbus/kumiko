@@ -1,4 +1,4 @@
-import { isCommand, type Attachment, type EndReason, type LoginAccount, type SessionEvent } from "@kumiko/shared";
+import { isCommand, type AgentAsk, type AskAnswer, type AskClosedReason, type Attachment, type EndReason, type LoginAccount, type SessionEvent } from "@kumiko/shared";
 
 // Turns a session's events into what the chat shows. Claude's stream-json is read loosely: only the fields the
 // chat needs, and anything unexpected is skipped rather than breaking the view.
@@ -29,6 +29,8 @@ export type ChatItem =
   | { type: "notice"; key: string; text: string }
   /** Claude asking to start a new session on `prompt`; `accepted` once the user has answered, with the `session` it started. */
   | { type: "proposal"; key: string; id: string; prompt: string; title?: string; artifacts?: string[]; accepted?: boolean; session?: string }
+  /** Claude asking the user, mid-turn: questions, or a plan to approve. `answer` once the user gave one; `closed` if Claude stopped waiting first. */
+  | { type: "ask"; key: string; ask: AgentAsk; answer?: AskAnswer; closed?: AskClosedReason }
   /** Another session, `name`d then, sharing copies of artifacts with this one; `told` once Claude has heard of it, with a prompt. */
   | { type: "shared"; key: string; name: string; titles: string[]; told?: boolean }
   | { type: "ended"; key: string; reason: EndReason; code?: number };
@@ -134,7 +136,7 @@ export function chatRows(items: readonly ChatItem[]): ChatRow[] {
     rows.push(row(i++));
     if (!startsTurn(prompt)) continue;
     const start = i;
-    while (i < items.length && (isWork(items[i]) || waitsOnUser(items[i]))) i++;
+    while (i < items.length && (isWork(items[i]) || waitsOnUser(items[i]) || items[i].type === "ask")) i++;
     let end = i;
     while (end < items.length && !startsTurn(items[end])) end++;
     const done = items.slice(start, end).some((it) => it.type === "turn");
@@ -180,6 +182,12 @@ export function chatRows(items: readonly ChatItem[]): ChatRow[] {
       group = [];
     };
     for (const r of work) {
+      // What Claude asked splits the work, like a long message: the work before it folds away, the card stays.
+      if (r.item.type === "ask") {
+        flush();
+        rows.push(r);
+        continue;
+      }
       if (r.item.type !== "assistant") {
         group.push(r);
         continue;
@@ -326,6 +334,17 @@ export function applyEvent(s: ChatState, ev: SessionEvent): ChatState {
         ...(ev.payload.title ? { title: ev.payload.title } : {}),
         ...(ev.payload.artifacts?.length ? { artifacts: ev.payload.artifacts } : {}),
       });
+    case "ask":
+      return push({ type: "ask", key, ask: ev.payload });
+    case "ask_answer":
+    case "ask_closed": {
+      const index = s.items.findIndex((i) => i.type === "ask" && i.ask.id === ev.payload.id);
+      if (index < 0) return s;
+      const items = [...s.items];
+      const item = items[index] as Extract<ChatItem, { type: "ask" }>;
+      items[index] = ev.kind === "ask_answer" ? { ...item, answer: ev.payload.answer } : { ...item, closed: ev.payload.reason };
+      return { ...s, items };
+    }
     case "proposal_answer": {
       const index = s.items.findIndex((i) => i.type === "proposal" && i.id === ev.payload.id);
       if (index < 0) return s;

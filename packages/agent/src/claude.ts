@@ -1,20 +1,23 @@
 import type { ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { eachLine, shellQuote } from "@kumiko/sandbox";
+import type { AskAnswer } from "@kumiko/shared";
+import { AskBridge, type PendingAsk } from "./asks.js";
 import type { AgentDriver, AgentEvent, AgentFile, AgentMessage, AttachOptions, Exec, RunPosition, StartOptions } from "./driver.js";
 import { mcpConfig, ToolBridge, type PendingCall } from "./tools.js";
 import { ATTACHED, attachCommand, closeInputCommand, execOutput, launchCommand, removeCommand, RUN_EXIT_TYPE, RUN_GONE, RUN_LOST, signalCommand, stderrCommand } from "./runs.js";
 
 /**
  * Claude Code in its own streaming mode: one JSON object per line on stdin and stdout, and the process stays alive
- * between turns. Permissions are bypassed because the sandbox is the boundary.
+ * between turns. Permissions are bypassed because the sandbox is the boundary; the permission prompts that remain, for
+ * the tools that ask the user something, come to the driver over the same streams (see `AskBridge`).
  */
 export const CLAUDE_COMMAND = [
   // Checkpoints are what lets a prompt's file changes be undone; --replay-user-messages is how Claude says a prompt has one.
   "env CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=1 claude -p",
   "--input-format stream-json --output-format stream-json",
   "--verbose --include-partial-messages --replay-user-messages --prompt-suggestions",
-  "--permission-mode bypassPermissions",
+  "--permission-mode bypassPermissions --permission-prompt-tool stdio",
 ].join(" ");
 
 /** A model alias or id, checked before it goes into a shell command. */
@@ -119,6 +122,10 @@ export class ClaudeDriver implements AgentDriver {
   private pending = new Map<string, { resolve(): void; reject(err: Error): void }>();
   /** Answers Claude's calls to the caller's tools, if it was given any. */
   private tools?: ToolBridge;
+  /** What Claude asks the user, mid-turn. */
+  private readonly asks = new AskBridge((line) => this.write(line), (ev) => this.emit(ev));
+  /** Whether Claude is in plan mode, as it last said; `mode` events are sent when it changes. */
+  private plan?: boolean;
   private readonly graceMs: number;
   private readonly owner?: string;
 
@@ -155,17 +162,32 @@ export class ClaudeDriver implements AgentDriver {
     if (prompt !== undefined) this.send(prompt, promptId, files);
   }
 
-  attach({ sandbox, run, offset, tools, pending }: AttachOptions): void {
+  attach({ sandbox, run, offset, tools, pending, asks }: AttachOptions): void {
     if (this.sandbox) throw new Error("This driver has already started.");
     const command = attachCommand(run, offset);
     if (tools) this.tools = new ToolBridge(tools, (line) => this.write(line));
     this.begin(sandbox, run, offset);
     this.connect(this.exec(sandbox, command, []), false);
     if (pending?.length) this.tools?.rerun(pending);
+    if (asks?.length) this.asks.adopt(asks);
   }
 
   pendingCalls(): PendingCall[] {
     return this.tools?.pending() ?? [];
+  }
+
+  pendingAsks(): PendingAsk[] {
+    return this.asks.pending();
+  }
+
+  answer(id: string, answer: AskAnswer): void {
+    if (!this.sandbox || this.done || this.frozen) throw new Error("Claude isn't running.");
+    this.asks.answer(id, answer);
+  }
+
+  setPlanMode(plan: boolean): void {
+    const request = { subtype: "set_permission_mode", mode: plan ? "plan" : "bypassPermissions" };
+    this.write(JSON.stringify({ type: "control_request", request_id: `mode-${++this.requests}`, request }) + "\n");
   }
 
   private begin(sandbox: string, run: string, offset: number) {
@@ -213,7 +235,7 @@ export class ClaudeDriver implements AgentDriver {
       this.child = undefined;
       if (this.done) return;
       const exitCode = code ?? (signal ? 128 : 1);
-      if (this.detaching) return this.settle();
+      if (this.detaching) return this.release();
       if (exitCode === RUN_GONE || exitCode === RUN_LOST) {
         return void this.finish(exitCode, { message: "Claude's process in the sandbox is gone; the sandbox may have restarted.", stderr: sshErr });
       }
@@ -251,9 +273,18 @@ export class ClaudeDriver implements AgentDriver {
       void this.finish(typeof payload.code === "number" ? payload.code : 1);
       return;
     }
-    if (payload.type === "control_response" && this.answer(payload)) return;
+    if (payload.type === "control_response" && this.settle(payload)) return;
+    if (this.asks.handle(payload)) return;
     if (this.tools?.handle(payload)) return;
+    this.asks.seen(payload);
     this.emit({ kind: "message", payload });
+    // Claude says which mode it is in with every turn's init, and when it changes: by us, by its own EnterPlanMode, or
+    // back once a plan is approved.
+    const mode = payload.type === "system" && (payload.subtype === "init" || payload.subtype === "status") ? payload.permissionMode : undefined;
+    if (typeof mode === "string" && (mode === "plan") !== this.plan) {
+      this.plan = mode === "plan";
+      this.emit({ kind: "mode", plan: this.plan });
+    }
     // Signed out, Claude still answers each turn, with an error result rather than an exit.
     if (payload.type === "result" && payload.is_error === true && SIGNED_OUT.test(String(payload.result ?? ""))) {
       // The failed turn already shows Claude's own words ("Invalid API key · Please run /login").
@@ -283,15 +314,16 @@ export class ClaudeDriver implements AgentDriver {
         this.emit({ kind: "error", message, hint: exitHint(code, tail), stderr: tail.length ? tail : undefined, ...(signedOut ? { signedOut } : {}) });
       }
     }
+    this.asks.close();
     this.emit({ kind: "exit", code, requested: this.requested });
-    this.settle();
+    this.release();
     // Nothing more will be read from the run: it goes, with the attachment still on it.
     this.removed = execOutput(this.exec, sandbox, removeCommand(run), 10_000).then(() => {}, () => {});
     this.child?.stdin?.end();
   }
 
   /** Nothing answers a request once the driver is done; `stop()` and `detach()` resolve. */
-  private settle() {
+  private release() {
     this.done = true;
     if (this.detaching) this.tools?.release();
     else this.tools?.close();
@@ -311,7 +343,7 @@ export class ClaudeDriver implements AgentDriver {
   }
 
   /** Settles the request a `control_response` answers, if one of ours is waiting; false for any other. */
-  private answer(msg: AgentMessage): boolean {
+  private settle(msg: AgentMessage): boolean {
     const response = msg.response as { request_id?: unknown; subtype?: unknown; error?: unknown } | undefined;
     const id = typeof response?.request_id === "string" ? response.request_id : undefined;
     const waiting = id ? this.pending.get(id) : undefined;
@@ -386,7 +418,7 @@ export class ClaudeDriver implements AgentDriver {
     const child = this.child;
     if (!child) {
       if (this.outbox.length) this.tools?.answersMayBeLost();
-      return this.settle();
+      return this.release();
     }
     // EOF ends the attachment in the sandbox; Claude, holding its own input open, doesn't notice.
     child.stdin!.end();

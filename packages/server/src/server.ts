@@ -16,6 +16,7 @@ import {
   formatBytes,
   isWaiting,
   NAME_PATTERN,
+  parseAskAnswer,
   parseSavedTabs,
   SESSION_ID_PATTERN,
   artifactsOf,
@@ -68,7 +69,7 @@ import { LoginFailed, Logins } from "./logins.js";
 import { BusyError, Operations } from "./operations.js";
 import { homeId, lockHome } from "./home.js";
 import { defaultKumikoHome, ProjectExists, ProjectRecordError, ProjectStore } from "./projects.js";
-import { RewindRefused, SessionEnded, SessionNotFound, SessionNotResumable, Sessions } from "./sessions.js";
+import { AskRefused, RewindRefused, SessionEnded, SessionNotFound, SessionNotResumable, Sessions } from "./sessions.js";
 import { docPaneTarget, Widgets, type PaneAnswer } from "./widgets.js";
 import { SessionStore, type StoredSession } from "./store.js";
 import { TabsStore } from "./tabs.js";
@@ -429,7 +430,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     if (err instanceof LoginFailed) return c.json(fail(err.message, err.output), 422);
     if (err instanceof BusyError || err instanceof ProjectExists || err instanceof ProjectRecordError) return c.json(fail(err.message), 409);
     if (err instanceof SessionNotFound) return c.json(fail(err.message), 404);
-    if (err instanceof SessionEnded || err instanceof SessionNotResumable || err instanceof RewindRefused) return c.json(fail(err.message), 409);
+    if (err instanceof SessionEnded || err instanceof SessionNotResumable || err instanceof RewindRefused || err instanceof AskRefused) return c.json(fail(err.message), 409);
     // Anything else is a bug or a tool failing; the UI still gets JSON it can show.
     return c.json(fail(err instanceof Error ? err.message : String(err)), 500);
   });
@@ -1073,6 +1074,22 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     const shown = sessions.changeWindow(id, op);
     void widgets.refresh(id);
     return c.json(shown);
+  });
+
+  /** Answers what Claude asked mid-turn: its questions, or its plan. 409 once it isn't waiting for that any more. */
+  app.post("/api/sessions/:id/asks/:ask", async (c) => {
+    const answer = parseAskAnswer(await c.req.json().catch(() => undefined));
+    if (!answer) throw new HttpError(400, "Send an answer: answers to the questions, approve, feedback with its text, or skip.");
+    sessions.answerAsk(sessionOf(c).id, c.req.param("ask"), answer);
+    return c.json({ ok: true });
+  });
+
+  /** Has Claude plan first, waiting for the user to approve the plan, or work without asking; `{ plan }`. */
+  app.post("/api/sessions/:id/plan-mode", async (c) => {
+    const { plan } = await body<{ plan?: unknown }>(c, "Send { plan: true } or { plan: false }.");
+    if (typeof plan !== "boolean") throw new HttpError(400, "Send { plan: true } or { plan: false }.");
+    sessions.setPlanMode(sessionOf(c).id, plan);
+    return c.json({ ok: true }, 202);
   });
 
   app.post("/api/sessions/:id/interrupt", (c) => {

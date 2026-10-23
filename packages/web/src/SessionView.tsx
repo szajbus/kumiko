@@ -1,9 +1,10 @@
 import { createContext, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { formatBytes, LIVE_SESSION_STATUSES, type LoginAccount, type SessionInfo } from "@kumiko/shared";
+import { formatBytes, LIVE_SESSION_STATUSES, type AskAnswer, type LoginAccount, type SessionInfo } from "@kumiko/shared";
 import { api, errorMessage, type SessionStream } from "./api";
 import { fromAttachment, toInput } from "./attachments";
 import { ArtifactsButton } from "./ArtifactView";
+import { AskCard, AskContext } from "./AskCard";
 import { applyEvent, backgroundAgents, startsTurn, unpromptedText, blocksOf, chatRows, emptyChat, loginCards, partialToolSummary, summarize, toolState, toolSummary, type Block, type ChatItem, type ChatState, type ItemRow, type LoginAnswer, type Subagent, type ToolState, type WorkRow } from "./chat";
 import { Composer, type ComposerHandle } from "./Composer";
 import { HeaderCorner } from "./Corner";
@@ -171,6 +172,8 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
   /** A new tab with the conversation up to the end of `prompt`'s turn, or all of it. */
   const fork = (prompt?: string) => call(() => api.forkSession(session.id, prompt).then(({ id }) => onForked(id)));
   const canBranch = idle && Boolean(session.claudeSessionId);
+  /** The user's answer to what Claude asked mid-turn. */
+  const answerAsk = (ask: string, answer: AskAnswer) => call(() => api.answerAsk(session.id, ask, answer));
   /** The user's answer to Claude asking to start a session; accepted, its tab opens. */
   const answerProposal = (item: ProposalItem, accept: boolean, prompt?: string) =>
     call(() =>
@@ -185,36 +188,38 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
     <div className="session">
       {corner && createPortal(<UsageStrip sessionId={session.id} live={live} turnDone={idle} cost={totalCost} bufferBytes={session.bufferBytes} />, corner)}
 
-      <Chat
-        chat={chat}
-        running={busy}
-        live={live}
-        active={active}
-        onRewind={canBranch ? setRewinding : undefined}
-        onFork={canBranch ? (item) => void fork(item.id) : undefined}
-        onQuote={(quoted) => composer.current?.insertQuote(quoted)}
-        onAnswer={answerProposal}
-        hidden={login.hidden}
-        actions={
-          login.card && {
-            key: login.card.key,
-            node: login.card.account ? (
-              <LoggedInCard
-                account={login.card.account}
-                retried={login.card.retried}
-                busy={busy}
-                onRetry={() => {
-                  const was = answer!;
-                  setAnswer({ ...was, retried: true });
-                  void call(() => api.retry(session.id)).then((ok) => ok || setAnswer(was));
-                }}
-              />
-            ) : (
-              <LoggedOutCard project={session.sandbox} onLogIn={() => setLoggingIn(true)} />
-            ),
+      <AskContext.Provider value={live ? answerAsk : undefined}>
+        <Chat
+          chat={chat}
+          running={busy}
+          live={live}
+          active={active}
+          onRewind={canBranch ? setRewinding : undefined}
+          onFork={canBranch ? (item) => void fork(item.id) : undefined}
+          onQuote={(quoted) => composer.current?.insertQuote(quoted)}
+          onAnswer={answerProposal}
+          hidden={login.hidden}
+          actions={
+            login.card && {
+              key: login.card.key,
+              node: login.card.account ? (
+                <LoggedInCard
+                  account={login.card.account}
+                  retried={login.card.retried}
+                  busy={busy}
+                  onRetry={() => {
+                    const was = answer!;
+                    setAnswer({ ...was, retried: true });
+                    void call(() => api.retry(session.id)).then((ok) => ok || setAnswer(was));
+                  }}
+                />
+              ) : (
+                <LoggedOutCard project={session.sandbox} onLogIn={() => setLoggingIn(true)} />
+              ),
+            }
           }
-        }
-      />
+        />
+      </AskContext.Provider>
 
       {loggingIn && (
         <LoginDialog
@@ -337,9 +342,16 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
           autoFocus
           footer={
             <>
-              <span className="badge badge-bypass" title="Claude runs tools without asking for permission. The sandbox is the boundary.">
-                Bypass permissions
-              </span>
+              <Select
+                compact
+                value={session.planMode ? "plan" : "bypass"}
+                className={session.planMode ? "mode-plan" : "mode-bypass"}
+                title={session.planMode ? "Claude plans first, and waits for you to approve the plan before it changes anything." : "Claude runs tools without asking for permission. The sandbox is the boundary."}
+                disabled={!live || session.status === "starting"}
+                groups={[{ options: ["bypass", "plan"] }]}
+                labels={{ bypass: "Bypass permissions", plan: "Plan first" }}
+                onValueChange={(v) => void call(() => api.setPlanMode(session.id, v === "plan"))}
+              />
               <Select
                 compact
                 value={model || currentModel}
@@ -757,6 +769,8 @@ const Item = memo(function Item({ item, from, to, open, onRewind, onFork, onAnsw
       return <div className="chat-unprompted">{unpromptedText(item.after)}</div>;
     case "proposal":
       return <ProposalCard item={item} onAnswer={onAnswer} />;
+    case "ask":
+      return <AskCard item={item} />;
     case "shared":
       return (
         <div className="chat-quiet">

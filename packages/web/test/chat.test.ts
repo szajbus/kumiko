@@ -172,6 +172,36 @@ describe("chat", () => {
     assert.equal(after.items[1], before.items[1]);
   });
 
+  it("shows what Claude asks mid-turn below the work so far, and keeps it in place once answered", () => {
+    const question = { kind: "questions" as const, id: "r1", toolUseId: "t1", questions: [{ question: "Color?", options: [{ label: "Red" }, { label: "Green" }] }] };
+    const asking = fold([
+      { kind: "user_prompt", payload: { text: "paint it", id: "p1" } },
+      assistant("m1", [{ type: "tool_use", id: "t1", name: "AskUserQuestion", input: { questions: [] } }]),
+      { kind: "ask", payload: question },
+    ]);
+    assert.deepEqual(ofType(asking, "ask"), [{ type: "ask", key: "3", ask: question }]);
+    assert.deepEqual(shape(chatRows(asking.items)), ["user", "work (open)[assistant]", "ask"]);
+
+    const answered = fold(
+      [
+        { kind: "ask_answer", payload: { id: "r1", answer: { kind: "answers", answers: { "Color?": ["Green"] } } } },
+        claude({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "Your questions have been answered." }] } }),
+        assistant("m2", [{ type: "tool_use", id: "t2", name: "Bash", input: { command: "paint green" } }]),
+        assistant("m3", [{ type: "text", text: "Painted it green." }]),
+        result(),
+      ],
+      asking,
+      3,
+    );
+    assert.deepEqual(ofType(answered, "ask")[0].answer, { kind: "answers", answers: { "Color?": ["Green"] } });
+    assert.deepEqual(shape(chatRows(answered.items)), ["user", "work[assistant]", "ask", "work[assistant]", "assistant", "turn"]);
+
+    const stopped = fold([{ kind: "ask_closed", payload: { id: "r1", reason: "interrupted" } }], asking, 3);
+    assert.equal(ofType(stopped, "ask")[0].closed, "interrupted");
+    // An answer to an ask that isn't there (rewound away) changes nothing.
+    assert.equal(fold([{ kind: "ask_closed", payload: { id: "r9", reason: "exited" } }], asking, 3), asking);
+  });
+
   it("shows Claude's ask to start a session, and the user's answer to it", () => {
     const asked = fold([{ kind: "proposal", payload: { id: "a1", prompt: "Fix the test.", title: "Flaky test", toolUseId: "t1" } }]);
     assert.deepEqual(ofType(asked, "proposal"), [{ type: "proposal", key: "1", id: "a1", prompt: "Fix the test.", title: "Flaky test" }]);

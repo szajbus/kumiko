@@ -376,6 +376,102 @@ describe("sessions", () => {
     await api(`/api/sessions/${id}`, { method: "DELETE" });
   });
 
+  describe("what Claude asks the user", () => {
+    const COLOR = "Which color do you prefer?";
+    const answer = (id: string, ask: string, body: unknown) => api(`/api/sessions/${id}/asks/${ask}`, { method: "POST", body: JSON.stringify(body) });
+    const prompt = (id: string, text: string) => api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text }) });
+    const asks = (got: SessionEvent[]) => got.flatMap((e) => (e.kind === "ask" ? [e.payload] : []));
+    const resultText = (got: SessionEvent[], n: number) => {
+      const r = got.filter((e) => e.kind === "claude" && e.payload.type === "result")[n];
+      return r?.kind === "claude" ? String(r.payload.result) : undefined;
+    };
+
+    it("waits on the user's answers, mid-turn, and takes them", async () => {
+      const id = await startSession("one", "ask");
+      const s = await listen(id);
+      const ask = (await waitFor(() => asks(s.got)[0]))!;
+      assert.equal(ask.kind, "questions");
+      const waiting = await waitFor(async () => { const i = await session(id); return i?.asking ? i : undefined; });
+      assert.equal(waiting.asking, "questions");
+      assert.equal(waiting.status, "running", "the turn is still open");
+      assert.ok(isWaiting(waiting) && !isBusy(waiting), "waiting on the user, not working");
+      const saved = await waitFor(async () => {
+        const stored = JSON.parse(await readFile(join(sessionsDir, `${id}.json`), "utf8").catch(() => "{}")) as Partial<StoredSession>;
+        return stored.run?.asks?.length ? stored : undefined;
+      });
+      assert.equal(saved.run!.asks![0].ask.id, ask.id, "saved with the run, for the next server");
+
+      assert.equal((await answer(id, ask.id, { kind: "nope" })).status, 400);
+      assert.equal((await answer(id, ask.id, { kind: "approve" })).status, 409, "a plan's answer doesn't fit questions");
+      assert.equal((await answer(id, ask.id, { kind: "answers", answers: { [COLOR]: ["Green"] } })).status, 200);
+      await waitFor(() => s.results().length === 1);
+      assert.match(resultText(s.got, 0)!, /"Green"/);
+      assert.ok(s.got.some((e) => e.kind === "ask_answer" && e.payload.id === ask.id));
+      const after = await waitFor(async () => { const i = await session(id); return i?.status === "idle" ? i : undefined; });
+      assert.equal(after.asking, undefined);
+      assert.equal((await answer(id, ask.id, { kind: "skip" })).status, 409, "answered already");
+      await api(`/api/sessions/${id}`, { method: "DELETE" });
+    });
+
+    it("plans first when asked, and takes a plan back or approves it", async () => {
+      const id = await startSession("one", "hello");
+      const s = await listen(id);
+      await waitFor(() => s.results().length === 1);
+      assert.equal((await api(`/api/sessions/${id}/plan-mode`, { method: "POST", body: JSON.stringify({ plan: "yes" }) })).status, 400);
+      assert.equal((await api(`/api/sessions/${id}/plan-mode`, { method: "POST", body: JSON.stringify({ plan: true }) })).status, 202);
+      await waitFor(async () => (await session(id))?.planMode || undefined);
+
+      await prompt(id, "plan");
+      const plan = (await waitFor(() => asks(s.got)[0]))!;
+      assert.equal(plan.kind === "plan" && plan.plan.split("\n")[0], "# Add a cache");
+      assert.equal((await session(id))?.asking, "plan");
+      assert.equal((await answer(id, plan.id, { kind: "feedback", text: "  " })).status, 400, "feedback needs words");
+      assert.equal((await answer(id, plan.id, { kind: "feedback", text: "Use SQLite." })).status, 200);
+      await waitFor(() => s.results().length === 2);
+      assert.match(resultText(s.got, 1)!, /Use SQLite\.$/);
+      assert.equal((await session(id))?.planMode, true, "still planning");
+
+      await prompt(id, "plan");
+      const again = (await waitFor(() => asks(s.got)[1]))!;
+      assert.equal((await answer(id, again.id, { kind: "approve" })).status, 200);
+      await waitFor(() => s.results().length === 3);
+      const done = await waitFor(async () => { const i = await session(id); return i?.status === "idle" ? i : undefined; });
+      assert.equal(done.planMode, undefined, "approving the plan ends plan mode");
+      await api(`/api/sessions/${id}`, { method: "DELETE" });
+    });
+
+    it("takes a message sent while Claude waits as the answer, and sends it next", async () => {
+      const id = await startSession("one", "ask");
+      const s = await listen(id);
+      const ask = (await waitFor(() => asks(s.got)[0]))!;
+      await prompt(id, "never mind");
+      await waitFor(() => s.results().length === 2);
+      const answered = s.got.findIndex((e) => e.kind === "ask_answer");
+      assert.deepEqual(s.got[answered].kind === "ask_answer" && s.got[answered].payload, { id: ask.id, answer: { kind: "message" } });
+      assert.ok(answered < s.got.findIndex((e) => e.kind === "user_prompt" && e.payload.text === "never mind"));
+      assert.match(resultText(s.got, 0)!, /sent a message instead/);
+      assert.equal(resultText(s.got, 1), "You said: never mind");
+      await api(`/api/sessions/${id}`, { method: "DELETE" });
+    });
+
+    it("stops waiting when the turn is stopped, and closes its tab at once", async () => {
+      const id = await startSession("one", "ask");
+      const s = await listen(id);
+      const ask = (await waitFor(() => asks(s.got)[0]))!;
+      await api(`/api/sessions/${id}/interrupt`, { method: "POST" });
+      const closed = await waitFor(() => s.got.find((e) => e.kind === "ask_closed"));
+      assert.deepEqual(closed.kind === "ask_closed" && closed.payload, { id: ask.id, reason: "interrupted" });
+      await waitFor(async () => { const i = await session(id); return i?.status === "idle" && !i.asking ? i : undefined; });
+
+      await prompt(id, "ask");
+      await waitFor(() => asks(s.got)[1]);
+      await waitFor(async () => (await session(id))?.asking || undefined);
+      // Claude isn't working while it waits: there is nothing to let it finish.
+      assert.equal((await api(`/api/sessions/${id}`, { method: "DELETE" })).status, 200);
+      assert.equal(await session(id), undefined);
+    });
+  });
+
   it("resumes a closed session with its chat, and forks one", async () => {
     const id = await startSession("one", "remember me");
     const idle = (x: string) => waitFor(async () => { const i = await session(x); return i?.status === "idle" && i.claudeSessionId ? i : undefined; });
@@ -769,6 +865,24 @@ describe("sessions", () => {
       await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: "still there?" }) });
       await waitFor(() => back.results().length === 2);
       assert.ok(back.got.some((e) => e.kind === "claude" && e.payload.type === "result" && e.payload.result === "You said: still there?"));
+      await api(`/api/sessions/${id}`, { method: "DELETE" });
+      await waitFor(async () => !(await alive(id)) || undefined);
+    });
+
+    it("keeps a question open through a restart, and takes the answer after", async () => {
+      const id = await startSession("one", "ask");
+      const s = await listen(id);
+      const ask = await waitFor(() => s.got.find((e) => e.kind === "ask"));
+      assert.ok(ask.kind === "ask");
+      await waitFor(async () => ((await stored(id)).run?.asks?.length ? true : undefined));
+      await restart();
+      assert.equal((await session(id))?.asking, "questions", "still waiting on the user");
+      const back = await listen(id);
+      assert.equal(back.got.filter((e) => e.kind === "ask").length, 1, "the question is there once");
+      const res = await api(`/api/sessions/${id}/asks/${ask.payload.id}`, { method: "POST", body: JSON.stringify({ kind: "answers", answers: { "Which color do you prefer?": ["Red"] } }) });
+      assert.equal(res.status, 200);
+      await waitFor(() => back.results().length === 1, 15000);
+      assert.ok(back.got.some((e) => e.kind === "claude" && e.payload.type === "result" && String(e.payload.result).includes('"Red"')));
       await api(`/api/sessions/${id}`, { method: "DELETE" });
       await waitFor(async () => !(await alive(id)) || undefined);
     });

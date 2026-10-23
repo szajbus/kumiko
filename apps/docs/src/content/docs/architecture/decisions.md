@@ -14,6 +14,20 @@ The agent gets a whole environment per project and works there without asking.
 **Costs:** a sandbox uses memory and CPU while it runs, and is slow to create. The boundary is only as tight as the
 project's mounts and forwarded variables.
 
+## Questions and plans over the agent's permission prompts
+
+With permissions bypassed, Claude still asks the host before the two tools whose approval is the user answering:
+AskUserQuestion and, in plan mode, ExitPlanMode. Kumiko takes those asks over stream-json's control protocol
+(`--permission-prompt-tool stdio`) and shows them as cards; any other tool that asks is allowed at once. Plan mode is
+switched on with a control request rather than started with `--permission-mode plan`, which would leave the agent in
+the default mode, asking about every edit, once a plan is approved. An ask waits for its answer with no time limit, and
+outlives the server like a tool call: what is still open is saved with the session's run, and answered by the next
+server.
+
+**Costs:** two of Claude's tools are handled outside the agent-neutral driver interface's messages, and their answers
+are worded for Claude. An answer is only known to have arrived once Claude's tool result for it does, so one may be sent
+twice; Claude ignores the second.
+
 ## Same-path mounts
 
 The clone and `<clone>__worktrees` are mounted at their host paths, because a worktree's `.git` file holds absolute
