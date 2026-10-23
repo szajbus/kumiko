@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { applyWindowOp, chatWindow, compactWindow, isCommand, LIVE_SESSION_STATUSES, sharedNote, sharesWaiting, windowState, type Attachment, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo, type WindowOp, type WindowState } from "@kumiko/shared";
+import { applyWindowOp, chatWindow, compactWindow, isBusy, isCommand, LIVE_SESSION_STATUSES, sharedNote, sharesWaiting, windowState, type Attachment, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo, type WindowOp, type WindowState } from "@kumiko/shared";
 import { TOOL_TIMEOUT_MS, type AgentDriver, type AgentFile, type AgentMessage, type StartOptions, type ToolHost } from "@kumiko/agent";
 import { chatEvents, type SessionStore, type StoredSession } from "./store.js";
 import { trimMessage } from "./trim.js";
@@ -83,8 +83,11 @@ const isChainEntry = (e: SessionEvent): e is ChainEntry =>
 
 const isLive = (s: SessionInfo) => LIVE_SESSION_STATUSES.includes(s.status);
 
-/** Claude is working in the session: closing it now would cut a turn short. */
-const isWorking = (s: SessionInfo) => s.status === "running" || s.status === "starting";
+/**
+ * Claude is working in the session, on a turn or with subagents it left working in the background: closing it now
+ * would cut that short.
+ */
+const isWorking = isBusy;
 
 /** How long Claude may go on with its turn after its session is closed, before it is stopped. */
 export const FINISH_MS = 30 * 60_000;
@@ -585,7 +588,9 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
       // Claude is done and waits for the user, until they look.
       this.setInfo(s, { status: "idle", bufferBytes: s.bytes, unread: true, ...(switched ? { model: s.pendingModel } : {}) });
       this.save(s);
-      if (s.info.closing) void this.finish(s);
+      // Closed with subagents still working in the background: once they are done, Claude takes a turn of its own to
+      // report on them, and the session ends after that one.
+      if (s.info.closing && !isWorking(s.info)) void this.finish(s);
     }
   }
 

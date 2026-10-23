@@ -602,6 +602,20 @@ describe("sessions", () => {
     await api(`/api/sessions/saved/${stopped}`, { method: "DELETE" });
   });
 
+  it("lets subagents working in the background finish after the tab closes, and Claude report on them", async () => {
+    const id = await startSession("one", "agents-bg");
+    const chat = await listen(id);
+    // Its turn is over, but the subagent works on.
+    await waitFor(async () => { const i = await session(id); return i?.status === "idle" && i.agents === 1 ? i : undefined; });
+    const res = await api(`/api/sessions/${id}`, { method: "DELETE" });
+    assert.equal(res.status, 202);
+    assert.equal((await json(res)).finishing, true);
+    await waitFor(async () => !(await session(id)), 20000);
+    assert.ok(chat.got.some((e) => e.kind === "claude" && e.payload.type === "system" && e.payload.subtype === "task_notification"), "the subagent was done, not cut short");
+    assert.equal(chat.results().length, 2, "and Claude's turn reporting on it finished");
+    await api(`/api/sessions/saved/${id}`, { method: "DELETE" });
+  });
+
   it("logs Claude in from a session, then retries the prompt that failed", async () => {
     // The fake Claude reads its config from the fake sandbox's ~/.claude: logged out until it has credentials.
     const claudeHome = join(limaDir, "vm-home", ".claude");

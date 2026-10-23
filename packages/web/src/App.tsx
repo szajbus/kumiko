@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { SessionInfo } from "@kumiko/shared";
+import { isBusy, type SessionInfo } from "@kumiko/shared";
 import { api, RequestError, useLiveState } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { HeaderCorner } from "./Corner";
@@ -49,9 +49,6 @@ function Redirect({ to }: { to: string }) {
   useEffect(() => go(to), [to]);
   return null;
 }
-
-/** Claude is working in the session, so ending it cuts a turn short. */
-const isWorking = (s: SessionInfo) => s.status === "running" || s.status === "starting";
 
 const tabOf = (r: Route): TabId => (r.view === "draft" ? `new-session:${r.key}` : r.view === "session" ? `session:${r.id}` : "projects");
 
@@ -386,11 +383,11 @@ export function App() {
       {deleting && (
         <ConfirmDialog
           title={`Close “${sessionTitle(deleting)}” and delete it from history?`}
-          confirmLabel={isWorking(deleting) ? "Delete when done" : "Close and delete"}
+          confirmLabel={isBusy(deleting) ? "Delete when done" : "Close and delete"}
           danger
           enterConfirms
           alternative={
-            isWorking(deleting)
+            isBusy(deleting)
               ? {
                   label: "Stop and delete",
                   onClick: () => {
@@ -408,7 +405,7 @@ export function App() {
             void closeSession(s, { delete: true });
           }}
         >
-          {isWorking(deleting) && (
+          {isBusy(deleting) && (
             <p>
               Claude is still working in it and will be allowed to finish (up to 30 minutes), or you can stop it now with{" "}
               <strong>Stop and delete</strong>.

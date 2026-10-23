@@ -46,7 +46,8 @@ A session's agent knows about the other sessions of its project, and no other pr
 ## Closing and ending
 
 - **Closing a tab closes the session.** It stays saved and can be resumed. If the agent is working, the tab closes at
-  once and the agent finishes its turn out of sight, for up to 30 minutes; then the session ends.
+  once and the agent finishes its turn out of sight, for up to 30 minutes; then the session ends. Subagents it started
+  in the background count as working: the session ends once they are done and the agent has reported on them.
 - <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> closes the tab and deletes the saved session, after asking. If the agent
   is working, it can finish its turn first (**Delete when done**, the default) or stop now (**Stop and delete**).
 - While the agent finishes, the Projects tab and the project's page list the session under **Finishing**, to **Open**
