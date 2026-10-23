@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { isBusy, isWaiting, type LogLine, type SandboxView, type SessionInfo } from "@kumiko/shared";
 import { matchCommands } from "../src/commands.ts";
 import { ago, endedText, formatBytes, formatCost, formatDuration, planName, projectHue, projectHues, resetText, sessionName, sessionTitle } from "../src/format.ts";
-import { COLORS, failedAgentScripts, opPill, resources, sandboxCreatedAt, sessionState, statusOf } from "../src/status.ts";
+import { COLORS, failedAgentScripts, finishingState, opPill, resources, sandboxCreatedAt, sessionState, statusOf } from "../src/status.ts";
 
 describe("format", () => {
   it("titles a session by its /rename name, else the opening prompt cut at a word", () => {
@@ -85,6 +85,13 @@ describe("status", () => {
     assert.deepEqual(sessionState(asking), { text: "Has a question for you", color: COLORS.warn });
     assert.deepEqual(sessionState({ ...s, asking: "plan" }), { text: "Plan to review", color: COLORS.warn });
     assert.ok(isWaiting(asking) && !isBusy(asking));
+  });
+
+  it("says a session finishing after its tab closed needs attention while Claude waits on the user", () => {
+    const s: SessionInfo = { id: "a1b2c3", sandbox: "web", workdir: "/w", status: "running", prompt: "x", startedAt: "2026-10-23T00:00:00Z", closing: { delete: false, until: "2026-10-23T00:30:00Z" } };
+    assert.deepEqual(finishingState(s), { text: "Finishing…", color: COLORS.busy, pulse: true });
+    assert.deepEqual(finishingState({ ...s, asking: "questions" }), { text: "Needs attention", color: COLORS.warn, pulse: false });
+    assert.deepEqual(finishingState({ ...s, asking: "plan" }), { text: "Needs attention", color: COLORS.warn, pulse: false });
   });
 
   const sb = (over: Partial<SandboxView> = {}): SandboxView => ({ name: "web", vm: "km-web", provider: "lima", status: "running", busy: false, sessions: 0, ...over });

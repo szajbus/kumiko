@@ -125,3 +125,10 @@ export const sessionState = (s: SessionInfo) =>
         : SESSION_STATUS[s.status];
 
 export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/**
+ * What a session Claude finishes after its tab closed says it is doing: finishing, or waiting on the user, who can open
+ * it again to answer while it waits.
+ */
+export const finishingState = (s: SessionInfo): { text: string; color: string; pulse: boolean } =>
+  s.asking ? { text: "Needs attention", color: COLORS.warn, pulse: false } : { text: "Finishing…", color: COLORS.busy, pulse: true };

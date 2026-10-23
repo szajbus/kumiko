@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { SessionInfo } from "@kumiko/shared";
 import { api, errorMessage } from "./api";
 import { sessionTitle } from "./format";
-import { COLORS } from "./status";
+import { finishingState } from "./status";
 
 /** Sessions whose tab was closed while Claude worked, which it finishes out of sight. */
 export const finishing = (sessions: readonly SessionInfo[]) => sessions.filter((s) => s.closing);
@@ -22,6 +22,7 @@ export function FinishingItem({ s, onOpened }: { s: SessionInfo; onOpened(id: st
       setBusy(false);
     }
   };
+  const state = finishingState(s);
   const until = s.closing ? new Date(s.closing.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
   return (
     <li className="item item-finishing">
@@ -32,9 +33,9 @@ export function FinishingItem({ s, onOpened }: { s: SessionInfo; onOpened(id: st
           {error && <span className="item-error"> · {error}</span>}
         </span>
       </span>
-      <span className="row-status item-state" style={{ color: COLORS.busy }}>
-        <span className="dot dot-small dot-pulse" style={{ background: COLORS.busy }} aria-hidden="true" />
-        Finishing…
+      <span className="row-status item-state" style={{ color: state.color }}>
+        <span className={`dot dot-small${state.pulse ? " dot-pulse" : ""}`} style={{ background: state.color }} aria-hidden="true" />
+        {state.text}
       </span>
       <span className="item-actions">
         <button type="button" className="btn-small" disabled={busy} onClick={() => void act(async () => onOpened((await api.resumeSession(s.id)).id))}>

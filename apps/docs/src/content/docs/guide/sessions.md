@@ -73,6 +73,8 @@ A session's agent knows about the other sessions of its project, and no other pr
 - While the agent finishes, the Projects tab and the project's page list the session under **Finishing**, to **Open**
   again, the agent still working, or to **Stop now**. <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> brings it back too,
   even one being deleted, until the agent is done. Queued messages aren't sent: the turn under way is all it finishes.
+  If the agent asks you something meanwhile, the session says **Needs attention**: **Open** it to answer, or it is
+  stopped when its time is up.
 - **Quitting the app** leaves the agent working. If it is working in any session, Kumiko says so, and offers **Stop
   Claude and Quit** instead, which ends every session at once. A session finishing after its tab closed goes on
   finishing when Kumiko is back. On macOS, closing the window leaves the app running.
