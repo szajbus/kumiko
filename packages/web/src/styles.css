@@ -748,7 +748,9 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
   background: var(--surface-2); color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer;
 }
 .md-code-btn:hover { color: var(--text); background: var(--border); }
-.md-code-btn[aria-pressed="true"] { color: var(--text); border-color: var(--text-2); }
+/* Wrap while it is on: filled, so it reads as switched on beside Copy. */
+.md-code-btn[aria-pressed="true"] { color: #fff; background: var(--primary); border-color: var(--primary); }
+.md-code-btn[aria-pressed="true"]:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
 .md pre.md-code-wrapped { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* Over the text selected in the chat, to quote it in the message. */
 .quote-btn {
