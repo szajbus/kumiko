@@ -74,11 +74,16 @@ export interface ChatState extends Thread {
   /** Likewise for tokens. */
   totalTokens: Tokens;
   interruptPending: boolean;
+  /**
+   * Turns started and not yet ended: prompts sent, and turns Claude took by itself. More than one while prompts wait
+   * behind a turn, and what Claude says next is for the first of them, not a turn of its own.
+   */
+  pending: number;
   /** Claude's guess at the next prompt, sent after a turn; gone once any prompt is sent. */
   suggestion?: string;
 }
 
-export const emptyChat = (): ChatState => ({ items: [], messages: {}, tools: {}, agents: {}, finished: [], totalCost: 0, totalTokens: { total: 0, cached: 0 }, interruptPending: false });
+export const emptyChat = (): ChatState => ({ items: [], messages: {}, tools: {}, agents: {}, finished: [], totalCost: 0, totalTokens: { total: 0, cached: 0 }, interruptPending: false, pending: 0 });
 
 /** The blocks to show for an assistant item: finished ones, then drafts past them. */
 export function blocksOf(item: AssistantItem): Block[] {
@@ -308,7 +313,7 @@ export function applyEvent(s: ChatState, ev: SessionEvent): ChatState {
 
   switch (ev.kind) {
     case "user_prompt": {
-      const next = { ...push({ type: "user", key, text: ev.payload.text, id: ev.payload.id, ...(ev.payload.attachments ? { attachments: ev.payload.attachments } : {}) }), suggestion: undefined, finished: [] };
+      const next = { ...push({ type: "user", key, text: ev.payload.text, id: ev.payload.id, ...(ev.payload.attachments ? { attachments: ev.payload.attachments } : {}) }), suggestion: undefined, finished: [], pending: s.pending + 1 };
       // Claude hears of what was shared with the first prompt after it that isn't a command; see `sharesWaiting`.
       if (isCommand(ev.payload.text) || !s.items.some((i) => i.type === "shared" && !i.told)) return next;
       return { ...next, items: next.items.map((i) => (i.type === "shared" && !i.told ? { ...i, told: true } : i)) };
@@ -319,10 +324,14 @@ export function applyEvent(s: ChatState, ev: SessionEvent): ChatState {
       return { ...s, interruptPending: true };
     case "error":
       return ev.payload.signedOut ? replaceFailedTurn(s, { type: "error", key, ...ev.payload }) : push({ type: "error", key, ...ev.payload });
-    case "ended":
-      // Stopping with its sandbox isn't an end: the banner says so while it sleeps, and Claude continues after it.
-      if (ev.payload.asleep) return s;
-      return push({ type: "ended", key, reason: ev.payload.reason, code: ev.payload.code });
+    case "ended": {
+      // Claude is gone, and the turns it hadn't finished with it, and the subagents still working.
+      const gone = { ...s, pending: 0, interruptPending: false, agents: stopAgents(s.agents, () => true) };
+      // Stopping with its sandbox isn't an end: the banner says so while it sleeps, and Claude continues after it. A turn
+      // it cut short ends there, though, as Claude doesn't take it up again.
+      if (ev.payload.asleep) return s.pending ? { ...gone, items: [...s.items, { type: "turn", key, status: "interrupted" }] } : gone;
+      return { ...gone, items: [...s.items, { type: "ended", key, reason: ev.payload.reason, code: ev.payload.code }] };
+    }
     case "claude":
       return applyClaude(s, ev.payload, key);
     case "proposal":
@@ -418,7 +427,7 @@ function applyClaude(s: ChatState, m: Json & { type: string }, key: string): Cha
       const usage = tokensOf(m.usage);
       const tokens = usage && (usage.total >= s.totalTokens.total ? { total: usage.total - s.totalTokens.total, cached: Math.max(0, usage.cached - s.totalTokens.cached) } : usage);
       const ok = m.subtype === "success" && m.is_error !== true;
-      const base = { ...s, totalCost: total ?? s.totalCost, totalTokens: usage ?? s.totalTokens, interruptPending: false };
+      const base = { ...s, totalCost: total ?? s.totalCost, totalTokens: usage ?? s.totalTokens, interruptPending: false, pending: Math.max(0, s.pending - 1) };
       // A slash command like /model is a turn of its own with nothing to sum up.
       if (ok && m.num_turns === 0) return base;
       const status = ok ? "ok" : s.interruptPending && m.subtype === "error_during_execution" ? "interrupted" : "error";
@@ -433,9 +442,9 @@ function applyClaude(s: ChatState, m: Json & { type: string }, key: string): Cha
 }
 
 function startUnprompted(s: ChatState, key: string): ChatState {
-  const ended = s.items.findLastIndex((i) => i.type === "turn");
-  if (ended < 0 || s.items.findLastIndex(startsTurn) > ended) return s;
-  return { ...s, items: [...s.items, { type: "unprompted", key: `u-${key}`, after: s.finished }], finished: [] };
+  // Before the first turn ends, or while one is under way or a prompt waits for its turn, Claude is answering.
+  if (s.pending > 0 || !s.items.some((i) => i.type === "turn")) return s;
+  return { ...s, items: [...s.items, { type: "unprompted", key: `u-${key}`, after: s.finished }], finished: [], pending: 1 };
 }
 
 /**
@@ -465,6 +474,13 @@ function applyTask(s: ChatState, m: Json): ChatState {
     return s;
   }
   return { ...s, agents: { ...s.agents, [id]: next } };
+}
+
+/** The subagents that `which` picks among those still running, stopped; `agents` itself if there are none. */
+export function stopAgents(agents: Record<string, Subagent>, which: (id: string) => boolean): Record<string, Subagent> {
+  const ids = Object.keys(agents).filter((id) => agents[id].status === "running" && which(id));
+  if (!ids.length) return agents;
+  return { ...agents, ...Object.fromEntries(ids.map((id) => [id, { ...agents[id], status: "stopped" as const, activity: undefined }])) };
 }
 
 /** Applies one of Claude's messages to a thread: the main one, or a subagent's. Returns `t` when nothing changed. */

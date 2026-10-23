@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { SessionEvent } from "@kumiko/shared";
-import { applyEvent, blocksOf, chatRows, emptyChat, loginCards, partialToolSummary, toolSummary, unpromptedText, type ChatItem, type ChatRow, type ChatState } from "../src/chat.ts";
+import { applyEvent, backgroundAgents, blocksOf, chatRows, emptyChat, loginCards, partialToolSummary, toolSummary, unpromptedText, type ChatItem, type ChatRow, type ChatState } from "../src/chat.ts";
 
 type NewEvent = SessionEvent extends infer E ? (E extends unknown ? Omit<E, "seq"> : never) : never;
 
@@ -25,14 +25,50 @@ describe("chat", () => {
     assert.equal(applyEvent(s, { seq: 2, kind: "board", payload: {} } as unknown as SessionEvent), s);
   });
 
-  it("leaves out a session's stopping with its sandbox, as Claude continues after it", () => {
+  it("leaves out a session's stopping with its sandbox, as Claude continues after it, but ends the turn it cut short", () => {
     const s = fold([
       { kind: "user_prompt", payload: { text: "hi", id: "p1" } },
+      result(),
       { kind: "ended", payload: { reason: "sandbox", code: 0, asleep: true } },
       { kind: "user_prompt", payload: { text: "again", id: "p2" } },
+      assistant("m1", [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "make" } }]),
+      { kind: "ended", payload: { reason: "sandbox", code: 0, asleep: true } },
+      { kind: "user_prompt", payload: { text: "and again", id: "p3" } },
       { kind: "ended", payload: { reason: "sandbox", code: 0 } },
     ]);
-    assert.deepEqual(s.items.map((i) => i.type), ["user", "user", "ended"]);
+    assert.deepEqual(s.items.map((i) => i.type), ["user", "turn", "user", "assistant", "turn", "user", "ended"]);
+    assert.equal(ofType(s, "turn")[1].status, "interrupted");
+    // The cut-short turn's work is done: it folds, and its tool call isn't taken for one under way.
+    assert.deepEqual(shape(chatRows(s.items)).slice(2, 4), ["user", "work[assistant]"]);
+  });
+
+  it("stops the subagents still working in the background when Claude is gone", () => {
+    const s = fold([
+      { kind: "user_prompt", payload: { text: "go", id: "p1" } },
+      assistant("m1", [{ type: "tool_use", id: "t1", name: "Agent", input: { description: "Count", run_in_background: true } }]),
+      claude({ type: "system", subtype: "task_started", task_id: "a1", tool_use_id: "t1", description: "Count", task_type: "local_agent", is_backgrounded: true }),
+      result(),
+    ]);
+    assert.deepEqual(backgroundAgents(s.agents), ["t1"]);
+    const gone = fold([{ kind: "ended", payload: { reason: "exit", code: 1 } }], s, 10);
+    assert.deepEqual(backgroundAgents(gone.agents), []);
+    assert.equal(gone.agents.t1.status, "stopped");
+  });
+
+  it("takes what Claude says after a turn for the prompt sent during it, not a turn of its own", () => {
+    const s = fold([
+      { kind: "user_prompt", payload: { text: "first", id: "p1" } },
+      assistant("m1", [{ type: "text", text: "Working on it." }]),
+      // Sent while Claude works: it waits for the turn to end.
+      { kind: "user_prompt", payload: { text: "second", id: "p2" } },
+      result(),
+      assistant("m2", [{ type: "text", text: "On to the second." }]),
+      result(),
+      // Then Claude goes on by itself.
+      assistant("m3", [{ type: "text", text: "A subagent finished." }]),
+      result(),
+    ]);
+    assert.deepEqual(s.items.map((i) => i.type), ["user", "assistant", "user", "turn", "assistant", "turn", "unprompted", "assistant", "turn"]);
   });
 
   it("shows a logged-out turn as one error, in place of Claude's reply and the failed turn", () => {
