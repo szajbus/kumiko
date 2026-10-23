@@ -1,6 +1,7 @@
-import { memo, useState, type ComponentProps } from "react";
+import { memo, useState, useSyncExternalStore, type ComponentProps } from "react";
 import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { codeWrap } from "./codeWrap";
 import { Diagram } from "./Diagram";
 import { imageSource } from "./imageSource";
 
@@ -12,10 +13,13 @@ function textOf(node: Element | undefined): string {
   return node.children.map((c) => (c.type === "text" ? c.value : c.type === "element" ? textOf(c) : "")).join("");
 }
 
-/** A code block, with buttons that show when the pointer is over it: one to copy its text, one to wrap its long lines. */
+/**
+ * A code block, with buttons that show when the pointer is over it: one to copy its text, one to wrap long lines, in this
+ * block and every other.
+ */
 function CodeBlock({ node, className, ...props }: ComponentProps<"pre"> & ExtraProps) {
   const [copied, setCopied] = useState(false);
-  const [wrapped, setWrapped] = useState(false);
+  const wrapped = useSyncExternalStore(codeWrap.subscribe, codeWrap.get);
   const copy = () => {
     void navigator.clipboard.writeText(textOf(node).replace(/\n$/, "")).then(() => {
       setCopied(true);
@@ -30,8 +34,8 @@ function CodeBlock({ node, className, ...props }: ComponentProps<"pre"> & ExtraP
           type="button"
           className="md-code-btn"
           aria-pressed={wrapped}
-          onClick={() => setWrapped((w) => !w)}
-          title={wrapped ? "Stop wrapping long lines" : "Wrap long lines"}
+          onClick={() => codeWrap.set(!wrapped)}
+          title={wrapped ? "Stop wrapping long lines in code blocks" : "Wrap long lines in code blocks"}
         >
           Wrap
         </button>
