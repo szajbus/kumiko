@@ -89,6 +89,11 @@ export function opPill(sb: SandboxView | undefined, op = sb?.operation): { text:
   return { text: OP_DONE[op.op], color: COLORS.stopped };
 }
 
+/** When the sandbox was created: its own record's time, which a recreate renews, not the project's. */
+export function sandboxCreatedAt(sb: SandboxView): string | undefined {
+  return sb.meta?.createdAt;
+}
+
 export function resources(sb: SandboxView): string {
   if (sb.cpus === undefined && sb.memoryGiB === undefined) {
     const s = sb.meta?.spec;

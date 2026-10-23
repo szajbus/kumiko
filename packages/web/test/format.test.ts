@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import type { LogLine, SandboxView } from "@kumiko/shared";
 import { matchCommands } from "../src/commands.ts";
 import { ago, endedText, formatBytes, formatCost, formatDuration, planName, projectHue, projectHues, resetText, sessionName, sessionTitle } from "../src/format.ts";
-import { COLORS, failedAgentScripts, opPill, resources, statusOf } from "../src/status.ts";
+import { COLORS, failedAgentScripts, opPill, resources, sandboxCreatedAt, statusOf } from "../src/status.ts";
 
 describe("format", () => {
   it("titles a session by its /rename name, else the opening prompt cut at a word", () => {
@@ -128,5 +128,12 @@ describe("status", () => {
     assert.equal(resources(sb({ cpus: 4, memoryGiB: 8, diskGiB: 100 })), "4 · 8 GiB · 100 GiB");
     assert.equal(resources(sb({ meta: meta("ready") })), "2 · 4 GiB · 20 GiB");
     assert.equal(resources(sb()), "—");
+  });
+
+  it("dates a sandbox by its own record, which a recreate renews, not by its project", () => {
+    const project = { id: "web", clonePath: "/src/web", worktreesPath: "/src/web__worktrees", createdAt: "2026-01-01T00:00:00Z" };
+    const view = { ...sb({ meta: { ...meta("ready"), createdAt: "2026-10-20T09:00:00Z" } }), project };
+    assert.equal(sandboxCreatedAt(view), "2026-10-20T09:00:00Z");
+    assert.equal(sandboxCreatedAt(sb()), undefined);
   });
 });

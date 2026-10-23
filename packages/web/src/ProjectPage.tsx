@@ -8,7 +8,7 @@ import { FinishingItem } from "./Finishing";
 import { sessionTitle, tilde } from "./format";
 import { Folder, Pencil, Plus, Redo } from "./icons";
 import { LogPanel } from "./LogPanel";
-import { COLORS, failedAgentScripts, plural, sessionState, statusOf } from "./status";
+import { COLORS, failedAgentScripts, plural, sandboxCreatedAt, sessionState, statusOf } from "./status";
 
 interface Props {
   id: string;
@@ -283,6 +283,7 @@ function Details({ p, home }: { p: ProjectView; home?: string }) {
   const spec = p.meta?.spec;
   const envSet = useEnvSet(spec?.env ?? []);
   const gib = (n?: number) => (n === undefined ? "—" : `${n} GiB`);
+  const created = sandboxCreatedAt(p);
 
   return (
     <>
@@ -299,7 +300,7 @@ function Details({ p, home }: { p: ProjectView; home?: string }) {
         <Fact label="Setup">
           <SetupState p={p} />
         </Fact>
-        <Fact label="Created">{new Date(p.project.createdAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</Fact>
+        <Fact label="Created">{created ? new Date(created).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "—"}</Fact>
       </section>
 
       {spec && (
