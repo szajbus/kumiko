@@ -14,7 +14,7 @@ import { Window } from "./Window";
 /** How many session tabs stay mounted, the one on screen included, for switching back to at once. */
 const KEEP_MOUNTED = 5;
 import { landingAfterClose } from "./landing";
-import { arrange, group, moveGroup, moveTab, replaceTab } from "./order";
+import { arrange, group, moveGroup, moveTab, replaceTab, unfolded } from "./order";
 import { loadTabs, saveTabs } from "./tabs";
 
 type Route =
@@ -93,6 +93,8 @@ export function App() {
   const kept = sessions.filter((s) => keep.has(s.id));
   // The order the tabs were dragged into. Tabs it doesn't name yet follow, sessions then New session tabs.
   const [order, setOrder] = useState<TabId[]>([]);
+  // The projects whose tabs are hidden behind their label.
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   // The session whose Cmd+Shift+W is waiting for confirmation.
   const [deleting, setDeleting] = useState<SessionInfo | undefined>();
   /** A session asked to close while commands Claude left running in the background would go with it. */
@@ -171,6 +173,7 @@ export function App() {
         t.startsWith("session:") ? [t as TabId] : draftAt(t) ? [`new-session:${draftAt(t).key}`] : [],
       );
       setOrder((o) => [...savedOrder, ...o]);
+      setCollapsed(new Set(saved.collapsed));
       // A link that already points somewhere wins over the saved active tab.
       if (!location.hash || location.hash === "#/" || staleLink) {
         const draft = /^new-session:([0-9]+)$/.exec(saved.active);
@@ -193,8 +196,10 @@ export function App() {
       newSessions: newSessions.map((n) => n.project ?? ""),
       active: byPlace(tabOf(route)),
       order: open.map(byPlace),
+      // Only projects with tabs: one whose last tab closed opens expanded next time.
+      collapsed: [...collapsed].filter((name) => open.some((t) => projectOf(t) === name)),
     });
-  }, [restored, live.connected, resumed, sessions, newSessions, order, route]);
+  }, [restored, live.connected, resumed, sessions, newSessions, order, collapsed, route]);
 
   useEffect(() => {
     const onHash = () => {
@@ -223,6 +228,15 @@ export function App() {
     projectOf,
   );
   const tabs: TabId[] = ["projects", ...open];
+  // The tabs not hidden in a collapsed project, the active one always among them.
+  const visible = unfolded(open, projectOf, collapsed, tabOf(route));
+
+  // A tab that comes to the front, by a link, a shortcut or a new session, brings its collapsed project's tabs back;
+  // so does one open at launch, once the saved tabs have come back collapsed.
+  const activeProject = projectOf(tabOf(route));
+  useEffect(() => {
+    if (activeProject !== undefined) setCollapsed((c) => (c.has(activeProject) ? new Set([...c].filter((n) => n !== activeProject)) : c));
+  }, [tabOf(route), activeProject, restored]);
 
   const select = (tab: TabId) => {
     if (tab === "projects") go(projectsHash.current);
@@ -316,14 +330,16 @@ export function App() {
     if (action === "reopen") return void reopen();
     // Cmd+1..9 jump to the nth tab after Projects.
     if (typeof action === "number") {
-      const target = open[action - 1];
+      const target = visible[action - 1];
       return target ? select(target) : undefined;
     }
     const current = tabOf(route);
     if (action === "close") return current === "projects" ? undefined : close(current);
-    const i = tabs.indexOf(current);
+    // Through the tabs on show, skipping those of collapsed projects.
+    const cycle: TabId[] = ["projects", ...visible];
+    const i = cycle.indexOf(current);
     const step = action === "next" ? 1 : -1;
-    select(tabs[(Math.max(i, 0) + step + tabs.length) % tabs.length]);
+    select(cycle[(Math.max(i, 0) + step + cycle.length) % cycle.length]);
   };
 
   useEffect(() => {
@@ -374,6 +390,8 @@ export function App() {
         onClose={close}
         onMove={(tab, target, after) => setOrder(group(moveTab(open, tab, target, after), projectOf))}
         onMoveGroup={(moving, target, after) => setOrder(moveGroup(open, projectOf, moving, target, after))}
+        collapsed={collapsed}
+        onToggleGroup={(name) => setCollapsed((c) => (c.has(name) ? new Set([...c].filter((n) => n !== name)) : new Set([...c, name])))}
         onOpenProject={(name) => go(`#/project/${name}`)}
         onNewSession={() => go("#/session/new")}
         cornerRef={setCorner}

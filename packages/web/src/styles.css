@@ -457,10 +457,19 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 .tab-group > .tab::after { left: -1px; right: -5px; }
 .tab-group > .tab:last-child::after { right: -1px; }
 .tab-group-label {
-  position: relative; flex: none; max-width: 120px; height: 22px; display: flex; align-items: center; padding: 0 8px;
-  border: 0; border-radius: 6px; background: hsl(var(--hue) 55% 62% / 0.14); color: hsl(var(--hue) 65% 78%);
-  font-size: 12px; font-weight: 600; cursor: pointer;
+  position: relative; flex: none; max-width: 140px; height: 22px; display: flex; align-items: center;
+  border-radius: 6px; background: hsl(var(--hue) 55% 62% / 0.14); color: hsl(var(--hue) 65% 78%);
 }
+/* The name opens the project; the chevron on its right hides the tabs, or brings them back. */
+.tab-group-open {
+  min-width: 0; height: 100%; display: flex; align-items: center; padding: 0 2px 0 8px;
+  border: 0; border-radius: 6px 0 0 6px; background: none; color: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.tab-group-toggle {
+  flex: none; display: flex; align-items: center; justify-content: center; width: 18px; height: 18px; margin: 0 2px 0 1px; padding: 0;
+  border: 0; border-radius: 4px; background: none; color: inherit; opacity: 0.7; cursor: pointer;
+}
+.tab-group-toggle:hover { opacity: 1; background: hsl(var(--hue) 55% 62% / 0.22); }
 /* Its line runs along the tabs' bottom, not its own: 3px lower, less the tabs' border, which theirs is drawn inside. */
 .tab-group-label::after { bottom: -6px; }
 .tab-group-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -491,7 +500,7 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
   border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer;
 }
 .tab-new:hover { background: var(--surface-2); color: var(--text); }
-[data-shell="electron-darwin"] .tab { -webkit-app-region: no-drag; }
+[data-shell="electron-darwin"] :is(.tab, .tab-group-label) { -webkit-app-region: no-drag; }
 
 /* A session's window: panes placed by its layout, side by side, each showing a widget. */
 .window { flex: 1; min-height: 0; position: relative; }

@@ -45,3 +45,11 @@ export function moveGroup<T>(tabs: readonly T[], groupOf: (t: T) => string | und
   const i = after ? theirs[theirs.length - 1] + 1 : theirs[0];
   return [...rest.slice(0, i), ...mine, ...rest.slice(i)];
 }
+
+/** `tabs` less those whose group is `collapsed`, though `keep` stays wherever it is. */
+export function unfolded<T>(tabs: readonly T[], groupOf: (t: T) => string | undefined, collapsed: ReadonlySet<string>, keep?: T): T[] {
+  return tabs.filter((t) => {
+    const g = groupOf(t);
+    return t === keep || g === undefined || !collapsed.has(g);
+  });
+}

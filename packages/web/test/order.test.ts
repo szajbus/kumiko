@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { arrange, group, moveGroup, moveTab, replaceTab } from "../src/order.ts";
+import { arrange, group, moveGroup, moveTab, replaceTab, unfolded } from "../src/order.ts";
 
 describe("arrange", () => {
   it("keeps the open tabs in the given order, dropping the ones that are gone", () => {
@@ -73,5 +73,19 @@ describe("moveGroup", () => {
     assert.deepEqual(moveGroup(tabs, groupOf, "a", "a", true), tabs);
     assert.deepEqual(moveGroup(tabs, groupOf, "a", "z", false), tabs);
     assert.deepEqual(moveGroup(tabs, groupOf, "z", "a", false), tabs);
+  });
+});
+
+describe("unfolded", () => {
+  const groupOf = (t: string) => (t === "x" ? undefined : t[0]);
+  const tabs = ["a1", "a2", "b1", "x"];
+
+  it("leaves out the tabs of collapsed groups, keeping loose ones", () => {
+    assert.deepEqual(unfolded(tabs, groupOf, new Set(["a"])), ["b1", "x"]);
+    assert.deepEqual(unfolded(tabs, groupOf, new Set()), tabs);
+  });
+
+  it("keeps the tab asked for, though its group is collapsed", () => {
+    assert.deepEqual(unfolded(tabs, groupOf, new Set(["a", "b"]), "a2"), ["a2", "x"]);
   });
 });

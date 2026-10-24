@@ -105,15 +105,19 @@ describe("server", () => {
 
   it("keeps the window's tabs in Kumiko's home, refusing what isn't tabs", async () => {
     assert.equal(await json(await api("/api/tabs")), null);
-    const tabs = { sessions: ["ab12", "../x", 3, "cd34"], newSessions: ["web", "", "../x", 3], active: "session:ab12", order: ["new-session:0", 3, "session:cd34", "session:ab12"] };
+    const tabs = { sessions: ["ab12", "../x", 3, "cd34"], newSessions: ["web", "", "../x", 3], active: "session:ab12", order: ["new-session:0", 3, "session:cd34", "session:ab12"], collapsed: ["web", "../x", 3] };
     assert.equal((await api("/api/tabs", { method: "PUT", body: JSON.stringify(tabs) })).status, 200);
-    const kept = { sessions: ["ab12", "cd34"], newSessions: ["web", "", ""], active: "session:ab12", order: ["new-session:0", "session:cd34", "session:ab12"] };
+    const kept = { sessions: ["ab12", "cd34"], newSessions: ["web", "", ""], active: "session:ab12", order: ["new-session:0", "session:cd34", "session:ab12"], collapsed: ["web"] };
     assert.deepEqual(await json(await api("/api/tabs")), kept);
     assert.deepEqual(JSON.parse(await readFile(join(dataDir, "tabs.json"), "utf8")), kept);
     for (const bad of ["nope", JSON.stringify({ sessions: "ab12", active: "projects" }), JSON.stringify({ sessions: [] }), JSON.stringify({ sessions: [], active: "projects", order: [] })]) {
       assert.equal((await api("/api/tabs", { method: "PUT", body: bad })).status, 400);
     }
     assert.deepEqual(await json(await api("/api/tabs")), kept);
+    // Tabs saved before projects could collapse them come back with none collapsed.
+    const { collapsed: _, ...older } = kept;
+    assert.equal((await api("/api/tabs", { method: "PUT", body: JSON.stringify(older) })).status, 200);
+    assert.deepEqual(await json(await api("/api/tabs")), { ...older, collapsed: [] });
   });
 
   it("refuses what can't be a project's clone, leaving nothing behind", async () => {

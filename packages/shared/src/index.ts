@@ -86,17 +86,21 @@ export interface SavedTabs {
   active: string;
   /** The tabs after Projects in the order they were dragged into, named as `active` is. */
   order: string[];
+  /** The projects whose tabs are collapsed behind their label. */
+  collapsed?: string[];
 }
 
 /** The saved tabs in `v`, or undefined if it isn't saved tabs. Session ids that can't be ids are dropped. */
 export function parseSavedTabs(v: unknown): SavedTabs | undefined {
   if (typeof v !== "object" || v === null) return undefined;
-  const { sessions, newSessions, active, order } = v as Partial<Record<keyof SavedTabs, unknown>>;
+  const { sessions, newSessions, active, order, collapsed } = v as Partial<Record<keyof SavedTabs, unknown>>;
   if (!Array.isArray(sessions) || !Array.isArray(newSessions) || !Array.isArray(order) || typeof active !== "string" || active.length > 100) return undefined;
   const ids = sessions.filter((x): x is string => typeof x === "string" && SESSION_ID_PATTERN.test(x));
   const projects = newSessions.filter((x): x is string => typeof x === "string").map((x) => (NAME_PATTERN.test(x) ? x : ""));
   const tabs = order.filter((x): x is string => typeof x === "string" && x.length <= 100);
-  return { sessions: ids.slice(0, 200), newSessions: projects.slice(0, 50), active, order: tabs.slice(0, 250) };
+  // Saved before tabs could collapse: none are.
+  const folded = Array.isArray(collapsed) ? collapsed.filter((x): x is string => typeof x === "string" && NAME_PATTERN.test(x)) : [];
+  return { sessions: ids.slice(0, 200), newSessions: projects.slice(0, 50), active, order: tabs.slice(0, 250), collapsed: folded.slice(0, 100) };
 }
 
 /** What the UI needs from the host. */

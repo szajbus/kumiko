@@ -25,6 +25,10 @@ interface Props {
   onMove(tab: TabId, target: TabId, after: boolean): void;
   /** Project `moving`'s tabs were dragged to just before project `target`'s, or just after them with `after`. */
   onMoveGroup(moving: string, target: string, after: boolean): void;
+  /** The projects whose tabs are hidden behind their label. */
+  collapsed: ReadonlySet<string>;
+  /** A project's collapse/expand button was clicked. */
+  onToggleGroup(name: string): void;
   /** A project's label was clicked. */
   onOpenProject(name: string): void;
   onNewSession(): void;
@@ -46,10 +50,10 @@ interface GroupDropAt {
 
 /**
  * The window's title bar: the Projects button, a tab per session under its project's label, which drag to reorder
- * within the project, the labels dragging their tabs along, and + to start a new one; in the corner, the open
- * session's usage.
+ * within the project, the labels dragging their tabs along and collapsing to hide them, and + to start a new one; in
+ * the corner, the open session's usage.
  */
-export function Header({ sessions, newSessions, order, active, onSelect, onClose, onMove, onMoveGroup, onOpenProject, onNewSession, cornerRef }: Props) {
+export function Header({ sessions, newSessions, order, active, onSelect, onClose, onMove, onMoveGroup, collapsed, onToggleGroup, onOpenProject, onNewSession, cornerRef }: Props) {
   const [dragging, setDragging] = useState<TabId | undefined>();
   const [dropAt, setDropAt] = useState<DropAt | undefined>();
   const [draggingGroup, setDraggingGroup] = useState<string | undefined>();
@@ -166,7 +170,7 @@ export function Header({ sessions, newSessions, order, active, onSelect, onClose
     if (groupDropAt?.target !== name || groupDropAt.after !== after) setGroupDropAt({ target: name, after });
   };
 
-  const dragGroup = (name: string): GroupDragProps => ({
+  const dragGroup = (name: string): DragProps => ({
     dragging: draggingGroup === name,
     drop: groupDropAt?.target === name && !groupDropAt.after && draggingGroup !== name ? "before" : undefined,
     onDragStart(e) {
@@ -203,10 +207,19 @@ export function Header({ sessions, newSessions, order, active, onSelect, onClose
     if (group === undefined) return tabs.map(tab);
     // A group whose tabs have all closed fades with its last one.
     const closing = tabs.every((id) => !looks.has(id));
+    const folded = collapsed.has(group);
     return (
       <div key={`group:${group}`} role="group" aria-label={group} className="tab-group" style={{ "--hue": hues.get(group) } as CSSProperties}>
-        <GroupLabel name={group} closing={closing} onOpen={onOpenProject} {...dragGroup(group)} />
-        {tabs.map(tab)}
+        <GroupLabel
+          name={group}
+          closing={closing}
+          collapsed={folded}
+          count={tabs.filter((id) => looks.has(id)).length}
+          onOpen={onOpenProject}
+          onToggle={onToggleGroup}
+          {...dragGroup(group)}
+        />
+        {!folded && tabs.map(tab)}
       </div>
     );
   };
@@ -248,7 +261,7 @@ function HomeButton({ active, onSelect }: { active: boolean; onSelect(): void })
   );
 }
 
-/** What makes a tab draggable, and shows where a dragged one would land. */
+/** What makes a tab or a project's label draggable, and shows where a dragged one would land. */
 interface DragProps {
   dragging: boolean;
   drop?: "before" | "after";
@@ -258,26 +271,45 @@ interface DragProps {
   onDragEnd(): void;
 }
 
-/** What makes a project's label draggable, and shows where a dragged one would land. */
-type GroupDragProps = Omit<DragProps, "onDragStart" | "onDragOver" | "onDrop"> & {
-  onDragStart(e: DragEvent<HTMLButtonElement>): void;
-  onDragOver(e: DragEvent<HTMLButtonElement>): void;
-  onDrop(e: DragEvent<HTMLButtonElement>): void;
-};
+interface GroupLabelProps {
+  name: string;
+  closing: boolean;
+  /** Its tabs are hidden. */
+  collapsed: boolean;
+  /** How many tabs it has. */
+  count: number;
+  onOpen(name: string): void;
+  onToggle(name: string): void;
+}
 
-/** A project's label, in front of its tabs: opens the project, and drags its tabs along. A label dragged before it shows here. */
-function GroupLabel({ name, closing, onOpen, dragging, drop, ...drag }: GroupDragProps & { name: string; closing: boolean; onOpen(name: string): void }) {
+/**
+ * A project's label, in front of its tabs: opens the project, drags its tabs along, and on its right collapses them out
+ * of sight or brings them back. A label dragged before it shows here.
+ */
+function GroupLabel({ name, closing, collapsed, count, onOpen, onToggle, dragging, drop, ...drag }: DragProps & GroupLabelProps) {
+  const tabs = `${count} tab${count === 1 ? "" : "s"}`;
   return (
-    <button
-      type="button"
-      className={`tab-group-label${dragging ? " is-dragging" : ""}${drop ? ` drop-${drop}` : ""}${closing ? " is-closing" : ""}`}
-      title={`${name}: open the project`}
+    <div
+      className={`tab-group-label${collapsed ? " is-collapsed" : ""}${dragging ? " is-dragging" : ""}${drop ? ` drop-${drop}` : ""}${closing ? " is-closing" : ""}`}
       draggable={!closing}
-      onClick={() => onOpen(name)}
-      {...(closing ? { tabIndex: -1, "aria-hidden": true } : drag)}
+      {...(closing ? { "aria-hidden": true, inert: true } : drag)}
     >
-      <span className="tab-group-name">{name}</span>
-    </button>
+      <button type="button" className="tab-group-open" title={`${name}: open the project`} onClick={() => onOpen(name)}>
+        <span className="tab-group-name">{name}</span>
+      </button>
+      <button
+        type="button"
+        className="tab-group-toggle"
+        aria-expanded={!collapsed}
+        aria-label={collapsed ? `Show ${name}'s ${tabs}` : `Hide ${name}'s ${tabs}`}
+        title={collapsed ? `Show ${tabs}` : `Hide ${tabs}`}
+        onClick={() => onToggle(name)}
+      >
+        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+          <path d={collapsed ? "M2 3.5l3 3 3-3" : "M3.5 2l3 3-3 3"} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+    </div>
   );
 }
 
