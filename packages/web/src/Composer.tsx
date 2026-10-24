@@ -32,6 +32,11 @@ interface Props {
   suggestion?: string;
   /** Messages sent before, oldest first: Up at the start of the box brings back the one before, Down the one after, as in a shell. */
   history?: string[];
+  /**
+   * Given while a message sent earlier waits for Claude: Up at the start of the box takes it back into the box, ahead of
+   * what is there, to be edited, in place of going through `history`. Resolves to its text, or undefined if it was too late.
+   */
+  onTakeBack?: () => Promise<string | undefined>;
   /** Keeps the unsent message in `drafts` under this key, and starts from what is there, with the cursor at its end. */
   draftKey?: string;
   /** Shown at the left of the line under the box, opposite the key hint. */
@@ -48,7 +53,7 @@ const MAX_SUGGESTIONS = 8;
  * same text again right after a label opens it up into the text, and Backspace takes the label out whole.
  * Files dropped on it, pasted, or picked with the paperclip go with the message; they are listed above the text.
  */
-export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder, autoFocus, label, commands, suggestion, history = [], draftKey, footer, ref }: Props) {
+export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder, autoFocus, label, commands, suggestion, history = [], onTakeBack, draftKey, footer, ref }: Props) {
   const [text, setText] = useState(() => (draftKey && drafts.get(draftKey)?.text) || "");
   // Kept until the message is sent, even once a label is deleted, so undo can bring the label back.
   const [pastes, setPastes] = useState<Pastes>(() => (draftKey && drafts.get(draftKey)?.pastes) || {});
@@ -74,6 +79,8 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
   // Which of `history` is in the box while going through it, and what was being written before that, for Down to come back to.
   const [recalled, setRecalled] = useState<number>();
   const stash = useRef("");
+  // A message being taken back, so Up pressed again meanwhile doesn't ask for it twice.
+  const takingBack = useRef(false);
   const box = useRef<HTMLTextAreaElement>(null);
   const marks = useRef<HTMLDivElement>(null);
 
@@ -318,6 +325,21 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
                   return;
                 }
               }
+              // A waiting message comes back before history does, from the very start of the box.
+              if (e.key === "ArrowUp" && onTakeBack && recalled === undefined && el.selectionStart === 0 && el.selectionEnd === 0 && !e.nativeEvent.isComposing && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
+                e.preventDefault();
+                if (takingBack.current) return;
+                takingBack.current = true;
+                void onTakeBack()
+                  .then((taken) => {
+                    if (taken === undefined || !box.current) return;
+                    // As an edit, so undo takes it out again; the cursor ends up after it.
+                    replace(0, 0, box.current.value ? `${taken}\n\n` : taken);
+                    box.current.setSelectionRange(taken.length, taken.length);
+                  })
+                  .finally(() => (takingBack.current = false));
+                return;
+              }
               // History: from the very start (or end) of the box, or anywhere on the first (or last) line of a message brought back and left as it was.
               if ((e.key === "ArrowUp" || e.key === "ArrowDown") && el.selectionStart === el.selectionEnd && !e.nativeEvent.isComposing && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
                 const up = e.key === "ArrowUp";
@@ -380,6 +402,11 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
           </div>
         )}
         <span className="composer-keys">
+          {onTakeBack && (
+            <span>
+              <kbd className="kbd">↑</kbd> to edit the queued message ·{" "}
+            </span>
+          )}
           <kbd className="kbd">Shift</kbd> + <kbd className="kbd">Enter</kbd> for a new line
         </span>
       </div>

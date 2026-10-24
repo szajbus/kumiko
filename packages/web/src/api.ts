@@ -120,6 +120,8 @@ export const api = {
   /** Starts the session's Claude again and resends the prompt that failed. */
   retry: (id: string) => request("POST", `/api/sessions/${id}/retry`),
   prompt: (id: string, text: string, attachments?: AttachmentInput[]) => request("POST", `/api/sessions/${id}/prompt`, { text, attachments } satisfies PromptRequest),
+  /** Takes back a prompt that waits for Claude, to be edited; `withdrawn` is false once Claude has read it. */
+  withdrawPrompt: (id: string, prompt: string) => request<{ withdrawn: boolean }>("POST", `/api/sessions/${id}/prompts/${encodeURIComponent(prompt)}/withdraw`),
   /** The Claude account behind a session and how much of its subscription is used. */
   usage: (id: string) => request<AccountUsage>("GET", `/api/sessions/${id}/usage`),
   interrupt: (id: string) => request("POST", `/api/sessions/${id}/interrupt`),

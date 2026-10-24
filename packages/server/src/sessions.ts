@@ -185,6 +185,7 @@ const noDriver: AgentDriver = {
   send: () => {
     throw new SessionEnded("Claude isn't running in this session.");
   },
+  withdraw: () => Promise.reject(new SessionEnded("Claude isn't running in this session.")),
   rewindFiles: () => Promise.reject(new SessionEnded("Claude isn't running in this session.")),
   taskOutput: () => Promise.reject(new SessionEnded("Claude isn't running in this session.")),
   stopTask: () => Promise.reject(new SessionEnded("Claude isn't running in this session.")),
@@ -775,6 +776,19 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     if (s.info.status === "idle") this.setInfo(s, { status: "running" });
     // Kumiko's own record of the prompt is nowhere in Claude's output, so it is saved now.
     this.save(s);
+  }
+
+  /**
+   * Takes back prompt `promptId`, sent while Claude worked, so it can be edited and sent again; false if Claude has
+   * read it already, and it runs as sent.
+   */
+  async withdrawPrompt(id: string, promptId: string): Promise<boolean> {
+    const s = this.live(id);
+    if (!(await s.driver.withdraw(promptId))) return false;
+    s.waiting = s.waiting?.filter((p) => p !== promptId);
+    this.push(s, { kind: "prompt_withdrawn", payload: { id: promptId } });
+    this.save(s);
+    return true;
   }
 
   /**

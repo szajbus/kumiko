@@ -16,6 +16,9 @@ class StubDriver implements AgentDriver {
   outputs = new Map<string, TaskOutput>();
   stopped: string[] = [];
   backgrounded: (string | undefined)[] = [];
+  withdrawn: string[] = [];
+  // What Claude answers to a withdrawal: whether the prompt was still waiting.
+  stillWaiting = true;
   start(opts: StartOptions) {
     this.started = opts;
   }
@@ -32,6 +35,10 @@ class StubDriver implements AgentDriver {
   }
   async backgroundTasks(toolUseId?: string) {
     this.backgrounded.push(toolUseId);
+  }
+  async withdraw(id: string) {
+    if (this.stillWaiting) this.withdrawn.push(id);
+    return this.stillWaiting;
   }
   rewindFiles() {
     return Promise.resolve();
@@ -136,6 +143,16 @@ describe("background tasks in sessions", () => {
     assert.deepEqual(of(id, "task_stop").map((e) => e.payload), [{ taskId: "b1" }]);
     await sessions.backgroundTasks(id, "toolu_2");
     assert.deepEqual(drivers[0].backgrounded, ["toolu_2"]);
+  });
+
+  it("records a prompt taken back from Claude's queue, and nothing when Claude has read it already", async () => {
+    const id = setup();
+    assert.equal(await sessions.withdrawPrompt(id, "p1"), true);
+    assert.deepEqual(drivers[0].withdrawn, ["p1"]);
+    assert.deepEqual(of(id, "prompt_withdrawn").map((e) => e.payload), [{ id: "p1" }]);
+    drivers[0].stillWaiting = false;
+    assert.equal(await sessions.withdrawPrompt(id, "p2"), false);
+    assert.equal(of(id, "prompt_withdrawn").length, 1);
   });
 
   it("says which monitor's line woke Claude for a turn of its own, and not for one it was prompted for", async () => {

@@ -77,6 +77,8 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
     [chat.items, chat.queued],
   );
   const [error, setError] = useState<string | undefined>();
+  // Messages taken back from the queue, until the chat hears so.
+  const [takenBack, setTakenBack] = useState<string[]>([]);
   const [model, setModel] = useState("");
   // The message a rewind was asked for, until it is confirmed or dropped.
   const [rewinding, setRewinding] = useState<Extract<ChatItem, { type: "user" }> | undefined>();
@@ -137,6 +139,23 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
   useEffect(() => setModel(""), [reported, idle]);
   const live = LIVE_SESSION_STATUSES.includes(session.status);
   const busy = live && !idle;
+  // The last message waiting for Claude can be taken back to be edited; not one with files, which the box can't get back.
+  const waiting = chat.queued.filter((i) => !takenBack.includes(i.id)).at(-1);
+  const takeBack =
+    live && waiting && !waiting.attachments?.length
+      ? async () => {
+          setError(undefined);
+          try {
+            const { withdrawn } = await api.withdrawPrompt(session.id, waiting.id);
+            if (!withdrawn) return void setError("Claude has read that message already.");
+            setTakenBack((ids) => [...ids, waiting.id]);
+            return waiting.text;
+          } catch (err) {
+            setError(errorMessage(err));
+            return undefined;
+          }
+        }
+      : undefined;
 
   const login = useMemo(() => loginCards(chat.items, answer), [chat.items, answer]);
   const open = login.open;
@@ -326,6 +345,7 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
           commands={session.commands && [...session.commands, ...OWN_COMMANDS.filter((c) => !session.commands!.includes(c))]}
           suggestion={chat.suggestion}
           history={history}
+          onTakeBack={takeBack}
           draftKey={session.id}
           submitLabel="Send"
           placeholder={live ? "Message Claude…" : session.asleep ? "Start the sandbox to continue." : "This session has ended."}

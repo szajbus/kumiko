@@ -838,6 +838,13 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     return c.json({ ok: true }, 202);
   });
 
+  /** Takes back a prompt sent while Claude worked, before Claude reads it, to be edited: `withdrawn` false if it was too late. */
+  app.post("/api/sessions/:id/prompts/:prompt/withdraw", async (c) => {
+    const prompt = c.req.param("prompt");
+    if (!/^[A-Za-z0-9-]{1,64}$/.test(prompt)) throw new HttpError(400, "Which prompt?");
+    return c.json({ withdrawn: await sessions.withdrawPrompt(sessionOf(c).id, prompt) });
+  });
+
   /** Starts a new session from a copy of this one's conversation, or of it up to one prompt's turn. Returns the new session's id. */
   app.post("/api/sessions/:id/fork", async (c) => {
     const from = sessionOf(c);

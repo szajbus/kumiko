@@ -361,6 +361,10 @@ export class ClaudeDriver implements AgentDriver {
     return true;
   }
 
+  withdraw(id: string): Promise<boolean> {
+    return this.request("withdraw", { subtype: "cancel_async_message", message_uuid: id }).then((r) => (r as { cancelled?: unknown } | undefined)?.cancelled === true);
+  }
+
   rewindFiles(id: string): Promise<void> {
     return this.request("rewind", { subtype: "rewind_files", user_message_id: id }).then(() => {});
   }

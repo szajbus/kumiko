@@ -31,6 +31,9 @@ class StubDriver implements AgentDriver {
   backgroundTasks() {
     return Promise.resolve();
   }
+  withdraw() {
+    return Promise.resolve(false);
+  }
   rewindFiles() {
     return Promise.resolve();
   }

@@ -380,6 +380,8 @@ function applyChatEvent(s: ChatState, ev: SessionEvent): ChatState {
       if (isCommand(ev.payload.text) || !s.items.some((i) => i.type === "shared" && !i.told)) return next;
       return { ...next, items: next.items.map((i) => (i.type === "shared" && !i.told ? { ...i, told: true } : i)) };
     }
+    case "prompt_withdrawn":
+      return { ...s, queued: s.queued.filter((i) => i.id !== ev.payload.id) };
     case "shared":
       return push({ type: "shared", key, name: ev.payload.name, titles: ev.payload.artifacts.map((a) => a.title) });
     case "task_stop":

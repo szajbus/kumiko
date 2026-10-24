@@ -51,7 +51,8 @@
 // switches the mode, which Claude reports in a `system/status` message and in every init.
 // Background shells and monitors are tasks as in Claude 2.1.309: task_started, task_updated, task_notification and
 // background_tasks_changed. `get_task_output` answers with the end of a task's output, `stop_task` kills one, and
-// `background_tasks` moves a foreground one to the background. With stdin closed, Claude waits for its shells to end
+// `background_tasks` moves a foreground one to the background. `cancel_async_message` takes a prompt that waits behind
+// the turn under way out of the queue, answering whether it found it there. With stdin closed, Claude waits for its shells to end
 // before it exits; SIGTERM kills them, each reported as stopped, and it exits with 143.
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -667,7 +668,7 @@ rl.on("line", (line) => {
       seen.add(msg.uuid);
       out({ type: "user", message: msg.message, parent_tool_use_id: null, session_id, uuid: msg.uuid, isReplay: true });
     }
-    queue.push({ text, files });
+    queue.push({ text, files, uuid: msg.uuid });
     void pump();
   } else if (msg.type === "control_request" && msg.request?.subtype === "rewind_files") {
     const ok = seen.has(msg.request.user_message_id);
@@ -702,6 +703,10 @@ rl.on("line", (line) => {
       t.moved?.("moved");
     }
     out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: want ? { backgrounded: moving.length > 0 } : {} } });
+  } else if (msg.type === "control_request" && msg.request?.subtype === "cancel_async_message") {
+    const at = queue.findIndex((q) => q.uuid === msg.request.message_uuid);
+    if (at >= 0) queue.splice(at, 1);
+    out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: { cancelled: at >= 0 } } });
   } else if (msg.type === "control_request" && msg.request?.subtype === "interrupt") {
     current?.cancel();
     out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: { still_queued: [] } } });

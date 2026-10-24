@@ -94,6 +94,21 @@ describe("chat", () => {
     assert.deepEqual(shape(chatRows(s.items)), ["user", "work[assistant]", "assistant", "turn", "user", "assistant", "turn", "user", "assistant", "turn"]);
   });
 
+  it("drops a prompt taken back from the queue, which Claude never reads", () => {
+    const sent = fold([
+      { kind: "user_prompt", payload: { text: "first", id: "p1" } },
+      echo("p1"),
+      bash("m1", "t1"),
+      { kind: "user_prompt", payload: { text: "second", id: "p2" } },
+      { kind: "user_prompt", payload: { text: "third", id: "p3" } },
+      { kind: "prompt_withdrawn", payload: { id: "p3" } },
+    ]);
+    assert.deepEqual(sent.queued.map((i) => i.text), ["second"]);
+    const s = fold([output("t1"), result(), echo("p2"), assistant("m3", [{ type: "text", text: "Second." }]), result()], sent, 10);
+    assert.deepEqual(s.queued, []);
+    assert.deepEqual(ofType(s, "user").map((u) => u.text), ["first", "second"]);
+  });
+
   it("shows a prompt Claude reads in the middle of a turn there, and folds the turn's work around it once it ends", () => {
     const s = fold([
       { kind: "user_prompt", payload: { text: "build it", id: "p1" } },

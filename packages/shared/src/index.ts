@@ -414,6 +414,8 @@ export type EndReason = "user" | "sandbox" | "quit" | "exit";
 export type SessionEvent =
   | { seq: number; kind: "claude"; payload: Record<string, unknown> & { type: string } }
   | { seq: number; kind: "user_prompt"; payload: { text: string; id: string; attachments?: Attachment[] } }
+  /** Prompt `id`, sent while Claude worked, taken back before Claude read it, to be edited: it never runs. */
+  | { seq: number; kind: "prompt_withdrawn"; payload: { id: string } }
   | { seq: number; kind: "interrupt"; payload: Record<string, never> }
   /** `signedOut`: Claude isn't logged in, so the UI offers to log in instead of only showing the message. */
   | { seq: number; kind: "error"; payload: { message: string; hint?: string; stderr?: string[]; signedOut?: boolean } }

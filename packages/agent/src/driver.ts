@@ -105,6 +105,11 @@ export interface AgentDriver {
    * stream and in its history, which is what `rewindFiles` and `resumeAt` refer to. `files` go with it.
    */
   send(text: string, id?: string, files?: AgentFile[]): void;
+  /**
+   * Takes back prompt `id`, sent while the agent worked, if it hasn't read it yet: true if it never will, false if it
+   * already has (or never got it), and the prompt runs as sent.
+   */
+  withdraw(id: string): Promise<boolean>;
   /** Puts the files the agent changed back as they were before prompt `id`. Rejects if the agent has no checkpoint for it. */
   rewindFiles(id: string): Promise<void>;
   /**

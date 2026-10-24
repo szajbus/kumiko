@@ -512,6 +512,23 @@ describe("ClaudeDriver", () => {
   });
 
 
+  it("takes back a prompt that waits behind the turn under way, but not one Claude has read", async () => {
+    const d = await drive();
+    d.start("slow");
+    await d.waitFor(() => d.messages().some((m) => m.type === "stream_event"));
+    d.driver.send("take me back", "w1");
+    d.driver.send("keep me", "w2");
+    assert.equal(await d.driver.withdraw("w1"), true);
+    assert.equal(await d.driver.withdraw("w1"), false, "it is gone already");
+    d.driver.interrupt();
+    const next = await d.waitFor(() => d.results()[1]);
+    assert.equal(next.result, "You said: keep me");
+    assert.equal(await d.driver.withdraw("w2"), false, "Claude has read it");
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(d.results().length, 2, "the prompt taken back never runs");
+    await d.driver.stop();
+  });
+
   describe("background tasks", () => {
     const system = (d: Awaited<ReturnType<typeof drive>>, subtype: string) => d.messages().filter((m) => m.type === "system" && m.subtype === subtype);
 
