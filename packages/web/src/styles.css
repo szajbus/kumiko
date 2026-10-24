@@ -721,10 +721,11 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
 .plan-feedback { field-sizing: content; min-height: 3lh; padding: 8px 10px; resize: vertical; }
 .ask-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; color: var(--muted); font-size: 12.5px; }
 .ask-foot .chat-proposal-buttons { margin-left: auto; }
-.ask-done { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13px; }
-.ask-done-row { display: contents; }
+.ask-done { display: flex; flex-direction: column; gap: 10px; font-size: 13px; }
+.ask-done-row { display: flex; flex-direction: column; gap: 2px; }
+.ask-done-row + .ask-done-row { padding-top: 10px; border-top: 1px solid var(--border); }
 .ask-done-q { color: var(--muted); }
-.ask-done-a { color: var(--text); }
+.ask-done-a { color: var(--text); overflow-wrap: anywhere; }
 .ask-own, .ask-outcome { color: var(--muted); }
 .ask-outcome { font-size: 12.5px; }
 .plan-box { padding: 10px 12px; border-radius: 6px; background: rgba(0, 0, 0, 0.25); max-height: 340px; overflow: auto; }
