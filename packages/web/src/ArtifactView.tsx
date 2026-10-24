@@ -10,7 +10,7 @@ import { quoteFrom } from "./quote";
 import { COLORS } from "./status";
 import { withPolicy } from "./htmlPolicy";
 import { api } from "./api";
-import { codeWrap } from "./codeWrap";
+import { sourceWrap } from "./codeWrap";
 import { shownSource, SOURCE_LANG } from "./artifactSource";
 import { WindowContext, type ArtifactEntry, type WindowApi } from "./windowContext";
 
@@ -50,8 +50,8 @@ export function ArtifactView({ widget, pane, doc, writing }: Props) {
   // Its source as text instead of what it draws, to read or quote from.
   const [source, setSource] = useState(false);
   const page = isPage(doc) && !(source && SOURCE_LANG[doc.type]);
-  // Whether the source wraps its long lines: the same choice as code blocks', so Wrap means one thing everywhere.
-  const wrapped = useSyncExternalStore(codeWrap.subscribe, codeWrap.get);
+  // Whether the source wraps its long lines: one choice for every artifact pane.
+  const wrapped = useSyncExternalStore(sourceWrap.subscribe, sourceWrap.get);
   const body = useRef<HTMLDivElement>(null);
   const shown = useContent(doc);
   // What Claude wrote stays until the version the window has of it has come, rather than the one before it.
@@ -104,7 +104,7 @@ export function ArtifactView({ widget, pane, doc, writing }: Props) {
               type="button"
               className="artifact-copy"
               aria-pressed={wrapped}
-              onClick={() => codeWrap.set(!wrapped)}
+              onClick={() => sourceWrap.set(!wrapped)}
               title={wrapped ? "Stop wrapping long lines" : "Wrap long lines"}
             >
               Wrap
