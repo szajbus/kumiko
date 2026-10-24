@@ -18,6 +18,8 @@ import type {
   PromptRequest,
   ResumableSession,
   ResumeRequest,
+  SessionDisk,
+  StatsResponse,
   SavedTabs,
   RewindRequest,
   RewindResponse,
@@ -124,6 +126,10 @@ export const api = {
   withdrawPrompt: (id: string, prompt: string) => request<{ withdrawn: boolean }>("POST", `/api/sessions/${id}/prompts/${encodeURIComponent(prompt)}/withdraw`),
   /** The Claude account behind a session and how much of its subscription is used. */
   usage: (id: string) => request<AccountUsage>("GET", `/api/sessions/${id}/usage`),
+  /** What a session keeps on the host. */
+  sessionDisk: (id: string) => request<SessionDisk>("GET", `/api/sessions/${id}/disk`),
+  /** The latest CPU, memory and disk reading of each running sandbox. */
+  stats: () => request<StatsResponse>("GET", "/api/stats"),
   interrupt: (id: string) => request("POST", `/api/sessions/${id}/interrupt`),
   /** The end of what one of Claude's background shells or monitors has printed; asking costs Claude no turn. */
   taskOutput: (id: string, task: string) => request<{ output: string; totalBytes: number; truncated: boolean }>("GET", `/api/sessions/${id}/tasks/${encodeURIComponent(task)}/output`),
@@ -364,4 +370,44 @@ export function useDefaults(): DefaultsResponse | undefined {
 /** The host user's home, for showing paths as ~/…; undefined until the server answers. */
 export function useHome(): string | undefined {
   return useDefaults()?.home;
+}
+
+/** How often the sandboxes' readings are asked for while something shows them; the VMs take one every 3 s. */
+const STATS_MS = 3000;
+const statsListeners = new Set<(s: StatsResponse) => void>();
+let statsLatest: StatsResponse = {};
+/** Set while the poll runs: waiting for an answer or for the next turn. */
+let statsPolling = false;
+
+/** One poll for every view that shows readings; it pauses while the window is hidden, as nobody sees them then. */
+function pollStats() {
+  if (!statsListeners.size) {
+    statsPolling = false;
+    statsLatest = {};
+    return;
+  }
+  const next = () => void setTimeout(pollStats, STATS_MS);
+  if (document.hidden) return next();
+  api
+    .stats()
+    .then((s) => {
+      statsLatest = s;
+      for (const l of statsListeners) l(s);
+    })
+    .catch(() => {})
+    .finally(next);
+}
+
+/** The latest reading of each running sandbox, by name, kept fresh while the component is mounted. */
+export function useSandboxStats(): StatsResponse {
+  const [stats, setStats] = useState(statsLatest);
+  useEffect(() => {
+    statsListeners.add(setStats);
+    if (!statsPolling) {
+      statsPolling = true;
+      pollStats();
+    }
+    return () => void statsListeners.delete(setStats);
+  }, []);
+  return stats;
 }

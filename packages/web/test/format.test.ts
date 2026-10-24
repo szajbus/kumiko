@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { isBusy, isWaiting, type LogLine, type SandboxView, type SessionInfo } from "@kumiko/shared";
 import { matchCommands } from "../src/commands.ts";
 import { ago, endedText, formatBytes, formatCost, formatDuration, planName, projectHue, projectHues, resetText, sessionName, sessionTitle } from "../src/format.ts";
-import { COLORS, failedAgentScripts, finishingState, opPill, resources, sandboxCreatedAt, sessionState, statusOf } from "../src/status.ts";
+import { COLORS, failedAgentScripts, finishingState, meters, opPill, resources, sandboxCreatedAt, sessionState, statusOf } from "../src/status.ts";
 
 describe("format", () => {
   it("titles a session by its /rename name, else the opening prompt cut at a word", () => {
@@ -56,9 +56,21 @@ describe("format", () => {
   });
 
   it("formats bytes, cost and duration", () => {
-    assert.deepEqual([formatBytes(812), formatBytes(4300), formatBytes(50_000), formatBytes(13 * 1024 ** 2)], ["812 B", "4.2 KB", "49 KB", "13 MB"]);
+    assert.deepEqual([formatBytes(812), formatBytes(4300), formatBytes(50_000), formatBytes(13 * 1024 ** 2), formatBytes(2.5 * 1024 ** 3)], ["812 B", "4.2 KB", "49 KB", "13 MB", "2.5 GB"]);
     assert.deepEqual([formatCost(0.0042), formatCost(1.254)], ["$0.0042", "$1.25"]);
     assert.deepEqual([formatDuration(4200), formatDuration(125_000), formatDuration(119_700)], ["4.2s", "2m 5s", "2m 0s"]);
+  });
+
+  it("shows a sandbox's reading as CPU, memory and disk bars, amber from 80% and red from 95%", () => {
+    const GiB = 1024 ** 3;
+    const reading = { cpuPercent: 38.4, load: 1.62, memTotalBytes: 4 * GiB, memUsedBytes: 3.3 * GiB, diskUsedBytes: 97 * GiB, diskFreeBytes: 3 * GiB };
+    assert.deepEqual(meters(reading), [
+      { label: "CPU", percent: 38, text: "38% busy · load 1.6", color: COLORS.running },
+      { label: "Memory", percent: 83, text: "3.3 GiB used · 83%", color: COLORS.warn },
+      { label: "Disk", percent: 97, text: "97 GiB used · 97%", color: COLORS.failed },
+    ]);
+    const first = meters({ ...reading, cpuPercent: undefined })[0];
+    assert.deepEqual([first.percent, first.text, first.color], [undefined, "— · load 1.6", COLORS.stopped]);
   });
 
   it("names plans and endings", () => {

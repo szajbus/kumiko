@@ -53,6 +53,8 @@ import {
   type SessionStreamMessage,
   type SessionInfo,
   type StartSessionRequest,
+  type SessionDisk,
+  type StatsResponse,
   type TemplatesResponse,
   type ArtifactState,
   type Side,
@@ -62,8 +64,9 @@ import {
 import { LimaProvider, shellQuote, validateSpec, type Log, type SandboxProvider } from "@kumiko/sandbox";
 import { ClaudeDriver, execOutput, Runs, type AgentDriver } from "@kumiko/agent";
 import { deleteAgentScripts, readAgentScripts, withExitCodes } from "./agentSetup.js";
-import { AttachmentRefused, AttachmentStore } from "./attachments.js";
-import { ArtifactContent } from "./content.js";
+import { AttachmentRefused, AttachmentStore, attachmentHashes } from "./attachments.js";
+import { ArtifactContent, contentHashes } from "./content.js";
+import { filesBytes } from "./disk.js";
 import { GitError, worktreeStatuses } from "./git.js";
 import { hasToken, isLocalRequest, isToken, tokenCookie } from "./guard.js";
 import { LoginFailed, Logins } from "./logins.js";
@@ -75,6 +78,7 @@ import { docPaneTarget, Widgets, type PaneAnswer } from "./widgets.js";
 import { SessionStore, type StoredSession } from "./store.js";
 import { TabsStore } from "./tabs.js";
 import { serveWeb } from "./static.js";
+import { StatsCache } from "./stats.js";
 import { sandboxAccountSource, UsageCache, type AccountSource } from "./usage.js";
 
 /** The largest request body: a prompt's attachments, a third bigger in base64, and room for its text. */
@@ -207,6 +211,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   widgets.sessions = sessions;
   const runs = opts.runs ?? new Runs(provider.exec.bind(provider), owner);
   const clients = new Set<WebSocket>();
+  const stats = new StatsCache(provider.exec.bind(provider));
   const usage = new UsageCache(
     opts.accounts ?? sandboxAccountSource(provider.exec.bind(provider), (sandbox) => infos.find((i) => i.name === sandbox)?.meta?.spec.env ?? []),
   );
@@ -511,6 +516,12 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     return c.json(views());
   });
 
+  /** The latest CPU, memory and disk reading of each running VM; pages poll it while they show them. */
+  app.get("/api/stats", (c) => {
+    const running = views().filter((v) => v.status === "running" && !v.busy).map((v) => v.name);
+    return c.json(stats.get(running) satisfies StatsResponse);
+  });
+
   let templatesCache: TemplatesResponse | undefined;
   app.get("/api/templates", async (c) => {
     templatesCache ??= await provider.templates();
@@ -781,6 +792,19 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   });
 
   /** Saved sessions that can be resumed, most recent first. */
+  /** What a session keeps on the host, as of when its chat was last saved. */
+  app.get("/api/sessions/:id/disk", async (c) => {
+    const info = sessionOf(c);
+    const events = (await sessionStore.read(info.id))?.events ?? [];
+    const [chat, artifacts, attached, shown] = await Promise.all([
+      sessionStore.size(info.id),
+      widgets.folderBytes(info),
+      filesBytes(attachments.dir, attachmentHashes(events)),
+      filesBytes(content.dir, contentHashes(events)),
+    ]);
+    return c.json({ chat, artifacts, files: attached + shown } satisfies SessionDisk);
+  });
+
   app.get("/api/sessions/resumable", async (c) => c.json(await sessions.resumable()));
 
   /** Deletes a saved session that isn't open. */
@@ -1231,6 +1255,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     working: () => sessions.list().filter(isBusy),
     close: async ({ endSessions = false } = {}) => {
       clearInterval(timer);
+      stats.stopAll();
       logins.cancelAll();
       if (endSessions) await sessions.endAll("quit");
       else await sessions.detachAll();

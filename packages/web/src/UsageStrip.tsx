@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from "react";
-import type { AccountUsage, UsageWindow } from "@kumiko/shared";
+import type { AccountUsage, SessionDisk, UsageWindow } from "@kumiko/shared";
 import { api, errorMessage } from "./api";
 import { Corner } from "./Corner";
 import { formatBytes, formatCost, planName, resetText } from "./format";
@@ -96,28 +96,48 @@ export function UsageStrip({ sessionId, live, turnDone, cost, bufferBytes }: Pro
         ))}
       </dl>
       {problem && <p className="usage-problem">⚠ {problem}</p>}
-      {(bufferBytes !== undefined || cost > 0) && (
-        <section className="corner-section" aria-labelledby={headingId}>
-          <h3 className="corner-heading" id={headingId}>
-            Current session
-          </h3>
-          <dl className="corner-list">
-            {bufferBytes !== undefined && (
-              <>
-                <dt title="Memory this session's chat takes in Kumiko's server, as of the last finished turn. Tool output past 64 KB isn't kept.">Memory</dt>
-                <dd className="mono">{formatBytes(bufferBytes)}</dd>
-              </>
-            )}
-            {cost > 0 && (
-              <>
-                <dt title="Total cost of this session">Cost</dt>
-                <dd className="mono">{formatCost(cost)}</dd>
-              </>
-            )}
-          </dl>
-        </section>
-      )}
+      <section className="corner-section" aria-labelledby={headingId}>
+        <h3 className="corner-heading" id={headingId}>
+          Current session
+        </h3>
+        <dl className="corner-list">
+          {bufferBytes !== undefined && (
+            <>
+              <dt title="Memory this session's chat takes in Kumiko's server, as of the last finished turn. Tool output past 64 KB isn't kept.">Memory</dt>
+              <dd className="mono">{formatBytes(bufferBytes)}</dd>
+            </>
+          )}
+          <Disk sessionId={sessionId} />
+          {cost > 0 && (
+            <>
+              <dt title="Total cost of this session">Cost</dt>
+              <dd className="mono">{formatCost(cost)}</dd>
+            </>
+          )}
+        </dl>
+      </section>
     </Corner>
+  );
+}
+
+/** What the session keeps on the host, read each time the details open. */
+function Disk({ sessionId }: { sessionId: string }) {
+  const [disk, setDisk] = useState<SessionDisk | undefined>();
+  useEffect(() => {
+    let stopped = false;
+    api.sessionDisk(sessionId).then((d) => !stopped && setDisk(d), () => {});
+    return () => {
+      stopped = true;
+    };
+  }, [sessionId]);
+  const parts = disk && [`Saved chat: ${formatBytes(disk.chat)}`, `Artifacts' folder: ${formatBytes(disk.artifacts)}`, `Attachments and artifact versions: ${formatBytes(disk.files)}`];
+  return (
+    <>
+      <dt title="What Kumiko keeps of this session on this computer, as of the last saved turn. Forks share their attachments and artifact versions.">Disk</dt>
+      <dd className="mono" title={parts?.join("\n")}>
+        {disk ? formatBytes(disk.chat + disk.artifacts + disk.files) : "…"}
+      </dd>
+    </>
   );
 }
 

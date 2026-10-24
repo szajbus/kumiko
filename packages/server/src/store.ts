@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { PendingAsk, PendingCall } from "@kumiko/agent";
@@ -65,6 +65,12 @@ export class SessionStore {
     const tmp = `${this.file(stored.info.id)}.${process.pid}.tmp`;
     await writeFile(tmp, JSON.stringify(stored) + "\n");
     await rename(tmp, this.file(stored.info.id));
+  }
+
+  /** How big the session's file is; 0 when it hasn't been saved. */
+  async size(id: string): Promise<number> {
+    if (!SESSION_ID_PATTERN.test(id)) return 0;
+    return stat(this.file(id)).then((s) => s.size, () => 0);
   }
 
   async remove(id: string): Promise<void> {

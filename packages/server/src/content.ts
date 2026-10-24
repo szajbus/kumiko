@@ -41,8 +41,7 @@ export class ArtifactContent {
 
   /** Deletes every version none of `events` name. For startup, before any window can keep new ones. */
   async sweep(events: Iterable<SessionEvent>): Promise<void> {
-    const keep = new Set<string>();
-    for (const e of events) if (e.kind === "window") hashesIn(e.payload.op, keep);
+    const keep = contentHashes(events);
     let names: string[];
     try {
       names = await readdir(this.dir);
@@ -51,6 +50,13 @@ export class ArtifactContent {
     }
     await Promise.all(names.filter((n) => !keep.has(n)).map((n) => rm(join(this.dir, n), { force: true })));
   }
+}
+
+/** The hashes of the artifact versions the windows in `events` showed. */
+export function contentHashes(events: Iterable<SessionEvent>): Set<string> {
+  const hashes = new Set<string>();
+  for (const e of events) if (e.kind === "window") hashesIn(e.payload.op, hashes);
+  return hashes;
 }
 
 /** Every `content` hash in a window op, wherever its shape puts it: an added widget, an update, a sync's widgets. */

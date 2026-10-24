@@ -2,13 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 import { isBusy, isWaiting, projectMountRole, vmName, type LogLine, type ProjectView, type SessionInfo, type WorktreeStatus, type WorktreesResponse } from "@kumiko/shared";
 import { SandboxActions, useActions } from "./actions";
 import { AgentSetupCard } from "./AgentSetup";
-import { api, errorMessage, useHome, type LiveState } from "./api";
+import { api, errorMessage, useHome, useSandboxStats, type LiveState } from "./api";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { FinishingItem } from "./Finishing";
 import { sessionTitle, tilde } from "./format";
 import { Folder, Pencil, Plus, Redo } from "./icons";
 import { LogPanel } from "./LogPanel";
-import { COLORS, failedAgentScripts, plural, sandboxCreatedAt, sessionState, statusOf } from "./status";
+import { COLORS, failedAgentScripts, meters, plural, sandboxCreatedAt, sessionState, statusOf, type Meter } from "./status";
 
 interface Props {
   id: string;
@@ -284,6 +284,10 @@ function Details({ p, home }: { p: ProjectView; home?: string }) {
   const envSet = useEnvSet(spec?.env ?? []);
   const gib = (n?: number) => (n === undefined ? "—" : `${n} GiB`);
   const created = sandboxCreatedAt(p);
+  const stats = useSandboxStats()[p.name];
+  // While it runs, each resource shows how much of it is in use, empty until the first reading is in.
+  const usage = p.status === "running" && !p.busy ? (stats ? meters(stats) : []) : undefined;
+  const meter = (label: Meter["label"]) => usage && <MeterLine m={usage.find((m) => m.label === label) ?? { label, text: "—", color: COLORS.stopped }} />;
 
   return (
     <>
@@ -291,9 +295,9 @@ function Details({ p, home }: { p: ProjectView; home?: string }) {
         <h2>Sandbox</h2>
       </div>
       <section className="card facts" aria-label="Sandbox">
-        <Fact label="CPUs">{p.cpus ?? spec?.cpus ?? "—"}</Fact>
-        <Fact label="Memory">{gib(p.memoryGiB ?? spec?.memoryGiB)}</Fact>
-        <Fact label="Disk">{gib(p.diskGiB ?? spec?.diskGiB)}</Fact>
+        <Fact label="CPUs" usage={meter("CPU")}>{p.cpus ?? spec?.cpus ?? "—"}</Fact>
+        <Fact label="Memory" usage={meter("Memory")}>{gib(p.memoryGiB ?? spec?.memoryGiB)}</Fact>
+        <Fact label="Disk" usage={meter("Disk")}>{gib(p.diskGiB ?? spec?.diskGiB)}</Fact>
         <Fact label="Template" mono>
           {spec ? spec.template || "template:default" : "—"}
         </Fact>
@@ -357,12 +361,28 @@ function Details({ p, home }: { p: ProjectView; home?: string }) {
   );
 }
 
-function Fact({ label, mono, children }: { label: string; mono?: boolean; children: React.ReactNode }) {
+function Fact({ label, mono, usage, children }: { label: string; mono?: boolean; usage?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="fact">
       <span className="eyebrow">{label}</span>
       <span className={`fact-value${mono ? " mono" : ""}`}>{children}</span>
+      {usage}
     </div>
+  );
+}
+
+/** How much of a resource the running VM uses: a bar, and the numbers under it. */
+function MeterLine({ m }: { m: Meter }) {
+  const alarm = m.percent !== undefined && m.percent >= 95;
+  return (
+    <>
+      <span className="meter" role="meter" aria-label={`${m.label} in use`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={m.percent}>
+        <span style={{ width: `${m.percent ?? 0}%`, background: m.color }} />
+      </span>
+      <span className="meter-text" style={alarm ? { color: m.color } : undefined}>
+        {m.text}
+      </span>
+    </>
   );
 }
 

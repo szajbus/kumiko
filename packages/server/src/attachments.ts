@@ -7,6 +7,13 @@ import type { AgentFile } from "@kumiko/agent";
 const HASH = /^[0-9a-f]{64}$/;
 const MAX_NAME = 200;
 
+/** The hashes of the files the prompts in `events` were sent with. */
+export function attachmentHashes(events: Iterable<SessionEvent>): Set<string> {
+  const hashes = new Set<string>();
+  for (const e of events) if (e.kind === "user_prompt") for (const a of e.payload.attachments ?? []) hashes.add(a.hash);
+  return hashes;
+}
+
 /** Files that can't go with a prompt: not a kind Claude reads, too big, or gone from the server. */
 export class AttachmentRefused extends Error {}
 
@@ -63,8 +70,7 @@ export class AttachmentStore {
 
   /** Deletes every file none of `events` name. For startup, before any prompt can bring new ones. */
   async sweep(events: Iterable<SessionEvent>): Promise<void> {
-    const keep = new Set<string>();
-    for (const e of events) if (e.kind === "user_prompt") for (const a of e.payload.attachments ?? []) keep.add(a.hash);
+    const keep = attachmentHashes(events);
     let names: string[];
     try {
       names = await readdir(this.dir);

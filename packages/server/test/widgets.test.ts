@@ -8,7 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 import WebSocket from "ws";
-import { artifactsOf, paneIds, paneOf, windowState, type ArtifactState, type ServerEvent, type SessionEvent, type SessionInfo, type SessionStreamMessage } from "@kumiko/shared";
+import { artifactsOf, paneIds, paneOf, windowState, type ArtifactState, type ServerEvent, type SessionEvent, type SessionDisk, type SessionInfo, type SessionStreamMessage } from "@kumiko/shared";
 import { LimaProvider, MetadataStore, shellQuote } from "@kumiko/sandbox";
 import { startServer, type RunningServer, type ServerOptions } from "../src/index.js";
 import { makeClone } from "./repo.js";
@@ -758,6 +758,30 @@ describe("widgets", () => {
     const again = await listen(id);
     assert.match(await ask(again, id, widget("window_list", {})), /chat \(the chat\)/);
     again.close();
+  });
+
+  it("tells how much a session keeps on the host: its chat, its folder and the versions its window showed", async () => {
+    const { id, s } = await start();
+    const disk = async () => (await json(await api(`/api/sessions/${id}/disk`))) as SessionDisk;
+    const content = "# Plan\n" + "x".repeat(5000);
+    await ask(s, id, write(docPath(id), content));
+    await ask(s, id, widget("artifact_open", { path: docPath(id) }));
+    const got = await waitFor(async () => {
+      const d = await disk();
+      return d.chat && d.files ? d : undefined;
+    });
+    assert.ok(got.chat > content.length / 10, "the saved chat counts");
+    assert.deepEqual({ ...got, chat: 0 }, { chat: 0, artifacts: content.length, files: content.length });
+
+    // A folder Claude swapped for a link isn't the session's, so what it points to doesn't count.
+    const dir = join(kumikoHome, "artifacts", id);
+    const outside = join(root, `big-${id}`);
+    await mkdir(outside);
+    await writeFile(join(outside, "big"), "y".repeat(50_000));
+    await rm(dir, { recursive: true });
+    await symlink(outside, dir);
+    assert.equal((await disk()).artifacts, 0);
+    s.close();
   });
 
   it("keeps the window across a server restart", async () => {

@@ -35,6 +35,7 @@ import {
 } from "@kumiko/shared";
 import type { AgentMessage, ToolHost, ToolResult, ToolSpec } from "@kumiko/agent";
 import { contentHash, type ArtifactContent } from "./content.js";
+import { dirBytes } from "./disk.js";
 import { openIn, removeIn, writeIn } from "./files.js";
 import type { SessionWidgets, Sessions } from "./sessions.js";
 
@@ -216,6 +217,12 @@ export class Widgets implements SessionWidgets {
    * swap the folder, or one above it, for a link to anywhere on the host; then it isn't the session's folder any more,
    * and nothing is read, written or deleted through it.
    */
+  /** How much the session's artifacts' folder takes on the host; 0 when there is none, or it links somewhere else. */
+  async folderBytes(info: SessionInfo): Promise<number> {
+    const dir = await this.realDocs(info).catch(() => undefined);
+    return dir ? dirBytes(dir) : 0;
+  }
+
   private async realDocs(info: SessionInfo): Promise<string | undefined> {
     const home = this.opts.home(info.sandbox);
     if (!home) return undefined;

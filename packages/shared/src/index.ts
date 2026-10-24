@@ -200,7 +200,34 @@ export interface SandboxInfo {
   hostLoopbackOpen?: string;
 }
 
-export type OpKind = "creating" | "starting" | "stopping" | "deleting" | "recreating" | "restarting" | "editing";
+/** What a running sandbox is using right now, as the VM itself sees it. */
+export interface SandboxStats {
+  /** How busy its CPUs were since the reading before, 0–100 across all of them; missing on the first reading. */
+  cpuPercent?: number;
+  /** The 1-minute load average. */
+  load: number;
+  memTotalBytes: number;
+  /** Total less what's available, so the page cache doesn't count. */
+  memUsedBytes: number;
+  /** The VM's root filesystem; folders mounted from the host aren't on it. */
+  diskUsedBytes: number;
+  diskFreeBytes: number;
+}
+
+/**
+ * `GET /api/sessions/:id/disk`: what a session keeps on the host, in bytes: its saved chat, its artifacts' folder, and
+ * the attachments and artifact versions its chat names, which other sessions (its forks) may name too.
+ */
+export interface SessionDisk {
+  chat: number;
+  artifacts: number;
+  files: number;
+}
+
+/** `GET /api/stats`: the latest reading of each running sandbox, by name; one with none yet is left out. */
+export type StatsResponse = Record<string, SandboxStats>;
+
+export type OpKind ="creating" | "starting" | "stopping" | "deleting" | "recreating" | "restarting" | "editing";
 
 /** How a log line is shown: a command being run, a note from Kumiko, success, or an error. */
 export type LineKind = "cmd" | "note" | "ok" | "err";

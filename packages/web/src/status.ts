@@ -1,4 +1,4 @@
-import { isBusy, isWaiting, type LogLine, type OpKind, type SandboxInfo, type SandboxView, type SessionInfo, type SessionStatus } from "@kumiko/shared";
+import { isBusy, isWaiting, type LogLine, type OpKind, type SandboxInfo, type SandboxStats, type SandboxView, type SessionInfo, type SessionStatus } from "@kumiko/shared";
 
 export const COLORS = {
   running: "#4CC38A",
@@ -100,6 +100,42 @@ export function resources(sb: SandboxView): string {
     return s ? `${s.cpus} · ${s.memoryGiB} GiB · ${s.diskGiB} GiB` : "—";
   }
   return `${sb.cpus ?? "?"} · ${sb.memoryGiB ?? "?"} GiB · ${sb.diskGiB ?? "?"} GiB`;
+}
+
+/** One of a running sandbox's readings, as a bar: how full it is, and in words. */
+export interface Meter {
+  label: "CPU" | "Memory" | "Disk";
+  /** Missing until there is a reading to show, as for CPU on the first one. */
+  percent?: number;
+  text: string;
+  color: string;
+}
+
+/** Green while there is room, amber from 80%, red from 95%. */
+export const meterColor = (percent: number): string => (percent >= 95 ? COLORS.failed : percent >= 80 ? COLORS.warn : COLORS.running);
+
+const gib = (bytes: number) => {
+  const n = bytes / 1024 ** 3;
+  return `${n < 10 ? n.toFixed(1) : Math.round(n)} GiB`;
+};
+
+/** The CPU, memory and disk bars of a sandbox's reading. Disk is full as `df` counts it: of the space not reserved. */
+export function meters(s: SandboxStats): Meter[] {
+  const meter = (label: Meter["label"], percent: number | undefined, text: string): Meter => ({
+    label,
+    percent,
+    text,
+    color: percent === undefined ? COLORS.stopped : meterColor(percent),
+  });
+  const pct = (used: number, total: number) => (total > 0 ? (100 * used) / total : 0);
+  const cpu = s.cpuPercent === undefined ? undefined : Math.round(s.cpuPercent);
+  const mem = Math.round(pct(s.memUsedBytes, s.memTotalBytes));
+  const disk = Math.round(pct(s.diskUsedBytes, s.diskUsedBytes + s.diskFreeBytes));
+  return [
+    meter("CPU", cpu, `${cpu === undefined ? "—" : `${cpu}% busy`} · load ${s.load.toFixed(1)}`),
+    meter("Memory", mem, `${gib(s.memUsedBytes)} used · ${mem}%`),
+    meter("Disk", disk, `${gib(s.diskUsedBytes)} used · ${disk}%`),
+  ];
 }
 
 const SESSION_STATUS: Record<SessionStatus, { text: string; color: string }> = {

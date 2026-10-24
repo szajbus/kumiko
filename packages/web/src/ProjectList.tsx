@@ -1,10 +1,10 @@
-import type { LogLine, ProjectView } from "@kumiko/shared";
+import type { LogLine, ProjectView, SandboxStats } from "@kumiko/shared";
 import { SandboxActions, useActions, type Actions } from "./actions";
-import { useHome, type LiveState } from "./api";
+import { useHome, useSandboxStats, type LiveState } from "./api";
 import { FinishingCard } from "./Finishing";
 import { tilde } from "./format";
 import { EmptyBento, Plus } from "./icons";
-import { plural, resources, statusOf } from "./status";
+import { meters, plural, resources, statusOf } from "./status";
 
 interface Props {
   live: LiveState;
@@ -17,6 +17,7 @@ interface Props {
 export function ProjectList({ live, onOpen, onNew, onSessionStarted }: Props) {
   const actions = useActions();
   const home = useHome();
+  const stats = useSandboxStats();
   const empty = live.loaded && live.projects.length === 0 && live.unreadable.length === 0;
 
   return (
@@ -77,7 +78,7 @@ export function ProjectList({ live, onOpen, onNew, onSessionStarted }: Props) {
                 <span className="align-right">Actions</span>
               </div>
               {live.projects.map((p) => (
-                <Row key={p.name} p={p} home={home} log={live.logs[p.name]} actions={actions} onOpen={() => onOpen(p.name)} />
+                <Row key={p.name} p={p} stats={p.status === "running" && !p.busy ? stats[p.name] : undefined} home={home} log={live.logs[p.name]} actions={actions} onOpen={() => onOpen(p.name)} />
               ))}
             </div>
           </div>
@@ -89,7 +90,7 @@ export function ProjectList({ live, onOpen, onNew, onSessionStarted }: Props) {
   );
 }
 
-function Row({ p, home, log, actions, onOpen }: { p: ProjectView; home?: string; log?: LogLine[]; actions: Actions; onOpen(): void }) {
+function Row({ p, stats, home, log, actions, onOpen }: { p: ProjectView; stats?: SandboxStats; home?: string; log?: LogLine[]; actions: Actions; onOpen(): void }) {
   const status = statusOf(p, log);
   return (
     <div className="table-row sandbox-row" onClick={onOpen}>
@@ -120,7 +121,21 @@ function Row({ p, home, log, actions, onOpen }: { p: ProjectView; home?: string;
         <span>{status.text}</span>
       </div>
 
-      <span className="mono row-res">{resources(p)}</span>
+      <span className="row-res">
+        <span className="mono">{resources(p)}</span>
+        {stats && (
+          <span className="row-meters">
+            {meters(stats).map((m) => (
+              <span key={m.label} className="row-meter" title={`${m.label}: ${m.text}`}>
+                <span className="meter" role="meter" aria-label={`${m.label} in use`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={m.percent}>
+                  <span style={{ width: `${m.percent ?? 0}%`, background: m.color }} />
+                </span>
+                <span className="mono">{m.percent === undefined ? "—" : `${m.percent}%`}</span>
+              </span>
+            ))}
+          </span>
+        )}
+      </span>
 
       <SandboxActions sb={p} actions={actions} />
     </div>
