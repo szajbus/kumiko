@@ -164,6 +164,22 @@ describe("background tasks in sessions", () => {
     assert.equal(of(id, "monitor_event").length, 1);
   });
 
+  it("still says which monitor woke Claude after a prompt it read in the middle of a turn, which got no turn of its own", async () => {
+    const id = setup();
+    drivers[0].message(init());
+    drivers[0].message(monitorCall("toolu_m"));
+    drivers[0].message(started("b9", "toolu_m"));
+    // Sent while Claude works, and read in the same turn: Claude echoes it, and there is no init for it.
+    sessions.prompt(id, "and this too");
+    const sent = sessions.events(id).findLast((e) => e.kind === "user_prompt")!.payload.id;
+    drivers[0].message({ type: "user", isReplay: true, uuid: sent, message: { role: "user", content: "and this too" } });
+    drivers[0].message(result());
+    drivers[0].outputs.set("b9", { output: "event 1\n", totalBytes: 8, truncated: false });
+    drivers[0].message(init());
+    await settle();
+    assert.deepEqual(of(id, "monitor_event").map((e) => e.payload), [{ taskId: "b9", line: "event 1" }]);
+  });
+
   it("records the tasks a Claude process took with it, when the next one starts", async () => {
     const id = setup();
     drivers[0].message(started("b1", "toolu_1"));

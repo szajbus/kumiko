@@ -71,8 +71,8 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
   const totalCost = useMemo(() => chat.items.reduce((sum, i) => sum + (i.type === "turn" ? (i.costUsd ?? 0) : 0), 0), [chat.items]);
   // What was sent so far, for Up in the composer; a message sent again right after itself is there once.
   const history = useMemo(
-    () => chat.items.flatMap((i) => (i.type === "user" ? [i.text] : [])).filter((t, n, all) => t && t !== all[n - 1]),
-    [chat.items],
+    () => [...chat.items, ...chat.queued].flatMap((i) => (i.type === "user" ? [i.text] : [])).filter((t, n, all) => t && t !== all[n - 1]),
+    [chat.items, chat.queued],
   );
   const [error, setError] = useState<string | undefined>();
   const [model, setModel] = useState("");
@@ -525,7 +525,7 @@ function Chat({ session, chat, running, live, active, onRewind, onFork, onQuote,
   const inner = useRef<HTMLDivElement>(null);
   // Follows new output while the view is at the bottom; scrolling up stops that until it is back at the bottom.
   const stick = useRef(true);
-  const userCount = chat.items.filter((i) => i.type === "user").length;
+  const userCount = chat.items.filter((i) => i.type === "user").length + chat.queued.length;
   // A chat kept in a background tab measures as empty; following it there would lose its place.
   const shown = (el: HTMLElement) => el.clientHeight > 0;
 
@@ -628,6 +628,13 @@ function Chat({ session, chat, running, live, active, onRewind, onFork, onQuote,
             <span className="spinner" aria-hidden="true" /> Waiting for Claude…
           </div>
         )}
+        {/* Sent while Claude works: they go up into the chat where Claude reads them. */}
+        {chat.queued.map((item) => (
+          <div key={item.key} className="msg-queued">
+            <Item item={item} open={false} />
+            <div className="msg-queued-note">Queued</div>
+          </div>
+        ))}
       </div>
     </div>
     {/* Outside the log, so it isn't read out as new output. */}

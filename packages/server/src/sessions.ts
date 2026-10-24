@@ -48,8 +48,11 @@ interface Session {
   finishing?: Promise<void>;
   /** What this Claude process has said of its background shells and monitors; see `TaskWatch`. */
   tasks?: TaskWatch;
-  /** Prompts sent whose turns haven't started: a turn that starts with none waiting is one Claude took by itself. */
-  waiting?: number;
+  /**
+   * Prompts sent whose turns haven't started, by id: a turn that starts with none waiting is one Claude took by itself.
+   * One Claude reads in the middle of a turn gets none, so its echo takes it off.
+   */
+  waiting?: string[];
 }
 
 /**
@@ -493,7 +496,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     const lost = openTasks(s.events);
     if (lost.length) this.push(s, { kind: "tasks_lost", payload: { taskIds: lost } });
     s.tasks = undefined;
-    s.waiting = driverOpts.prompt !== undefined ? 1 : 0;
+    s.waiting = driverOpts.prompt !== undefined && driverOpts.promptId ? [driverOpts.promptId] : [];
     driver.start({ ...driverOpts, run: `${s.info.id}-${randomBytes(4).toString("hex")}`, ...widgets });
     if (s.info.planMode) driver.setPlanMode(true);
   }
@@ -652,9 +655,10 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     this.countBlocks(s, m);
 
     this.watchTasks(s, m);
+    if (m.type === "user" && m.isReplay === true) s.waiting = s.waiting?.filter((id) => id !== m.uuid);
     if (m.type === "system" && m.subtype === "init") {
       // A turn nobody prompted, with no task ended to report on: a monitor's line may have woken Claude.
-      if (s.waiting) s.waiting--;
+      if (s.waiting?.length) s.waiting = s.waiting.slice(1);
       else if (s.tasks && !s.tasks.ended && s.tasks.monitors.size) void this.findMonitorEvent(s);
       // Claude sends init at the start of every turn, so it also marks a queued prompt's turn starting.
       const isNew = typeof m.session_id === "string" && m.session_id !== s.info.claudeSessionId;
@@ -751,7 +755,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     const note = isCommand(text) ? "" : sharedNote(sharesWaiting(s.events));
     this.push(s, { kind: "user_prompt", payload: { text, id: promptId, ...(attachments.length ? { attachments } : {}) } });
     s.pendingModel = /^\/model\s+(\S+)/.exec(text)?.[1];
-    s.waiting = (s.waiting ?? 0) + 1;
+    s.waiting = [...(s.waiting ?? []), promptId];
     s.driver.send(text + note, promptId, files);
     if (s.info.status === "idle") this.setInfo(s, { status: "running" });
     // Kumiko's own record of the prompt is nowhere in Claude's output, so it is saved now.

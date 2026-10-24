@@ -15,8 +15,11 @@ export type Block =
   | { type: "tool"; id: string; name: string; input: Record<string, unknown>; partialInput?: string; result?: ToolResult };
 
 export type ChatItem =
-  /** A prompt we sent. `id` is what Claude knows it by; `replayed` once Claude has echoed it, which means it can be rewound to. */
-  | { type: "user"; key: string; text: string; id: string; replayed?: boolean; attachments?: Attachment[] }
+  /**
+   * A prompt we sent. `id` is what Claude knows it by; `replayed` once Claude has echoed it, which means it can be rewound
+   * to. `merged` if Claude took it up in the middle of a turn it was already taking, rather than starting one for it.
+   */
+  | { type: "user"; key: string; text: string; id: string; replayed?: boolean; merged?: boolean; attachments?: Attachment[] }
   /** One assistant message: finished blocks, then the ones still streaming (by content index). */
   | { type: "assistant"; key: string; final: Block[]; drafts: Block[] }
   /**
@@ -46,6 +49,7 @@ export interface Tokens {
 }
 
 type AssistantItem = Extract<ChatItem, { type: "assistant" }>;
+type UserItem = Extract<ChatItem, { type: "user" }>;
 
 /** A run of Claude's messages: the main thread's, or a subagent's. */
 interface Thread<T extends ChatItem = ChatItem> {
@@ -78,11 +82,13 @@ export interface ChatState extends Thread {
   /** Likewise for tokens. */
   totalTokens: Tokens;
   interruptPending: boolean;
+  /** A turn is under way: for a prompt, or one Claude took by itself. */
+  inTurn: boolean;
   /**
-   * Turns started and not yet ended: prompts sent, and turns Claude took by itself. More than one while prompts wait
-   * behind a turn, and what Claude says next is for the first of them, not a turn of its own.
+   * Prompts sent while a turn was under way, that Claude hasn't taken up yet. Each goes into the chat where Claude does:
+   * in the middle of that turn if it reads it there, or starting a turn of its own after it.
    */
-  pending: number;
+  queued: UserItem[];
   /** Claude's guess at the next prompt, sent after a turn; gone once any prompt is sent. */
   suggestion?: string;
   /** Claude's background tasks; see tasks.ts. */
@@ -93,7 +99,7 @@ export interface ChatState extends Thread {
   monitorLine?: { taskId: string; line: string };
 }
 
-export const emptyChat = (): ChatState => ({ items: [], messages: {}, tools: {}, agents: {}, finished: [], totalCost: 0, totalTokens: { total: 0, cached: 0 }, interruptPending: false, pending: 0, tasks: emptyTasks(), endedTasks: [] });
+export const emptyChat = (): ChatState => ({ items: [], messages: {}, tools: {}, agents: {}, finished: [], totalCost: 0, totalTokens: { total: 0, cached: 0 }, interruptPending: false, inTurn: false, queued: [], tasks: emptyTasks(), endedTasks: [] });
 
 /** The blocks to show for an assistant item: finished ones, then drafts past them. */
 export function blocksOf(item: AssistantItem): Block[] {
@@ -126,7 +132,9 @@ export interface WorkRow {
 export type ChatRow = ItemRow | WorkRow;
 
 /** What a turn starts with: a prompt, or Claude going on by itself. */
-export const startsTurn = (i: ChatItem) => i.type === "user" || i.type === "unprompted";
+export const startsTurn = (i: ChatItem) => (i.type === "user" && !i.merged) || i.type === "unprompted";
+/** Things that show in the middle of a turn's work, splitting it, and stay in view when it folds. */
+const splitsWork = (i: ChatItem) => i.type === "ask" || (i.type === "user" && i.merged === true);
 const isWork = (i: ChatItem) => i.type === "assistant" || i.type === "retry" || i.type === "notice";
 /** Items for the user that come in while Claude works, and stay in view when its work folds. */
 const waitsOnUser = (i: ChatItem) => i.type === "proposal" || i.type === "shared";
@@ -151,7 +159,7 @@ export function chatRows(items: readonly ChatItem[]): ChatRow[] {
     rows.push(row(i++));
     if (!startsTurn(prompt)) continue;
     const start = i;
-    while (i < items.length && (isWork(items[i]) || waitsOnUser(items[i]) || items[i].type === "ask")) i++;
+    while (i < items.length && (isWork(items[i]) || waitsOnUser(items[i]) || splitsWork(items[i]))) i++;
     let end = i;
     while (end < items.length && !startsTurn(items[end])) end++;
     const done = items.slice(start, end).some((it) => it.type === "turn");
@@ -197,8 +205,9 @@ export function chatRows(items: readonly ChatItem[]): ChatRow[] {
       group = [];
     };
     for (const r of work) {
-      // What Claude asked splits the work, like a long message: the work before it folds away, the card stays.
-      if (r.item.type === "ask") {
+      // What Claude asked, or a message it read on the way, splits the work like a long message: the work before it
+      // folds away, the card stays.
+      if (splitsWork(r.item)) {
         flush();
         rows.push(r);
         continue;
@@ -337,7 +346,9 @@ function applyChatEvent(s: ChatState, ev: SessionEvent): ChatState {
 
   switch (ev.kind) {
     case "user_prompt": {
-      const next = { ...push({ type: "user", key, text: ev.payload.text, id: ev.payload.id, ...(ev.payload.attachments ? { attachments: ev.payload.attachments } : {}) }), suggestion: undefined, finished: [], pending: s.pending + 1, endedTasks: [], monitorLine: undefined };
+      const item: UserItem = { type: "user", key, text: ev.payload.text, id: ev.payload.id, ...(ev.payload.attachments ? { attachments: ev.payload.attachments } : {}) };
+      // Sent while Claude works, it waits until Claude takes it up; see `take`.
+      const next = s.inTurn ? { ...s, queued: [...s.queued, item], suggestion: undefined } : startTurn({ ...push(item), suggestion: undefined });
       // Claude hears of what was shared with the first prompt after it that isn't a command; see `sharesWaiting`.
       if (isCommand(ev.payload.text) || !s.items.some((i) => i.type === "shared" && !i.told)) return next;
       return { ...next, items: next.items.map((i) => (i.type === "shared" && !i.told ? { ...i, told: true } : i)) };
@@ -362,11 +373,12 @@ function applyChatEvent(s: ChatState, ev: SessionEvent): ChatState {
       return ev.payload.signedOut ? replaceFailedTurn(s, { type: "error", key, ...ev.payload }) : push({ type: "error", key, ...ev.payload });
     case "ended": {
       // Claude is gone, and the turns it hadn't finished with it, and the subagents still working.
-      const gone = { ...s, pending: 0, interruptPending: false, agents: stopAgents(s.agents, () => true) };
+      // Prompts it hadn't taken up yet stay in the chat, as they were sent.
+      const gone = { ...s, items: [...s.items, ...s.queued], queued: [], inTurn: false, interruptPending: false, agents: stopAgents(s.agents, () => true) };
       // Stopping with its sandbox isn't an end: the banner says so while it sleeps, and Claude continues after it. A turn
       // it cut short ends there, though, as Claude doesn't take it up again.
-      if (ev.payload.asleep) return s.pending ? { ...gone, items: [...s.items, { type: "turn", key, status: "interrupted" }] } : gone;
-      return { ...gone, items: [...s.items, { type: "ended", key, reason: ev.payload.reason, code: ev.payload.code }] };
+      if (ev.payload.asleep) return s.inTurn ? { ...gone, items: [...gone.items, { type: "turn", key, status: "interrupted" }] } : gone;
+      return { ...gone, items: [...gone.items, { type: "ended", key, reason: ev.payload.reason, code: ev.payload.code }] };
     }
     case "claude":
       return applyClaude(s, ev.payload, key);
@@ -445,8 +457,11 @@ function applyClaude(s: ChatState, m: Json & { type: string }, key: string): Cha
       return applyTask(s, m);
 
     case "user": {
-      // Claude echoes each prompt back (the sign that it can be rewound to); the chat already shows it.
+      // Claude echoes each prompt back (the sign that it can be rewound to) as it takes it up. One sent while it worked
+      // goes into the chat there: in the middle of the turn under way, or starting its own.
       if (m.isReplay === true) {
+        const waiting = s.queued.findIndex((i) => i.id === m.uuid);
+        if (waiting >= 0) return take(s, waiting, s.inTurn, true);
         const index = s.items.findLastIndex((i) => i.type === "user" && i.id === m.uuid);
         if (index < 0) return s;
         const items = [...s.items];
@@ -463,7 +478,7 @@ function applyClaude(s: ChatState, m: Json & { type: string }, key: string): Cha
       const usage = tokensOf(m.usage);
       const tokens = usage && (usage.total >= s.totalTokens.total ? { total: usage.total - s.totalTokens.total, cached: Math.max(0, usage.cached - s.totalTokens.cached) } : usage);
       const ok = m.subtype === "success" && m.is_error !== true;
-      const base = { ...s, totalCost: total ?? s.totalCost, totalTokens: usage ?? s.totalTokens, interruptPending: false, pending: Math.max(0, s.pending - 1) };
+      const base = { ...s, totalCost: total ?? s.totalCost, totalTokens: usage ?? s.totalTokens, interruptPending: false, inTurn: false };
       // A slash command like /model is a turn of its own with nothing to sum up.
       if (ok && m.num_turns === 0) return base;
       const status = ok ? "ok" : s.interruptPending && m.subtype === "error_during_execution" ? "interrupted" : "error";
@@ -478,10 +493,27 @@ function applyClaude(s: ChatState, m: Json & { type: string }, key: string): Cha
 }
 
 function startUnprompted(s: ChatState, key: string): ChatState {
-  // Before the first turn ends, or while one is under way or a prompt waits for its turn, Claude is answering.
-  if (s.pending > 0 || !s.items.some((i) => i.type === "turn")) return s;
+  // Before the first turn ends, or while one is under way, Claude is answering.
+  if (s.inTurn || !s.items.some((i) => i.type === "turn")) return s;
+  // A prompt waits: this turn is for it. Claude echoes most before it says anything, but not a command like /code-review.
+  if (s.queued.length) return take(s, 0, false);
   const item: ChatItem = { type: "unprompted", key: `u-${key}`, after: s.finished, ...(s.endedTasks.length ? { ended: s.endedTasks } : {}), ...(s.monitorLine ? { monitor: s.monitorLine } : {}) };
-  return { ...s, items: [...s.items, item], finished: [], endedTasks: [], monitorLine: undefined, pending: 1 };
+  return startTurn({ ...s, items: [...s.items, item] });
+}
+
+/** A turn begins: what finished in the background before it is news for that turn only. */
+function startTurn(s: ChatState): ChatState {
+  return { ...s, inTurn: true, finished: [], endedTasks: [], monitorLine: undefined };
+}
+
+/**
+ * Claude takes up queued prompt `index`: in the middle of the turn under way (`merged`), or starting a turn of its own.
+ * Either way it shows from here on, where Claude read it.
+ */
+function take(s: ChatState, index: number, merged: boolean, replayed = false): ChatState {
+  const item: UserItem = { ...s.queued[index], ...(replayed ? { replayed } : {}), ...(merged ? { merged } : {}) };
+  const next = { ...s, items: [...s.items, item], queued: s.queued.filter((_, i) => i !== index) };
+  return merged ? next : startTurn(next);
 }
 
 /**

@@ -68,7 +68,109 @@ describe("chat", () => {
       assistant("m3", [{ type: "text", text: "A subagent finished." }]),
       result(),
     ]);
-    assert.deepEqual(s.items.map((i) => i.type), ["user", "assistant", "user", "turn", "assistant", "turn", "unprompted", "assistant", "turn"]);
+    // It shows where its turn starts, after the turn it waited for.
+    assert.deepEqual(s.items.map((i) => i.type), ["user", "assistant", "turn", "user", "assistant", "turn", "unprompted", "assistant", "turn"]);
+  });
+
+  const echo = (id: string) => claude({ type: "user", isReplay: true, uuid: id, message: { content: id } });
+  const bash = (msg: string, id: string) => assistant(msg, [{ type: "tool_use", id, name: "Bash", input: { command: "make" } }]);
+  const output = (id: string) => claude({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] } });
+
+  it("keeps a prompt sent during a turn below the chat until Claude takes it up, then starts its turn with it", () => {
+    const sent = fold([
+      { kind: "user_prompt", payload: { text: "first", id: "p1" } },
+      echo("p1"),
+      bash("m1", "t1"),
+      { kind: "user_prompt", payload: { text: "second", id: "p2" } },
+      { kind: "user_prompt", payload: { text: "third", id: "p3" } },
+    ]);
+    assert.deepEqual(sent.queued.map((i) => i.text), ["second", "third"]);
+    assert.deepEqual(sent.items.map((i) => i.type), ["user", "assistant"]);
+    // Claude echoes each queued prompt as its turn starts, before it says anything.
+    const s = fold([output("t1"), assistant("m2", [{ type: "text", text: "Done." }]), result(), echo("p2"), assistant("m3", [{ type: "text", text: "Second." }]), result(), echo("p3"), assistant("m4", [{ type: "text", text: "Third." }]), result()], sent, 10);
+    assert.deepEqual(s.queued, []);
+    assert.deepEqual(s.items.map((i) => (i.type === "user" ? `user:${i.text}` : i.type)), ["user:first", "assistant", "assistant", "turn", "user:second", "assistant", "turn", "user:third", "assistant", "turn"]);
+    assert.ok(ofType(s, "user").every((u) => u.replayed && !u.merged));
+    assert.deepEqual(shape(chatRows(s.items)), ["user", "work[assistant]", "assistant", "turn", "user", "assistant", "turn", "user", "assistant", "turn"]);
+  });
+
+  it("shows a prompt Claude reads in the middle of a turn there, and folds the turn's work around it once it ends", () => {
+    const s = fold([
+      { kind: "user_prompt", payload: { text: "build it", id: "p1" } },
+      echo("p1"),
+      bash("m1", "t1"),
+      { kind: "user_prompt", payload: { text: "did you start by yourself?", id: "p2" } },
+      output("t1"),
+      // Claude reads it between tool calls, in the turn it is taking: one result for both prompts.
+      echo("p2"),
+      bash("m2", "t2"),
+      output("t2"),
+      assistant("m3", [{ type: "text", text: "As a reaction to your message." }]),
+      result(),
+      // What Claude says next is a turn of its own: nothing waits for one.
+      assistant("m4", [{ type: "text", text: "A subagent finished." }]),
+      result(),
+    ]);
+    assert.deepEqual(s.items.map((i) => (i.type === "user" ? `user:${i.text}` : i.type)), ["user:build it", "assistant", "user:did you start by yourself?", "assistant", "assistant", "turn", "unprompted", "assistant", "turn"]);
+    assert.equal(ofType(s, "user")[1].merged, true);
+    assert.deepEqual(shape(chatRows(s.items)), ["user", "work[assistant]", "user", "work[assistant]", "assistant", "turn", "unprompted", "assistant", "turn"]);
+  });
+
+  it("doesn't take the turn for a prompt queued behind one Claude read mid-turn for one Claude took by itself", () => {
+    // As Claude does it: a prompt read in the middle of a turn gets no turn of its own, and so no result.
+    const s = fold([
+      { kind: "user_prompt", payload: { text: "fix it", id: "p1" } },
+      echo("p1"),
+      bash("m1", "t1"),
+      { kind: "user_prompt", payload: { text: "then merge", id: "p2" } },
+      output("t1"),
+      echo("p2"),
+      assistant("m2", [{ type: "text", text: "Fixed and merged." }]),
+      result(),
+      { kind: "user_prompt", payload: { text: "read the original file?", id: "p3" } },
+      echo("p3"),
+      bash("m3", "t3"),
+      { kind: "user_prompt", payload: { text: "so be it", id: "p4" } },
+      output("t3"),
+      assistant("m4", [{ type: "text", text: "Shall I build this one?" }]),
+      result(),
+      claude({ type: "system", subtype: "init" }),
+      echo("p4"),
+      assistant("m5", [{ type: "text", text: "Building it." }]),
+      result(),
+      // Nothing waits now: this one Claude took by itself.
+      assistant("m6", [{ type: "text", text: "A subagent finished." }]),
+      result(),
+    ]);
+    assert.deepEqual(s.items.map((i) => (i.type === "user" ? `user:${i.text}` : i.type)), [
+      "user:fix it", "assistant", "user:then merge", "assistant", "turn",
+      "user:read the original file?", "assistant", "assistant", "turn",
+      "user:so be it", "assistant", "turn",
+      "unprompted", "assistant", "turn",
+    ]);
+  });
+
+  it("takes a queued command's turn for it though Claude echoes it last", () => {
+    const s = fold([
+      { kind: "user_prompt", payload: { text: "go", id: "p1" } },
+      { kind: "user_prompt", payload: { text: "/code-review", id: "p2" } },
+      result(),
+      assistant("m1", [{ type: "text", text: "Review done." }]),
+      echo("p2"),
+      result(),
+    ]);
+    assert.deepEqual(s.items.map((i) => i.type), ["user", "turn", "user", "assistant", "turn"]);
+    assert.equal(ofType(s, "user")[1].replayed, true);
+  });
+
+  it("keeps prompts Claude never took up in the chat when it is gone", () => {
+    const s = fold([
+      { kind: "user_prompt", payload: { text: "go", id: "p1" } },
+      { kind: "user_prompt", payload: { text: "and then", id: "p2" } },
+      { kind: "ended", payload: { reason: "exit", code: 1 } },
+    ]);
+    assert.deepEqual(s.queued, []);
+    assert.deepEqual(s.items.map((i) => i.type), ["user", "user", "ended"]);
   });
 
   it("shows a logged-out turn as one error, in place of Claude's reply and the failed turn", () => {
