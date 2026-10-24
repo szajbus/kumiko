@@ -4,7 +4,7 @@ import { api, errorMessage } from "./api";
 import { formatDuration } from "./format";
 import { PaneGrip } from "./PaneGrip";
 import { COLORS } from "./status";
-import { applyTaskEvent, emptyTasks, endText, listed, runningTasks, timeLimit, type MonitorRow, type Task, type TasksState } from "./tasks";
+import { applyTaskEvent, emptyTasks, endText, listed, quietEventsText, runningTasks, timeLimit, type MonitorRow, type Task, type TasksState } from "./tasks";
 import { WindowContext } from "./windowContext";
 
 // The Tasks pane, and the parts of the chat that show Claude's background tasks. See tasks.ts for the state.
@@ -443,7 +443,7 @@ const showMonitor = (session: string, task?: Task) =>
 
 /** A monitor's line that woke Claude for the turn this starts. */
 export function MonitorLine({ session, task, line }: { session: string; task?: Task; line: string }) {
-  return <BackgroundLine mark={monitorMark} name={task?.description || "A monitor"} what={<code>{line || "printed a line"}</code>} action={showMonitor(session, task)} />;
+  return <BackgroundLine mark={monitorMark} name={task?.description || "A monitor"} what={line ? <code>{line}</code> : "printed a line"} action={showMonitor(session, task)} />;
 }
 
 /** How many of a monitor's quiet turns show before "more". */
@@ -455,7 +455,7 @@ export function MonitorEvents({ session, row, task }: { session: string; row: Mo
   const [all, setAll] = useState(false);
   const n = row.events.length;
   const shown = all ? row.events : row.events.slice(-SHOWN_EVENTS);
-  const what = `${n === 1 ? `printed “${row.events[0].line || "a line"}”` : `${n} lines`} · nothing for Claude to do`;
+  const what = quietEventsText(row);
   return (
     <div className="monitor-events">
       <BackgroundLine fold={{ open, toggle: () => setOpen(!open) }} mark={monitorMark} name={task?.description || "A monitor"} what={what} action={showMonitor(session, task)} />

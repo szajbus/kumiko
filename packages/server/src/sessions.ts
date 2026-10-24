@@ -62,16 +62,14 @@ interface Session {
 interface TaskWatch {
   /** Shell and monitor tasks by Claude's task id: whether they run, in the background, and were started by a subagent. */
   shells: Map<string, { running: boolean; background: boolean; subagent: boolean }>;
-  /** Tasks the user stopped, by task id: Claude takes no turn for those. */
-  stopped: Set<string>;
   /** The tool_use ids of Claude's Monitor calls; a task started by one is a monitor. */
   monitorCalls: Set<string>;
   /** Running monitors, by task id, with how much they had printed when last looked at. */
   monitors: Map<string, number>;
   /**
    * A task ended since Claude's last turn ended that Claude takes a turn to report on, so the turn Claude takes next is
-   * for that, not a monitor's line: one in the background that ended by itself, not stopped by the user or ending with
-   * its subagent.
+   * for that, not a monitor's line: one in the background that ended by itself, not stopped or ending with its subagent.
+   * How it ended says so, not whether the user asked to stop it: one can end by itself just before the stop reaches it.
    */
   ended: boolean;
 }
@@ -882,7 +880,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
 
   /** Follows what Claude says of its shells and monitors; see `TaskWatch`. */
   private watchTasks(s: Session, m: AgentMessage) {
-    const w = (s.tasks ??= { shells: new Map(), stopped: new Set(), monitorCalls: new Set(), monitors: new Map(), ended: false });
+    const w = (s.tasks ??= { shells: new Map(), monitorCalls: new Set(), monitors: new Map(), ended: false });
     if (m.type === "assistant" && !m.parent_tool_use_id) {
       const content = (m.message as { content?: unknown } | undefined)?.content;
       for (const b of Array.isArray(content) ? (content as { type?: unknown; name?: unknown; id?: unknown }[]) : [])
@@ -900,8 +898,8 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
       const shell = w.shells.get(id);
       const timedOut = typeof m.summary === "string" && m.summary.includes("background time limit");
       const byItself = m.status === "completed" || m.status === "failed" || timedOut;
-      // A subagent's end is reported too; a shell's only when it ran in the background, on its own, and wasn't stopped.
-      if (byItself && (!shell || (shell.background && !shell.subagent)) && !w.stopped.has(id)) w.ended = true;
+      // A subagent's end is reported too; a shell's only when it ran in the background, on its own.
+      if (byItself && (!shell || (shell.background && !shell.subagent))) w.ended = true;
       w.monitors.delete(id);
       if (!shell?.running) return;
       shell.running = false;
@@ -958,7 +956,6 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
   async stopTask(id: string, taskId: string): Promise<void> {
     const s = this.live(id);
     this.push(s, { kind: "task_stop", payload: { taskId } });
-    s.tasks?.stopped.add(taskId);
     await s.driver.stopTask(taskId);
   }
 

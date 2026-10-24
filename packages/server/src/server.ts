@@ -1136,7 +1136,11 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     });
     const nl = out.indexOf("\n");
     const totalBytes = Number(out.slice(0, nl).trim());
-    return c.json({ output: out.slice(nl + 1), totalBytes, truncated: totalBytes > TASK_FILE_BYTES });
+    const truncated = totalBytes > TASK_FILE_BYTES;
+    // Cut at a byte count, the last line may end inside a character: what is shown ends with the last whole line.
+    const output = out.slice(nl + 1);
+    const lastLine = output.lastIndexOf("\n");
+    return c.json({ output: truncated && lastLine >= 0 ? output.slice(0, lastLine + 1) : output, totalBytes, truncated });
   });
   app.post("/api/sessions/:id/tasks/:task/stop", async (c) => {
     await sessions.stopTask(sessionOf(c).id, taskOf(c));

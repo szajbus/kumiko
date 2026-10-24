@@ -34,6 +34,8 @@
 //   "fg-shell"   runs a Bash command in the foreground for 30 steps, reported as a task after the first; moved to the
 //                background, its call returns at once and it goes on there
 //   "agent-shell" runs a subagent that starts a background shell and finishes, which kills the shell
+//   "bg-race"    starts a Monitor that prints a line every step without waking Claude, and a background shell that,
+//                asked to stop, has just finished by itself: it ends as completed, and Claude takes a turn to report it
 //   anything else is echoed back as "You said: …", followed by " [with …]" naming the files that came with it
 // With a `.require-login` file in $CLAUDE_CONFIG_DIR, every prompt is answered as "signed out" until there is a
 // `.credentials.json` beside it. `claude auth status` and `claude auth login` work against that folder: the login
@@ -53,10 +55,11 @@
 // background_tasks_changed. `get_task_output` answers with the end of a task's output, `stop_task` kills one, and
 // `background_tasks` moves a foreground one to the background. `cancel_async_message` takes a prompt that waits behind
 // the turn under way out of the queue, answering whether it found it there. With stdin closed, Claude waits for its shells to end
-// before it exits; SIGTERM kills them, each reported as stopped, and it exits with 143.
+// before it exits; SIGTERM kills them, each reported as stopped, and it exits with 143. Either way it deletes the files
+// it kept the tasks' output in, as Claude does.
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, fstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, fstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -302,6 +305,8 @@ const tasksChanged = () =>
 const taskEvent = (subtype, t, extra) => out({ type: "system", subtype, task_id: t.id, session_id, uuid: randomUUID(), ...extra });
 // Where Claude keeps a task's output, as it does: a file per task, which the host can read itself.
 const outputFile = (t) => join(tmpdir(), "claude-fake", session_id, "tasks", `${t.id}.output`);
+/** Deletes the files of every task's output, as Claude does when it exits. */
+const forgetOutput = () => rmSync(join(tmpdir(), "claude-fake", session_id), { recursive: true, force: true });
 /** Adds to what task `t` printed, in its file too. */
 const print = (t, text) => {
   t.output += text;
@@ -319,8 +324,8 @@ function autoTurn(text) {
  * Starts a shell task (`kind` "shell" or "monitor") that prints one line per step from `lines`, then exits with `code`;
  * `steps` Infinity runs until stopped. Returns it; `t.done` resolves once it has ended, however it did.
  */
-function startShell({ toolUseId, description, kind = "shell", background = true, steps, line = (i) => `line ${i}`, code = 0, parent, onLine }) {
-  const t = { id: `b${randomUUID().replace(/-/g, "").slice(0, 8)}`, toolUseId, description, kind, background, status: "running", output: "", parent };
+function startShell({ toolUseId, description, kind = "shell", background = true, steps, line = (i) => `line ${i}`, code = 0, parent, onLine, endsOnStop = false }) {
+  const t = { id: `b${randomUUID().replace(/-/g, "").slice(0, 8)}`, toolUseId, description, kind, background, status: "running", output: "", parent, endsOnStop };
   let finish;
   t.done = new Promise((r) => (finish = r));
   t.end = (status, how) => {
@@ -545,6 +550,14 @@ async function turn({ text, files, auto }) {
     return result(start, { text: "started" });
   }
 
+  if (text === "bg-race") {
+    backgroundCall(id, "Monitor", { command: "tail -F deploy.log", description: "Watch the deploy" }, { kind: "monitor", steps: Infinity, line: (i) => `deploy ${i}` });
+    backgroundCall(id, "Bash", { command: "npm run build", description: "Build", run_in_background: true }, { steps: Infinity, endsOnStop: true });
+    const id2 = `msg_${++msgN}`;
+    await streamText(id2, "started", 0, () => cancelled);
+    return result(start, { text: "started" });
+  }
+
   if (/^bg-log \d+$/.test(text)) {
     // One long line per number, all printed at once: more than get_task_output's 8 KiB, for the whole file.
     const n = Number(text.slice(7));
@@ -691,7 +704,11 @@ rl.on("line", (line) => {
     out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: { output: all.subarray(-OUTPUT_TAIL).toString("utf8"), total_bytes: all.length, truncated: all.length > OUTPUT_TAIL } } });
   } else if (msg.type === "control_request" && msg.request?.subtype === "stop_task") {
     const t = shells.get(msg.request.task_id);
-    if (t) killShell(t);
+    if (t?.endsOnStop && t.status === "running") {
+      // It finished just before the stop came: Claude reports that like any end of its own.
+      t.end("completed", "\n[exited with code 0]\n");
+      autoTurn("The command finished.");
+    } else if (t) killShell(t);
     out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: {} } });
   } else if (msg.type === "control_request" && msg.request?.subtype === "background_tasks") {
     const want = msg.request.tool_use_id;
@@ -718,9 +735,11 @@ rl.on("close", async () => {
   if (gaveUp) current?.cancel();
   // Background shells keep Claude alive: it waits for them, and for the turns they bring, before it exits.
   while (current || liveShells().some((t) => t.background) || queue.length) await sleep(10);
+  forgetOutput();
   process.exit(gaveUp ? 1 : 0);
 });
 process.on("SIGTERM", () => {
   for (const t of liveShells()) killShell(t);
+  forgetOutput();
   process.exit(143);
 });

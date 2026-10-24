@@ -737,6 +737,8 @@ describe("sessions", () => {
     assert.ok(chat.got.findIndex((e) => e.kind === "task_stop") < chat.got.findIndex((e) => e.kind === "claude" && e.payload.subtype === "task_notification"), "who stopped it comes first");
     await waitFor(async () => (await session(id))?.shells === undefined);
     assert.equal(chat.results().length, 1, "Claude took no turn for the stop");
+    const ended = chat.got.find((e) => e.kind === "claude" && e.payload.subtype === "task_notification");
+    const outputs = dirname(String(ended?.kind === "claude" && ended.payload.output_file));
 
     // The Tasks pane opens beside the chat, and closes again.
     const opened = await json(await api(`/api/sessions/${id}/window/tasks`, { method: "POST", body: "{}" }));
@@ -744,6 +746,25 @@ describe("sessions", () => {
     assert.ok(Object.values(opened.panes).includes("tasks"));
     assert.ok(Object.values((await json(await api(`/api/sessions/${id}/window/tasks`, { method: "POST", body: JSON.stringify({ open: true }) }))).panes).includes("tasks"), "open leaves it open");
     assert.ok(!Object.values((await json(await api(`/api/sessions/${id}/window/tasks`, { method: "POST", body: "{}" }))).panes).includes("tasks"));
+    await api(`/api/sessions/${id}?stop`, { method: "DELETE" });
+    // Claude deletes its files of the tasks' output when it exits.
+    await waitFor(() => !existsSync(outputs) || undefined);
+  });
+
+  it("doesn't take a monitor's line for why Claude reports a task that ended by itself as it was being stopped", async () => {
+    const id = await startSession("one", "bg-race");
+    const chat = await listen(id);
+    const shell = await waitFor(() => chat.got.find((e) => e.kind === "claude" && e.payload.subtype === "task_started" && e.payload.description === "Build"));
+    const taskId = String(shell.kind === "claude" && shell.payload.task_id);
+    await waitFor(async () => (await session(id))?.status === "idle" || undefined);
+    // The monitor has printed since: its output has grown.
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal((await api(`/api/sessions/${id}/tasks/${taskId}/stop`, { method: "POST" })).status, 200);
+    await waitFor(() => chat.results().length === 2 || undefined);
+    await new Promise((r) => setTimeout(r, 300));
+    assert.deepEqual(chat.got.filter((e) => e.kind === "monitor_event"), [], "the turn was for the build's end");
+    const monitor = chat.got.find((e) => e.kind === "claude" && e.payload.subtype === "task_started" && e.payload.description === "Watch the deploy");
+    await api(`/api/sessions/${id}/tasks/${String(monitor?.kind === "claude" && monitor.payload.task_id)}/stop`, { method: "POST" });
     await api(`/api/sessions/${id}?stop`, { method: "DELETE" });
   });
 
@@ -762,9 +783,18 @@ describe("sessions", () => {
     assert.equal(all.truncated, false);
     assert.equal((await api(`/api/sessions/${id}/tasks/bnotatask/file`)).status, 404);
 
-    // Once Claude's file is gone, it says so; what the session kept is still there.
+    // A file longer than what is read is cut at a line's end, never inside a character.
     const done = chat.got.find((e) => e.kind === "claude" && e.payload.subtype === "task_notification")!;
-    await rm(String(done.kind === "claude" && done.payload.output_file));
+    const file = String(done.kind === "claude" && done.payload.output_file);
+    const limit = 5 * 1024 * 1024;
+    // "é" is two bytes, the first of them the last byte read.
+    await writeFile(file, `first line\n${"y".repeat(limit - 12)}é\nmore\n`);
+    const cut = await json(await api(`/api/sessions/${id}/tasks/${task}/file`));
+    assert.equal(cut.truncated, true);
+    assert.equal(cut.output, "first line\n");
+
+    // Once Claude's file is gone, it says so; what the session kept is still there.
+    await rm(file);
     assert.equal((await api(`/api/sessions/${id}/tasks/${task}/file`)).status, 410);
     await api(`/api/sessions/${id}?stop`, { method: "DELETE" });
   });

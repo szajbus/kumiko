@@ -1,5 +1,5 @@
 import { isCommand, type AgentAsk, type AskAnswer, type AskClosedReason, type Attachment, type EndReason, type LoginAccount, type SessionEvent } from "@kumiko/shared";
-import { applyTaskEvent, emptyTasks, reportsEnd, type TasksState } from "./tasks.ts";
+import { applyTaskEvent, emptyTasks, reportsEnd, type Task, type TasksState } from "./tasks.ts";
 
 // Turns a session's events into what the chat shows. Claude's stream-json is read loosely: only the fields the
 // chat needs, and anything unexpected is skipped rather than breaking the view.
@@ -301,6 +301,13 @@ export function unpromptedText(after: readonly string[]): string {
   return `${list} finished in the background`;
 }
 
+/** The plain line a turn of Claude's own starts with, when the lines for tasks that ended or a monitor's don't say why. */
+export function unpromptedPlain(after: readonly string[], ended: readonly Task[], monitor: boolean): string | undefined {
+  // A subagent's end has a line of its own when its task is known; one whose task isn't still needs saying.
+  const rest = after.filter((d) => !ended.some((t) => t.kind === "agent" && t.description === d));
+  return rest.length || (!ended.length && !monitor) ? unpromptedText(rest) : undefined;
+}
+
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 export function summarize(blocks: Block[]): { summary: string; tools: string } {
@@ -391,14 +398,25 @@ function applyChatEvent(s: ChatState, ev: SessionEvent): ChatState {
       // kept for it. Without `at`, recorded before Kumiko said which turn, it goes on the latest such line.
       const line = { taskId: ev.payload.taskId, line: ev.payload.line };
       const { at } = ev.payload;
-      const index =
-        at === undefined
-          ? s.items.findLastIndex(startsTurn)
-          : s.items.findIndex((i) => i.type === "unprompted" && Number(i.key.slice(2)) > at);
-      const start = s.items[index];
-      if (start?.type !== "unprompted" || start.monitor || start.ended?.length || start.after.length) return index >= 0 && at !== undefined ? s : { ...s, monitorLine: line };
+      let index: number;
+      if (at === undefined) {
+        index = s.items.findLastIndex(startsTurn);
+        const start = s.items[index];
+        if (start?.type !== "unprompted" || start.monitor || start.ended?.length || start.after.length) return { ...s, monitorLine: line };
+      } else {
+        // The turn that began at `at` starts with the first line after the end of the turn before it, and before its own
+        // end. Keys can't say which that is: a prompt Claude took up from the queue keeps its own, earlier one.
+        const before = s.items.findLastIndex((i) => i.type === "turn" && Number(i.key) < at);
+        const end = s.items.findIndex((i, k) => k > before && i.type === "turn");
+        index = s.items.findIndex((i, k) => k > before && (end < 0 || k < end) && startsTurn(i));
+        // Not under way yet: kept for it. Over without a word: there is nothing to put it on.
+        if (index < 0) return end < 0 ? { ...s, monitorLine: line } : s;
+        const start = s.items[index];
+        // A turn for a prompt, or for something else that ended, isn't the monitor's.
+        if (start.type !== "unprompted" || start.monitor || start.ended?.length || start.after.length) return s;
+      }
       const items = [...s.items];
-      items[index] = { ...start, monitor: line };
+      items[index] = { ...(items[index] as Extract<ChatItem, { type: "unprompted" }>), monitor: line };
       return { ...s, items };
     }
     case "interrupt":
@@ -512,7 +530,8 @@ function applyClaude(s: ChatState, m: Json & { type: string }, key: string): Cha
       const usage = tokensOf(m.usage);
       const tokens = usage && (usage.total >= s.totalTokens.total ? { total: usage.total - s.totalTokens.total, cached: Math.max(0, usage.cached - s.totalTokens.cached) } : usage);
       const ok = m.subtype === "success" && m.is_error !== true;
-      const base = { ...s, totalCost: total ?? s.totalCost, totalTokens: usage ?? s.totalTokens, interruptPending: false, inTurn: false };
+      // A monitor's line kept for a turn that ended without a word was for that turn only.
+      const base = { ...s, totalCost: total ?? s.totalCost, totalTokens: usage ?? s.totalTokens, interruptPending: false, inTurn: false, monitorLine: undefined };
       // A slash command like /model is a turn of its own with nothing to sum up.
       if (ok && m.num_turns === 0) return base;
       const status = ok ? "ok" : s.interruptPending && m.subtype === "error_during_execution" ? "interrupted" : "error";

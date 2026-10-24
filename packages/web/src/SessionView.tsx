@@ -5,7 +5,7 @@ import { api, errorMessage, type SessionStream } from "./api";
 import { fromAttachment, toInput } from "./attachments";
 import { ArtifactsButton } from "./ArtifactView";
 import { AskCard, AskContext } from "./AskCard";
-import { applyEvent, backgroundAgents, startsTurn, unpromptedText, blocksOf, chatRows, emptyChat, loginCards, partialToolSummary, summarize, toolState, toolSummary, type Block, type ChatItem, type ChatState, type ItemRow, type LoginAnswer, type Subagent, type ToolState, type WorkRow } from "./chat";
+import { applyEvent, backgroundAgents, startsTurn, unpromptedPlain, blocksOf, chatRows, emptyChat, loginCards, partialToolSummary, summarize, toolState, toolSummary, type Block, type ChatItem, type ChatState, type ItemRow, type LoginAnswer, type Subagent, type ToolState, type WorkRow } from "./chat";
 import { codeWrap } from "./codeWrap";
 import { Composer, type ComposerHandle } from "./Composer";
 import { HeaderCorner } from "./Corner";
@@ -938,9 +938,10 @@ function ShellToolLine({ block, state, tasks, session, live }: { block: Extract<
 function UnpromptedLine({ item }: { item: Extract<ChatItem, { type: "unprompted" }> }) {
   const { tasks, session } = useContext(AgentsContext);
   const ended = (item.ended ?? []).map((id) => tasks.byId[id]).filter(Boolean);
+  const plain = unpromptedPlain(item.after, ended, Boolean(item.monitor));
   return (
     <>
-      {!ended.length && !item.monitor && <PlainLine text={unpromptedText(item.after)} />}
+      {plain !== undefined && <PlainLine text={plain} />}
       {ended.map((t) => (
         <TaskEndLine key={t.id} session={session} task={t} />
       ))}

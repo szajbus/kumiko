@@ -1049,6 +1049,8 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
 .bg-line-mark { flex: none; width: 16px; display: flex; justify-content: center; }
 .bg-line-name { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); font-weight: 500; }
 .bg-line-what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* On a line that doesn't fold, what happened takes the room the fold button would, so the button sits at the right. */
+.bg-line > .bg-line-what { flex: 1; }
 .bg-line-what code { color: var(--text-2); font-size: 12px; }
 .monitor-events { display: flex; flex-direction: column; gap: 6px; }
 .monitor-event-list { margin: 0 0 0 44px; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); }

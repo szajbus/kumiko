@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { SessionEvent } from "@kumiko/shared";
-import { applyEvent, chatRows, emptyChat, type ChatItem, type ChatState } from "../src/chat.ts";
-import { endText, foldMonitorTurns, foregroundTask, listed, runningTasks, timeLimit, type MonitorRow } from "../src/tasks.ts";
+import { applyEvent, chatRows, emptyChat, unpromptedPlain, type ChatItem, type ChatState } from "../src/chat.ts";
+import { endText, foldMonitorTurns, foregroundTask, listed, quietEventsText, runningTasks, timeLimit, type MonitorRow, type Task } from "../src/tasks.ts";
 
 type NewEvent = SessionEvent extends infer E ? (E extends unknown ? Omit<E, "seq"> : never) : never;
 
@@ -129,6 +129,62 @@ describe("background tasks", () => {
     const turn = 100;
     const s = fold([init(), { kind: "monitor_event", payload: { taskId: "b-mon", line: "check 2", at: turn + 1 } }, text("m2", "Deploy check 2 is healthy."), result()], before, turn);
     assert.deepEqual(ofType(s, "unprompted").map((i) => i.monitor?.line), [undefined, "check 2"]);
+  });
+
+  // A turn that took up a prompt sent while Claude worked: its user item keeps the prompt's own, earlier key.
+  const queuedTurn = (): ChatState =>
+    fold([
+      { kind: "user_prompt", payload: { text: "watch", id: "p1" } },
+      call("t-mon", "Monitor", { command: "deploy checks", description: "Watch the deploy" }),
+      started("b-mon", "t-mon"),
+      { kind: "user_prompt", payload: { text: "and the logs?", id: "p2" } },
+      text("m0", "watching"),
+      result(),
+    ]);
+
+  it("leaves a monitor's line off a later turn when the turn it came for took up a waiting prompt", () => {
+    const before = queuedTurn();
+    const at = 101;
+    // The turn at `at` answers the prompt; the next is one of Claude's own; then the line for the first comes, late.
+    const s = fold([init(), text("m1", "The logs are clean."), result(), init(), text("m2", "Deploy check 2 is healthy."), result(), { kind: "monitor_event", payload: { taskId: "b-mon", line: "check 1", at } }], before, at - 1);
+    assert.deepEqual(ofType(s, "unprompted").map((i) => i.monitor?.line), [undefined]);
+  });
+
+  it("doesn't keep a line for a turn that took up a waiting prompt, for the next turn to pick up", () => {
+    const before = queuedTurn();
+    const at = 101;
+    const s = fold([init(), text("m1", "The logs are clean."), { kind: "monitor_event", payload: { taskId: "b-mon", line: "check 1", at } }, result(), init(), text("m2", "Deploy check 2 is healthy."), result()], before, at - 1);
+    assert.deepEqual(ofType(s, "unprompted").map((i) => i.monitor?.line), [undefined]);
+  });
+
+  it("doesn't keep a line for a turn that ended without a word, for the next turn to pick up", () => {
+    const before = fold([
+      { kind: "user_prompt", payload: { text: "watch", id: "p1" } },
+      call("t-mon", "Monitor", { command: "deploy checks", description: "Watch the deploy" }),
+      started("b-mon", "t-mon"),
+      text("m0", "watching"),
+      result(),
+    ]);
+    const at = 101;
+    const s = fold([init(), { kind: "monitor_event", payload: { taskId: "b-mon", line: "check 1", at } }, result(), init(), text("m2", "Deploy check 2 is healthy."), result()], before, at - 1);
+    assert.deepEqual(ofType(s, "unprompted").map((i) => i.monitor?.line), [undefined]);
+  });
+
+  it("names a subagent that finished in the background even beside a shell's end, when its own end isn't known", () => {
+    const shell: Task = { id: "b1", kind: "shell", description: "npm ci", background: true, status: "completed" };
+    const agent: Task = { id: "a1", kind: "agent", description: "Review the diff", background: true, status: "completed" };
+    assert.equal(unpromptedPlain(["Review the diff"], [shell], false), "“Review the diff” finished in the background");
+    assert.equal(unpromptedPlain(["Review the diff"], [agent], false), undefined, "its own end says it");
+    assert.equal(unpromptedPlain([], [shell], false), undefined);
+    assert.equal(unpromptedPlain([], [], true), undefined, "the monitor's line says why");
+    assert.equal(unpromptedPlain([], [], false), "Claude went on by itself");
+  });
+
+  it("quotes only a line a monitor really printed", () => {
+    const row = (lines: string[]) => ({ events: lines.map((line) => ({ line })) }) as unknown as MonitorRow;
+    assert.equal(quietEventsText(row(["deploy ok"])), "printed “deploy ok” · nothing for Claude to do");
+    assert.equal(quietEventsText(row([""])), "printed a line · nothing for Claude to do");
+    assert.equal(quietEventsText(row(["a", "b"])), "2 lines · nothing for Claude to do");
   });
 
   it("folds quiet turns a monitor woke Claude for, and shows one that did something", () => {

@@ -276,3 +276,10 @@ function quietTurn(rows: readonly ChatRow[], i: number): { start: Unprompted; re
   }
   return undefined;
 }
+
+/** What a monitor's folded quiet turns say of its lines. */
+export function quietEventsText(row: MonitorRow): string {
+  const n = row.events.length;
+  const one = row.events[0]?.line;
+  return `${n === 1 ? (one ? `printed “${one}”` : "printed a line") : `${n} lines`} · nothing for Claude to do`;
+}
