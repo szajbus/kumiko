@@ -175,11 +175,12 @@ code, .mono { font-family: var(--mono); }
 .badge.badge-failed { border-color: #5c2b2e; color: #f6b3aa; }
 .badge.badge-bypass { border-color: #6b4a2a; color: #e0a96d; white-space: nowrap; }
 .row-status { display: flex; align-items: center; gap: 8px; font-weight: 500; }
-.row-res { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text-2); }
-.row-meters { display: flex; gap: 10px; }
-.row-meter { display: flex; align-items: center; gap: 4px; }
-.row-meter .meter { width: 24px; margin: 0; }
-.row-meter .mono { font-size: 11px; color: var(--muted); }
+.row-res { display: grid; grid-template-columns: 2.5fr 4fr 4fr; gap: 14px; max-width: 260px; font-size: 13px; color: var(--text-2); }
+.table-headrow .row-res { font-size: inherit; color: inherit; }
+.row-res-cell { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.row-meter { display: flex; align-items: center; gap: 6px; }
+.row-meter .meter { flex: 1; min-width: 16px; margin: 0; }
+.row-meter .mono { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .row-actions { position: relative; display: flex; justify-content: flex-end; gap: 8px; }
 .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
 .dot-small { width: 8px; height: 8px; }

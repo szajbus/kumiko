@@ -94,12 +94,12 @@ export function sandboxCreatedAt(sb: SandboxView): string | undefined {
   return sb.meta?.createdAt;
 }
 
-export function resources(sb: SandboxView): string {
+export function resources(sb: SandboxView): [string, string, string] | undefined {
   if (sb.cpus === undefined && sb.memoryGiB === undefined) {
     const s = sb.meta?.spec;
-    return s ? `${s.cpus} · ${s.memoryGiB} GiB · ${s.diskGiB} GiB` : "—";
+    return s && [`${s.cpus}`, `${s.memoryGiB} GiB`, `${s.diskGiB} GiB`];
   }
-  return `${sb.cpus ?? "?"} · ${sb.memoryGiB ?? "?"} GiB · ${sb.diskGiB ?? "?"} GiB`;
+  return [`${sb.cpus ?? "?"}`, `${sb.memoryGiB ?? "?"} GiB`, `${sb.diskGiB ?? "?"} GiB`];
 }
 
 /** One of a running sandbox's readings, as a bar: how full it is, and in words. */

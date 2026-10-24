@@ -152,9 +152,9 @@ describe("status", () => {
   });
 
   it("shows Lima's resources, else the stored spec's", () => {
-    assert.equal(resources(sb({ cpus: 4, memoryGiB: 8, diskGiB: 100 })), "4 · 8 GiB · 100 GiB");
-    assert.equal(resources(sb({ meta: meta("ready") })), "2 · 4 GiB · 20 GiB");
-    assert.equal(resources(sb()), "—");
+    assert.deepEqual(resources(sb({ cpus: 4, memoryGiB: 8, diskGiB: 100 })), ["4", "8 GiB", "100 GiB"]);
+    assert.deepEqual(resources(sb({ meta: meta("ready") })), ["2", "4 GiB", "20 GiB"]);
+    assert.equal(resources(sb()), undefined);
   });
 
   it("dates a sandbox by its own record, which a recreate renews, not by its project", () => {

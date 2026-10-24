@@ -4,7 +4,7 @@ import { useHome, useSandboxStats, type LiveState } from "./api";
 import { FinishingCard } from "./Finishing";
 import { tilde } from "./format";
 import { EmptyBento, Plus } from "./icons";
-import { meters, plural, resources, statusOf } from "./status";
+import { meters, plural, resources, statusOf, type Meter } from "./status";
 
 interface Props {
   live: LiveState;
@@ -74,7 +74,11 @@ export function ProjectList({ live, onOpen, onNew, onSessionStarted }: Props) {
               <div className="table-row table-headrow">
                 <span>Project</span>
                 <span>Sandbox</span>
-                <span>CPU · Memory · Disk</span>
+                <span className="row-res">
+                  <span>CPU</span>
+                  <span>Memory</span>
+                  <span>Disk</span>
+                </span>
                 <span className="align-right">Actions</span>
               </div>
               {live.projects.map((p) => (
@@ -121,23 +125,34 @@ function Row({ p, stats, home, log, actions, onOpen }: { p: ProjectView; stats?:
         <span>{status.text}</span>
       </div>
 
-      <span className="row-res">
-        <span className="mono">{resources(p)}</span>
-        {stats && (
-          <span className="row-meters">
-            {meters(stats).map((m) => (
-              <span key={m.label} className="row-meter" title={`${m.label}: ${m.text}`}>
+      <ResourceCells specs={resources(p)} usage={stats && meters(stats)} />
+
+      <SandboxActions sb={p} actions={actions} />
+    </div>
+  );
+}
+
+/** The sandbox's size, one column per resource, each with its meter under it while it runs. */
+function ResourceCells({ specs, usage }: { specs?: string[]; usage?: Meter[] }) {
+  if (!specs) return <span className="mono dim">—</span>;
+  return (
+    <span className="row-res">
+      {specs.map((spec, i) => {
+        const m = usage?.[i];
+        return (
+          <span key={i} className="row-res-cell" title={m && `${m.label}: ${m.text}`}>
+            <span className="mono">{spec}</span>
+            {m && (
+              <span className="row-meter">
                 <span className="meter" role="meter" aria-label={`${m.label} in use`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={m.percent}>
                   <span style={{ width: `${m.percent ?? 0}%`, background: m.color }} />
                 </span>
                 <span className="mono">{m.percent === undefined ? "—" : `${m.percent}%`}</span>
               </span>
-            ))}
+            )}
           </span>
-        )}
-      </span>
-
-      <SandboxActions sb={p} actions={actions} />
-    </div>
+        );
+      })}
+    </span>
   );
 }
