@@ -1,4 +1,4 @@
-import { useContext, useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from "react";
+import { useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type PointerEvent } from "react";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import { imageTypeOf, MAX_ARTIFACT_BYTES, MAX_IMAGE_BYTES, MAX_PANES, urlOrigin, type ArtifactState, type ArtifactType, type PaneId, type WidgetId } from "@kumiko/shared";
 import { ArtifactIcon, Close, OpenNew, Trash } from "./icons";
@@ -10,6 +10,8 @@ import { quoteFrom } from "./quote";
 import { COLORS } from "./status";
 import { withPolicy } from "./htmlPolicy";
 import { api } from "./api";
+import { codeWrap } from "./codeWrap";
+import { shownSource, SOURCE_LANG } from "./artifactSource";
 import { WindowContext, type ArtifactEntry, type WindowApi } from "./windowContext";
 
 /** How long "Updated" shows after the text changes. */
@@ -34,8 +36,6 @@ const WIDTHS = [
 /** Artifacts that are files in the session's folder, as opposed to pages served elsewhere. */
 const hasFile = (type: ArtifactType) => type !== "preview" && type !== "web";
 
-/** Artifacts drawn from a source that can be shown instead, by the language it is in. */
-const SOURCE_LANG: Partial<Record<ArtifactType, string>> = { mermaid: "mermaid", svg: "xml", html: "html" };
 /** What the button that goes back from the source says: what it shows. */
 const DRAWN_LABEL: Partial<Record<ArtifactType, string>> = { mermaid: "Diagram", svg: "Image", html: "Page" };
 
@@ -50,6 +50,8 @@ export function ArtifactView({ widget, pane, doc, writing }: Props) {
   // Its source as text instead of what it draws, to read or quote from.
   const [source, setSource] = useState(false);
   const page = isPage(doc) && !(source && SOURCE_LANG[doc.type]);
+  // Whether the source wraps its long lines: the same choice as code blocks', so Wrap means one thing everywhere.
+  const wrapped = useSyncExternalStore(codeWrap.subscribe, codeWrap.get);
   const body = useRef<HTMLDivElement>(null);
   const shown = useContent(doc);
   // What Claude wrote stays until the version the window has of it has come, rather than the one before it.
@@ -95,6 +97,17 @@ export function ArtifactView({ widget, pane, doc, writing }: Props) {
           {SOURCE_LANG[doc.type] && writing === undefined && (
             <button type="button" className="artifact-copy" onClick={() => setSource((v) => !v)} title={source ? "Show it drawn" : "Show its source, to read or quote from"}>
               {source ? DRAWN_LABEL[doc.type] : "Source"}
+            </button>
+          )}
+          {shownSource(doc.type, source, writing !== undefined) && (
+            <button
+              type="button"
+              className="artifact-copy"
+              aria-pressed={wrapped}
+              onClick={() => codeWrap.set(!wrapped)}
+              title={wrapped ? "Stop wrapping long lines" : "Wrap long lines"}
+            >
+              Wrap
             </button>
           )}
           {page && (doc.type !== "web" || doc.approved) && (
@@ -144,7 +157,7 @@ export function ArtifactView({ widget, pane, doc, writing }: Props) {
           {doc.type === "web" && !doc.approved ? (
             <SiteApproval doc={doc} live={ctx.live} onAnswer={(allow) => ctx.approve(widget, allow)} />
           ) : (
-            <Rendered key={reloads} doc={doc} text={text} writing={writing !== undefined} source={source} loading={writing === undefined && !wrote.current && Boolean(shown.loading)} />
+            <Rendered key={reloads} doc={doc} text={text} writing={writing !== undefined} source={source} wrapped={wrapped} loading={writing === undefined && !wrote.current && Boolean(shown.loading)} />
           )}
           {shown.failed && writing === undefined && <p className="artifact-note">Couldn't get it from Kumiko: {shown.failed}</p>}
           {doc.truncated && writing === undefined && (
@@ -375,15 +388,15 @@ function DeleteButton({ title, onDelete }: { title: string; onDelete(): void }) 
 }
 
 /** An artifact's text, shown as its type is shown. */
-function Rendered({ doc, text, writing, source, loading }: { doc: ArtifactState; text: string; writing: boolean; source: boolean; loading: boolean }) {
+function Rendered({ doc, text, writing, source, wrapped, loading }: { doc: ArtifactState; text: string; writing: boolean; source: boolean; wrapped: boolean; loading: boolean }) {
   // Nothing to draw until the text has come: an empty diagram or page is an error, or a flash of nothing.
   if (loading) return <div className="diagram-wait">Loading…</div>;
   // While it is written, and when asked for, the source of what is drawn shows instead, marked with its language so a
   // quote of it is fenced as code.
-  const lang = SOURCE_LANG[doc.type];
-  if (lang && (writing || source)) {
+  const lang = shownSource(doc.type, source, writing);
+  if (lang) {
     return (
-      <pre className="mono artifact-source">
+      <pre className={`mono artifact-source${wrapped ? " is-wrapped" : ""}`}>
         <code className={`language-${lang}`}>{text}</code>
       </pre>
     );

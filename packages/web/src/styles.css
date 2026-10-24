@@ -583,6 +583,9 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
   background: none; color: var(--text-2); font: inherit; font-size: 12.5px; cursor: pointer;
 }
 .artifact-copy:hover { background: var(--surface-2); color: var(--text); }
+/* Wrap while it is on: filled, as on code blocks. */
+.artifact-copy[aria-pressed="true"] { color: #fff; background: var(--primary); border-color: var(--primary); }
+.artifact-copy[aria-pressed="true"]:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
 .artifact-close {
   display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0;
   border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer;
@@ -623,7 +626,9 @@ a.artifact-copy { text-decoration: none; }
 /* Pictures fit the pane's width. SVG goes on a light card, as most are drawn for a white page; diagrams are drawn dark. */
 .artifact-image, .diagram { display: block; max-width: 100%; height: auto; margin: 0 auto; }
 .artifact-image.is-svg { padding: 16px; border-radius: 8px; background: #fff; }
-.artifact-source { white-space: pre-wrap; font-size: 12.5px; color: var(--text-2); }
+/* Source keeps its lines as written, scrolling sideways, unless Wrap is on. */
+.artifact-source { white-space: pre; overflow-x: auto; font-size: 12.5px; color: var(--text-2); }
+.artifact-source.is-wrapped { white-space: pre-wrap; overflow-wrap: anywhere; }
 .diagram { margin: 12px auto; }
 .md-image-blocked { color: var(--muted); font-style: italic; }
 .md-image-blocked::before { content: "[image: "; }
