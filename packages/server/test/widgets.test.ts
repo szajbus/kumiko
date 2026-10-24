@@ -347,6 +347,15 @@ describe("widgets", () => {
     s.close();
   });
 
+  it("tells Claude of the Tasks pane as what it is", async () => {
+    const { id, s } = await start();
+    assert.equal((await api(`/api/sessions/${id}/window/tasks`, { method: "POST", body: "{}" })).status, 200);
+    const told = await ask(s, id, widget("window_list", {}));
+    assert.match(told, /side by side: \[chat \(the chat\), p2 \(the Tasks pane/);
+    assert.doesNotMatch(told, /undefined/);
+    s.close();
+  });
+
   it("closes a pane for the user or Claude, and shows its artifact again", async () => {
     const { id, s } = await start();
     const path = docPath(id);
