@@ -337,7 +337,7 @@ export function applyEvent(s: ChatState, ev: SessionEvent): ChatState {
   }
   // A shell or monitor ended that Claude takes a turn to report on: that turn starts by saying so.
   const ended = ev.kind === "claude" && ev.payload.subtype === "task_notification" ? tasks.byId[String(ev.payload.task_id)] : undefined;
-  return { ...next, tasks, ...(ended && ended.kind !== "agent" && reportsEnd(ended) ? { endedTasks: [...next.endedTasks, ended.id] } : {}) };
+  return { ...next, tasks, ...(ended && reportsEnd(ended) ? { endedTasks: [...next.endedTasks, ended.id] } : {}) };
 }
 
 function applyChatEvent(s: ChatState, ev: SessionEvent): ChatState {
@@ -358,13 +358,18 @@ function applyChatEvent(s: ChatState, ev: SessionEvent): ChatState {
     case "task_stop":
       return push({ type: "task_stop", key, taskId: ev.payload.taskId });
     case "monitor_event": {
-      // It comes as the turn starts: onto that turn's first line if it shows already, or kept for it.
+      // It comes once the turn it woke Claude for is under way: onto that turn's first line if it shows already, or
+      // kept for it. Without `at`, recorded before Kumiko said which turn, it goes on the latest such line.
       const line = { taskId: ev.payload.taskId, line: ev.payload.line };
-      const at = s.items.findLastIndex(startsTurn);
-      const start = s.items[at];
-      if (start?.type !== "unprompted" || start.monitor || start.ended?.length || start.after.length) return { ...s, monitorLine: line };
+      const { at } = ev.payload;
+      const index =
+        at === undefined
+          ? s.items.findLastIndex(startsTurn)
+          : s.items.findIndex((i) => i.type === "unprompted" && Number(i.key.slice(2)) > at);
+      const start = s.items[index];
+      if (start?.type !== "unprompted" || start.monitor || start.ended?.length || start.after.length) return index >= 0 && at !== undefined ? s : { ...s, monitorLine: line };
       const items = [...s.items];
-      items[at] = { ...start, monitor: line };
+      items[index] = { ...start, monitor: line };
       return { ...s, items };
     }
     case "interrupt":

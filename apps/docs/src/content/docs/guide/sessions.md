@@ -28,7 +28,9 @@ The agent can leave commands running in the background: a dev server, a build, a
 background, subagents too, with the shells a subagent started under it, then what has ended. Pick one to see its
 command, how long it has run, when the agent will stop it (30 minutes by default), and its output as it comes. **Stop**
 stops it; the agent hears of it with your next message. Reading the output costs no tokens. Ended tasks stay listed, with
-the end of their output, until you **Clear ended**.
+the end of their output, until you **Clear ended**. When that end isn't all of it, **Show all** reads the whole output
+(up to 5 MB) from the agent's own file of it, for as long as the agent keeps that file; a restart of the sandbox
+removes it.
 
 When a command ends by itself, the agent takes a turn to report on it, which starts with a line saying how it ended,
 with **Output**. A command you stop gets that line, and no turn. A Monitor wakes the agent each time it prints a line,

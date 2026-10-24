@@ -1,4 +1,4 @@
-import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { SessionEvent } from "@kumiko/shared";
 import { api, errorMessage } from "./api";
 import { formatDuration } from "./format";
@@ -79,6 +79,8 @@ export function TaskIcon({ task }: { task: Task }) {
     if (task.kind === "monitor") return <span className="task-icon is-monitor" aria-label="Monitor">◉</span>;
     return <span className="task-icon is-shell" aria-label="Shell">▶</span>;
   }
+  // A subagent keeps its mark; how it ended is said beside it.
+  if (task.kind === "agent") return <span className="task-icon is-agent" aria-label="Subagent">◆</span>;
   if (task.status === "completed") return <span className="task-icon is-ok" aria-label="Finished">✓</span>;
   if (task.status === "failed") return <span className="task-icon is-failed" aria-label="Failed">✕</span>;
   if (task.status === "stopped" && !task.stoppedByUser && /time limit/.test(endText(task))) return <span className="task-icon is-stopped" aria-label="Stopped">⏱</span>;
@@ -211,7 +213,23 @@ function useOutput(session: string, task: Task, live: boolean, active: boolean) 
 }
 
 function TaskDetail({ session, task, live, active, now }: { session: string; task: Task; live: boolean; active: boolean; now: number }) {
-  const { shown, error } = useOutput(session, task, live, active);
+  const { shown: tail, error } = useOutput(session, task, live, active);
+  // All of it, read from Claude's file when asked for; or why it couldn't be.
+  const [all, setAll] = useState<{ output: string; totalBytes: number; truncated: boolean } | "reading" | { failed: string }>();
+  const full = typeof all === "object" && "output" in all ? all : undefined;
+  const shown = full ?? tail;
+  const showAll = async () => {
+    setAll("reading");
+    try {
+      const read = await api.taskFile(session, task.id);
+      // From its start, which is where to begin reading it.
+      follow.current = false;
+      setAll(read);
+      requestAnimationFrame(() => out.current?.scrollTo({ top: 0 }));
+    } catch (err) {
+      setAll({ failed: errorMessage(err) });
+    }
+  };
   const [stopping, setStopping] = useState(false);
   const [failed, setFailed] = useState<string>();
   const out = useRef<HTMLPreElement>(null);
@@ -251,8 +269,12 @@ function TaskDetail({ session, task, live, active, now }: { session: string; tas
       {failed && <div className="banner banner-error">{failed}</div>}
       {task.command && <pre className="task-command mono">{task.command}</pre>}
       <dl className="task-facts">
-        <dt>{KIND_LABEL[task.kind]}</dt>
-        <dd>{task.kind === "monitor" ? "Claude is told of each line it prints" : task.kind === "agent" ? (task.activity ?? (running ? "Working" : endText(task))) : task.parent ? "Started by a subagent; it ends with it" : "Claude is told when it ends"}</dd>
+        {task.kind === "agent" && task.activity && (
+          <>
+            <dt>Doing</dt>
+            <dd>{task.activity}</dd>
+          </>
+        )}
         {task.startedAt !== undefined && (
           <>
             <dt>{running ? "Started" : "Ran"}</dt>
@@ -284,11 +306,22 @@ function TaskDetail({ session, task, live, active, now }: { session: string; tas
               follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
             }}
           >
-            {shown?.truncated && <span className="task-output-cut">… only the end of {formatBytesShort(shown.totalBytes)} is kept{"\n"}</span>}
+            {!full && shown?.truncated && <span className="task-output-cut">… only the end of {formatBytesShort(shown.totalBytes)} is kept{"\n"}</span>}
             {shown ? shown.output || <span className="task-output-cut">Nothing printed yet.</span> : <span className="task-output-cut">{live ? "Reading…" : "Its output wasn't kept."}</span>}
+            {full?.truncated && <span className="task-output-cut">{"\n"}… cut at 5 MB of {formatBytesShort(full.totalBytes)}</span>}
           </pre>
           <div className="task-output-foot">
-            {error ? <span className="task-output-error">Couldn't read it: {error}</span> : running ? <span>Read every second while open</span> : <span>As it ended</span>}
+            {error ? (
+              <span className="task-output-error">Couldn't read it: {error}</span>
+            ) : typeof all === "object" && "failed" in all ? (
+              <span className="task-output-error">{all.failed}</span>
+            ) : !running && !full && tail?.truncated ? (
+              <button type="button" className="tasks-clear" disabled={all === "reading"} onClick={() => void showAll()}>
+                {all === "reading" ? "Reading…" : "Show all"}
+              </button>
+            ) : (
+              <span />
+            )}
             {shown && <span>{formatBytesShort(shown.totalBytes)}</span>}
           </div>
         </>
@@ -343,53 +376,89 @@ export function MoveToBackground({ session, toolUseId }: { session: string; tool
   );
 }
 
-/** A line for a task that ended: what it was, and how it ended, with a way to its output. */
-export function TaskEndLine({ session, task }: { session: string; task: Task }) {
+/**
+ * One line a background task leaves in the chat, as all of them look: a fold arrow where it folds, the mark, the task's
+ * name, what happened, and one button on the right.
+ */
+function BackgroundLine({ fold, mark, name, what, action }: { fold?: { open: boolean; toggle(): void }; mark?: ReactNode; name?: string; what: ReactNode; action?: ReactNode }) {
+  const body = (
+    <>
+      <span className="bg-line-fold" aria-hidden="true">{fold ? (fold.open ? "▾" : "▸") : ""}</span>
+      <span className="bg-line-mark">{mark}</span>
+      {name && <span className="bg-line-name">{name}</span>}
+      <span className="bg-line-what">{what}</span>
+    </>
+  );
   return (
-    <div className="task-line">
-      <TaskIcon task={task} />
-      <span className="task-line-name">{task.description || task.command || KIND_LABEL[task.kind]}</span>
-      <span className="task-line-how">{task.kind === "shell" && (task.status === "failed" || task.status === "completed") ? `${task.status === "failed" ? "failed" : "finished"} · ${endText(task)}` : endText(task)}</span>
-      {task.kind !== "agent" && (
-        <button type="button" className="tool-show" onClick={() => showTask(session, task.id)}>
-          Output
+    <div className="bg-line">
+      {fold ? (
+        <button type="button" className="bg-line-toggle" aria-expanded={fold.open} onClick={fold.toggle}>
+          {body}
         </button>
+      ) : (
+        body
       )}
+      {action}
     </div>
   );
 }
+
+const nameOf = (task: Task) => task.description || task.command || KIND_LABEL[task.kind];
+
+/** A line for a task that ended: what it was, and how it ended, with a way to its output, or to a subagent's work. */
+export function TaskEndLine({ session, task }: { session: string; task: Task }) {
+  const how = task.kind === "shell" && (task.status === "failed" || task.status === "completed") ? `${task.status === "failed" ? "failed" : "finished"} · ${endText(task)}` : endText(task);
+  const action =
+    task.kind === "agent" ? (
+      task.toolUseId && (
+        <button type="button" className="tool-show" onClick={() => revealers.get(session)?.(task.toolUseId!)}>
+          Show
+        </button>
+      )
+    ) : (
+      <button type="button" className="tool-show" onClick={() => showTask(session, task.id)}>
+        Output
+      </button>
+    );
+  return <BackgroundLine mark={<TaskIcon task={task} />} name={nameOf(task)} what={how} action={action} />;
+}
+
+/** Where Claude starts a turn of its own for a reason it can't name: a plain line, in the same look. */
+export function PlainLine({ text }: { text: string }) {
+  return <BackgroundLine what={text} />;
+}
+
+const monitorMark = (
+  <span className="task-icon is-monitor" aria-label="Monitor">
+    ◉
+  </span>
+);
+
+const showMonitor = (session: string, task?: Task) =>
+  task && (
+    <button type="button" className="tool-show" onClick={() => showTask(session, task.id)}>
+      Show
+    </button>
+  );
 
 /** A monitor's line that woke Claude for the turn this starts. */
 export function MonitorLine({ session, task, line }: { session: string; task?: Task; line: string }) {
-  return (
-    <div className="task-line">
-      <span className="task-icon is-monitor" aria-hidden="true">◉</span>
-      <span className="task-line-name">{task?.description || "A monitor"}</span>
-      <code className="task-line-event">{line || "printed a line"}</code>
-      {task && (
-        <button type="button" className="tool-show" onClick={() => showTask(session, task.id)}>
-          Show
-        </button>
-      )}
-    </div>
-  );
+  return <BackgroundLine mark={monitorMark} name={task?.description || "A monitor"} what={<code>{line || "printed a line"}</code>} action={showMonitor(session, task)} />;
 }
 
-/** How many of a monitor's quiet turns show before "show all". */
-const SHOWN_EVENTS = 2;
+/** How many of a monitor's quiet turns show before "more". */
+const SHOWN_EVENTS = 5;
 
-/** A monitor's quiet turns, folded: its lines, each with what Claude said to it. */
+/** A monitor's quiet turns, folded into one line: opened, its lines, each with what Claude said to it. */
 export function MonitorEvents({ session, row, task }: { session: string; row: MonitorRow; task?: Task }) {
   const [open, setOpen] = useState(false);
   const [all, setAll] = useState(false);
   const n = row.events.length;
   const shown = all ? row.events : row.events.slice(-SHOWN_EVENTS);
+  const what = `${n === 1 ? `printed “${row.events[0].line || "a line"}”` : `${n} lines`} · nothing for Claude to do`;
   return (
     <div className="monitor-events">
-      <button type="button" className="work-summary" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <span className="task-icon is-monitor" aria-hidden="true">◉</span>
-        {task?.description || "A monitor"} · {n === 1 ? `printed ${row.events[0].line ? `“${row.events[0].line}”` : "a line"}` : `${n} lines`} · nothing for Claude to do
-      </button>
+      <BackgroundLine fold={{ open, toggle: () => setOpen(!open) }} mark={monitorMark} name={task?.description || "A monitor"} what={what} action={showMonitor(session, task)} />
       {open && (
         <ul className="monitor-event-list">
           {n > shown.length && (
@@ -405,13 +474,6 @@ export function MonitorEvents({ session, row, task }: { session: string; row: Mo
               <span className="monitor-event-reply">→ {e.reply}</span>
             </li>
           ))}
-          {task && (
-            <li>
-              <button type="button" className="tool-show" onClick={() => showTask(session, task.id)}>
-                Show output
-              </button>
-            </li>
-          )}
         </ul>
       )}
     </div>

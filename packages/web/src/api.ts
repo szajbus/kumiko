@@ -125,6 +125,8 @@ export const api = {
   interrupt: (id: string) => request("POST", `/api/sessions/${id}/interrupt`),
   /** The end of what one of Claude's background shells or monitors has printed; asking costs Claude no turn. */
   taskOutput: (id: string, task: string) => request<{ output: string; totalBytes: number; truncated: boolean }>("GET", `/api/sessions/${id}/tasks/${encodeURIComponent(task)}/output`),
+  /** All of what a background task that ended printed, from the start, read from Claude's own file of it while it keeps it. */
+  taskFile: (id: string, task: string) => request<{ output: string; totalBytes: number; truncated: boolean }>("GET", `/api/sessions/${id}/tasks/${encodeURIComponent(task)}/file`),
   /** Stops one of Claude's background tasks. */
   stopTask: (id: string, task: string) => request("POST", `/api/sessions/${id}/tasks/${encodeURIComponent(task)}/stop`),
   /** Moves a command Claude waits on to the background: the one `toolUseId` started, or all of them. */

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { isBusy, type SessionEvent } from "@kumiko/shared";
 import type { AgentDriver, AgentEvent, AgentMessage, StartOptions, TaskOutput } from "@kumiko/agent";
-import { Sessions } from "../src/sessions.js";
+import { isTaskOutputFile, Sessions } from "../src/sessions.js";
 import { SessionStore } from "../src/store.js";
 
 /** A driver that says only what a test makes it say, with the tasks' output the test sets. */
@@ -65,7 +65,7 @@ const CLAUDE_ID = randomUUID();
 const settle = (ms = 20) => new Promise((r) => setTimeout(r, ms));
 
 /** Claude's messages about a background shell or monitor, as Claude 2.1.309 sends them. */
-const started = (taskId: string, toolUseId: string) => ({ type: "system", subtype: "task_started", task_id: taskId, tool_use_id: toolUseId, description: "Start the dev server", is_backgrounded: true, task_type: "local_bash" });
+const started = (taskId: string, toolUseId: string, extra: Record<string, unknown> = {}) => ({ type: "system", subtype: "task_started", task_id: taskId, tool_use_id: toolUseId, description: "Start the dev server", is_backgrounded: true, task_type: "local_bash", ...extra });
 const notified = (taskId: string, toolUseId: string, status = "completed") => ({ type: "system", subtype: "task_notification", task_id: taskId, tool_use_id: toolUseId, status, output_file: "", summary: "done" });
 const listed = (tasks: { task_id: string; task_type: string; ambient?: boolean }[]) => ({ type: "system", subtype: "background_tasks_changed", tasks: tasks.map((t) => ({ description: "x", ...t })) });
 const init = () => ({ type: "system", subtype: "init", session_id: CLAUDE_ID });
@@ -96,6 +96,8 @@ describe("background tasks in sessions", () => {
     return id;
   };
   const of = (id: string, kind: SessionEvent["kind"]) => sessions.events(id).filter((e) => e.kind === kind);
+  /** The monitor lines recorded as what woke Claude. */
+  const lines = (id: string) => sessions.events(id).flatMap((e) => (e.kind === "monitor_event" ? [e.payload] : []));
 
   it("counts shells apart from subagents, and doesn't call the session busy for them", () => {
     const id = setup();
@@ -146,7 +148,7 @@ describe("background tasks in sessions", () => {
     drivers[0].outputs.set("b9", { output: "event 1\n", totalBytes: 8, truncated: false });
     drivers[0].message(init());
     await settle();
-    assert.deepEqual(of(id, "monitor_event").map((e) => e.payload), [{ taskId: "b9", line: "event 1" }]);
+    assert.deepEqual(lines(id).map(({ taskId, line }) => ({ taskId, line })), [{ taskId: "b9", line: "event 1" }]);
     drivers[0].message(result());
     // A prompt's turn isn't a monitor's, even if it printed more meanwhile.
     drivers[0].outputs.set("b9", { output: "event 1\nevent 2\n", totalBytes: 16, truncated: false });
@@ -164,6 +166,33 @@ describe("background tasks in sessions", () => {
     assert.equal(of(id, "monitor_event").length, 1);
   });
 
+  it("says which monitor woke Claude after the user stopped another task, and which turn it woke Claude for", async () => {
+    const id = setup();
+    drivers[0].message(init());
+    drivers[0].message(monitorCall("toolu_m"));
+    drivers[0].message(started("b9", "toolu_m"));
+    drivers[0].message(started("b5", "toolu_5"));
+    drivers[0].message(result());
+    // Stopped by the user: Claude takes no turn for it, so the next turn of its own is still a monitor's.
+    await sessions.stopTask(id, "b5");
+    drivers[0].message(notified("b5", "toolu_5", "stopped"));
+    drivers[0].outputs.set("b9", { output: "check 1\n", totalBytes: 8, truncated: false });
+    drivers[0].message(init());
+    const turn = sessions.events(id).at(-1)!.seq;
+    await settle();
+    assert.deepEqual(lines(id), [{ taskId: "b9", line: "check 1", at: turn }]);
+    drivers[0].message(result());
+    // Nor does a shell a subagent started, which ends with it, or a command Claude waited on.
+    drivers[0].message(started("b6", "toolu_6", { parent_task_id: "a1" }));
+    drivers[0].message(notified("b6", "toolu_6", "stopped"));
+    drivers[0].message(started("b7", "toolu_7", { is_backgrounded: false }));
+    drivers[0].message(notified("b7", "toolu_7"));
+    drivers[0].outputs.set("b9", { output: "check 1\ncheck 2\n", totalBytes: 16, truncated: false });
+    drivers[0].message(init());
+    await settle();
+    assert.deepEqual(lines(id).map((e) => e.line), ["check 1", "check 2"]);
+  });
+
   it("still says which monitor woke Claude after a prompt it read in the middle of a turn, which got no turn of its own", async () => {
     const id = setup();
     drivers[0].message(init());
@@ -177,7 +206,7 @@ describe("background tasks in sessions", () => {
     drivers[0].outputs.set("b9", { output: "event 1\n", totalBytes: 8, truncated: false });
     drivers[0].message(init());
     await settle();
-    assert.deepEqual(of(id, "monitor_event").map((e) => e.payload), [{ taskId: "b9", line: "event 1" }]);
+    assert.deepEqual(lines(id).map(({ taskId, line }) => ({ taskId, line })), [{ taskId: "b9", line: "event 1" }]);
   });
 
   it("records the tasks a Claude process took with it, when the next one starts", async () => {
@@ -193,6 +222,24 @@ describe("background tasks in sessions", () => {
     drivers[1].say({ kind: "exit", code: 137, requested: false });
     sessions.relaunch(id, []);
     assert.equal(of(id, "tasks_lost").length, 1);
+    await sessions.flush();
+  });
+
+  it("finds a task's output file only where Claude's notification puts one shaped like it", async () => {
+    const id = setup();
+    const file = "/tmp/claude-1000/-home-me-w/0b9c/tasks/b1.output";
+    drivers[0].message(started("b1", "toolu_1"));
+    drivers[0].message({ ...notified("b1", "toolu_1"), output_file: file });
+    drivers[0].message(started("b2", "toolu_2"));
+    drivers[0].message({ ...notified("b2", "toolu_2"), output_file: "/etc/passwd" });
+    assert.equal(sessions.taskFile(id, "b1"), file);
+    assert.equal(sessions.taskFile(id, "b2"), undefined, "not one of Claude's task files");
+    assert.equal(sessions.taskFile(id, "b3"), undefined, "no such task");
+    assert.ok(isTaskOutputFile(file, "b1"));
+    assert.ok(!isTaskOutputFile(file, "b2"), "another task's");
+    assert.ok(!isTaskOutputFile("tmp/tasks/b1.output", "b1"), "relative");
+    assert.ok(!isTaskOutputFile("/tmp/x/../../etc/tasks/b1.output", "b1"), "leading elsewhere");
+    assert.ok(!isTaskOutputFile("/tmp/x\n/tasks/b1.output", "b1"), "with a newline");
     await sessions.flush();
   });
 });

@@ -60,13 +60,19 @@ interface Session {
  * ends, and to tell which monitor woke Claude for a turn of its own.
  */
 interface TaskWatch {
-  /** Shell and monitor tasks by Claude's task id. */
-  shells: Map<string, { running: boolean }>;
+  /** Shell and monitor tasks by Claude's task id: whether they run, in the background, and were started by a subagent. */
+  shells: Map<string, { running: boolean; background: boolean; subagent: boolean }>;
+  /** Tasks the user stopped, by task id: Claude takes no turn for those. */
+  stopped: Set<string>;
   /** The tool_use ids of Claude's Monitor calls; a task started by one is a monitor. */
   monitorCalls: Set<string>;
   /** Running monitors, by task id, with how much they had printed when last looked at. */
   monitors: Map<string, number>;
-  /** A task ended since Claude's last turn ended: the turn Claude takes next is for that, not a monitor's line. */
+  /**
+   * A task ended since Claude's last turn ended that Claude takes a turn to report on, so the turn Claude takes next is
+   * for that, not a monitor's line: one in the background that ended by itself, not stopped by the user or ending with
+   * its subagent.
+   */
   ended: boolean;
 }
 
@@ -139,6 +145,14 @@ const toolsVersion = (widgets: SessionWidgets | undefined) =>
     .slice(0, 12);
 
 const sizeOf = (e: SessionEvent) => Buffer.byteLength(JSON.stringify(e));
+
+/**
+ * Whether `file` is shaped like the file Claude keeps task `taskId`'s output in: an absolute path ending in
+ * `tasks/<taskId>.output`, with nothing in it that leads elsewhere. It goes into a command in the sandbox.
+ */
+export function isTaskOutputFile(file: string, taskId: string): boolean {
+  return file.startsWith("/") && file.endsWith(`/tasks/${taskId}.output`) && !/[\0\n\r]/.test(file) && !file.split("/").includes("..");
+}
 
 /** Claude's task ids that the events say started and haven't said ended or were lost. */
 function openTasks(events: readonly SessionEvent[]): string[] {
@@ -659,7 +673,8 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     if (m.type === "system" && m.subtype === "init") {
       // A turn nobody prompted, with no task ended to report on: a monitor's line may have woken Claude.
       if (s.waiting?.length) s.waiting = s.waiting.slice(1);
-      else if (s.tasks && !s.tasks.ended && s.tasks.monitors.size) void this.findMonitorEvent(s);
+      // The init is the last event recorded: the turn it starts is the one the line is for.
+      else if (s.tasks && !s.tasks.ended && s.tasks.monitors.size) void this.findMonitorEvent(s, s.seq);
       // Claude sends init at the start of every turn, so it also marks a queued prompt's turn starting.
       const isNew = typeof m.session_id === "string" && m.session_id !== s.info.claudeSessionId;
       this.setInfo(s, {
@@ -853,7 +868,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
 
   /** Follows what Claude says of its shells and monitors; see `TaskWatch`. */
   private watchTasks(s: Session, m: AgentMessage) {
-    const w = (s.tasks ??= { shells: new Map(), monitorCalls: new Set(), monitors: new Map(), ended: false });
+    const w = (s.tasks ??= { shells: new Map(), stopped: new Set(), monitorCalls: new Set(), monitors: new Map(), ended: false });
     if (m.type === "assistant" && !m.parent_tool_use_id) {
       const content = (m.message as { content?: unknown } | undefined)?.content;
       for (const b of Array.isArray(content) ? (content as { type?: unknown; name?: unknown; id?: unknown }[]) : [])
@@ -862,12 +877,18 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     if (m.type !== "system" || typeof m.task_id !== "string") return;
     const id = m.task_id;
     if (m.subtype === "task_started" && m.task_type === "local_bash") {
-      w.shells.set(id, { running: true });
+      w.shells.set(id, { running: true, background: m.is_backgrounded === true, subagent: typeof m.parent_task_id === "string" });
       if (typeof m.tool_use_id === "string" && w.monitorCalls.has(m.tool_use_id)) w.monitors.set(id, 0);
-    } else if (m.subtype === "task_notification") {
-      w.ended = true;
-      w.monitors.delete(id);
+    } else if (m.subtype === "task_updated" && (m.patch as { is_backgrounded?: unknown } | undefined)?.is_backgrounded === true) {
       const shell = w.shells.get(id);
+      if (shell) shell.background = true;
+    } else if (m.subtype === "task_notification") {
+      const shell = w.shells.get(id);
+      const timedOut = typeof m.summary === "string" && m.summary.includes("background time limit");
+      const byItself = m.status === "completed" || m.status === "failed" || timedOut;
+      // A subagent's end is reported too; a shell's only when it ran in the background, on its own, and wasn't stopped.
+      if (byItself && (!shell || (shell.background && !shell.subagent)) && !w.stopped.has(id)) w.ended = true;
+      w.monitors.delete(id);
       if (!shell?.running) return;
       shell.running = false;
       // Claude deletes a task's output soon after, and all of it when it exits: what it printed is kept with the session.
@@ -886,7 +907,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
    * Which monitor woke Claude for the turn it is starting, if one did: the one whose output grew since it was last looked
    * at. Claude's stream doesn't say, so its newest line is recorded for the chat to start that turn with.
    */
-  private async findMonitorEvent(s: Session) {
+  private async findMonitorEvent(s: Session, at: number) {
     const w = s.tasks!;
     const driver = s.driver;
     for (const [id, seen] of [...w.monitors]) {
@@ -894,9 +915,24 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
       if (!o || o.totalBytes <= seen || s.driver !== driver) continue;
       w.monitors.set(id, o.totalBytes);
       const line = o.output.split("\n").map((l) => l.trim()).filter(Boolean).at(-1) ?? "";
-      if (isLive(s.info)) this.push(s, { kind: "monitor_event", payload: { taskId: id, line } });
+      if (isLive(s.info)) this.push(s, { kind: "monitor_event", payload: { taskId: id, line, at } });
       return;
     }
+  }
+
+  /**
+   * Where Claude keeps all of what background task `taskId` printed, as its notification of the task's end says, if it
+   * says so of a file shaped like Claude's task output. On a session that has ended too, while it is open.
+   */
+  taskFile(id: string, taskId: string): string | undefined {
+    const s = this.sessions.get(id);
+    if (!s) throw new SessionNotFound(`No session ${id}.`);
+    for (const e of s.events) {
+      if (e.kind !== "claude" || e.payload.subtype !== "task_notification" || e.payload.task_id !== taskId) continue;
+      const file = e.payload.output_file;
+      if (typeof file === "string" && isTaskOutputFile(file, taskId)) return file;
+    }
+    return undefined;
   }
 
   /** The end of what background task `taskId` has printed, from Claude, which keeps it. */
@@ -908,6 +944,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
   async stopTask(id: string, taskId: string): Promise<void> {
     const s = this.live(id);
     this.push(s, { kind: "task_stop", payload: { taskId } });
+    s.tasks?.stopped.add(taskId);
     await s.driver.stopTask(taskId);
   }
 

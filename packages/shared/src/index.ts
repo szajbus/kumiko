@@ -450,8 +450,11 @@ export type SessionEvent =
    * was killed, or crashed. By Claude's task ids.
    */
   | { seq: number; kind: "tasks_lost"; payload: { taskIds: string[] } }
-  /** What woke Claude for the turn of its own that follows: monitor `taskId` printed `line`. */
-  | { seq: number; kind: "monitor_event"; payload: { taskId: string; line: string } };
+  /**
+   * What woke Claude for a turn of its own: monitor `taskId` printed `line`. `at` is the seq of the event that started
+   * that turn (Claude's init), as this comes once the turn is under way; missing in events recorded before it was added.
+   */
+  | { seq: number; kind: "monitor_event"; payload: { taskId: string; line: string; at?: number } };
 
 /** A prompt that is one of Claude's commands, such as /model, to which nothing can be added. */
 export const isCommand = (text: string) => text.trimStart().startsWith("/");

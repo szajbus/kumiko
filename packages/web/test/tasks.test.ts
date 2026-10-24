@@ -113,6 +113,24 @@ describe("background tasks", () => {
     assert.deepEqual(ofType(s, "unprompted").map((i) => i.ended), [["b1"]]);
   });
 
+  it("puts a monitor's line on the turn it woke Claude for, even when the turn before had none", () => {
+    const before = fold([
+      { kind: "user_prompt", payload: { text: "watch", id: "p1" } },
+      call("t-mon", "Monitor", { command: "deploy checks", description: "Watch the deploy" }),
+      started("b-mon", "t-mon"),
+      text("m0", "watching"),
+      result(),
+      // A turn of Claude's own that no line was found for.
+      init(),
+      text("m1", "Deploy check 1 is healthy."),
+      result(),
+    ]);
+    // The next one: its line comes once it has started, before Claude says anything in it.
+    const turn = 100;
+    const s = fold([init(), { kind: "monitor_event", payload: { taskId: "b-mon", line: "check 2", at: turn + 1 } }, text("m2", "Deploy check 2 is healthy."), result()], before, turn);
+    assert.deepEqual(ofType(s, "unprompted").map((i) => i.monitor?.line), [undefined, "check 2"]);
+  });
+
   it("folds quiet turns a monitor woke Claude for, and shows one that did something", () => {
     const wake = (n: number, reply: NewEvent[]): NewEvent[] => [
       init(),

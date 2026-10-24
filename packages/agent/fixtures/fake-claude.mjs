@@ -25,6 +25,7 @@
 //                on it; without N it runs until it is stopped. "bg-fail" prints a line, then exits 3
 //   "monitor N"  starts a Monitor that prints "event i" every step for N steps: each line wakes Claude for a short turn
 //                of its own ("No action is needed."), and once it ends, Claude takes one more
+//   "bg-log N"   starts a Bash command in the background that prints N long lines at once, then exits 0
 //   "fg-shell"   runs a Bash command in the foreground for 30 steps, reported as a task after the first; moved to the
 //                background, its call returns at once and it goes on there
 //   "agent-shell" runs a subagent that starts a background shell and finishes, which kills the shell
@@ -49,8 +50,8 @@
 // before it exits; SIGTERM kills them, each reported as stopped, and it exits with 143.
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { existsSync, fstatSync, mkdirSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { appendFileSync, existsSync, fstatSync, mkdirSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 
@@ -248,7 +249,14 @@ const liveShells = () => [...shells.values()].filter((t) => t.status === "runnin
 const tasksChanged = () =>
   out({ type: "system", subtype: "background_tasks_changed", tasks: liveShells().filter((t) => t.background).map((t) => ({ task_id: t.id, task_type: "local_bash", description: t.description, ...(t.parent ? { parent_task_id: t.parent } : {}) })), session_id, uuid: randomUUID() });
 const taskEvent = (subtype, t, extra) => out({ type: "system", subtype, task_id: t.id, session_id, uuid: randomUUID(), ...extra });
-const outputFile = (t) => `/tmp/claude-1000/fake/${session_id}/tasks/${t.id}.output`;
+// Where Claude keeps a task's output, as it does: a file per task, which the host can read itself.
+const outputFile = (t) => join(tmpdir(), "claude-fake", session_id, "tasks", `${t.id}.output`);
+/** Adds to what task `t` printed, in its file too. */
+const print = (t, text) => {
+  t.output += text;
+  mkdirSync(dirname(outputFile(t)), { recursive: true });
+  appendFileSync(outputFile(t), text);
+};
 
 /** A turn Claude takes by itself, queued behind any other. */
 function autoTurn(text) {
@@ -268,7 +276,7 @@ function startShell({ toolUseId, description, kind = "shell", background = true,
     if (t.status !== "running") return;
     t.status = status === "completed" ? "completed" : status === "failed" ? "failed" : "killed";
     // As Claude does, the line saying how it ended lands in its output just after Claude says it ended.
-    setTimeout(() => (t.output += how), 100);
+    setTimeout(() => print(t, how), 100);
     taskEvent("task_updated", t, { patch: { status: t.status, end_time: Date.now() } });
     const summary =
       status === "stopped"
@@ -289,7 +297,7 @@ function startShell({ toolUseId, description, kind = "shell", background = true,
     for (let i = 1; i <= steps && t.status === "running"; i++) {
       await shellStep();
       if (t.status !== "running") return;
-      t.output += line(i) + "\n";
+      print(t, line(i) + "\n");
       onLine?.(i);
     }
     if (t.status !== "running") return;
@@ -456,6 +464,15 @@ async function turn({ text, files, auto }) {
     const steps = fail ? 1 : text.length > 8 ? Number(text.slice(9)) : Infinity;
     const command = fail ? "sleep 1; echo about to fail >&2; exit 3" : "npm run dev";
     backgroundCall(id, "Bash", { command, description: fail ? "Fail after a line" : "Start the dev server", run_in_background: true }, { steps, code: fail ? 3 : 0, line: fail ? () => "about to fail" : undefined });
+    const id2 = `msg_${++msgN}`;
+    await streamText(id2, "started", 0, () => cancelled);
+    return result(start, { text: "started" });
+  }
+
+  if (/^bg-log \d+$/.test(text)) {
+    // One long line per number, all printed at once: more than get_task_output's 8 KiB, for the whole file.
+    const n = Number(text.slice(7));
+    backgroundCall(id, "Bash", { command: "npm run build", description: "Build with a long log", run_in_background: true }, { steps: 1, line: () => Array.from({ length: n }, (_, i) => `log ${i + 1} ${"x".repeat(90)}`).join("\n") });
     const id2 = `msg_${++msgN}`;
     await streamText(id2, "started", 0, () => cancelled);
     return result(start, { text: "started" });

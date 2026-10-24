@@ -726,6 +726,28 @@ describe("sessions", () => {
     await api(`/api/sessions/${id}?stop`, { method: "DELETE" });
   });
 
+  it("reads all of what a task printed from Claude's file of it, while Claude keeps it", async () => {
+    const id = await startSession("one", "bg-log 200");
+    const chat = await listen(id);
+    const kept = await waitFor(() => chat.got.find((e) => e.kind === "task_output"));
+    assert.ok(kept.kind === "task_output" && kept.payload.truncated, "the end kept with the session is only the end");
+    const task = kept.kind === "task_output" ? kept.payload.taskId : "";
+    const res = await api(`/api/sessions/${id}/tasks/${task}/file`);
+    assert.equal(res.status, 200);
+    const all = await json(res);
+    assert.match(all.output, /^log 1 x/);
+    assert.match(all.output, /log 200 x+\n\n\[exited with code 0\]\n$/);
+    assert.equal(all.totalBytes, Buffer.byteLength(all.output));
+    assert.equal(all.truncated, false);
+    assert.equal((await api(`/api/sessions/${id}/tasks/bnotatask/file`)).status, 404);
+
+    // Once Claude's file is gone, it says so; what the session kept is still there.
+    const done = chat.got.find((e) => e.kind === "claude" && e.payload.subtype === "task_notification")!;
+    await rm(String(done.kind === "claude" && done.payload.output_file));
+    assert.equal((await api(`/api/sessions/${id}/tasks/${task}/file`)).status, 410);
+    await api(`/api/sessions/${id}?stop`, { method: "DELETE" });
+  });
+
   it("says which line of a monitor woke Claude", async () => {
     const id = await startSession("one", "monitor 2");
     const chat = await listen(id);

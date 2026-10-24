@@ -20,7 +20,7 @@ import { COLORS } from "./status";
 import { UsageStrip } from "./UsageStrip";
 import { widgetLine } from "./widgets";
 import { WindowContext } from "./windowContext";
-import { MonitorEvents, MonitorLine, MoveToBackground, onReveal, TaskEndLine, TasksButton, TaskToolMeta } from "./TasksPane";
+import { MonitorEvents, MonitorLine, MoveToBackground, onReveal, PlainLine, TaskEndLine, TasksButton, TaskToolMeta } from "./TasksPane";
 import { emptyTasks, foldMonitorTurns, type TasksState } from "./tasks";
 
 /** How long the note that Claude restarted, or that the sandbox started, stays. */
@@ -904,7 +904,7 @@ function UnpromptedLine({ item }: { item: Extract<ChatItem, { type: "unprompted"
   const ended = (item.ended ?? []).map((id) => tasks.byId[id]).filter(Boolean);
   return (
     <>
-      {(item.after.length > 0 || (!ended.length && !item.monitor)) && <div className="chat-unprompted">{unpromptedText(item.after)}</div>}
+      {!ended.length && !item.monitor && <PlainLine text={unpromptedText(item.after)} />}
       {ended.map((t) => (
         <TaskEndLine key={t.id} session={session} task={t} />
       ))}

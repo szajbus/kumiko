@@ -59,7 +59,7 @@ import {
   type WindowOp,
   type WorktreesResponse,
 } from "@kumiko/shared";
-import { LimaProvider, validateSpec, type Log, type SandboxProvider } from "@kumiko/sandbox";
+import { LimaProvider, shellQuote, validateSpec, type Log, type SandboxProvider } from "@kumiko/sandbox";
 import { ClaudeDriver, execOutput, Runs, type AgentDriver } from "@kumiko/agent";
 import { deleteAgentScripts, readAgentScripts, withExitCodes } from "./agentSetup.js";
 import { AttachmentRefused, AttachmentStore } from "./attachments.js";
@@ -1080,12 +1080,33 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   // Claude's background shells and monitors: what one has printed so far, and stopping one (subagents too). Asking costs
   // Claude no turn. Task ids are Claude's, such as "b9yuskb88".
   const TASK_ID = /^[A-Za-z0-9_-]{1,64}$/;
+  /** How much of a task's output file is read: the start of a longer one. */
+  const TASK_FILE_BYTES = 5 * 1024 * 1024;
   const taskOf = (c: { req: { param(name: string): string } }) => {
     const task = c.req.param("task");
     if (!TASK_ID.test(task)) throw new HttpError(400, `Not a task id: ${task}`);
     return task;
   };
   app.get("/api/sessions/:id/tasks/:task/output", async (c) => c.json(await sessions.taskOutput(sessionOf(c).id, taskOf(c))));
+  // All of what a task that ended printed, read from Claude's own file of it in the sandbox, for as long as Claude keeps
+  // it: from its start, up to TASK_FILE_BYTES. 410 once the file is gone, as a VM restart takes it.
+  app.get("/api/sessions/:id/tasks/:task/file", async (c) => {
+    const { id, sandbox } = sessionOf(c);
+    const task = taskOf(c);
+    const file = sessions.taskFile(id, task);
+    if (!file) throw new HttpError(404, "Claude didn't say where this task's output is kept.");
+    const q = shellQuote(file);
+    // Its size on the first line, then as much of it as is shown; exit 3 if it isn't there. One command, as the sandbox
+    // runs it with exec.
+    const cmd = `bash -c ${shellQuote(`[ -f ${q} ] || exit 3; wc -c < ${q}; head -c ${TASK_FILE_BYTES} ${q}`)}`;
+    const out = await execOutput(provider.exec.bind(provider), sandbox, cmd, 30_000).catch((err: Error) => {
+      if (/^exit 3\b/.test(err.message)) throw new HttpError(410, "Claude's file of this output is gone.");
+      throw new HttpError(503, `Couldn't read it from ${vmName(sandbox)}: ${err.message}`);
+    });
+    const nl = out.indexOf("\n");
+    const totalBytes = Number(out.slice(0, nl).trim());
+    return c.json({ output: out.slice(nl + 1), totalBytes, truncated: totalBytes > TASK_FILE_BYTES });
+  });
   app.post("/api/sessions/:id/tasks/:task/stop", async (c) => {
     await sessions.stopTask(sessionOf(c).id, taskOf(c));
     return c.json({ ok: true });
