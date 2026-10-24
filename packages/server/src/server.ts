@@ -25,6 +25,7 @@ import {
   paneOf,
   TASKS,
   urlOrigin,
+  TASK_FILE_BYTES,
   vmName,
   WindowError,
   type AgentSetupResponse,
@@ -1111,8 +1112,6 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   // Claude's background shells and monitors: what one has printed so far, and stopping one (subagents too). Asking costs
   // Claude no turn. Task ids are Claude's, such as "b9yuskb88".
   const TASK_ID = /^[A-Za-z0-9_-]{1,64}$/;
-  /** How much of a task's output file is read: the start of a longer one. */
-  const TASK_FILE_BYTES = 5 * 1024 * 1024;
   const taskOf = (c: { req: { param(name: string): string } }) => {
     const task = c.req.param("task");
     if (!TASK_ID.test(task)) throw new HttpError(400, `Not a task id: ${task}`);

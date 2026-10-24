@@ -1,5 +1,5 @@
 import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import type { SessionEvent } from "@kumiko/shared";
+import { formatBytes, TASK_FILE_BYTES, type SessionEvent } from "@kumiko/shared";
 import { api, errorMessage } from "./api";
 import { formatDuration } from "./format";
 import { PaneGrip } from "./PaneGrip";
@@ -308,7 +308,7 @@ function TaskDetail({ session, task, live, active, now }: { session: string; tas
           >
             {!full && shown?.truncated && <span className="task-output-cut">… only the end of {formatBytesShort(shown.totalBytes)} is kept{"\n"}</span>}
             {shown ? shown.output || <span className="task-output-cut">Nothing printed yet.</span> : <span className="task-output-cut">{live ? "Reading…" : "Its output wasn't kept."}</span>}
-            {full?.truncated && <span className="task-output-cut">{"\n"}… cut at 5 MB of {formatBytesShort(full.totalBytes)}</span>}
+            {full?.truncated && <span className="task-output-cut">{"\n"}… cut at {formatBytes(TASK_FILE_BYTES)} of {formatBytesShort(full.totalBytes)}</span>}
           </pre>
           <div className="task-output-foot">
             {error ? (

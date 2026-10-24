@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 import WebSocket from "ws";
-import { isBusy, isWaiting, type ProjectView, type ServerEvent, type SessionEvent, type SessionInfo, type SessionStreamMessage } from "@kumiko/shared";
+import { isBusy, isWaiting, TASK_FILE_BYTES, type ProjectView, type ServerEvent, type SessionEvent, type SessionInfo, type SessionStreamMessage } from "@kumiko/shared";
 import { RUNS_DIR, userMessage } from "@kumiko/agent";
 import { LimaProvider, MetadataStore, shellQuote } from "@kumiko/sandbox";
 import { startServer, type RunningServer, type ServerOptions } from "../src/index.js";
@@ -786,7 +786,7 @@ describe("sessions", () => {
     // A file longer than what is read is cut at a line's end, never inside a character.
     const done = chat.got.find((e) => e.kind === "claude" && e.payload.subtype === "task_notification")!;
     const file = String(done.kind === "claude" && done.payload.output_file);
-    const limit = 5 * 1024 * 1024;
+    const limit = TASK_FILE_BYTES;
     // "é" is two bytes, the first of them the last byte read.
     await writeFile(file, `first line\n${"y".repeat(limit - 12)}é\nmore\n`);
     const cut = await json(await api(`/api/sessions/${id}/tasks/${task}/file`));

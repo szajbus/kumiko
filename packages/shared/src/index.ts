@@ -586,6 +586,12 @@ export const ATTACHMENT_LIMITS: Record<AttachmentKind, number> = { image: 5 * 10
 /** The most all the files of one prompt may add up to. */
 export const ATTACHMENTS_TOTAL_LIMIT = 20 * 1024 * 1024;
 
+/**
+ * How much of a background task's output Show all reads from Claude's file of it: the start of a longer one. More makes
+ * the Tasks pane stall as it lays the text out.
+ */
+export const TASK_FILE_BYTES = 1024 * 1024;
+
 /** "256 KB", "5 MB". */
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
