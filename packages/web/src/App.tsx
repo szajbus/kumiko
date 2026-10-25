@@ -14,7 +14,7 @@ import { Window } from "./Window";
 /** How many session tabs stay mounted, the one on screen included, for switching back to at once. */
 const KEEP_MOUNTED = 5;
 import { landingAfterClose } from "./landing";
-import { arrange, group, moveGroup, moveTab, replaceTab, unfolded } from "./order";
+import { arrange, expandInFront, group, moveGroup, moveTab, replaceTab, unfolded } from "./order";
 import { loadTabs, saveTabs } from "./tabs";
 
 type Route =
@@ -232,11 +232,13 @@ export function App() {
   const visible = unfolded(open, projectOf, collapsed, tabOf(route));
 
   // A tab that comes to the front, by a link, a shortcut or a new session, brings its collapsed project's tabs back;
-  // so does one open at launch, once the saved tabs have come back collapsed.
+  // so does one open at launch, once the saved tabs have come back collapsed. Only then: not when its session drops
+  // out of the list for a moment, as when the server restarts, and comes back.
   const activeProject = projectOf(tabOf(route));
-  useEffect(() => {
-    if (activeProject !== undefined) setCollapsed((c) => (c.has(activeProject) ? new Set([...c].filter((n) => n !== activeProject)) : c));
-  }, [tabOf(route), activeProject, restored]);
+  const [expandActive] = useState(() =>
+    expandInFront<string>((project) => setCollapsed((c) => (c.has(project) ? new Set([...c].filter((n) => n !== project)) : c))),
+  );
+  useEffect(() => expandActive(`${restored}:${tabOf(route)}`, activeProject), [tabOf(route), activeProject, restored]);
 
   const select = (tab: TabId) => {
     if (tab === "projects") go(projectsHash.current);

@@ -53,3 +53,16 @@ export function unfolded<T>(tabs: readonly T[], groupOf: (t: T) => string | unde
     return t === keep || g === undefined || !collapsed.has(g);
   });
 }
+
+/**
+ * Calls `expand` with the group of the tab in front, once per time a tab comes to the front: a tab whose group is
+ * unknown for a while, as its session is when the server restarts, doesn't expand it again when it's known once more.
+ */
+export function expandInFront<T>(expand: (group: string) => void): (tab: T, group: string | undefined) => void {
+  let last: { tab: T } | undefined;
+  return (tab, group) => {
+    if (group === undefined || last?.tab === tab) return;
+    last = { tab };
+    expand(group);
+  };
+}

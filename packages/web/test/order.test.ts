@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { arrange, group, moveGroup, moveTab, replaceTab, unfolded } from "../src/order.ts";
+import { arrange, expandInFront, group, moveGroup, moveTab, replaceTab, unfolded } from "../src/order.ts";
 
 describe("arrange", () => {
   it("keeps the open tabs in the given order, dropping the ones that are gone", () => {
@@ -87,5 +87,35 @@ describe("unfolded", () => {
 
   it("keeps the tab asked for, though its group is collapsed", () => {
     assert.deepEqual(unfolded(tabs, groupOf, new Set(["a", "b"]), "a2"), ["a2", "x"]);
+  });
+});
+
+describe("expandInFront", () => {
+  const watch = () => {
+    const expanded: string[] = [];
+    return { expanded, inFront: expandInFront<string>((g) => expanded.push(g)) };
+  };
+
+  it("expands the group of each tab that comes to the front", () => {
+    const { expanded, inFront } = watch();
+    inFront("a1", "a");
+    inFront("b1", "b");
+    inFront("a1", "a");
+    assert.deepEqual(expanded, ["a", "b", "a"]);
+  });
+
+  it("doesn't expand again when the tab in front loses its group for a moment and gets it back", () => {
+    const { expanded, inFront } = watch();
+    inFront("a1", "a");
+    inFront("a1", undefined);
+    inFront("a1", "a");
+    assert.deepEqual(expanded, ["a"]);
+  });
+
+  it("expands once the group of the tab in front becomes known", () => {
+    const { expanded, inFront } = watch();
+    inFront("new", undefined);
+    inFront("new", "a");
+    assert.deepEqual(expanded, ["a"]);
   });
 });
