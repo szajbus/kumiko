@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { SessionEvent } from "@kumiko/shared";
-import { applyEvent, backgroundAgents, blocksOf, chatRows, emptyChat, loginCards, partialToolSummary, toolSummary, unpromptedText, type ChatItem, type ChatRow, type ChatState } from "../src/chat.ts";
+import { applyEvent, backgroundAgents, blocksOf, chatRows, emptyChat, inputSections, loginCards, partialToolSummary, toolSummary, unpromptedText, type ChatItem, type ChatRow, type ChatState } from "../src/chat.ts";
 
 type NewEvent = SessionEvent extends infer E ? (E extends unknown ? Omit<E, "seq"> : never) : never;
 
@@ -557,6 +557,16 @@ describe("tool summaries", () => {
     assert.equal(toolSummary({ description: "list", command: "ls -la\necho" }), "ls -la");
     assert.equal(toolSummary({ other: "x" }), "x");
     assert.equal(toolSummary({}), "");
+  });
+
+  it("shows a command as typed, with its line breaks and quotes, and the rest of the input under it", () => {
+    const command = 'cat <<EOF\necho "hi"\nEOF';
+    assert.deepEqual(inputSections({ command, description: "say hi", run_in_background: true }), [
+      { label: "Command", text: command },
+      { label: "Input", text: JSON.stringify({ description: "say hi", run_in_background: true }, null, 2) },
+    ]);
+    assert.deepEqual(inputSections({ command }), [{ label: "Command", text: command }]);
+    assert.deepEqual(inputSections({ file_path: "a" }), [{ label: "Input", text: '{\n  "file_path": "a"\n}' }]);
   });
 
   it("reads as much as has streamed of the input JSON", () => {

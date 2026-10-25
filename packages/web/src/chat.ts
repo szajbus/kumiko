@@ -754,6 +754,16 @@ export function toolSummary(input: Record<string, unknown>): string {
   return first?.split("\n")[0] ?? "";
 }
 
+/**
+ * A tool call's input to read: a command as it would be typed, not a JSON string with its line breaks and quotes escaped,
+ * then the rest of the input, if there is any.
+ */
+export function inputSections(input: Record<string, unknown>): { label: string; text: string }[] {
+  const { command, ...rest } = input;
+  if (typeof command !== "string" || !command) return [{ label: "Input", text: JSON.stringify(input, null, 2) }];
+  return [{ label: "Command", text: command }, ...(Object.keys(rest).length ? [{ label: "Input", text: JSON.stringify(rest, null, 2) }] : [])];
+}
+
 /** The same summary from input JSON that is still streaming in, as far as it has got. */
 export function partialToolSummary(json: string): string {
   for (const k of SUMMARY_KEYS) {

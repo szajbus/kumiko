@@ -1,11 +1,11 @@
-import { createContext, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
+import { createContext, Fragment, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { formatBytes, LIVE_SESSION_STATUSES, type AskAnswer, type LoginAccount, type SessionInfo } from "@kumiko/shared";
 import { api, errorMessage, type SessionStream } from "./api";
 import { fromAttachment, toInput } from "./attachments";
 import { ArtifactsButton } from "./ArtifactView";
 import { AskCard, AskContext } from "./AskCard";
-import { applyEvent, backgroundAgents, startsTurn, unpromptedPlain, blocksOf, chatRows, emptyChat, loginCards, partialToolSummary, summarize, toolState, toolSummary, type Block, type ChatItem, type ChatState, type ItemRow, type LoginAnswer, type Subagent, type ToolState, type WorkRow } from "./chat";
+import { applyEvent, backgroundAgents, startsTurn, unpromptedPlain, blocksOf, chatRows, emptyChat, inputSections, loginCards, partialToolSummary, summarize, toolState, toolSummary, type Block, type ChatItem, type ChatState, type ItemRow, type LoginAnswer, type Subagent, type ToolState, type WorkRow } from "./chat";
 import { codeWrap } from "./codeWrap";
 import { Composer, type ComposerHandle } from "./Composer";
 import { HeaderCorner } from "./Corner";
@@ -1119,8 +1119,24 @@ function PlainToolCall({ block, state, meta }: { block: Extract<Block, { type: "
         )}
       </summary>
       <div className="tool-body">
-        <div className="eyebrow">{line?.input?.label ?? "Input"}</div>
-        <pre className="mono">{line?.input?.text ?? (Object.keys(block.input).length ? JSON.stringify(block.input, null, 2) : block.partialInput || "{}")}</pre>
+        {line?.input ? (
+          <>
+            <div className="eyebrow">{line.input.label}</div>
+            <pre className="mono">{line.input.text}</pre>
+          </>
+        ) : Object.keys(block.input).length ? (
+          inputSections(block.input).map((s) => (
+            <Fragment key={s.label}>
+              <div className="eyebrow">{s.label}</div>
+              <pre className="mono">{s.text}</pre>
+            </Fragment>
+          ))
+        ) : (
+          <>
+            <div className="eyebrow">Input</div>
+            <pre className="mono">{block.partialInput || "{}"}</pre>
+          </>
+        )}
         {block.result && (
           <>
             <div className="eyebrow">{block.result.isError ? "Error" : "Result"}</div>
