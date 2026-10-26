@@ -1,6 +1,6 @@
 import { useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type PointerEvent } from "react";
 import * as Menu from "@radix-ui/react-dropdown-menu";
-import { imageTypeOf, MAX_ARTIFACT_BYTES, MAX_IMAGE_BYTES, MAX_PANES, urlOrigin, type ArtifactState, type ArtifactType, type PaneId, type WidgetId } from "@kumiko/shared";
+import { formatBytes, imageTypeOf, MAX_ARTIFACT_BYTES, MAX_IMAGE_BYTES, MAX_PANES, urlOrigin, type ArtifactState, type ArtifactType, type PaneId, type WidgetId } from "@kumiko/shared";
 import { ArtifactIcon, Close, OpenNew, Trash } from "./icons";
 import { Diagram } from "./Diagram";
 import { Markdown } from "./Markdown";
@@ -163,8 +163,8 @@ export function ArtifactView({ widget, pane, doc, writing }: Props) {
           {doc.truncated && writing === undefined && (
             <p className="artifact-note">
               {doc.type === "image"
-                ? `The image is larger than ${MAX_IMAGE_BYTES / 1024 / 1024} MB, so it isn't shown.`
-                : `The file is longer than ${MAX_ARTIFACT_BYTES / 1024} KB; only its start is shown.`}
+                ? `The image is larger than ${formatBytes(MAX_IMAGE_BYTES)}, so it isn't shown.`
+                : `The file is longer than ${formatBytes(MAX_ARTIFACT_BYTES)}; only its start is shown.`}
             </p>
           )}
         </div>

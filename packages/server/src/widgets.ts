@@ -15,6 +15,7 @@ import {
   CHAT,
   artifactsOf,
   MAX_ARTIFACT_BYTES,
+  formatBytes,
   nextId,
   paneIds,
   paneOf,
@@ -480,8 +481,8 @@ export class Widgets implements SessionWidgets {
     const note = !read.truncated
       ? ""
       : type === "image"
-        ? ` It is larger than ${MAX_IMAGE_BYTES / 1024 / 1024} MB, so it isn't shown: make it smaller.`
-        : ` It is longer than ${MAX_ARTIFACT_BYTES / 1024} KB, so only its start is shown: split it into several artifacts.`;
+        ? ` It is larger than ${formatBytes(MAX_IMAGE_BYTES)}, so it isn't shown: make it smaller.`
+        : ` It is longer than ${formatBytes(MAX_ARTIFACT_BYTES)}, so only its start is shown: split it into several artifacts.`;
 
     // Kept before the window is looked at: from there to the change, nothing waits, so no other change comes between.
     const content = await this.keepContent(read);

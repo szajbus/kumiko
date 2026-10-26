@@ -400,7 +400,7 @@ export interface ArtifactState {
 export type ArtifactOp = Partial<Pick<ArtifactState, "title" | "content" | "truncated" | "missing" | "approved">>;
 
 /** How much of an artifact's file a window keeps and shows. A safety limit, not one on what Claude writes. */
-export const MAX_ARTIFACT_BYTES = 256 * 1024;
+export const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024;
 /** The largest image artifact a window keeps and shows; a larger one isn't shown at all. */
 export const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 

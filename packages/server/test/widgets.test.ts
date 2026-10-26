@@ -587,6 +587,11 @@ describe("widgets", () => {
     await writeFile(join(dir, "chart.png"), png);
     await writeFile(join(dir, "flow.mmd"), "graph TD\n  A --> B\n");
     await writeFile(join(dir, "big.png"), Buffer.alloc(3 * 1024 * 1024));
+    // A page with images in it is kept whole up to 2 MB; past that, only its start.
+    await writeFile(join(dir, "page.html"), "x".repeat(1024 * 1024));
+    await writeFile(join(dir, "huge.html"), "x".repeat(3 * 1024 * 1024));
+    assert.doesNotMatch(await ask(s, id, widget("artifact_open", { path: docPath(id, "page.html") })), /only its start/);
+    assert.match(await ask(s, id, widget("artifact_open", { path: docPath(id, "huge.html") })), /longer than 2 MB, so only its start is shown/);
     await ask(s, id, widget("artifact_open", { path: docPath(id, "chart.png"), place: { split: "below" } }));
     await ask(s, id, widget("artifact_open", { path: docPath(id, "flow.mmd") }));
     assert.match(await ask(s, id, widget("artifact_open", { path: docPath(id, "big.png") })), /larger than 2 MB, so it isn't shown/);
@@ -597,6 +602,9 @@ describe("widgets", () => {
     assert.ok(Buffer.from(await image.arrayBuffer()).equals(png));
     assert.deepEqual([byPath.get("flow.mmd")?.type, byPath.get("flow.mmd")?.title], ["mermaid", "flow.mmd"]);
     assert.deepEqual([byPath.get("big.png")?.content, byPath.get("big.png")?.truncated], [undefined, true]);
+    assert.deepEqual([Boolean(byPath.get("page.html")?.content), byPath.get("page.html")?.truncated], [true, undefined]);
+    const huge = await api(`/api/artifacts/${byPath.get("huge.html")?.content}`);
+    assert.deepEqual([byPath.get("huge.html")?.truncated, (await huge.arrayBuffer()).byteLength], [true, 2 * 1024 * 1024]);
     assert.match(await ask(s, id, widget("artifact_open", { path: docPath(id, "flow.mmd"), place: { split: "sideways" } })), /place\.split must be/);
     s.close();
   });
