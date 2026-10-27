@@ -10,7 +10,7 @@ import { quoteFrom } from "./quote";
 import { COLORS } from "./status";
 import { withPolicy } from "./htmlPolicy";
 import { api } from "./api";
-import { sourceWrap } from "./codeWrap";
+import { markdownFull, sourceWrap } from "./codeWrap";
 import { shownSource, SOURCE_LANG } from "./artifactSource";
 import { WindowContext, type ArtifactEntry, type WindowApi } from "./windowContext";
 
@@ -52,6 +52,8 @@ export function ArtifactView({ widget, pane, doc, writing }: Props) {
   const page = isPage(doc) && !(source && SOURCE_LANG[doc.type]);
   // Whether the source wraps its long lines: one choice for every artifact pane.
   const wrapped = useSyncExternalStore(sourceWrap.subscribe, sourceWrap.get);
+  // Whether Markdown fills the pane's width: one choice for every artifact pane.
+  const full = useSyncExternalStore(markdownFull.subscribe, markdownFull.get);
   const body = useRef<HTMLDivElement>(null);
   const shown = useContent(doc);
   // What Claude wrote stays until the version the window has of it has come, rather than the one before it.
@@ -110,6 +112,17 @@ export function ArtifactView({ widget, pane, doc, writing }: Props) {
               Wrap
             </button>
           )}
+          {doc.type === "markdown" && (
+            <button
+              type="button"
+              className="artifact-copy"
+              aria-pressed={full}
+              onClick={() => markdownFull.set(!full)}
+              title={full ? "Keep to the chat's width" : "Fill the pane's width"}
+            >
+              Full width
+            </button>
+          )}
           {page && (doc.type !== "web" || doc.approved) && (
             <>
               <select className="artifact-width" value={width} onChange={(e) => setWidth(e.target.value as typeof width)} aria-label="Width to show the page at" title="Width to show the page at">
@@ -147,7 +160,7 @@ export function ArtifactView({ widget, pane, doc, writing }: Props) {
       {doc.missing && <div className="banner banner-warn artifact-banner">The file isn't there any more. This is how it was when last read.</div>}
       <div
         ref={body}
-        className={`artifact-body${page && writing === undefined ? " is-page" : ""}`}
+        className={`artifact-body${page && writing === undefined ? " is-page" : ""}${doc.type === "markdown" && full ? " is-full" : ""}`}
         onScroll={(e) => {
           const el = e.currentTarget;
           follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;

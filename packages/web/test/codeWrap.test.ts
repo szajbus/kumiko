@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { codeWrap, sourceWrap } from "../src/codeWrap.ts";
+import { codeWrap, markdownFull, sourceWrap } from "../src/codeWrap.ts";
 
 describe("codeWrap", () => {
   it("is one choice that every subscribed block hears about", () => {
@@ -31,6 +31,21 @@ describe("sourceWrap", () => {
     assert.deepEqual(heard, [false]);
     assert.equal(codeWrap.get(), false);
     sourceWrap.set(true);
+    stop();
+  });
+});
+
+describe("markdownFull", () => {
+  it("starts at the chat's width, and is a choice apart from wrapping", () => {
+    assert.equal(markdownFull.get(), false);
+    const heard: boolean[] = [];
+    const stop = markdownFull.subscribe(() => heard.push(markdownFull.get()));
+    sourceWrap.set(false);
+    sourceWrap.set(true);
+    assert.deepEqual(heard, [], "the source's Wrap leaves the width alone");
+    markdownFull.set(true);
+    assert.deepEqual(heard, [true]);
+    markdownFull.set(false);
     stop();
   });
 });

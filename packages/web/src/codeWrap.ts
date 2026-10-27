@@ -33,3 +33,8 @@ export const codeWrap = wrapChoice(false);
  * of a page or drawing is read rather than copied from line by line.
  */
 export const sourceWrap = wrapChoice(true);
+
+/**
+ * Whether Markdown artifacts fill their pane's width rather than keep to the chat's: one choice for every artifact pane.
+ */
+export const markdownFull = wrapChoice(false);

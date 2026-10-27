@@ -599,7 +599,8 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 .artifact-delete.is-asking:hover { background: #3a1a1d; }
 .artifact-banner { margin: 10px 20px 0; }
 .artifact-body { flex: 1; min-height: 0; overflow-y: auto; }
-.artifact-inner { max-width: 760px; margin: 0 auto; padding: 20px 24px 32px; }
+.artifact-inner { max-width: 860px; margin: 0 auto; padding: 20px 24px 32px; }
+.artifact-body.is-full .artifact-inner { max-width: none; }
 .artifact-note { color: var(--muted); font-size: 12.5px; font-style: italic; }
 /* A page fills the pane, at the width chosen, centred, on a white ground as most pages assume one. */
 .artifact-body.is-page { display: flex; overflow: auto; background: var(--surface-2); }
