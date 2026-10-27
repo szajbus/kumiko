@@ -1,6 +1,6 @@
 import { createContext, useContext, useId, useState, type KeyboardEvent } from "react";
 import type { AgentQuestion, AskAnswer } from "@kumiko/shared";
-import { answersOf, askOutcome, noPicks, pick, pickOwn, planTitle, splitAnswer, typeOwn, type Picks } from "./asks";
+import { answersOf, askOutcome, askPosition, noPicks, pick, pickOwn, planTitle, splitAnswer, typeOwn, type Picks } from "./asks";
 import type { ChatItem } from "./chat";
 import { Markdown } from "./Markdown";
 
@@ -60,7 +60,7 @@ function QuestionsCard({ item, questions }: { item: AskItem; questions: AgentQue
     <div className="chat-proposal chat-ask" role="group" aria-label="Claude asks">
       <strong>Claude asks:</strong>
       {questions.map((q, i) => (
-        <Question key={q.question} q={q} n={i} picks={picks[i]} disabled={sending !== undefined} onChange={(p) => set(i, p)} />
+        <Question key={q.question} q={q} n={i} total={questions.length} picks={picks[i]} disabled={sending !== undefined} onChange={(p) => set(i, p)} />
       ))}
       <div className="ask-foot">
         <span>Claude is waiting for your answer.</span>
@@ -78,10 +78,11 @@ function QuestionsCard({ item, questions }: { item: AskItem; questions: AgentQue
 }
 
 /** One question: its options, then a box for an answer of the user's own. The digits pick options while it has the focus. */
-function Question({ q, n, picks, disabled, onChange }: { q: AgentQuestion; n: number; picks: Picks; disabled: boolean; onChange(p: Picks): void }) {
+function Question({ q, n, total, picks, disabled, onChange }: { q: AgentQuestion; n: number; total: number; picks: Picks; disabled: boolean; onChange(p: Picks): void }) {
   // Unique on the page: chats in other tabs stay mounted, and may ask the same question, which would share the group.
   const name = `${useId()}-${n}`;
   const type = q.multiSelect ? "checkbox" : "radio";
+  const position = askPosition(n, total);
   const onKeyDown = (e: KeyboardEvent<HTMLFieldSetElement>) => {
     if (e.target instanceof HTMLInputElement && e.target.type === "text") return;
     const k = Number(e.key);
@@ -92,9 +93,17 @@ function Question({ q, n, picks, disabled, onChange }: { q: AgentQuestion; n: nu
   return (
     <fieldset className="ask-q" disabled={disabled} onKeyDown={onKeyDown}>
       <legend className="ask-q-head">
-        {q.header && <span className="badge">{q.header}</span>}
+        {(position || q.header || q.multiSelect) && (
+          <span className="ask-q-top">
+            <span className="ask-q-label">
+              {position && <span className="ask-q-pos">{position}</span>}
+              {position && q.header && " · "}
+              {q.header}
+            </span>
+            {q.multiSelect && <span className="ask-q-kind">Pick any</span>}
+          </span>
+        )}
         <span>{q.question}</span>
-        {q.multiSelect && <span className="ask-q-kind">Pick any</span>}
       </legend>
       {q.options.map((o, k) => (
         <label className="ask-option" key={o.label}>

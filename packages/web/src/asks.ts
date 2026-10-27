@@ -62,6 +62,11 @@ export function askOutcome(kind: "questions" | "plan", answer: AskAnswer | undef
   return undefined;
 }
 
+/** Where a question stands among those asked together, as "1 of 2"; nothing when it's the only one. */
+export function askPosition(n: number, total: number): string | undefined {
+  return total > 1 ? `${n + 1} of ${total}` : undefined;
+}
+
 /** What a plan is called: its first heading, or failing that its first line. */
 export function planTitle(plan: string): string {
   const lines = plan.split("\n").map((l) => l.trim()).filter(Boolean);

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AgentQuestion } from "@kumiko/shared";
-import { answersOf, askOutcome, noPicks, pick, pickOwn, planTitle, splitAnswer, typeOwn } from "../src/asks.ts";
+import { answersOf, askOutcome, askPosition, noPicks, pick, pickOwn, planTitle, splitAnswer, typeOwn } from "../src/asks.ts";
 
 const one: AgentQuestion = { question: "Storage?", options: [{ label: "Redis" }, { label: "SQLite" }] };
 const any: AgentQuestion = { question: "When?", multiSelect: true, options: [{ label: "TTL" }, { label: "Deploy" }, { label: "Webhook" }] };
@@ -54,5 +54,11 @@ describe("asks", () => {
     assert.equal(planTitle("Context first.\n\n## Move auth to JWT\n\n1. Do it."), "Move auth to JWT");
     assert.equal(planTitle("\n  Just do it.\nThen test."), "Just do it.");
     assert.equal(planTitle(""), "");
+  });
+
+  it("numbers a question among several asked together, but not one asked alone", () => {
+    assert.equal(askPosition(0, 2), "1 of 2");
+    assert.equal(askPosition(2, 3), "3 of 3");
+    assert.equal(askPosition(0, 1), undefined);
   });
 });
