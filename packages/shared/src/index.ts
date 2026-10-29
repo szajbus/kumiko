@@ -578,13 +578,17 @@ export interface Attachment {
 export type AttachmentInput = { name: string; data: string } | { name: string; hash: string };
 
 /**
- * The most a file of each kind may be. The API's own limit for an image is 5 MB. Text is read whole into the context,
- * and every file goes to the API again with each later turn, so they are kept well short of its 32 MB per request.
+ * The most a file of each kind may be. The API's own limit for an image is 5 MB, and a PDF is kept a little under the
+ * whole of a prompt's files.
  */
-export const ATTACHMENT_LIMITS: Record<AttachmentKind, number> = { image: 5 * 1024 * 1024, pdf: 10 * 1024 * 1024, text: 256 * 1024 };
+export const ATTACHMENT_LIMITS: Record<AttachmentKind, number> = { image: 5 * 1024 * 1024, pdf: 20 * 1024 * 1024, text: 10 * 1024 * 1024 };
 
-/** The most all the files of one prompt may add up to. */
-export const ATTACHMENTS_TOTAL_LIMIT = 20 * 1024 * 1024;
+/**
+ * The most all the files of one prompt may add up to: in base64 they are a third more, which brings 24 MB to the API's
+ * 32 MB per request. Every file goes to the API again with each later turn, so a session that has sent this much once
+ * can still go past it.
+ */
+export const ATTACHMENTS_TOTAL_LIMIT = 24 * 1024 * 1024;
 
 /**
  * How much of a background task's output Show all reads from Claude's file of it: the start of a longer one. More makes

@@ -903,6 +903,10 @@ describe("sessions", () => {
 
     // Files alone make a prompt.
     const prompt = (body: object) => api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify(body) });
+    // A text file of a few MB goes; it can be 10 MB.
+    assert.equal((await prompt({ text: "", attachments: [{ name: "log.txt", data: Buffer.alloc(3 * 1024 * 1024, 97).toString("base64") }] })).status, 202);
+    await said("You said:  [with log.txt (3145728 bytes)]");
+    await idle();
     assert.equal((await prompt({ text: "", attachments: [{ name: "notes.txt", data: notes.toString("base64") }] })).status, 202);
     await said("You said:  [with notes.txt (21 bytes)]");
     await idle();
@@ -916,7 +920,7 @@ describe("sessions", () => {
       assert.match((await json(r)).error, pattern);
     };
     await refused([{ name: "app.bin", data: Buffer.from([0, 1, 2]).toString("base64") }], /app\.bin can't be attached/);
-    await refused([{ name: "big.txt", data: Buffer.alloc(300 * 1024, 97).toString("base64") }], /big\.txt is too big/);
+    await refused([{ name: "big.txt", data: Buffer.alloc(10 * 1024 * 1024 + 1, 97).toString("base64") }], /big\.txt is too big/);
     await refused([{ name: "gone.png", hash: "0".repeat(64) }], /gone\.png is no longer on the server/);
     await refused([{ name: "x" }], /needs its data/);
 

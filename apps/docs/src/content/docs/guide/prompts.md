@@ -16,12 +16,13 @@ with the message, as content it reads directly rather than files in the sandbox.
 | Kind | Up to |
 | --- | --- |
 | Images | 5 MB each, scaled down to 1568 px on the long edge first |
-| PDFs | 10 MB each |
-| Text (UTF-8) | 256 KB each |
+| PDFs | 20 MB each |
+| Text (UTF-8) | 10 MB each |
 
-All the files of one message can add up to 20 MB. Kumiko tells the kind from the file's bytes, not its name. Anything
-else, or anything too big, is left out with a reason. With Claude Code, every file goes to the model's API again with each later
-turn, which is why the limits are well under the API's own.
+All the files of one message can add up to 24 MB, which is as much as the model's API takes in one request once the
+files are encoded. Kumiko tells the kind from the file's bytes, not its name. Anything else, or anything too big, is left
+out with a reason. With Claude Code, every file goes to the API again with each later turn, so a session that has sent
+large files can still go past the API's limit later on.
 
 For anything bigger, or a kind the agent can't read directly, put it in the clone or an extra mount and point the agent
 at it.
