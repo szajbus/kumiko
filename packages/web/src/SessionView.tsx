@@ -20,6 +20,7 @@ import { QuoteButton } from "./QuoteButton";
 import { Select } from "./Select";
 import { COLORS } from "./status";
 import { UsageStrip } from "./UsageStrip";
+import { WakeBanner, type WakeContext } from "./WakeBanner";
 import { widgetLine } from "./widgets";
 import { WindowContext } from "./windowContext";
 import { MonitorEvents, MonitorLine, MoveToBackground, onReveal, PlainLine, TaskEndLine, TasksButton, TaskToolMeta } from "./TasksPane";
@@ -44,6 +45,8 @@ interface Props {
   onForked(id: string): void;
   /** Its tab is the one on screen. */
   active?: boolean;
+  /** While it is asleep, its sandbox and the sandbox's log. */
+  wake?: WakeContext;
 }
 
 /**
@@ -64,7 +67,7 @@ function useMarkSeen(session: SessionInfo, active: boolean) {
 }
 
 /** The chat widget: its usage in the title bar's corner, the chat folded from its events, and the composer. */
-export function SessionView({ session, stream, onForked, composerRef, active = true }: Props) {
+export function SessionView({ session, stream, onForked, composerRef, active = true, wake }: Props) {
   // The title bar's corner is the tab on screen's.
   const headerCorner = useContext(HeaderCorner);
   const corner = active ? headerCorner : undefined;
@@ -289,22 +292,14 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
         )}
         {error && <div className="banner banner-error">{error}</div>}
         {session.asleep && (
-          <div className="banner banner-info">
-            <span className="banner-text">
-              {waking ? "Starting the sandbox…" : "Start the sandbox to resume this session."}
-            </span>
-            <button
-              type="button"
-              className="btn btn-primary btn-compact"
-              disabled={waking}
-              onClick={async () => {
-                setWaking(true);
-                if (!(await call(() => api.wakeSession(session.id)))) setWaking(false);
-              }}
-            >
-              {waking ? "Starting…" : "Start sandbox"}
-            </button>
-          </div>
+          <WakeBanner
+            wake={wake}
+            waking={waking}
+            onStart={async () => {
+              setWaking(true);
+              if (!(await call(() => api.wakeSession(session.id)))) setWaking(false);
+            }}
+          />
         )}
         {woke && (
           <div className={`banner banner-success${woke === "fading" ? " is-fading" : ""}`} role="status">

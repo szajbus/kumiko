@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
-import { isBusy, isWaiting, projectMountRole, vmName, type LogLine, type ProjectView, type SessionInfo, type WorktreeStatus, type WorktreesResponse } from "@kumiko/shared";
+import { isBusy, isWaiting, projectMountRole, vmName, type LogLine, type ProjectView, type ResumableSession, type WorktreeStatus, type WorktreesResponse } from "@kumiko/shared";
 import { SandboxActions, useActions } from "./actions";
 import { AgentSetupCard } from "./AgentSetup";
 import { api, errorMessage, useHome, useSandboxStats, type LiveState } from "./api";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { FinishingItem } from "./Finishing";
-import { sessionTitle, tilde } from "./format";
-import { Folder, Pencil, Plus, Redo } from "./icons";
+import { ago, tilde } from "./format";
+import { Folder, Pencil, Plus, Redo, Resume } from "./icons";
 import { LogPanel } from "./LogPanel";
+import { resumableKey } from "./resumable";
 import { COLORS, failedAgentScripts, meters, plural, sandboxCreatedAt, sessionState, statusOf, type Meter } from "./status";
+import { projectSessions } from "./wake";
 
 interface Props {
   id: string;
@@ -26,7 +28,6 @@ export function ProjectPage({ id, live, onBack, onEdit, onNewSession, onSessionS
   const lines = live.logs[id] ?? [];
   const actions = useActions({ onDeleted: onBack });
   const home = useHome();
-  const sessions = live.sessions.filter((s) => s.sandbox === id);
 
   return (
     <>
@@ -89,7 +90,7 @@ export function ProjectPage({ id, live, onBack, onEdit, onNewSession, onSessionS
 
         {p && (
           <div className="detail-grid">
-            <SessionsCard sessions={sessions} onOpened={onSessionStarted} />
+            <SessionsCard id={id} live={live} onOpened={onSessionStarted} />
             <WorktreesCard p={p} home={home} />
           </div>
         )}
@@ -129,38 +130,107 @@ function DetailHead({ p, home, lines, children }: { p: ProjectView; home?: strin
   );
 }
 
-/** The project's open sessions, the ones waiting on the user first, then those Claude finishes after their tab closed. */
-function SessionsCard({ sessions: all, onOpened }: { sessions: SessionInfo[]; onOpened(id: string): void }) {
-  const sessions = all.filter((s) => !s.closing);
-  const sorted = [...sessions].sort((a, b) => Number(isWaiting(b)) - Number(isWaiting(a)));
-  const waiting = sessions.filter(isWaiting).length;
-  const finishing = all.filter((s) => s.closing);
+/** How many closed sessions the card shows before "Show older". */
+const CLOSED_SHOWN = 5;
+
+/**
+ * The project's sessions: the open ones, those waiting on the user first, then those Claude finishes after their tab
+ * closed, then the closed ones, most recent first, to resume.
+ */
+function SessionsCard({ id, live, onOpened }: { id: string; live: LiveState; onOpened(id: string): void }) {
+  // Re-read when a session opens or closes, or a project (and its saved sessions) goes.
+  const [saved, setSaved] = useState<ResumableSession[]>([]);
+  const key = resumableKey(live);
+  useEffect(() => {
+    let current = true;
+    api.resumable().then((list) => current && setSaved(list), () => {});
+    return () => {
+      current = false;
+    };
+  }, [key]);
+  const { open, closed } = projectSessions(id, live.sessions, saved);
+  const finishing = live.sessions.filter((s) => s.sandbox === id && s.closing);
+  const waiting = open.filter(isWaiting).length;
+  const [all, setAll] = useState(false);
+  const [resuming, setResuming] = useState<string | undefined>();
+  const [error, setError] = useState<string | undefined>();
+  const resume = async (sid: string) => {
+    setError(undefined);
+    setResuming(sid);
+    try {
+      onOpened((await api.resumeSession(sid)).id);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setResuming(undefined);
+    }
+  };
+  const shown = all ? closed : closed.slice(0, CLOSED_SHOWN);
   return (
     <section className="card section" aria-labelledby="p-sessions">
       <div className="card-head">
         <h2 id="p-sessions">Sessions</h2>
         {waiting > 0 && <span className="badge badge-warn">{waiting} waiting on you</span>}
       </div>
-      {sorted.length === 0 && !finishing.length && <p className="muted">No open sessions. Resume saved ones from a New session tab.</p>}
-      <ul className="item-list">
-        {sorted.map((s) => {
-          const st = sessionState(s);
-          return (
-            <li key={s.id} className="item">
-              <a className="item-main" href={`#/session/${s.id}`} title={s.prompt}>
-                <span className="item-title">{sessionTitle(s)}</span>
-              </a>
-              <span className="row-status item-state" style={{ color: st.color }}>
-                <span className={`dot dot-small${isBusy(s) ? " dot-pulse" : ""}`} style={{ background: st.color }} aria-hidden="true" />
-                {st.text}
-              </span>
-            </li>
-          );
-        })}
-        {finishing.map((s) => (
-          <FinishingItem key={s.id} s={s} onOpened={onOpened} />
-        ))}
-      </ul>
+      {!open.length && !finishing.length && !closed.length && <p className="muted">No sessions yet.</p>}
+      {error && <div className="banner banner-error">{error}</div>}
+      {(open.length > 0 || finishing.length > 0) && (
+        <>
+          {closed.length > 0 && <h3 className="item-group">Open</h3>}
+          <ul className="item-list">
+            {open.map((s) => {
+              const st = sessionState(s);
+              return (
+                <li key={s.id} className="item">
+                  <a className="item-main" href={`#/session/${s.id}`} title={s.prompt}>
+                    <span className="item-title">{s.title ?? s.prompt}</span>
+                  </a>
+                  <span className="row-status item-state" style={{ color: st.color }}>
+                    <span className={`dot dot-small${isBusy(s) ? " dot-pulse" : ""}`} style={{ background: st.color }} aria-hidden="true" />
+                    {st.text}
+                  </span>
+                </li>
+              );
+            })}
+            {finishing.map((s) => (
+              <FinishingItem key={s.id} s={s} onOpened={onOpened} />
+            ))}
+          </ul>
+        </>
+      )}
+      {closed.length > 0 && (
+        <>
+          <h3 className="item-group">Closed</h3>
+          <ul className="item-list">
+            {shown.map((s) => (
+              <li key={s.id} className="item">
+                <span className="item-main" title={s.prompt}>
+                  <span className="item-title">{s.title ?? s.prompt}</span>
+                  <span className="item-sub muted">
+                    {s.description ? `${s.description} · ` : ""}
+                    {ago(s.updatedAt ?? s.startedAt)}
+                  </span>
+                </span>
+                <span className="item-actions">
+                  <span className="row-status item-state muted">
+                    <span className="dot dot-small" style={{ background: COLORS.closed }} aria-hidden="true" />
+                    Closed
+                  </span>
+                  <button type="button" className="btn btn-secondary btn-small" disabled={resuming !== undefined} onClick={() => void resume(s.id)}>
+                    <Resume />
+                    {resuming === s.id ? "Resuming…" : "Resume"}
+                  </button>
+                </span>
+              </li>
+            ))}
+          </ul>
+          {closed.length > CLOSED_SHOWN && (
+            <button type="button" className="link-btn" onClick={() => setAll(!all)}>
+              {all ? "Show fewer" : `Show ${plural(closed.length - CLOSED_SHOWN, "older closed session")}`}
+            </button>
+          )}
+        </>
+      )}
     </section>
   );
 }

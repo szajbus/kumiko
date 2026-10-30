@@ -6,6 +6,8 @@ export const COLORS = {
   busy: "#8FA6F0",
   failed: "#F07A6A",
   warn: "#E3A24A",
+  /** A saved session without a tab. */
+  closed: "#5F6773",
 } as const;
 
 const OP_LABEL: Record<OpKind, string> = {

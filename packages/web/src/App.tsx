@@ -466,7 +466,13 @@ export function App() {
         {/* The tab on screen and those looked at before it, hidden; Body decides whether there is one to show. */}
         {kept.map((s) => (
           <div key={s.id} className={`session-kept${s.id === onSession ? "" : " is-hidden"}`} aria-hidden={s.id !== onSession || undefined}>
-            <Window session={s} active={s.id === onSession} onForked={(id) => onSessionStarted(id)} sessionNames={sessionNames} />
+            <Window
+              session={s}
+              active={s.id === onSession}
+              onForked={(id) => onSessionStarted(id)}
+              sessionNames={sessionNames}
+              wake={s.asleep ? { sandbox: live.projects.find((p) => p.name === s.sandbox), log: live.logs[s.sandbox] ?? [] } : undefined}
+            />
           </div>
         ))}
       </HeaderCorner.Provider>

@@ -5,6 +5,7 @@ import type { ComposerHandle } from "./Composer";
 import { ArtifactView } from "./ArtifactView";
 import { PaneGrip } from "./PaneGrip";
 import { SessionView } from "./SessionView";
+import type { WakeContext } from "./WakeBanner";
 import { TasksPane } from "./TasksPane";
 import { columns, dividers, dropPreview, dropZone, lastChanges, paneRects, streamingWrites, windowEdge, type Divider, type DropZone, type PaneRect } from "./widgets";
 import { WindowContext, type ArtifactEntry, type WindowApi } from "./windowContext";
@@ -17,6 +18,8 @@ interface Props {
   active?: boolean;
   /** The open sessions' names, by id; see `WindowApi`. */
   sessionNames?: ReadonlyMap<string, string>;
+  /** While the session is asleep, its sandbox and the sandbox's log. */
+  wake?: WakeContext;
 }
 
 const NO_NAMES: ReadonlyMap<string, string> = new Map();
@@ -29,7 +32,7 @@ const MIN_PANE_WIDTH = 360;
  * folds its state from the stream's `window` events, and passes the stream on to the chat. Panes are placed by the
  * layout but rendered side by side, each under its own key, so the chat stays mounted as panes open and close.
  */
-export function Window({ session, onForked, active = true, sessionNames = NO_NAMES }: Props) {
+export function Window({ session, onForked, active = true, sessionNames = NO_NAMES, wake }: Props) {
   const stream = useSessionEvents(session.id);
   const win = useWindow(stream.events);
   const composer = useRef<ComposerHandle>(null);
@@ -76,7 +79,7 @@ export function Window({ session, onForked, active = true, sessionNames = NO_NAM
     const w = win.widgets[id];
     switch (w?.kind) {
       case "chat":
-        return <SessionView session={session} stream={stream} onForked={onForked} composerRef={composer} active={active} />;
+        return <SessionView session={session} stream={stream} onForked={onForked} composerRef={composer} active={active} wake={wake} />;
       case "artifact": {
         const doc = w.state as ArtifactState;
         // What Claude is writing to the file streams in, until the window has read the file it wrote.
