@@ -27,8 +27,9 @@ If `gh` is signed out, fetching a private repository fails until you sign it in 
 
 ## Adding a repository
 
-**Add repository** lists every repository `gh` can see, yours and your organizations', most recently pushed first.
-Type to filter by name or description; ↑ ↓ and Enter add the highlighted one. The dialog stays open, so you can add
+**Add repository** lists the repositories `gh` can see, one owner at a time, by name. It starts with your own; pick
+one of your organizations from the menu beside the search to see theirs. Type to filter by name or description; ↑ ↓
+and Enter add the highlighted one. The dialog stays open, so you can add
 several. Each one is cloned in the background and shows **Cloning…** until it's done.
 
 ## The list

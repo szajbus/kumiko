@@ -5,7 +5,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { formatBytes, tilde } from "./format";
 import { HomeNav } from "./HomeNav";
 import { Plus, Redo, Trash } from "./icons";
-import { filterRepos, highlight, mirrorStatus } from "./repos";
+import { filterRepos, highlight, mirrorStatus, repoOwners, reposOf } from "./repos";
 
 /**
  * The repository mirrors: the GitHub repos the user picked, each kept by Kumiko as a bare mirror on the host, which
@@ -105,7 +105,7 @@ export function ReposPage({ live }: { live: LiveState }) {
         )}
       </main>
 
-      {adding && <AddRepoDialog added={mirrors} onAdd={(r) => act(api.addMirror(r.repo, r.private))} onClose={() => setAdding(false)} />}
+      {adding && <AddRepoDialog login={signedIn ? account.login : undefined} added={mirrors} onAdd={(r) => act(api.addMirror(r.repo, r.private))} onClose={() => setAdding(false)} />}
       {removing && (
         <ConfirmDialog
           title={`Remove ${removing.repo}?`}
@@ -250,14 +250,18 @@ function CopyCommand({ command }: { command: string }) {
   );
 }
 
-/** A searchable list of the repos gh's account can see; picking one adds it, and the dialog stays for more. */
-function AddRepoDialog({ added, onAdd, onClose }: { added: MirrorView[]; onAdd(r: GitHubRepo): void; onClose(): void }) {
+/**
+ * A searchable list of one owner's repos, by name: the gh account's own at first, or an organization's picked above.
+ * Picking one adds it, and the dialog stays for more.
+ */
+function AddRepoDialog({ login, added, onAdd, onClose }: { login?: string; added: MirrorView[]; onAdd(r: GitHubRepo): void; onClose(): void }) {
   const ref = useRef<HTMLDialogElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const [repos, setRepos] = useState<GitHubRepo[] | undefined>();
   const [loadError, setLoadError] = useState<string | undefined>();
   const [query, setQuery] = useState("");
   const [at, setAt] = useState(0);
+  const [picked, setPicked] = useState<string | undefined>();
 
   const load = useCallback(() => {
     setRepos(undefined);
@@ -273,7 +277,10 @@ function AddRepoDialog({ added, onAdd, onClose }: { added: MirrorView[]; onAdd(r
     const keys = new Set(added.map((m) => m.repo.toLowerCase()));
     return (r: GitHubRepo) => keys.has(r.repo.toLowerCase());
   }, [added]);
-  const shown = useMemo(() => filterRepos(repos ?? [], query), [repos, query]);
+  const owners = useMemo(() => repoOwners(repos ?? [], login), [repos, login]);
+  const owner = picked ?? login ?? owners[0]?.owner ?? "";
+  const ofOwner = useMemo(() => reposOf(repos ?? [], owner), [repos, owner]);
+  const shown = useMemo(() => filterRepos(ofOwner, query), [ofOwner, query]);
   const current = Math.min(at, Math.max(0, shown.length - 1));
 
   useEffect(() => {
@@ -295,19 +302,37 @@ function AddRepoDialog({ added, onAdd, onClose }: { added: MirrorView[]; onAdd(r
     <dialog ref={ref} className="dialog add-repo-dialog" onCancel={(e) => (e.preventDefault(), onClose())} aria-labelledby="add-repo-title">
       <h2 id="add-repo-title">Add a repository</h2>
       <p className="add-repo-lead">Your repositories and your organizations', as gh lists them. Kumiko clones the one you pick into a mirror on this Mac.</p>
-      <input
-        className="input add-repo-search"
-        type="search"
-        placeholder="Search by name or description"
-        aria-label="Search repositories"
-        autoFocus
-        value={query}
-        onChange={(e) => {
-          setQuery(e.target.value);
-          setAt(0);
-        }}
-        onKeyDown={onKey}
-      />
+      <div className="add-repo-filters">
+        <select
+          className="input add-repo-owner"
+          aria-label="Owner"
+          value={owner}
+          disabled={!repos}
+          onChange={(e) => {
+            setPicked(e.target.value);
+            setAt(0);
+          }}
+        >
+          {(owners.length ? owners : [{ owner, count: 0 }]).map((o) => (
+            <option key={o.owner} value={o.owner}>
+              {repos ? `${o.owner} (${o.count})` : o.owner}
+            </option>
+          ))}
+        </select>
+        <input
+          className="input add-repo-search"
+          type="search"
+          placeholder="Search by name or description"
+          aria-label="Search repositories"
+          autoFocus
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setAt(0);
+          }}
+          onKeyDown={onKey}
+        />
+      </div>
       <div className="add-repo-list">
         {loadError ? (
           <div className="add-repo-empty banner-error-text">{loadError}</div>
@@ -316,12 +341,12 @@ function AddRepoDialog({ added, onAdd, onClose }: { added: MirrorView[]; onAdd(r
             <span className="spinner" aria-hidden="true" /> Loading your repositories…
           </div>
         ) : shown.length === 0 ? (
-          <div className="add-repo-empty muted">{repos.length ? "No repository matches." : "gh lists no repositories for this account."}</div>
+          <div className="add-repo-empty muted">{ofOwner.length ? "No repository matches." : `gh lists no repositories of ${owner}.`}</div>
         ) : (
           <ul ref={listRef} role="listbox" aria-label="Repositories">
             {shown.map((r, i) => {
               const done = isAdded(r);
-              const [a, b, c] = highlight(r.repo, query);
+              const [a, b, c] = highlight(r.repo.slice(r.repo.indexOf("/") + 1), query);
               return (
                 <li
                   key={r.repo}
@@ -358,7 +383,7 @@ function AddRepoDialog({ added, onAdd, onClose }: { added: MirrorView[]; onAdd(r
       </div>
       <div className="add-repo-foot">
         <span className="muted">
-          {repos && `${shown.length === repos.length ? repos.length : `${shown.length} of ${repos.length}`} ${repos.length === 1 ? "repository" : "repositories"} · `}
+          {repos && `${shown.length === ofOwner.length ? ofOwner.length : `${shown.length} of ${ofOwner.length}`} ${ofOwner.length === 1 ? "repository" : "repositories"} · `}
           <button type="button" className="link-btn" onClick={load} disabled={!repos && !loadError}>
             Reload list
           </button>

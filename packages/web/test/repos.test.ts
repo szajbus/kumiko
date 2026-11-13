@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { GitHubRepo, MirrorView } from "@kumiko/shared";
-import { filterRepos, highlight, mirrorStatus } from "../src/repos.ts";
+import { filterRepos, highlight, mirrorStatus, repoOwners, reposOf } from "../src/repos.ts";
 
 const repo = (name: string, description?: string): GitHubRepo => ({ repo: name, private: false, fork: false, archived: false, ...(description ? { description } : {}) });
 
@@ -14,6 +14,24 @@ describe("the repository picker", () => {
     assert.deepEqual(filterRepos(repos, "acme kumiko").map((r) => r.repo), ["acme/api"]);
     assert.deepEqual(filterRepos(repos, "  sandboxed ").map((r) => r.repo), ["szajbus/kumiko"]);
     assert.deepEqual(filterRepos(repos, "nothing"), []);
+  });
+
+  it("offers the account first, then its organizations by name, each with its count", () => {
+    const all = [...repos, repo("Zeta/x"), repo("beta/y")];
+    assert.deepEqual(repoOwners(all, "szajbus"), [
+      { owner: "szajbus", count: 1 },
+      { owner: "acme", count: 2 },
+      { owner: "beta", count: 1 },
+      { owner: "Zeta", count: 1 },
+    ]);
+    assert.deepEqual(repoOwners([repo("acme/api")], "octo"), [{ owner: "octo", count: 0 }, { owner: "acme", count: 1 }], "the account even with no repos");
+    assert.deepEqual(repoOwners(repos, "SZAJBUS")[0], { owner: "SZAJBUS", count: 1 }, "ignoring case");
+  });
+
+  it("lists one owner's repos by name, whatever order gh gave them in", () => {
+    const all = [repo("acme/web"), repo("acme/Api"), repo("other/aaa"), repo("acme/api-2"), repo("acme/app10"), repo("acme/app9")];
+    assert.deepEqual(reposOf(all, "ACME").map((r) => r.repo), ["acme/Api", "acme/api-2", "acme/app9", "acme/app10", "acme/web"]);
+    assert.deepEqual(reposOf(all, "nobody"), []);
   });
 
   it("highlights the query's first word in a name", () => {
