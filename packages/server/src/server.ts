@@ -126,8 +126,7 @@ export interface ServerOptions {
   /** The GitHub CLI the Repos page lists the user's repositories with; defaults to `gh` (or `KUMIKO_GH`). */
   github?: GitHub;
   /**
-   * Where a newly picked repository's mirror fetches from. Defaults to GitHub, over SSH or HTTPS as gh's git_protocol
-   * says, or `<KUMIKO_GITHUB_URL>/<owner>/<name>.git` when that is set (for running against a stand-in).
+   * Where a newly picked repository's mirror fetches from. Defaults to GitHub over HTTPS, signing in with gh's token, or `<KUMIKO_GITHUB_URL>/<owner>/<name>.git` when that is set (for running against a stand-in).
    */
   repoUrl?(repo: string): string | Promise<string>;
 }
@@ -437,7 +436,8 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   const githubBase = process.env.KUMIKO_GITHUB_URL;
   const mirrors = new Mirrors({
     home,
-    remoteUrl: opts.repoUrl ?? (async (repo) => (githubBase ? `${githubBase.replace(/\/$/, "")}/${repo}.git` : gitHubUrl(repo, await github.protocol()))),
+    remoteUrl: opts.repoUrl ?? ((repo) => (githubBase ? `${githubBase.replace(/\/$/, "")}/${repo}.git` : gitHubUrl(repo))),
+    credentialHelper: github.credentialHelper(),
     onChange: () => broadcast({ type: "mirrors", ...mirrorsView() }),
   });
   const mirrorsView = (): MirrorsResponse => (mirrors.readError ? { mirrors: mirrors.list(), error: mirrors.readError } : { mirrors: mirrors.list() });

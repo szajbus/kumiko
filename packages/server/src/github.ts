@@ -101,10 +101,12 @@ export class GitHub {
     return repos.sort((a, b) => (b.pushedAt ?? "").localeCompare(a.pushedAt ?? ""));
   }
 
-  /** How the user clones from GitHub, as set in gh: "ssh" or "https" (gh's default). */
-  async protocol(): Promise<"https" | "ssh"> {
-    const r = await this.run(["config", "get", "git_protocol", "--host", "github.com"]).catch(() => undefined);
-    return r?.code === 0 && r.stdout.trim() === "ssh" ? "ssh" : "https";
+  /**
+   * The git credential helper that has gh hand git its token, as `gh auth setup-git` sets up: git runs it through a
+   * shell, so the path is quoted. The token stays between gh and git; Kumiko never sees it.
+   */
+  credentialHelper(): string {
+    return `!'${this.gh.replace(/'/g, "'\\''")}' auth git-credential`;
   }
 }
 
@@ -123,7 +125,7 @@ function firstLines(text: string): string {
   return text.trim().split("\n").slice(0, 4).join("\n").slice(0, 500);
 }
 
-/** Where git fetches a GitHub repo from, the way the user clones: over HTTPS, or SSH. */
-export function gitHubUrl(repo: string, protocol: "https" | "ssh"): string {
-  return protocol === "ssh" ? `git@github.com:${repo}.git` : `https://github.com/${repo}.git`;
+/** Where git fetches a GitHub repo from: over HTTPS, with gh's token. */
+export function gitHubUrl(repo: string): string {
+  return `https://github.com/${repo}.git`;
 }
