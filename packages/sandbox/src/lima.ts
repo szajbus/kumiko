@@ -18,7 +18,7 @@ import {
   type ValidSpec,
 } from "@kumiko/shared";
 import { MetadataError, MetadataStore } from "./metadata.js";
-import { eachLine, exitCode, runOk, type RunOptions } from "./proc.js";
+import { eachLine, exitCode, runOk, withStdio, type RunOptions } from "./proc.js";
 import { ProviderError, type Log, type SandboxProvider } from "./provider.js";
 import { validateSpec, type Validation } from "./validate.js";
 
@@ -554,9 +554,9 @@ export class LimaProvider implements SandboxProvider {
   exec(name: string, cmd: string, env: string[], opts: { cwd?: string } = {}): ChildProcess {
     const vm = vmName(name);
     const sshConfig = join(this.limaHome(), vm, "ssh.config");
-    const child = spawn(this.ssh, ["-F", sshConfig, "-T", `lima-${vm}`, "bash", "-s"], {
+    const child = withStdio(spawn(this.ssh, ["-F", sshConfig, "-T", `lima-${vm}`, "bash", "-s"], {
       stdio: ["pipe", "pipe", "pipe"],
-    });
+    }));
     // Writing to a process that has gone (the VM stopped, ssh couldn't connect) fails with EPIPE, and an unhandled
     // stream error would take the whole server down. The exit code already says what happened.
     child.stdin!.on("error", () => {});

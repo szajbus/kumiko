@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
-import type { Readable } from "node:stream";
+import { Readable, Writable } from "node:stream";
 import { ProviderError, type Log } from "./provider.js";
 
 const TAIL_LINES = 15;
@@ -36,6 +36,17 @@ export function tidyLimaLine(line: string): { text: string; kind?: "err" } {
   return { text };
 }
 
+/**
+ * Out of file descriptors (EMFILE, or ENFILE when the whole system is), spawn gives up before making the child's
+ * pipes and leaves them undefined, then reports the failure by an "error" event on the next tick. Empty streams in
+ * their place let callers set up as they always do and hear of it from that event, as they would of any other.
+ */
+export function withStdio(child: ChildProcess): ChildProcess {
+  if (child.stdin === undefined) child.stdin = new Writable({ write: (_c, _e, done) => done() });
+  for (const key of ["stdout", "stderr"] as const) if (child[key] === undefined) child[key] = Readable.from([]);
+  return child;
+}
+
 export interface RunResult {
   code: number;
   stdout: string;
@@ -57,7 +68,7 @@ export function run(cmd: string, args: string[], opts: RunOptions = {}): Promise
   return new Promise((resolve, reject) => {
     let child: ChildProcess;
     try {
-      child = spawn(cmd, args, { ...spawnOpts, stdio: ["ignore", "pipe", "pipe"] });
+      child = withStdio(spawn(cmd, args, { ...spawnOpts, stdio: ["ignore", "pipe", "pipe"] }));
     } catch (err) {
       reject(err);
       return;
