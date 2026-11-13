@@ -75,7 +75,7 @@ import { ArtifactContent, contentHashes } from "./content.js";
 import { filesBytes } from "./disk.js";
 import { GitError, worktreeStatuses } from "./git.js";
 import { GhError, GitHub, gitHubUrl } from "./github.js";
-import { MirrorFetchFailed, MirrorNotFound, Mirrors } from "./mirrors.js";
+import { MirrorFetchFailed, MirrorNotFound, MirrorRecordError, Mirrors } from "./mirrors.js";
 import { hasToken, isLocalRequest, isToken, tokenCookie } from "./guard.js";
 import { LoginFailed, Logins } from "./logins.js";
 import { BusyError, Operations } from "./operations.js";
@@ -461,7 +461,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     if (err instanceof HttpError) return c.json(fail(err.message, err.details), err.status);
     if (err instanceof AttachmentRefused || err instanceof WindowError) return c.json(fail(err.message), 400);
     if (err instanceof LoginFailed) return c.json(fail(err.message, err.output), 422);
-    if (err instanceof BusyError || err instanceof ProjectExists || err instanceof ProjectRecordError) return c.json(fail(err.message), 409);
+    if (err instanceof BusyError || err instanceof ProjectExists || err instanceof ProjectRecordError || err instanceof MirrorRecordError) return c.json(fail(err.message), 409);
     if (err instanceof SessionNotFound || err instanceof MirrorNotFound) return c.json(fail(err.message), 404);
     if (err instanceof MirrorFetchFailed || err instanceof GhError) return c.json(fail(err.message), 502);
     if (err instanceof SessionEnded || err instanceof SessionNotResumable || err instanceof RewindRefused || err instanceof AskRefused) return c.json(fail(err.message), 409);
@@ -1236,9 +1236,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   app.post("/api/mirrors", async (c) => {
     const req = await body<AddMirrorRequest>(c, "Body must be JSON: { repo, private }.");
     if (!parseRepo(req?.repo)) throw new HttpError(400, "repo must be a GitHub repository, as owner/name.");
-    const view = await mirrors.add(req.repo, typeof req.private === "boolean" ? { private: req.private } : {});
-    void mirrors.ensure(req.repo).catch(() => {});
-    return c.json(view, 201);
+    return c.json(await mirrors.pick(req.repo, typeof req.private === "boolean" ? { private: req.private } : {}), 201);
   });
 
   /** Fetches the mirror from GitHub, or joins the fetch under way; answers at once, and the page follows it. */

@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { before, describe, it } from "node:test";
+import { after, before, describe, it } from "node:test";
 import { GitHub, gitHubUrl } from "../src/github.js";
-import { MirrorFetchFailed, MirrorNotFound, Mirrors, type MirrorOptions } from "../src/mirrors.js";
+import { MirrorFetchFailed, MirrorNotFound, MirrorRecordError, Mirrors, objectsSize, type MirrorOptions } from "../src/mirrors.js";
 import { LimaProvider, MetadataStore } from "@kumiko/sandbox";
 import { startServer } from "../src/index.js";
 import { sh } from "./repo.js";
@@ -255,6 +255,54 @@ describe("repository mirrors", () => {
     await second.start();
     assert.match(second.readError!, /repos\.json, can't be read/);
     assert.ok(existsSync(path));
+    // Nor is the file written over, so it can still be fixed.
+    await assert.rejects(second.add("acme/other"), MirrorRecordError);
+    await assert.rejects(second.ensure("acme/other"), MirrorRecordError);
+    assert.equal(await readFile(join(w.home, "repos.json"), "utf8"), "{ not json");
+  });
+
+  it("starts even when a mirror can't be rewritten, and says so on its row", async () => {
+    const w = await world();
+    const first = mirrorsOf(w);
+    await first.start();
+    const path = await first.ensure("acme/widget");
+    await first.close();
+    await chmod(path, 0o555);
+    try {
+      const second = mirrorsOf(w);
+      await second.start();
+      const m = second.get("acme/widget")!;
+      assert.equal(m.state, "failed");
+      assert.match(m.error!.message, /couldn't rewrite the mirror's config and hooks/);
+    } finally {
+      await chmod(path, 0o755);
+    }
+  });
+
+  it("hands out a mirror it has even when its last fetch failed", async () => {
+    const w = await world();
+    const mirrors = mirrorsOf(w, { freshMs: 0 });
+    await mirrors.start();
+    const path = await mirrors.ensure("acme/widget");
+    await rm(join(w.base, "acme"), { recursive: true });
+    await assert.rejects(mirrors.fetch("acme/widget"), MirrorFetchFailed);
+    assert.equal(await mirrors.ensure("acme/widget"), path);
+    await mirrors.close();
+  });
+
+  it("doesn't run gc right after a first clone that worked only on a retry", async () => {
+    const w = await world();
+    await rm(join(w.base, "acme"), { recursive: true });
+    const mirrors = mirrorsOf(w, { gcEveryMs: 0 });
+    await mirrors.start();
+    await assert.rejects(mirrors.ensure("acme/widget"), MirrorFetchFailed);
+    await mkdir(join(w.base, "acme"), { recursive: true });
+    sh(w.root, "clone", "--quiet", "--bare", w.work, join(w.base, "acme", "widget.git"));
+    const path = await mirrors.ensure("acme/widget");
+    const record = JSON.parse(await readFile(join(w.home, "repos.json"), "utf8")).repos[0];
+    assert.equal(record.gcAt, record.fetchedAt, "counted as a first clone");
+    assert.notEqual(sh(path, "count-objects").trim().split(" ")[0], "0", "gc didn't pack the loose objects");
+    await mirrors.close();
   });
 });
 
@@ -355,5 +403,75 @@ describe("the Repos page's API", () => {
     } finally {
       await server.close();
     }
+  });
+});
+
+/**
+ * A "GitHub" reached through git's ext:: transport, so each connection runs a script first: the n-th connection
+ * (counting from 1) can be held up for a while, or refused. The script counts connections in `count`.
+ */
+async function slowGitHub(w: World, opts: { slow?: number; fail?: number }): Promise<{ url: string; count(): Promise<number> }> {
+  const script = join(w.root, "connect.sh");
+  const count = join(w.root, "count");
+  await writeFile(
+    script,
+    `#!/bin/sh
+n=$(( $(cat '${count}' 2>/dev/null || echo 0) + 1 ))
+echo $n > '${count}'
+[ "$n" = "${opts.fail ?? 0}" ] && exit 1
+[ "$n" = "${opts.slow ?? 0}" ] && sleep 3
+exec "$1" "$2"
+`,
+    { mode: 0o755 },
+  );
+  return { url: `ext::${script} %S ${join(w.base, "acme", "widget.git")}`, count: async () => Number(await readFile(count, "utf8").catch(() => "0")) };
+}
+
+describe("repository mirrors, connection by connection", () => {
+  before(() => {
+    // ext:: is off by default; only these tests' git may use it.
+    process.env.GIT_CONFIG_COUNT = "1";
+    process.env.GIT_CONFIG_KEY_0 = "protocol.ext.allow";
+    process.env.GIT_CONFIG_VALUE_0 = "always";
+  });
+  after(() => {
+    delete process.env.GIT_CONFIG_COUNT;
+    delete process.env.GIT_CONFIG_KEY_0;
+    delete process.env.GIT_CONFIG_VALUE_0;
+  });
+
+  it("keeps a fetch that worked when Kumiko quits during what comes after it", async () => {
+    const w = await world();
+    // The first clone's second connection asks where HEAD points: held up, then Kumiko quits.
+    const gh = await slowGitHub(w, { slow: 2 });
+    const mirrors = mirrorsOf(w, { remoteUrl: () => gh.url });
+    await mirrors.start();
+    const cloning = mirrors.ensure("acme/widget").catch(() => {});
+    while ((await gh.count()) < 2) await new Promise((r) => setTimeout(r, 20));
+    await mirrors.close();
+    await cloning;
+    const record = JSON.parse(await readFile(join(w.home, "repos.json"), "utf8")).repos[0];
+    assert.ok(record.fetchedAt, "the fetch is recorded");
+    assert.equal(record.error, undefined);
+  });
+
+  it("asks GitHub where HEAD points only when it needs to, and copes when it can't", async () => {
+    const w = await world();
+    // The first clone's second connection, where HEAD points, is refused.
+    const gh = await slowGitHub(w, { fail: 2 });
+    const mirrors = mirrorsOf(w, { remoteUrl: () => gh.url, freshMs: 0 });
+    await mirrors.start();
+    const path = await mirrors.ensure("acme/widget");
+    assert.equal(sh(path, "symbolic-ref", "HEAD").trim(), "refs/heads/main", "a branch that is there");
+    const before = await gh.count();
+    await mirrors.fetch("acme/widget");
+    assert.equal((await gh.count()) - before, 1, "one connection: the fetch");
+    await mirrors.close();
+  });
+});
+
+describe("a mirror's size", () => {
+  it("is what git counts of its objects", () => {
+    assert.equal(objectsSize("count: 3\nsize: 12\nin-pack: 9\npacks: 1\nsize-pack: 100\nprune-packable: 0\ngarbage: 0\nsize-garbage: 4\n"), 116 * 1024);
   });
 });

@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
-import { lstat, mkdir, readdir, readFile, rename, rm, rmdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { lstat, mkdir, readdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { parseRepo, type MirrorView } from "@kumiko/shared";
+import { replaceFile } from "./files.js";
 import { GitError, runGit } from "./git.js";
 
 /** Not a repository's name, or one that isn't picked. */
@@ -9,6 +10,9 @@ export class MirrorNotFound extends Error {}
 
 /** A fetch didn't work; the message is git's. */
 export class MirrorFetchFailed extends Error {}
+
+/** `repos.json` couldn't be read when Kumiko started, so nothing is written over it until it is fixed. */
+export class MirrorRecordError extends Error {}
 
 /** What is kept of each picked repository in `repos.json`, beside Kumiko's other data. */
 interface RepoRecord {
@@ -107,15 +111,11 @@ function gitEnv(): NodeJS.ProcessEnv {
 
 const exists = (path: string) => lstat(path).then(() => true, () => false);
 
-/** The bytes a folder takes, files and all; links are counted as themselves, not followed. */
-async function dirSize(path: string): Promise<number> {
-  let total = 0;
-  for (const d of await readdir(path, { withFileTypes: true }).catch(() => [])) {
-    const p = join(path, d.name);
-    if (d.isDirectory()) total += await dirSize(p);
-    else total += await lstat(p).then((s) => s.size, () => 0);
-  }
-  return total;
+/** The bytes a mirror's objects take, loose, packed and garbage, as git counts them: no walk over every file. */
+export function objectsSize(countObjects: string): number {
+  let kib = 0;
+  for (const m of countObjects.matchAll(/^(size|size-pack|size-garbage): (\d+)$/gm)) kib += Number(m[2]);
+  return kib * 1024;
 }
 
 /** git's complaint, without the progress lines a fetch can print before it. */
@@ -174,11 +174,19 @@ export class Mirrors {
       if (!r || typeof record.url !== "string" || this.entries.has(r.key)) continue;
       this.entries.set(r.key, { key: r.key, record });
     }
-    if (!this.readError) await this.sweep();
+    // Nothing here may keep Kumiko from starting: what goes wrong is shown on the page instead.
+    if (!this.readError) await this.sweep().catch((err) => console.error(`Couldn't tidy ${this.root}: ${err instanceof Error ? err.message : String(err)}`));
     for (const e of this.entries.values()) {
       const dir = this.path(e.record.repo);
-      if (e.record.fetchedAt && (await exists(join(dir, "HEAD")))) await this.writeOwn(dir, e.record.url);
-      else void this.fetchEntry(e).catch(() => {});
+      if (!e.record.fetchedAt || !(await exists(join(dir, "HEAD")))) {
+        void this.fetchEntry(e);
+        continue;
+      }
+      try {
+        await this.writeOwn(dir, e.record.url);
+      } catch (err) {
+        e.record.error = { message: `Kumiko couldn't rewrite the mirror's config and hooks: ${err instanceof Error ? err.message : String(err)}`, at: new Date().toISOString() };
+      }
     }
   }
 
@@ -204,11 +212,19 @@ export class Mirrors {
     return this.view(await this.addEntry(repo, opts));
   }
 
+  /** Picks a repository and starts making its mirror if there is none, without waiting for it: for the page. */
+  async pick(repo: string, opts: { private?: boolean } = {}): Promise<MirrorView> {
+    const e = await this.addEntry(repo, opts);
+    void this.ensureEntry(e).catch(() => {});
+    return this.view(e);
+  }
+
   private async addEntry(repo: string, opts: { private?: boolean }): Promise<Entry> {
     const r = parseRepo(repo);
     if (!r) throw new MirrorNotFound(`Not a GitHub repository: ${repo}. Give it as owner/name.`);
     const existing = this.entries.get(r.key);
     if (existing) return existing;
+    if (this.readError) throw new MirrorRecordError(this.readError);
     await this.removing.get(r.key);
     const record: RepoRecord = { repo: r.repo, url: await this.opts.remoteUrl(r.repo), addedAt: new Date().toISOString() };
     if (opts.private !== undefined) record.private = opts.private;
@@ -225,14 +241,19 @@ export class Mirrors {
 
   /**
    * Picks the repository if it isn't, makes its mirror if there is none, and resolves with the mirror's path once it
-   * has been fetched at least once. A mirror already there isn't fetched again: call \`fetch\` for that.
+   * has been fetched at least once. A mirror already there isn't fetched again, and is used even if its last fetch
+   * failed: call \`fetch\` for fresh refs.
    */
   async ensure(repo: string, opts: { private?: boolean } = {}): Promise<string> {
-    const e = await this.addEntry(repo, opts);
-    const dir = this.path(repo);
-    if (!e.record.fetchedAt || !(await exists(join(dir, "HEAD")))) await this.fetchEntry(e);
-    if (e.removed) throw new MirrorNotFound(`${repo} was removed.`);
-    if (!e.record.fetchedAt || e.record.error) throw new MirrorFetchFailed(e.record.error?.message ?? `${repo} couldn't be fetched.`);
+    return this.ensureEntry(await this.addEntry(repo, opts));
+  }
+
+  private async ensureEntry(e: Entry): Promise<string> {
+    const dir = this.path(e.record.repo);
+    if (e.record.fetchedAt && (await exists(join(dir, "HEAD")))) return dir;
+    await this.fetchEntry(e);
+    if (e.removed) throw new MirrorNotFound(`${e.record.repo} was removed.`);
+    if (e.record.error || !e.record.fetchedAt) throw new MirrorFetchFailed(e.record.error?.message ?? `${e.record.repo} couldn't be fetched.`);
     return dir;
   }
 
@@ -321,46 +342,55 @@ export class Mirrors {
     const timeoutMs = this.opts.fetchTimeoutMs ?? 60 * 60_000;
     const git = (args: string[], ms = 60_000) => runGit(dir, args, { env, signal, timeoutMs: ms });
     const update: Partial<RepoRecord> = {};
+    // Never fetched yet, after a first clone that failed too: what arrives now is the whole repository in one pack.
+    const first = !e.record.fetchedAt || !(await exists(join(dir, "HEAD")));
     try {
-      const made = !(await exists(join(dir, "HEAD")));
-      if (made) {
+      if (!(await exists(join(dir, "HEAD")))) {
         await mkdir(dir, { recursive: true });
         // No template: its sample hooks and excludes are of no use in a mirror.
         await runGit(this.root, ["init", "--bare", "--quiet", "--template=", dir], { env, signal });
       }
       await this.writeOwn(dir, e.record.url);
       await git(["fetch", "--quiet", "--prune", "--no-write-fetch-head", "origin"], timeoutMs);
-      await this.followHead(dir, git);
+      // From here on the fetch has worked, and is kept even if what follows is stopped or fails.
+      update.fetchedAt = new Date().toISOString();
+      update.error = undefined;
+      const gcDue = !first && (!e.record.gcAt || Date.now() - Date.parse(e.record.gcAt) > (this.opts.gcEveryMs ?? 7 * 24 * 60 * 60_000));
+      // Asking GitHub where HEAD points costs another connection, so only when it matters: a new mirror, a HEAD
+      // whose branch is gone, and with the weekly gc, for a default branch renamed on GitHub.
+      if (first || gcDue || !(await git(["rev-parse", "--verify", "--quiet", "HEAD"]).then(() => true, () => false))) await this.followHead(git);
       const refs = await git(["for-each-ref", "--format=%(refname)", "refs/heads", "refs/tags"]);
       const names = refs.split("\n").filter(Boolean);
       update.branches = names.filter((n) => n.startsWith("refs/heads/")).length;
       update.tags = names.length - update.branches;
-      const now = new Date().toISOString();
-      update.fetchedAt = now;
-      update.error = undefined;
-      // A first clone arrives as one pack, so its gc is as good as done.
-      const gcAt = made ? undefined : e.record.gcAt;
-      if (made) update.gcAt = now;
-      else if (!gcAt || Date.now() - Date.parse(gcAt) > (this.opts.gcEveryMs ?? 7 * 24 * 60 * 60_000)) {
+      if (first) update.gcAt = update.fetchedAt;
+      else if (gcDue) {
         await git(["gc", "--quiet"], timeoutMs);
         update.gcAt = new Date().toISOString();
       }
     } catch (err) {
       // Stopped because the repository was removed or Kumiko is quitting: not a failure to show.
-      if (signal.aborted) return;
-      update.error = { message: gitMessage(err), at: new Date().toISOString() };
+      if (!signal.aborted) update.error = { message: gitMessage(err), at: new Date().toISOString() };
     }
-    if (e.removed) return;
-    update.size = await dirSize(dir);
+    if (e.removed || (signal.aborted && !update.fetchedAt)) return;
+    update.size = await runGit(dir, ["count-objects", "-v"], { env }).then(objectsSize, () => e.record.size);
     Object.assign(e.record, update);
     if (!e.record.error) delete e.record.error;
-    await this.save();
+    await this.save().catch(() => {});
   }
 
-  /** Points the mirror's HEAD where GitHub's points, so a clone from it checks out the default branch. */
-  private async followHead(dir: string, git: (args: string[]) => Promise<string>): Promise<void> {
+  /**
+   * Points the mirror's HEAD where GitHub's points, so a clone from it checks out the default branch. If GitHub can't
+   * be asked, a HEAD whose branch is missing goes to main, master or the first branch there is.
+   */
+  private async followHead(git: (args: string[]) => Promise<string>): Promise<void> {
     const out = await git(["ls-remote", "--symref", "origin", "HEAD"]).catch(() => "");
-    const ref = /^ref: (refs\/heads\/\S+)\tHEAD$/m.exec(out)?.[1];
+    let ref = /^ref: (refs\/heads\/\S+)\tHEAD$/m.exec(out)?.[1];
+    if (!ref) {
+      if (await git(["rev-parse", "--verify", "--quiet", "HEAD"]).then(() => true, () => false)) return;
+      const branches = (await git(["for-each-ref", "--format=%(refname)", "refs/heads"])).split("\n").filter(Boolean);
+      ref = ["refs/heads/main", "refs/heads/master"].find((b) => branches.includes(b)) ?? branches[0];
+    }
     if (ref) await git(["symbolic-ref", "HEAD", ref]);
   }
 
@@ -404,6 +434,7 @@ export class Mirrors {
 
   /** Writes the record, one write at a time, each with what is picked by then. */
   private save(): Promise<void> {
+    if (this.readError) return Promise.reject(new MirrorRecordError(this.readError));
     const next = this.saving.then(async () => {
       const repos = [...this.entries.values()].sort((a, b) => a.key.localeCompare(b.key)).map((e) => e.record);
       await mkdir(dirname(this.file), { recursive: true });
@@ -419,8 +450,4 @@ export class Mirrors {
 }
 
 /** Writes a file whole, through a temporary one, so a crash never leaves half of it. */
-async function replace(file: string, text: string): Promise<void> {
-  const tmp = `${file}.${process.pid}.tmp`;
-  await writeFile(tmp, text);
-  await rename(tmp, file);
-}
+const replace = (file: string, text: string) => replaceFile(dirname(file), basename(file), text);
