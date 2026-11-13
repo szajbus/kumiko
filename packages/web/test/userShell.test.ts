@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { cutMiddle, keepEnds, SHELL_KEEP_HEAD, SHELL_PROMPT_CHARS, shellCommand, shellPrompt, type SessionEvent } from "@kumiko/shared";
+import { cutMiddle, keepEnds, SHELL_KEEP_HEAD, SHELL_KEEP_TAIL, SHELL_PROMPT_CHARS, shellCommand, shellPrompt, type SessionEvent } from "@kumiko/shared";
 import { applyEvent, emptyChat, type ChatState } from "../src/chat.ts";
 import { applyShellEvent, historyStep, shellElapsed, shellNote, shellOutputParts, shellState, shellStatusText, type UserShells } from "../src/userShell.ts";
 
@@ -62,7 +62,7 @@ describe("shell commands, as Claude gets them", () => {
 
 describe("shell commands in the chat", () => {
   it("follows a command from its output streaming in to its end", () => {
-    let s = fold(applyShellEvent, {} as UserShells, [started, { kind: "user_shell_output", payload: { id: "aaaaaaaaaaaa", chunk: { stream: "out", text: "a" } } }, { kind: "user_shell_output", payload: { id: "aaaaaaaaaaaa", chunk: { stream: "out", text: "b" } } }]);
+    let s = fold(applyShellEvent, {} as UserShells, [started, { kind: "user_shell_output", payload: { id: "aaaaaaaaaaaa", chunk: { stream: "out", text: "a" }, at: 0 } }, { kind: "user_shell_output", payload: { id: "aaaaaaaaaaaa", chunk: { stream: "out", text: "b" }, at: 1 } }]);
     const shell = s.aaaaaaaaaaaa!;
     assert.deepEqual(shell.output, [{ stream: "out", text: "ab" }]);
     assert.equal(shellState(shell), "running");
@@ -85,8 +85,23 @@ describe("shell commands in the chat", () => {
     assert.equal(shellState(of(end({ error: "no ssh" }))), "failed");
     assert.equal(shellNote(of(end({ code: 0 })), true), undefined);
     assert.match(shellNote(of(end({ code: 0, log: "/h/x.log" })), true)!, /all of it is in \/h\/x\.log/);
-    assert.match(shellNote(of(end({ stopped: "ended" })), false)!, /Claude didn't get this: the session ended/);
-    assert.match(shellNote(of(end({ stopped: "lost" })), false)!, /Kumiko restarted/);
+    assert.match(shellNote(of(end({ stopped: "ended", alone: true })), false)!, /Claude didn't get this: the session ended/);
+    assert.match(shellNote(of(end({ stopped: "user", alone: true })), false)!, /Claude didn't get this: the session ended/);
+    assert.match(shellNote(of(end({ stopped: "lost", alone: true })), false)!, /Kumiko restarted/);
+    // Ended, and not yet given to Claude, which waits on an answer.
+    assert.match(shellNote(of(end({ code: 0 })), false)!, /once you've answered its question/);
+  });
+
+  it("keeps the start and end of a long run's output as it streams in, and counts what the server dropped", () => {
+    const out = (text: string, at: number): NewEvent => ({ kind: "user_shell_output", payload: { id: "aaaaaaaaaaaa", chunk: { stream: "out", text }, at } });
+    const big = "x".repeat(SHELL_KEEP_HEAD + SHELL_KEEP_TAIL);
+    let shell = fold(applyShellEvent, {} as UserShells, [started, out(big, 0), out("y".repeat(10), big.length)]).aaaaaaaaaaaa!;
+    assert.equal(shell.cut, 10);
+    assert.equal(shellOutputParts(shell).tail.at(-1)!.text.endsWith("yyyyyyyyyy"), true);
+    // Opened again later, the server's buffer has the start and the latest, with what it dropped between: a gap.
+    shell = fold(applyShellEvent, {} as UserShells, [started, out("start\n", 0), out("latest\n", 5_000_000)]).aaaaaaaaaaaa!;
+    assert.equal(shell.cut, 5_000_000 - 6);
+    assert.deepEqual(shellOutputParts(shell).head, [{ stream: "out", text: "start\nlatest\n" }]);
   });
 
   it("shows where the chat left out the middle of long output", () => {
@@ -108,11 +123,11 @@ describe("shell commands in the chat", () => {
   });
 
   it("keeps a command that never went to Claude in the chat where it ended", () => {
-    for (const stopped of ["ended", "lost"] as const) {
-      const chat = fold(applyEvent, emptyChat(), [started, end({ stopped })]);
+    for (const stopped of ["ended", "lost", "user"] as const) {
+      const chat = fold(applyEvent, emptyChat(), [started, end({ stopped, alone: true })]);
       assert.deepEqual(chat.items, [{ type: "shell", key: "2", id: "aaaaaaaaaaaa" }]);
     }
-    // One the user stopped still goes to Claude, as a prompt.
+    // One that goes to Claude shows as its prompt, which follows.
     assert.deepEqual(fold(applyEvent, emptyChat(), [started, end({ stopped: "user" })]).items, []);
   });
 });

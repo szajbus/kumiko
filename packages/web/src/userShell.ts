@@ -1,4 +1,4 @@
-import { mergeChunks, SHELL_KEEP_HEAD, shellDuration, type SessionEvent, type ShellChunk } from "@kumiko/shared";
+import { chunksLength, keepEnds, mergeChunks, SHELL_KEEP_HEAD, SHELL_KEEP_TAIL, shellDuration, type SessionEvent, type ShellChunk } from "@kumiko/shared";
 
 type Ended = Extract<SessionEvent, { kind: "user_shell_end" }>["payload"];
 
@@ -8,8 +8,10 @@ export interface UserShell {
   command: string;
   cwd: string;
   startedAt: string;
-  /** What it printed: as it streamed in while it runs, then what the chat keeps of it. */
+  /** What it printed: its start and end as it streams in while it runs, then what the chat keeps of it. */
   output: ShellChunk[];
+  /** Characters left out between the start and the end of `output`. */
+  cut: number;
   /** How it ended, once it has. */
   end?: Ended;
 }
@@ -21,16 +23,19 @@ export type UserShells = Record<string, UserShell>;
 export function applyShellEvent(s: UserShells, ev: SessionEvent): UserShells {
   switch (ev.kind) {
     case "user_shell":
-      return { ...s, [ev.payload.id]: { ...ev.payload, output: [] } };
+      return { ...s, [ev.payload.id]: { ...ev.payload, output: [], cut: 0 } };
     case "user_shell_output": {
       const shell = s[ev.payload.id];
       if (!shell || shell.end) return s;
-      return { ...s, [shell.id]: { ...shell, output: mergeChunks([...shell.output, ev.payload.chunk]) } };
+      // The server keeps only the latest of a long run's output: what it dropped before this is left out too.
+      const gap = Math.max(0, ev.payload.at - chunksLength(shell.output) - shell.cut);
+      const kept = keepEnds([...shell.output, ev.payload.chunk], SHELL_KEEP_HEAD, SHELL_KEEP_TAIL);
+      return { ...s, [shell.id]: { ...shell, output: kept.chunks, cut: shell.cut + gap + kept.cut } };
     }
     case "user_shell_end": {
       const shell = s[ev.payload.id];
       if (!shell) return s;
-      return { ...s, [shell.id]: { ...shell, output: ev.payload.output, end: ev.payload } };
+      return { ...s, [shell.id]: { ...shell, output: ev.payload.output, cut: ev.payload.cut, end: ev.payload } };
     }
     default:
       return s;
@@ -64,7 +69,7 @@ export function shellElapsed(shell: UserShell, now = Date.now()): string {
 
 /** The output to show: the start and end the chat kept, with what was left out between them, if anything. */
 export function shellOutputParts(shell: UserShell): { head: ShellChunk[]; cut: number; tail: ShellChunk[] } {
-  const cut = shell.end?.cut ?? 0;
+  const { cut } = shell;
   if (!cut) return { head: shell.output, cut: 0, tail: [] };
   // The chat keeps the first SHELL_KEEP_HEAD characters, then the end.
   const head: ShellChunk[] = [];
@@ -85,13 +90,14 @@ export function shellOutputParts(shell: UserShell): { head: ShellChunk[]; cut: n
 
 /**
  * What the line under a command says of what Claude got of it: nothing while it runs or when Claude got all of it;
- * that it got part when it couldn't get all, naming the log with the rest; that it got none when it never will.
+ * that it got part when it couldn't get all, naming the log with the rest; that it gets it once Claude has its answer,
+ * when `prompted` it isn't yet; that it got none when it never will.
  */
 export function shellNote(shell: UserShell, prompted: boolean): string | undefined {
   const { end } = shell;
   if (!end) return undefined;
-  if (!prompted && end.stopped === "ended") return "Claude didn't get this: the session ended while it ran.";
-  if (!prompted && end.stopped === "lost") return "Claude didn't get this: Kumiko restarted while it ran.";
+  if (end.alone) return end.stopped === "lost" ? "Claude didn't get this: Kumiko restarted while it ran." : "Claude didn't get this: the session ended, or was closing.";
+  if (!prompted) return "Claude gets this once you've answered its question.";
   if (end.log) return `Claude got its start and its end; all of it is in ${end.log}`;
   return undefined;
 }

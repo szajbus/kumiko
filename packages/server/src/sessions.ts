@@ -57,6 +57,11 @@ interface Session {
   waiting?: string[];
   /** Commands the user runs in the sandbox, by run id, until they end. */
   userShells: Map<string, UserShell>;
+  /**
+   * Commands that ended while Claude waited on the user's answer to something it asked: Claude reads nothing until that
+   * is settled, and they aren't an answer, so they go to Claude once it is.
+   */
+  heldShells: { id: string; command: string; text: string }[];
 }
 
 /** A command the user runs, as the session follows it: what it printed so far, and what the chat has had of it. */
@@ -68,8 +73,14 @@ interface UserShell {
   /** Printed but not yet in an event: output goes to the chat a few times a second, not on every write. */
   pending: ShellChunk[];
   flush?: NodeJS.Timeout;
-  /** Characters the chat had as the command ran; past `SHELL_STREAM_MAX` it has the rest once the command ends. */
+  /** Characters printed into events so far. */
   streamed: number;
+  /**
+   * Its output events past the start the chat keeps, oldest first, with their lengths: the oldest are dropped once
+   * there are more than the chat keeps of the end, so a command that prints for hours doesn't fill the buffer.
+   */
+  tail: { event: SessionEvent; length: number }[];
+  tailLength: number;
   stopped?: ShellStop;
 }
 
@@ -150,9 +161,8 @@ const isWorking = isBusy;
 /** How long after Claude says a task ended its output is read to be kept, so the line saying how it ended is in it. */
 const OUTPUT_SETTLE_MS = 500;
 
-/** How often a running command's output goes to the chat, in ms, and how much of it, in characters, before it ends. */
+/** How often a running command's output goes to the chat, in ms. */
 const SHELL_FLUSH_MS = 100;
-const SHELL_STREAM_MAX = 256 * 1024;
 
 /** A command can't be run or stopped: no sandbox to run it in, it is too long, or there is no such command running. */
 export class ShellRefused extends Error {}
@@ -170,8 +180,18 @@ function lostShells(events: readonly SessionEvent[], running: ReadonlyMap<string
   }
   return [...open].filter(([id]) => !running.has(id)).map(([id, chunks]) => {
     const kept = keepEnds(chunks, SHELL_KEEP_HEAD, SHELL_KEEP_TAIL);
-    return { kind: "user_shell_end", payload: { id, stopped: "lost", durationMs: 0, output: kept.chunks, cut: kept.cut } };
+    return { kind: "user_shell_end", payload: { id, stopped: "lost", durationMs: 0, output: kept.chunks, cut: kept.cut, alone: true } };
   });
+}
+
+/**
+ * Events cut at some point (for a rewind or a fork) without the commands whose prompts to Claude were cut off: a
+ * command shows as the prompt that gave it to Claude, which comes after it, so without that prompt it isn't in what
+ * Claude has. Commands Claude never got stay.
+ */
+function withoutCutShells(events: SessionEvent[]): SessionEvent[] {
+  const kept = new Set(events.flatMap((e) => (e.kind === "user_prompt" && e.payload.shell ? [e.payload.shell] : e.kind === "user_shell_end" && e.payload.alone ? [e.payload.id] : [])));
+  return events.filter((e) => !((e.kind === "user_shell" || e.kind === "user_shell_output" || e.kind === "user_shell_end") && !kept.has(e.payload.id)));
 }
 
 /** How long Claude may go on with its turn after its session is closed, before it is stopped. */
@@ -412,7 +432,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
       // Up to the next prompt; Claude's history is cut after the last of its messages before that.
       const next = events.findIndex((e, i) => i > at && e.kind === "user_prompt");
       if (next >= 0) {
-        events = events.slice(0, next);
+        events = withoutCutShells(events.slice(0, next));
         const kept = events.findLast(isChainEntry);
         if (!kept) throw new SessionNotResumable("That message can't be forked from.");
         if (beforeCompaction(from.events, kept)) throw new SessionNotResumable(COMPACTED);
@@ -437,7 +457,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     const prompt = from.events[at];
     if (prompt?.kind !== "user_prompt") throw new RewindRefused("That message can't be rewound to.");
     // Claude cuts its history after one of its own messages: the last it logged before this prompt, if any.
-    const before = from.events.slice(0, at);
+    const before = withoutCutShells(from.events.slice(0, at));
     const kept = before.findLast(isChainEntry);
     if (kept && !from.info.claudeSessionId) throw new RewindRefused("Claude hasn't started this session yet.");
     if (kept && beforeCompaction(from.events, kept)) throw new RewindRefused(COMPACTED);
@@ -531,7 +551,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
 
   /** A session with `seed` in a new buffer, not yet listed and with no driver. */
   private newSession(info: SessionInfo, seed: NewEvent[]): Session {
-    const s: Session = { info, driver: undefined!, events: [], bytes: 0, seq: 0, buffer: randomBytes(6).toString("hex"), subscribers: new Set(), blocks: new Map(), exited: Promise.resolve(), saving: Promise.resolve(), window: chatWindow(), userShells: new Map() };
+    const s: Session = { info, driver: undefined!, events: [], bytes: 0, seq: 0, buffer: randomBytes(6).toString("hex"), subscribers: new Set(), blocks: new Map(), exited: Promise.resolve(), saving: Promise.resolve(), window: chatWindow(), userShells: new Map(), heldShells: [] };
     for (const ev of seed) this.push(s, ev);
     for (const ev of lostShells(s.events, s.userShells)) this.push(s, ev);
     this.dropShellOutput(s);
@@ -573,6 +593,8 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     s.waiting = driverOpts.prompt !== undefined && driverOpts.promptId ? [driverOpts.promptId] : [];
     driver.start({ ...driverOpts, run: `${s.info.id}-${randomBytes(4).toString("hex")}`, ...widgets });
     if (s.info.planMode) driver.setPlanMode(true);
+    // What the last process asked is closed now: commands held for its answer go to this one.
+    this.releaseShells(s);
   }
 
   /** Records that Claude stopped waiting for everything it asked, for `reason`. */
@@ -626,6 +648,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
           if (!openAsks(s.events).some((a) => a.id === ev.id)) break;
           this.push(s, { kind: "ask_closed", payload: { id: ev.id, reason: ev.reason } });
           this.setInfo(s, { asking: openAsks(s.events).at(-1)?.kind });
+          this.releaseShells(s);
           break;
         case "mode":
           this.setInfo(s, { planMode: ev.plan || undefined });
@@ -641,6 +664,11 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
         case "exit": {
           this.closeAsks(s, "exited");
           this.stopShells(s, "ended");
+          // Commands held for an answer Claude no longer waits for never reach it now.
+          for (const held of s.heldShells.splice(0)) {
+            const end = s.events.findLast((e) => e.kind === "user_shell_end" && e.payload.id === held.id);
+            if (end?.kind === "user_shell_end") this.push(s, { kind: "user_shell_end", payload: { ...end.payload, alone: true } });
+          }
           const reason = s.ending ?? "exit";
           const failed = !s.ending && (ev.code !== 0 || s.info.status === "starting");
           // A session that stopped by itself needs the user to look; one they ended doesn't.
@@ -863,15 +891,12 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     const { sandbox, workdir } = s.info;
     const startedAt = Date.now();
     this.push(s, { kind: "user_shell", payload: { id: runId, command, cwd: workdir, startedAt: new Date(startedAt).toISOString() } });
-    const shell: UserShell = { run: undefined!, command, startedAt, output: new ShellOutput(), pending: [], streamed: 0 };
+    const shell: UserShell = { run: undefined!, command, startedAt, output: new ShellOutput(), pending: [], streamed: 0, tail: [], tailLength: 0 };
     s.userShells.set(runId, shell);
     shell.run = new UserShellRun(this.exec, sandbox, runId, command, env, workdir, {
       chunk: (c) => {
         shell.output.add(c);
-        if (shell.streamed >= SHELL_STREAM_MAX) return;
-        const room = SHELL_STREAM_MAX - shell.streamed;
-        shell.pending.push(c.text.length > room ? { stream: c.stream, text: c.text.slice(0, room) } : c);
-        shell.streamed += Math.min(room, c.text.length);
+        shell.pending.push(c);
         shell.flush ??= setTimeout(() => this.flushShell(s, runId, shell), SHELL_FLUSH_MS);
       },
       end: (r) => void this.endShell(s, runId, shell, r),
@@ -899,7 +924,34 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
   private flushShell(s: Session, runId: string, shell: UserShell) {
     clearTimeout(shell.flush);
     shell.flush = undefined;
-    for (const chunk of mergeChunks(shell.pending.splice(0))) if (!s.detached) this.push(s, { kind: "user_shell_output", payload: { id: runId, chunk } });
+    for (const { stream, text: all } of mergeChunks(shell.pending.splice(0))) {
+      if (s.detached) return;
+      let at = shell.streamed;
+      let text = all;
+      shell.streamed += text.length;
+      // What the chat keeps of the start stays.
+      if (at < SHELL_KEEP_HEAD) {
+        const n = Math.min(text.length, SHELL_KEEP_HEAD - at);
+        this.push(s, { kind: "user_shell_output", payload: { id: runId, chunk: { stream, text: text.slice(0, n) }, at } });
+        text = text.slice(n);
+        at += n;
+      }
+      if (!text) continue;
+      // Past it, only as much of the end as the chat keeps, however much came at once.
+      if (text.length > SHELL_KEEP_TAIL) {
+        at += text.length - SHELL_KEEP_TAIL;
+        text = text.slice(-SHELL_KEEP_TAIL);
+      }
+      this.push(s, { kind: "user_shell_output", payload: { id: runId, chunk: { stream, text }, at } });
+      shell.tail.push({ event: s.events.at(-1)!, length: text.length });
+      shell.tailLength += text.length;
+      while (shell.tail.length > 1 && shell.tailLength - shell.tail[0]!.length >= SHELL_KEEP_TAIL) {
+        const old = shell.tail.shift()!;
+        shell.tailLength -= old.length;
+        const i = s.events.indexOf(old.event);
+        if (i >= 0) s.bytes -= sizeOf(s.events.splice(i, 1)[0]!);
+      }
+    }
   }
 
   /**
@@ -909,25 +961,39 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
   private async endShell(s: Session, runId: string, shell: UserShell, r: { code?: number; error?: string }) {
     this.flushShell(s, runId, shell);
     const durationMs = Date.now() - shell.startedAt;
-    // An interrupted command exits with 128 plus the signal's number, as it would in a terminal; Stop says it better.
-    const end: ShellEnd = { ...(shell.stopped && (r.code === undefined || r.code > 128) ? { stopped: shell.stopped } : { code: r.code }), ...(r.error ? { error: r.error } : {}), durationMs };
+    // Stopped, unless it was done before the stop reached it. An interrupted command exits with 128 plus the signal's
+    // number, as it would in a terminal, which Stop says better; one that exits with a code of its own says that too.
+    const stopped = shell.stopped && r.code !== 0 ? shell.stopped : undefined;
+    const code = stopped && r.code !== undefined && r.code > 128 ? undefined : r.code;
+    const end: ShellEnd = { ...(stopped ? { stopped } : {}), ...(code !== undefined ? { code } : {}), ...(r.error ? { error: r.error } : {}), durationMs };
     const all = shell.output.chunks();
     const log = this.exec && (shell.output.cut || chunksLength(all) > SHELL_PROMPT_CHARS) ? await writeLog(this.exec, s.info.sandbox, runId, all.map((c) => c.text).join("")) : undefined;
     s.userShells.delete(runId);
-    if (s.detached) return;
+    // Let go of, or closed and forgotten meanwhile: there is nothing left to tell, nor to save.
+    if (s.detached || this.sessions.get(s.info.id) !== s) return;
     const kept = keepEnds(all, SHELL_KEEP_HEAD, SHELL_KEEP_TAIL);
-    this.push(s, { kind: "user_shell_end", payload: { id: runId, ...end, output: kept.chunks, cut: kept.cut + shell.output.cut, ...(log ? { log } : {}) } });
+    // A command that ended with its session has no Claude to tell, and one in a session that is closing would keep it
+    // open with a turn of its own; one ended by the user's Stop still goes to Claude.
+    const alone = !isLive(s.info) || s.info.closing !== undefined || s.driver === noDriver || stopped === "ended";
+    this.push(s, { kind: "user_shell_end", payload: { id: runId, ...end, output: kept.chunks, cut: kept.cut + shell.output.cut, ...(log ? { log } : {}), ...(alone ? { alone } : {}) } });
     this.dropShellOutput(s);
-    // A command that ended with its session has no Claude to tell; one ended by the user's Stop still goes to Claude.
-    if (isLive(s.info) && end.stopped !== "ended" && s.driver !== noDriver) {
-      try {
-        this.prompt(s.info.id, `!${shell.command}`, [], [], { id: runId, text: shellPrompt(shell.command, all, end, log) });
-        return;
-      } catch {
-        // Claude went as the command ended: the chat keeps it all the same.
-      }
+    if (!alone) {
+      s.heldShells.push({ id: runId, command: shell.command, text: shellPrompt(shell.command, all, end, log) });
+      this.releaseShells(s);
     }
     this.save(s);
+  }
+
+  /** Gives Claude the commands that ended while it waited on an answer from the user, once it no longer does. */
+  private releaseShells(s: Session) {
+    if (!s.heldShells.length || openAsks(s.events).length || !isLive(s.info)) return;
+    for (const held of s.heldShells.splice(0)) {
+      try {
+        this.prompt(s.info.id, `!${held.command}`, [], [], { id: held.id, text: held.text });
+      } catch {
+        // Claude went meanwhile: the chat keeps the command all the same.
+      }
+    }
   }
 
   /** Drops the output of commands that have ended, whose end keeps what the chat shows of it. */
@@ -1025,6 +1091,8 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     }
     this.push(s, { kind: "ask_answer", payload: { id: askId, answer } });
     this.setInfo(s, { asking: openAsks(s.events).at(-1)?.kind });
+    // Commands that ended meanwhile go now, before the message that answered, if one did: they ran before it.
+    this.releaseShells(s);
     this.save(s);
   }
 
