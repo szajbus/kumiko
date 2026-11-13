@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -491,5 +492,29 @@ describe("LimaProvider against a fake limactl", () => {
     child.stdin!.write("x".repeat(1 << 20));
     child.stdin!.end();
     assert.equal(await exitCode(child), 0);
+  });
+});
+
+describe("out of file descriptors", () => {
+  // Spawning then fails with EMFILE (ENFILE when the whole system is out) before the child's pipes exist, and says so
+  // only by an "error" event a tick later: unheard, it ended the app. Run in a process of its own that uses up its fds.
+  it("reports it as a spawn error instead of crashing", () => {
+    const script = `
+      const { openSync } = await import("node:fs");
+      const { run } = await import(${JSON.stringify(new URL("../src/proc.js", import.meta.url).href)});
+      const { exitCode } = await import(${JSON.stringify(new URL("../src/index.js", import.meta.url).href)});
+      const { fakeLima } = await import(${JSON.stringify(new URL("./helpers.js", import.meta.url).href)});
+      const { provider } = await fakeLima();
+      const fds = [];
+      try { for (;;) fds.push(openSync("/dev/null", "r")); } catch {}
+      const ran = await run("true", []).then(() => "ran", (e) => e.code);
+      const child = provider.exec("web", "true", []);
+      child.stdin.end();
+      child.stdout.resume();
+      const exec = await exitCode(child).then(() => "ran", (e) => e.code);
+      console.log(JSON.stringify({ ran, exec }));
+    `;
+    const out = execFileSync("sh", ["-c", 'ulimit -n 64 && exec "$0" --input-type=module -e "$1"', process.execPath, script], { encoding: "utf8" });
+    assert.deepEqual(JSON.parse(out), { ran: "EMFILE", exec: "EMFILE" });
   });
 });
