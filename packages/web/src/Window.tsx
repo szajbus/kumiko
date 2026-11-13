@@ -7,6 +7,7 @@ import { PaneGrip } from "./PaneGrip";
 import { SessionView } from "./SessionView";
 import type { WakeContext } from "./WakeBanner";
 import { TasksPane } from "./TasksPane";
+import { useFold } from "./useFold";
 import { columns, dividers, dropPreview, dropZone, lastChanges, paneRects, streamingWrites, windowEdge, type Divider, type DropZone, type PaneRect } from "./widgets";
 import { WindowContext, type ArtifactEntry, type WindowApi } from "./windowContext";
 
@@ -386,14 +387,7 @@ function useDocuments(win: WindowState, changed: Map<WidgetId, number>, history:
 
 /** Folds the window incrementally: only new events are applied, unless the stream was reset (a rewind). */
 function useWindow(events: SessionEvent[]): WindowState {
-  const ref = useRef<{ state: WindowState; count: number; last?: SessionEvent }>({ state: chatWindow(), count: 0 });
-  return useMemo(() => {
-    const same = ref.current.count === 0 || events[ref.current.count - 1] === ref.current.last;
-    const { state, count } = same ? ref.current : { state: chatWindow(), count: 0 };
-    const next = windowState(events.slice(count), state);
-    ref.current = { state: next, count: events.length, last: events.at(-1) };
-    return next;
-  }, [events]);
+  return useFold(events, chatWindow, (state, added) => windowState(added, state));
 }
 
 /** The element's width, kept up to date. */

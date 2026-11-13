@@ -4,7 +4,7 @@ import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { CLAUDE_COMMAND, ClaudeDriver, claudeCommand, exitHint, mcpConfig, Runs, RUNS_DIR, userMessage, type AgentEvent, type AgentMessage, type Exec, type ToolCallContext, type ToolHost } from "../src/index.js";
+import { CLAUDE_COMMAND, ClaudeDriver, claudeCommand, contextUsage, exitHint, mcpConfig, Runs, RUNS_DIR, userMessage, type AgentEvent, type AgentMessage, type Exec, type ToolCallContext, type ToolHost } from "../src/index.js";
 import { localExec } from "./helpers.js";
 
 /** Starts a driver on the fake claude and collects its events. */
@@ -56,6 +56,30 @@ describe("ClaudeDriver", () => {
     await d.driver.stop();
     assert.deepEqual(d.events.at(-1), { kind: "exit", code: 0, requested: true });
     assert.ok(!d.events.some((e) => e.kind === "error"));
+  });
+
+  it("asks how full Claude's context is: at the start, after each turn, and after a compaction in the middle of one", async (t) => {
+    const d = await drive({ FAKE_CLAUDE_CONTEXT: "100000" }, { env: ["FAKE_CLAUDE_CONTEXT"] });
+    const contexts = () => d.events.flatMap((e) => (e.kind === "context" ? [e.usage] : []));
+    t.after(() => d.driver.stop());
+    d.start("hello");
+    await d.waitFor(() => d.results().length === 1 && contexts().length === 2);
+    assert.deepEqual(contexts(), [
+      { tokens: 100000, window: 1_000_000, autoCompact: true, threshold: 967_000 },
+      { tokens: 100500, window: 1_000_000, autoCompact: true, threshold: 967_000 },
+    ]);
+    d.driver.send("auto-compact");
+    await d.waitFor(() => d.results().length === 2 && contexts().length === 4);
+    // Asked on the compaction, then on the turn's end.
+    assert.deepEqual(contexts().slice(2).map((c) => c.tokens), [7000, 7500]);
+    // Claude's answers are the driver's; nobody else hears them.
+    assert.ok(!d.messages().some((m) => m.type === "control_response"));
+  });
+
+  it("reads Claude's answer on context usage, with auto-compaction on or off", () => {
+    assert.deepEqual(contextUsage({ totalTokens: 57749, maxTokens: 1_000_000, rawMaxTokens: 1_000_000, autoCompactThreshold: 967_000, isAutoCompactEnabled: true }), { tokens: 57749, window: 1_000_000, autoCompact: true, threshold: 967_000 });
+    assert.deepEqual(contextUsage({ totalTokens: 17883, maxTokens: 1_000_000, rawMaxTokens: 1_000_000, isAutoCompactEnabled: false }), { tokens: 17883, window: 1_000_000, autoCompact: false });
+    assert.equal(contextUsage({ error: "nope" }), undefined);
   });
 
   it("reports a crash with the stderr tail", async () => {
@@ -183,6 +207,8 @@ describe("ClaudeDriver", () => {
       const result = await e.waitFor(() => e.results()[0], 15000);
       assert.equal(result.result, "counted");
       assert.equal(before + counted(e.messages()), Array.from({ length: 200 }, (_, i) => `${i + 1}`).join(" "));
+      // It asks how full the context is, as the first driver's answers are none of its business.
+      await e.waitFor(() => e.events.some((x) => x.kind === "context") || undefined);
 
       e.driver.send("still there?");
       assert.equal((await e.waitFor(() => e.results()[1])).result, "You said: still there?", "the same Claude answers");

@@ -2,7 +2,9 @@ import { useEffect, useId, useState } from "react";
 import type { AccountUsage, SessionDisk, UsageWindow } from "@kumiko/shared";
 import { api, errorMessage } from "./api";
 import { Corner } from "./Corner";
-import { formatBytes, formatCost, planName, resetText } from "./format";
+import type { ChatItem } from "./chat";
+import { contextMeter, type ContextState } from "./context";
+import { formatBytes, formatCost, formatTokens, planName, resetText } from "./format";
 
 /** How often the numbers are re-read while the session is open, plus up to JITTER_MS so sessions don't all ask at once. */
 const REFRESH_MS = 60_000;
@@ -21,13 +23,17 @@ interface Props {
   cost: number;
   /** Memory the session's chat takes on the server, when known. */
   bufferBytes?: number;
+  /** How full Claude's context is, when known. */
+  context?: ContextState;
+  /** The chat, for how often Claude compacted it. */
+  items?: readonly ChatItem[];
 }
 
 /**
  * In the title bar's corner: how much of each subscription limit is used, as two bars. Clicked, it opens into the
  * details: the Claude account and plan the session runs as, when the limits reset, and the session's memory and cost.
  */
-export function UsageStrip({ sessionId, live, turnDone, cost, bufferBytes }: Props) {
+export function UsageStrip({ sessionId, live, turnDone, cost, bufferBytes, context, items = [] }: Props) {
   const [usage, setUsage] = useState<AccountUsage | undefined>();
   const [error, setError] = useState<string | undefined>();
   const [now, setNow] = useState(() => Date.now());
@@ -101,6 +107,7 @@ export function UsageStrip({ sessionId, live, turnDone, cost, bufferBytes }: Pro
           Current session
         </h3>
         <dl className="corner-list">
+          <ContextRows context={context} items={items} />
           {bufferBytes !== undefined && (
             <>
               <dt title="Memory this session's chat takes in Kumiko's server, as of the last finished turn. Tool output past 64 KB isn't kept.">Memory</dt>
@@ -117,6 +124,40 @@ export function UsageStrip({ sessionId, live, turnDone, cost, bufferBytes }: Pro
         </dl>
       </section>
     </Corner>
+  );
+}
+
+/** How full Claude's context is, and how often it was compacted. */
+function ContextRows({ context, items }: { context?: ContextState; items: readonly ChatItem[] }) {
+  const done = items.filter((i) => i.type === "compaction" && i.status === "done");
+  const auto = done.filter((i) => i.type === "compaction" && i.trigger === "auto").length;
+  const meter = contextMeter(context);
+  return (
+    <>
+      {context?.window !== undefined && meter && (
+        <>
+          <dt title="How much of Claude's context the conversation takes, as of its last message">Context</dt>
+          <dd className="usage-window">
+            <span className="usage-line">
+              <span className="usage-bar" role="meter" aria-label="Context used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={meter.percent}>
+                <span style={{ width: `${meter.percent}%` }} />
+              </span>
+              <span className="mono usage-left">{formatTokens(context.tokens)}</span>
+            </span>
+            <span className="usage-reset">{meter.auto ? `auto-compacts at ${formatTokens(meter.limit)} of ${formatTokens(context.window)}` : `of ${formatTokens(context.window)}; auto-compaction is off`}</span>
+          </dd>
+        </>
+      )}
+      {done.length > 0 && (
+        <>
+          <dt>Compacted</dt>
+          <dd>
+            {done.length === 1 ? "once" : `${done.length} times`}
+            {auto > 0 && <span className="usage-reset"> ({auto === done.length ? "automatically" : `${auto} automatically`})</span>}
+          </dd>
+        </>
+      )}
+    </>
   );
 }
 

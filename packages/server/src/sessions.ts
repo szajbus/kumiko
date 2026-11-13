@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { answerFits, applyWindowOp, chatWindow, compactWindow, isBusy, isCommand, LIVE_SESSION_STATUSES, sharedNote, sharesWaiting, windowState, type Attachment, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo, type WindowOp, type WindowState, type AgentAsk, type AskAnswer, type AskClosedReason } from "@kumiko/shared";
+import { answerFits, applyWindowOp, chatWindow, compactWindow, isBusy, isCommand, isCompactSummary, LIVE_SESSION_STATUSES, sharedNote, sharesWaiting, windowState, type Attachment, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo, type WindowOp, type WindowState, type AgentAsk, type AskAnswer, type AskClosedReason } from "@kumiko/shared";
 import { TOOL_TIMEOUT_MS, type AgentDriver, type AgentFile, type AgentMessage, type StartOptions, type TaskOutput, type ToolHost } from "@kumiko/agent";
 import { chatEvents, type SessionStore, type StoredSession } from "./store.js";
 import { trimMessage } from "./trim.js";
@@ -110,6 +110,18 @@ const isChainEntry = (e: SessionEvent): e is ChainEntry =>
   e.kind === "claude" && (e.payload.type === "assistant" || e.payload.type === "user") && !e.payload.parent_tool_use_id && typeof e.payload.uuid === "string";
 
 const isLive = (s: SessionInfo) => LIVE_SESSION_STATUSES.includes(s.status);
+
+/**
+ * Whether `kept`, the message a rewind or fork would cut Claude's history after, comes before Claude's last compaction.
+ * Claude only has a summary of what's before that, and can't resume at any of it: it exits at once. Chats saved before
+ * Kumiko kept Claude's compact_boundary messages only have the summary to say where a compaction was.
+ */
+const beforeCompaction = (events: readonly SessionEvent[], kept: SessionEvent) =>
+  events.indexOf(kept) < events.findLastIndex((e) => e.kind === "claude" && ((e.payload.type === "system" && e.payload.subtype === "compact_boundary") || isCompactSummary(e.payload)));
+
+/** A session's events without how full the context was, which a new Claude, on a cut or copied history, says anew. */
+const withoutContext = (events: SessionEvent[]) => events.filter((e) => e.kind !== "context");
+const COMPACTED = "Claude only has a summary of the conversation before its last compaction, so it can't go back there.";
 
 /**
  * Claude is working in the session, on a turn or with subagents it left working in the background: closing it now
@@ -359,11 +371,12 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
         events = events.slice(0, next);
         const kept = events.findLast(isChainEntry);
         if (!kept) throw new SessionNotResumable("That message can't be forked from.");
+        if (beforeCompaction(from.events, kept)) throw new SessionNotResumable(COMPACTED);
         resumeAt = kept.payload.uuid;
       }
     }
     const info: SessionInfo = { id: this.newId(), sandbox, workdir, prompt, model, status: "idle", startedAt: new Date().toISOString() };
-    const seed = this.widgets ? this.widgets.forked(from.info, info, chatEvents(events)) : chatEvents(events);
+    const seed = withoutContext(this.widgets ? this.widgets.forked(from.info, info, chatEvents(events)) : chatEvents(events));
     return this.launch(info, seed, { sandbox, workdir, env, resume: claudeSessionId, fork: true, ...(resumeAt ? { resumeAt } : {}), ...keptModel(from.info) });
   }
 
@@ -382,6 +395,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     const before = from.events.slice(0, at);
     const kept = before.findLast(isChainEntry);
     if (kept && !from.info.claudeSessionId) throw new RewindRefused("Claude hasn't started this session yet.");
+    if (kept && beforeCompaction(from.events, kept)) throw new RewindRefused(COMPACTED);
 
     if (files) {
       try {
@@ -402,7 +416,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     from.blocks.clear();
     from.pendingModel = undefined;
     from.window = chatWindow();
-    for (const ev of chatEvents(before)) this.push(from, ev);
+    for (const ev of withoutContext(chatEvents(before))) this.push(from, ev);
 
     // Rewound to the first prompt, there is nothing of Claude's to keep: it starts afresh and gets a new id.
     const { claudeSessionId, resumeAt: _resumeAt, ...rest } = from.info;
@@ -569,6 +583,14 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
         case "mode":
           this.setInfo(s, { planMode: ev.plan || undefined });
           break;
+        case "context": {
+          // Only the latest says anything, so it takes the place of the one before. It's saved with the next turn; a
+          // server started in between hears anew from Claude.
+          const was = s.events.findIndex((e) => e.kind === "context");
+          if (was >= 0) s.bytes -= sizeOf(s.events.splice(was, 1)[0]);
+          this.push(s, { kind: "context", payload: ev.usage });
+          break;
+        }
         case "exit": {
           this.closeAsks(s, "exited");
           const reason = s.ending ?? "exit";

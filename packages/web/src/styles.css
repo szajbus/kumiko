@@ -754,6 +754,47 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
 .select-trigger.select-compact.mode-plan { border-color: #3a4a78; color: var(--accent); }
 .chat-ended { align-self: center; padding: 4px 12px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 12.5px; }
 
+/* Claude compacting its conversation: a rule across the chat with a pill, and the summary it kept below when opened. */
+.compaction { display: flex; flex-direction: column; gap: 8px; }
+.compaction-line { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12.5px; }
+.compaction-line::before, .compaction-line::after { content: ""; flex: 1; border-top: 1px solid var(--border-strong); }
+.compaction-pill {
+  display: inline-flex; align-items: center; gap: 8px; max-width: 85%; padding: 3px 4px 3px 12px;
+  border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface); color: var(--text-2);
+}
+.compaction-pill:not(:has(button)) { padding-right: 12px; }
+.compaction-pill .spinner { width: 10px; height: 10px; }
+.compaction-time { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.compaction-pill button { flex: none; padding: 1px 8px; border: 1px solid var(--border); border-radius: 999px; background: none; color: var(--text-2); font-size: 12px; cursor: pointer; }
+.compaction-pill button:hover { background: var(--surface-2); color: var(--text); }
+.compaction-pill.is-failed { border-color: #5c2b2e; color: #f6b3aa; }
+.compaction-pill.is-stopped { color: var(--muted); }
+.compaction-summary { border: 1px solid var(--border-soft); border-radius: 8px; background: var(--surface); }
+.compaction-summary-head { padding: 8px 12px; font-size: 13px; color: var(--muted); border-bottom: 1px solid var(--border-soft); }
+.compaction-summary-body { padding: 4px 14px 8px; font-size: 13.5px; color: var(--text-2); }
+/* A row of the chat, in a box that takes no room of its own. One before Claude's last compaction is dimmed, as Claude
+   has only a summary of it; read closely, it comes back. */
+.chat-row { display: contents; }
+.chat-inner > .chat-row > * { content-visibility: auto; contain-intrinsic-size: auto 90px; }
+.is-before > * { opacity: 0.55; transition: opacity 150ms ease; }
+.is-before > *:hover, .is-before > *:focus-within { opacity: 1; }
+.msg-actions .btn.is-off { opacity: 0.4; cursor: default; }
+
+/* How full Claude's context is, by the model in the composer's footer: quiet until it nears auto-compaction. */
+.ctx {
+  display: inline-flex; align-items: center; gap: 6px; padding: 1px 6px; border: 1px solid transparent; border-radius: 4px;
+  font-size: 11px; font-weight: 500; letter-spacing: 0.02em; color: var(--muted); white-space: nowrap;
+}
+.ctx-bar { width: 36px; height: 4px; border-radius: 2px; background: #2e3850; overflow: hidden; }
+.ctx-bar > span { display: block; height: 100%; background: var(--muted); }
+.ctx.is-warn { color: #e0a96d; border-color: #5c4a2b; }
+.ctx.is-warn .ctx-bar > span { background: #e0a96d; }
+.ctx.is-high { color: #f29b8f; border-color: #5c2b2e; }
+.ctx.is-high .ctx-bar > span { background: #e5645a; }
+.ctx.is-running .spinner { width: 9px; height: 9px; }
+.ctx-act { padding: 1px 6px; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--surface); color: var(--text-2); font-size: 11px; font-weight: 500; cursor: pointer; }
+.ctx-act:hover { background: var(--surface-2); color: var(--text); }
+
 /* A turn's work: folds behind a summary line once the turn is done */
 .work { display: flex; flex-direction: column; }
 .work-summary {

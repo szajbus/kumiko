@@ -7,6 +7,8 @@ import { ArtifactsButton } from "./ArtifactView";
 import { AskCard, AskContext } from "./AskCard";
 import { applyEvent, backgroundAgents, startsTurn, unpromptedPlain, blocksOf, chatRows, emptyChat, inputSections, loginCards, partialToolSummary, summarize, toolState, toolSummary, type Block, type ChatItem, type ChatState, type ItemRow, type LoginAnswer, type Subagent, type ToolState, type WorkRow } from "./chat";
 import { codeWrap } from "./codeWrap";
+import { branchLimits, lastCompaction } from "./compaction";
+import { CompactionLine, ContextMeterView, useContextState } from "./CompactionLine";
 import { Composer, type ComposerHandle } from "./Composer";
 import { HeaderCorner } from "./Corner";
 import { Markdown } from "./Markdown";
@@ -20,6 +22,7 @@ import { QuoteButton } from "./QuoteButton";
 import { Select } from "./Select";
 import { COLORS } from "./status";
 import { UsageStrip } from "./UsageStrip";
+import { useFold } from "./useFold";
 import { WakeBanner, type WakeContext } from "./WakeBanner";
 import { widgetLine } from "./widgets";
 import { WindowContext } from "./windowContext";
@@ -73,6 +76,7 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
   const corner = active ? headerCorner : undefined;
   useMarkSeen(session, active);
   const chat = useChat(stream.events);
+  const context = useContextState(stream.events);
   const totalCost = useMemo(() => chat.items.reduce((sum, i) => sum + (i.type === "turn" ? (i.costUsd ?? 0) : 0), 0), [chat.items]);
   // What was sent so far, for Up in the composer; a message sent again right after itself is there once.
   const history = useMemo(
@@ -212,7 +216,7 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
 
   return (
     <div className="session">
-      {corner && createPortal(<UsageStrip sessionId={session.id} live={live} turnDone={idle} cost={totalCost} bufferBytes={session.bufferBytes} />, corner)}
+      {corner && createPortal(<UsageStrip sessionId={session.id} live={live} turnDone={idle} cost={totalCost} bufferBytes={session.bufferBytes} context={context} items={chat.items} />, corner)}
 
       <AskContext.Provider value={live ? answerAsk : undefined}>
         <Chat
@@ -385,6 +389,7 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
                   void call(() => api.prompt(session.id, `/model ${v}`));
                 }}
               />
+              <ContextMeterView context={context} onCompact={live ? () => void call(() => api.prompt(session.id, "/compact")) : undefined} />
               <TasksButton session={session.id} tasks={chat.tasks} live={live} active={active} />
               <ArtifactsButton />
             </>
@@ -397,15 +402,7 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
 
 /** Folds events into the chat incrementally: only new events are applied, and unchanged items keep their identity. */
 function useChat(events: SessionStream["events"]): ChatState {
-  const ref = useRef<{ state: ChatState; count: number; last?: unknown }>({ state: emptyChat(), count: 0 });
-  return useMemo(() => {
-    // The stream only grows; if the last event applied isn't where it was, the stream was reset (a rewind), so start over.
-    const same = ref.current.count === 0 || events[ref.current.count - 1] === ref.current.last;
-    let { state, count } = same ? ref.current : { state: emptyChat(), count: 0 };
-    for (; count < events.length; count++) state = applyEvent(state, events[count]);
-    ref.current = { state, count, last: events[count - 1] };
-    return state;
-  }, [events]);
+  return useFold(events, emptyChat, (state, added) => added.reduce(applyEvent, state));
 }
 
 type UserItem = Extract<ChatItem, { type: "user" }>;
@@ -592,6 +589,16 @@ function Chat({ session, chat, workdir, running, live, active, onRewind, onFork,
   useEffect(() => onReveal(session, (id) => setReveal((r) => ({ id, n: (r?.n ?? 0) + 1 }))), [session]);
   const workBlocks = (row: WorkRow) => row.rows.flatMap((r) => (r.item.type === "assistant" ? blocksOf(r.item).slice(r.from, r.to) : []));
   const toolIds = (row: WorkRow) => workBlocks(row).flatMap((b) => (b.type === "tool" ? [b.id] : []));
+  // Claude has only a summary of what's before its last compaction: that shows dimmed, and can't be gone back to.
+  const compacted = useMemo(() => lastCompaction(chat.items), [chat.items]);
+  const limits = useMemo(() => branchLimits(chat.items, compacted), [chat.items, compacted]);
+  // Every row is in a box that takes no room of its own, so dimming one as a compaction passes it changes a class, not
+  // what React mounts: a row unfolded stays so.
+  const dim = (key: string, index: number, node: ReactNode) => (
+    <div key={key} className={index < compacted ? "chat-row is-before" : "chat-row"}>
+      {node}
+    </div>
+  );
   const itemRow = (row: ItemRow) =>
     hidden?.has(row.item.key) ? null : (
       <Item
@@ -602,6 +609,8 @@ function Chat({ session, chat, workdir, running, live, active, onRewind, onFork,
         open={running && row.index > lastTurn}
         onRewind={onRewind}
         onFork={onFork}
+        noRewind={limits.get(row.item.key)?.noRewind}
+        noFork={limits.get(row.item.key)?.noFork}
         onAnswer={onAnswer}
         actions={actions?.key === row.item.key ? actions.node : undefined}
       />
@@ -623,13 +632,15 @@ function Chat({ session, chat, workdir, running, live, active, onRewind, onFork,
         <AgentsContext.Provider value={agents}>
         {rows.map((row) => {
           if (row.type === "monitor") return <MonitorEvents key={row.key} session={session} row={row} task={chat.tasks.byId[row.taskId]} />;
-          if (row.type !== "work") return itemRow(row);
+          if (row.type !== "work") return dim(row.from ? `${row.item.key}-${row.from}` : row.item.key, row.index, itemRow(row));
           // Only for saying which subagents work on in it, or opening it on Show: most renders need neither.
           const ids = background.length || reveal ? toolIds(row) : [];
-          return (
+          return dim(
+            row.key,
+            row.rows[0]?.index ?? 0,
             <Work key={row.key} row={row} changes={row.done ? workChanges(workBlocks(row), chat.agents) : undefined} onUnfold={agents.onUnfold} agents={ids.filter((id) => background.includes(id)).length} reveal={reveal && ids.includes(reveal.id) ? reveal.n : undefined}>
               {row.rows.map(itemRow)}
-            </Work>
+            </Work>,
           );
         })}
         </AgentsContext.Provider>
@@ -745,11 +756,17 @@ interface ItemProps {
   open: boolean;
   onRewind?: (item: UserItem) => void;
   onFork?: (item: UserItem) => void;
+  /** A prompt before Claude's last compaction, which can't be rewound to, or forked from. */
+  noRewind?: boolean;
+  noFork?: boolean;
   onAnswer?: AnswerProposal;
   actions?: ReactNode;
 }
 
-const Item = memo(function Item({ item, from, to, open, onRewind, onFork, onAnswer, actions }: ItemProps) {
+/** Why a prompt before Claude's last compaction can't be rewound to or forked from. */
+const COMPACTED = "Claude only has a summary of this now, so it can't go back here.";
+
+const Item = memo(function Item({ item, from, to, open, onRewind, onFork, noRewind, noFork, onAnswer, actions }: ItemProps) {
   if (actions) return <>{actions}</>;
   switch (item.type) {
     case "user":
@@ -759,12 +776,26 @@ const Item = memo(function Item({ item, from, to, open, onRewind, onFork, onAnsw
           {item.replayed && (onRewind || onFork) && (
             <div className="msg-actions">
               {onFork && (
-                <button type="button" className="btn btn-secondary btn-compact" title="Fork from here: a new tab with the conversation up to Claude's reply to this message" aria-label="Fork from this message" onClick={() => onFork(item)}>
+                <button
+                  type="button"
+                  className={`btn btn-secondary btn-compact${noFork ? " is-off" : ""}`}
+                  title={noFork ? `${COMPACTED} Fork from a message after the last compaction.` : "Fork from here: a new tab with the conversation up to Claude's reply to this message"}
+                  aria-label="Fork from this message"
+                  aria-disabled={noFork || undefined}
+                  onClick={() => !noFork && onFork(item)}
+                >
                   <Fork />
                 </button>
               )}
               {onRewind && (
-                <button type="button" className="btn btn-secondary btn-compact" title="Rewind to just before this message" aria-label="Rewind to this message" onClick={() => onRewind(item)}>
+                <button
+                  type="button"
+                  className={`btn btn-secondary btn-compact${noRewind ? " is-off" : ""}`}
+                  title={noRewind ? `${COMPACTED} Rewind to a message after the last compaction, or to the first one, which starts afresh.` : "Rewind to just before this message"}
+                  aria-label="Rewind to this message"
+                  aria-disabled={noRewind || undefined}
+                  onClick={() => !noRewind && onRewind(item)}
+                >
                   <Rewind />
                 </button>
               )}
@@ -831,6 +862,8 @@ const Item = memo(function Item({ item, from, to, open, onRewind, onFork, onAnsw
       );
     case "ended":
       return <div className="chat-ended">{endedText(item.reason, item.code)}</div>;
+    case "compaction":
+      return <CompactionLine item={item} />;
   }
 });
 

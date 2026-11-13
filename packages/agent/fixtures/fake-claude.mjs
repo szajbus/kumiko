@@ -36,14 +36,22 @@
 //   "agent-shell" runs a subagent that starts a background shell and finishes, which kills the shell
 //   "bg-race"    starts a Monitor that prints a line every step without waking Claude, and a background shell that,
 //                asked to stop, has just finished by itself: it ends as completed, and Claude takes a turn to report it
+//   "/compact [X]" compacts the conversation as Claude 2.1.309 does: status "compacting", then "success", a
+//                compact_boundary (trigger "manual", tokens before and after), the summary as a synthetic user message,
+//                and a 0-turn result. $FAKE_CLAUDE_COMPACT_MS sets how long it takes (100ms); interrupted, it fails
+//                with "Compaction canceled.". With nothing to compact yet, it says "Error: No messages to compact"
+//   "auto-compact" reads a file, then compacts by itself in the middle of the turn (trigger "auto"), and replies
 //   anything else is echoed back as "You said: …", followed by " [with …]" naming the files that came with it
 // With a `.require-login` file in $CLAUDE_CONFIG_DIR, every prompt is answered as "signed out" until there is a
 // `.credentials.json` beside it. `claude auth status` and `claude auth login` work against that folder: the login
 // prints a sign-in URL, reads a code from stdin, and logs in for the code "good-code". Logged in, every turn reports
 // the subscription's usage in a `rate_limit_event` before its result: 7% of the 5-hour limit, 42% of the week's.
 // Prompts carrying a uuid are echoed back as `isReplay` user messages, as with --replay-user-messages, and every
-// assistant message has a uuid. A `rewind_files` control request is answered with success, or with an error for a uuid
-// the session never saw. --resume-session-at <uuid> keeps only the messages up to that one.
+// assistant message has a uuid, and the usage of a context that grows by 500 tokens a turn from $FAKE_CLAUDE_CONTEXT
+// (20000); `get_context_usage` answers with it, of a 1M window, auto-compacting at 967k unless $DISABLE_AUTO_COMPACT is
+// set. A `rewind_files` control request is answered with success, or with an error for a uuid
+// the session never saw. --resume-session-at <uuid> keeps only the messages up to that one; like Claude, it exits at once
+// with "No message found with message.uuid of: <uuid>" for a message from before the session's last compaction.
 // With --mcp-config naming a server of type "sdk", it does that server's MCP handshake over control requests on
 // start, as Claude does, and lists its tools in init as mcp__<server>__<tool>. --append-system-prompt is taken and
 // replied to by the prompt "system prompt".
@@ -117,9 +125,72 @@ let mode = args.includes("--permission-mode") ? args[args.indexOf("--permission-
 let modeBeforePlan = mode;
 let asking = false; // a permission request is waiting for its answer
 
-const out = (o) => process.stdout.write(JSON.stringify(o) + "\n");
+// The ids of the messages this process sent, which a compaction leaves behind.
+const sent = [];
+const out = (o) => {
+  if ((o.type === "assistant" || o.type === "user") && o.uuid && !o.parent_tool_use_id) sent.push(o.uuid);
+  process.stdout.write(JSON.stringify(o) + "\n");
+};
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const ev = (event, id) => out({ type: "stream_event", event, session_id, parent_tool_use_id: null, uuid: randomUUID(), api_message_id: id });
+
+// How full the context is: it grows with each turn, and a compaction leaves the summary.
+let context = Number(process.env.FAKE_CLAUDE_CONTEXT ?? 20000);
+const WINDOW = 1_000_000;
+const autoCompact = !process.env.DISABLE_AUTO_COMPACT;
+const usage = () => ({ input_tokens: 2, cache_creation_input_tokens: 0, cache_read_input_tokens: context, output_tokens: 10 });
+const contextUsage = () => ({
+  totalTokens: context,
+  maxTokens: WINDOW,
+  rawMaxTokens: WINDOW,
+  percentage: Math.round((context / WINDOW) * 100),
+  model,
+  ...(autoCompact ? { autoCompactThreshold: WINDOW - 33000 } : {}),
+  isAutoCompactEnabled: autoCompact,
+});
+
+// The messages a session's compactions left behind, which it can't be resumed at, kept across processes as Claude
+// keeps its transcripts. A fork starts with its original's.
+const compactedFile = (id) => join(tmpdir(), "claude-fake", "compacted", `${id}.json`);
+const readCompacted = (id) => (existsSync(compactedFile(id)) ? JSON.parse(readFileSync(compactedFile(id), "utf8")) : []);
+let compacted = resumed ? readCompacted(resumed) : [];
+function writeCompacted() {
+  mkdirSync(dirname(compactedFile(session_id)), { recursive: true });
+  writeFileSync(compactedFile(session_id), JSON.stringify(compacted));
+}
+
+// Claude only finds messages after the session's last compaction to resume at.
+const refused = resumeAt !== undefined && compacted.includes(resumeAt);
+if (refused) {
+  process.stderr.write(`No message found with message.uuid of: ${resumeAt}\n`);
+  out({ type: "result", subtype: "error_during_execution", is_error: true, num_turns: 0, session_id, total_cost_usd: 0, errors: [`No message found with message.uuid of: ${resumeAt}`] });
+  process.stdout.write("", () => process.exit(1));
+} else if (compacted.length && session_id !== resumed) writeCompacted();
+
+/**
+ * Compacts the conversation: what Claude sends while it does, and once it has. Returns false if it was cancelled, after
+ * saying so.
+ */
+async function compact(trigger, cancelled, init) {
+  const start = Date.now();
+  out({ type: "system", subtype: "status", status: "compacting", ...(trigger === "auto" ? { compact_output_chars: 0 } : {}), session_id, uuid: randomUUID() });
+  await sleep(Number(process.env.FAKE_CLAUDE_COMPACT_MS ?? 100));
+  if (cancelled()) {
+    out({ type: "system", subtype: "status", status: null, compact_result: "failed", compact_error: "API Error: Request was aborted.", session_id, uuid: randomUUID() });
+    return false;
+  }
+  out({ type: "system", subtype: "status", status: null, compact_result: "success", session_id, uuid: randomUUID() });
+  init?.();
+  compacted = [...compacted, ...sent.splice(0)];
+  writeCompacted();
+  const summaryId = randomUUID();
+  const pre = context;
+  context = 7000;
+  out({ type: "system", subtype: "compact_boundary", session_id, uuid: randomUUID(), compact_metadata: { trigger, pre_tokens: pre, post_tokens: context, duration_ms: Date.now() - start, preserved_segment: { anchor_uuid: summaryId } } });
+  const text = "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n1. Primary Request and Intent:\n   The user said hello.\n\nIf you need specific details from before compaction, read the full transcript at: /tmp/transcript.jsonl\nContinue the conversation from where it left off without asking the user any further questions.";
+  out({ type: "user", message: { role: "user", content: trigger === "auto" ? [{ type: "text", text }] : text }, parent_tool_use_id: null, session_id, uuid: summaryId, isReplay: false, isSynthetic: true });
+  return true;
+}
 
 async function streamText(id, text, index, cancelled, delay = 0) {
   ev({ type: "content_block_start", index, content_block: { type: "text", text: "" } }, id);
@@ -129,12 +200,13 @@ async function streamText(id, text, index, cancelled, delay = 0) {
     if (delay) await sleep(delay);
   }
   ev({ type: "content_block_stop", index }, id);
-  out({ type: "assistant", message: { model, id, type: "message", role: "assistant", content: [{ type: "text", text }] }, parent_tool_use_id: null, session_id, uuid: randomUUID() });
+  out({ type: "assistant", message: { model, id, type: "message", role: "assistant", content: [{ type: "text", text }], usage: usage() }, parent_tool_use_id: null, session_id, uuid: randomUUID() });
   return true;
 }
 
 function result(start, { subtype = "success", is_error = false, text = "", cost = 0.01, num_turns = 1 } = {}) {
   total += cost;
+  if (num_turns > 0) context += 500;
   if (loggedIn()) {
     const resetsAt = Math.floor(Date.now() / 1000) + 3600;
     const unifiedWindows = { five_hour: { utilization: 0.07, resetsAt }, seven_day: { utilization: 0.42, resetsAt: resetsAt + 86400 } };
@@ -389,7 +461,10 @@ async function turn({ text, files, auto }) {
   const start = Date.now();
   await handshake;
   const mcpNames = mcpTools.map((t) => `mcp__${mcpServer}__${t.name}`);
-  out({ type: "system", subtype: "init", cwd: process.cwd(), session_id, model, tools: ["Bash", "Read", "Write", ...mcpNames], permissionMode: mode, slash_commands: ["compact", "model", "context"] });
+  const init = () => out({ type: "system", subtype: "init", cwd: process.cwd(), session_id, model, tools: ["Bash", "Read", "Write", ...mcpNames], permissionMode: mode, slash_commands: ["compact", "model", "context"] });
+  // A /compact's turn only starts once the conversation is compacted; an init says so then.
+  const compacting = auto === undefined && (text === "/compact" || text.startsWith("/compact "));
+  if (!compacting) init();
 
   if (auto !== undefined) {
     const id = `msg_${++msgN}`;
@@ -402,6 +477,13 @@ async function turn({ text, files, auto }) {
     model = `claude-${text.slice(7).trim()}-5-5`;
     out({ type: "assistant", message: { model: "<synthetic>", id: randomUUID(), type: "message", role: "assistant", content: [{ type: "text", text: `Set model to ${model}` }] }, parent_tool_use_id: null, session_id, uuid: randomUUID() });
     return result(start, { cost: 0, num_turns: 0, text: "Set model to `" + text.slice(7).trim() + "` for this session only" });
+  }
+  if (text === "/compact" || text.startsWith("/compact ")) {
+    const synthetic = (t) => out({ type: "assistant", message: { model: "<synthetic>", id: randomUUID(), type: "message", role: "assistant", content: [{ type: "text", text: t }] }, parent_tool_use_id: null, session_id, uuid: randomUUID() });
+    if (!sent.length && !compacted.length && !resumed) synthetic("Error: No messages to compact");
+    else if (!(await compact("manual", () => cancelled, init))) synthetic("Compaction canceled.");
+    else out({ type: "user", message: { role: "user", content: "<local-command-stdout>Compacted </local-command-stdout>" }, parent_tool_use_id: null, session_id, uuid: randomUUID(), isReplay: true });
+    return result(start, { cost: 0.002, num_turns: 0 });
   }
   if (text.startsWith("/rename ")) {
     out({ type: "system", subtype: "session_title_changed", title: text.slice(8).trim(), session_id });
@@ -648,6 +730,19 @@ async function turn({ text, files, auto }) {
     return result(start, { text: "planning" });
   }
 
+  if (text === "auto-compact") {
+    const tool = { type: "tool_use", id: `toolu_${msgN}`, name: "Read", input: { file_path: "notes.txt" } };
+    out({ type: "assistant", message: { model, id, type: "message", role: "assistant", content: [tool], usage: usage() }, parent_tool_use_id: null, session_id, uuid: randomUUID() });
+    context += 40000;
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: tool.id, content: "lots of notes", is_error: false }] }, parent_tool_use_id: null, session_id, uuid: randomUUID() });
+    await compact("auto", () => cancelled);
+    // Claude's next request after compacting takes a while, as any does.
+    await sleep(50);
+    const id2 = `msg_${++msgN}`;
+    ev({ type: "message_start", message: { model, id: id2, type: "message", role: "assistant", content: [] } }, id2);
+    await streamText(id2, "Read them all.", 0, () => cancelled);
+    return result(start, { text: "Read them all." });
+  }
   if (text === "where") {
     await streamText(id, `resumed at ${resumeAt ?? "nothing"}`, 0, () => cancelled);
     return result(start, { text: "where" });
@@ -669,7 +764,7 @@ async function pump() {
 const input = process.platform === "darwin" && fstatSync(0).isFIFO() ? spawn("cat", [], { stdio: [0, "pipe", "inherit"] }).stdout : process.stdin;
 const rl = createInterface({ input });
 rl.on("line", (line) => {
-  if (!line.trim()) return;
+  if (!line.trim() || refused) return;
   const msg = JSON.parse(line);
   if (msg.type === "user") {
     const text = msg.message.content.filter((b) => b.type === "text").map((b) => b.text).join("");
@@ -724,6 +819,8 @@ rl.on("line", (line) => {
     const at = queue.findIndex((q) => q.uuid === msg.request.message_uuid);
     if (at >= 0) queue.splice(at, 1);
     out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: { cancelled: at >= 0 } } });
+  } else if (msg.type === "control_request" && msg.request?.subtype === "get_context_usage") {
+    out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: contextUsage() } });
   } else if (msg.type === "control_request" && msg.request?.subtype === "interrupt") {
     current?.cancel();
     out({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response: { still_queued: [] } } });

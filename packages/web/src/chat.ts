@@ -1,5 +1,6 @@
 import { isCommand, type AgentAsk, type AskAnswer, type AskClosedReason, type Attachment, type EndReason, type LoginAccount, type SessionEvent } from "@kumiko/shared";
 import { applyTaskEvent, emptyTasks, reportsEnd, type Task, type TasksState } from "./tasks.ts";
+import { applyCompaction, compactionFollowUp, settleCompactions } from "./compaction.ts";
 
 // Turns a session's events into what the chat shows. Claude's stream-json is read loosely: only the fields the
 // chat needs, and anything unexpected is skipped rather than breaking the view.
@@ -67,7 +68,23 @@ export type ChatItem =
   | { type: "ask"; key: string; ask: AgentAsk; answer?: AskAnswer; closed?: AskClosedReason }
   /** Another session, `name`d then, sharing copies of artifacts with this one; `told` once Claude has heard of it, with a prompt. */
   | { type: "shared"; key: string; name: string; titles: string[]; told?: boolean }
-  | { type: "ended"; key: string; reason: EndReason; code?: number };
+  | { type: "ended"; key: string; reason: EndReason; code?: number }
+  /**
+   * Claude compacting its conversation (see compaction.ts): under way, done (with the numbers and the `summary` Claude
+   * kept), failed (with Claude's `error`, and the `message` it replied with), or cut short with its turn.
+   */
+  | {
+      type: "compaction";
+      key: string;
+      status: "running" | "done" | "failed" | "stopped";
+      trigger?: "auto" | "manual";
+      preTokens?: number;
+      postTokens?: number;
+      durationMs?: number;
+      summary?: string;
+      error?: string;
+      message?: string;
+    };
 
 /** Tokens Claude read and wrote, all models together; `cached` of them read from the prompt cache. */
 export interface Tokens {
@@ -161,7 +178,7 @@ export type ChatRow = ItemRow | WorkRow;
 /** What a turn starts with: a prompt, or Claude going on by itself. */
 export const startsTurn = (i: ChatItem) => (i.type === "user" && !i.merged) || i.type === "unprompted";
 /** Things that show in the middle of a turn's work, splitting it, and stay in view when it folds. */
-const splitsWork = (i: ChatItem) => i.type === "ask" || (i.type === "user" && i.merged === true);
+const splitsWork = (i: ChatItem) => i.type === "ask" || i.type === "compaction" || (i.type === "user" && i.merged === true);
 const isWork = (i: ChatItem) => i.type === "assistant" || i.type === "retry" || i.type === "notice";
 /** Items for the user that come in while Claude works, and stay in view when its work folds. */
 const waitsOnUser = (i: ChatItem) => i.type === "proposal" || i.type === "shared";
@@ -426,7 +443,7 @@ function applyChatEvent(s: ChatState, ev: SessionEvent): ChatState {
     case "ended": {
       // Claude is gone, and the turns it hadn't finished with it, and the subagents still working.
       // Prompts it hadn't taken up yet stay in the chat, as they were sent.
-      const gone = { ...s, items: [...s.items, ...s.queued], queued: [], inTurn: false, interruptPending: false, agents: stopAgents(s.agents, () => true) };
+      const gone = settleCompactions({ ...s, items: [...s.items, ...s.queued], queued: [], inTurn: false, interruptPending: false, agents: stopAgents(s.agents, () => true) });
       // Stopping with its sandbox isn't an end: the banner says so while it sleeps, and Claude continues after it. A turn
       // it cut short ends there, though, as Claude doesn't take it up again.
       if (ev.payload.asleep) return s.inTurn ? { ...gone, items: [...gone.items, { type: "turn", key, status: "interrupted" }] } : gone;
@@ -499,6 +516,8 @@ function applyClaude(s: ChatState, m: Json & { type: string }, key: string): Cha
   // Claude says something after its turn ended, with no prompt since: it is taking a turn of its own.
   const speaks = m.type === "stream_event" || m.type === "assistant" || (m.type === "user" && m.isReplay !== true) || (m.type === "system" && m.subtype === "api_retry");
   if (speaks) s = startUnprompted(s, key);
+  const followUp = compactionFollowUp(s, m, key);
+  if (followUp) return followUp;
 
   switch (m.type) {
     case "prompt_suggestion":
@@ -506,7 +525,7 @@ function applyClaude(s: ChatState, m: Json & { type: string }, key: string): Cha
 
     case "system":
       if (m.subtype === "api_retry") return { ...s, items: [...s.items, { type: "retry", key, attempt: num(m.attempt), max: num(m.max_retries) }] };
-      return applyTask(s, m);
+      return applyCompaction(s, m, key) ?? applyTask(s, m);
 
     case "user": {
       // Claude echoes each prompt back (the sign that it can be rewound to) as it takes it up. One sent while it worked
@@ -531,7 +550,7 @@ function applyClaude(s: ChatState, m: Json & { type: string }, key: string): Cha
       const tokens = usage && (usage.total >= s.totalTokens.total ? { total: usage.total - s.totalTokens.total, cached: Math.max(0, usage.cached - s.totalTokens.cached) } : usage);
       const ok = m.subtype === "success" && m.is_error !== true;
       // A monitor's line kept for a turn that ended without a word was for that turn only.
-      const base = { ...s, totalCost: total ?? s.totalCost, totalTokens: usage ?? s.totalTokens, interruptPending: false, inTurn: false, monitorLine: undefined };
+      const base = settleCompactions({ ...s, totalCost: total ?? s.totalCost, totalTokens: usage ?? s.totalTokens, interruptPending: false, inTurn: false, monitorLine: undefined });
       // A slash command like /model is a turn of its own with nothing to sum up.
       if (ok && m.num_turns === 0) return base;
       const status = ok ? "ok" : s.interruptPending && m.subtype === "error_during_execution" ? "interrupted" : "error";

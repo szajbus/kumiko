@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { eachLine, shellQuote } from "@kumiko/sandbox";
-import type { AskAnswer } from "@kumiko/shared";
+import type { AskAnswer, ContextUsage } from "@kumiko/shared";
 import { AskBridge, type PendingAsk } from "./asks.js";
 import type { AgentDriver, AgentEvent, AgentFile, AgentMessage, AttachOptions, Exec, RunPosition, StartOptions, TaskOutput } from "./driver.js";
 import { mcpConfig, ToolBridge, type PendingCall } from "./tools.js";
@@ -48,6 +48,8 @@ const STDERR_TAIL = 20;
  * so one that comes after a detach is dropped rather than reported.
  */
 const TASK_REQUEST = "task-";
+/** Likewise for the requests asking how full Claude's context is, which the driver makes by itself. */
+const CONTEXT_REQUEST = "context-";
 const REQUEST_TIMEOUT_MS = 15_000;
 /** Waits between attempts to attach again after an attachment drops, in ms; the last repeats. */
 const REATTACH_MS = [250, 500, 1000, 2000, 5000];
@@ -74,6 +76,16 @@ export function fileBlock(file: AgentFile): Record<string, unknown> {
 export function userMessage(text: string, uuid?: string, files: AgentFile[] = []): string {
   const content = [...files.map(fileBlock), ...(text ? [{ type: "text", text }] : [])];
   return JSON.stringify({ type: "user", ...(uuid ? { uuid } : {}), message: { role: "user", content } }) + "\n";
+}
+
+/** Claude's answer to `get_context_usage`, as Kumiko keeps it; undefined if it isn't one. */
+export function contextUsage(raw: unknown): ContextUsage | undefined {
+  const r = (raw ?? {}) as { totalTokens?: unknown; rawMaxTokens?: unknown; maxTokens?: unknown; autoCompactThreshold?: unknown; isAutoCompactEnabled?: unknown };
+  const window = typeof r.rawMaxTokens === "number" ? r.rawMaxTokens : r.maxTokens;
+  if (typeof r.totalTokens !== "number" || typeof window !== "number" || window <= 0) return undefined;
+  const autoCompact = r.isAutoCompactEnabled !== false;
+  const threshold = autoCompact && typeof r.autoCompactThreshold === "number" ? r.autoCompactThreshold : undefined;
+  return { tokens: r.totalTokens, window, autoCompact, ...(threshold ? { threshold } : {}) };
 }
 
 /** Claude's result text when it isn't signed in, e.g. "Invalid API key · Please run /login". */
@@ -165,6 +177,7 @@ export class ClaudeDriver implements AgentDriver {
     this.begin(sandbox, runId, 0);
     this.connect(this.exec(sandbox, command, env, { cwd: workdir }), true);
     if (prompt !== undefined) this.send(prompt, promptId, files);
+    this.askContext();
   }
 
   attach({ sandbox, run, offset, tools, pending, asks }: AttachOptions): void {
@@ -175,6 +188,7 @@ export class ClaudeDriver implements AgentDriver {
     this.connect(this.exec(sandbox, command, []), false);
     if (pending?.length) this.tools?.rerun(pending);
     if (asks?.length) this.asks.adopt(asks);
+    this.askContext();
   }
 
   pendingCalls(): PendingCall[] {
@@ -290,6 +304,8 @@ export class ClaudeDriver implements AgentDriver {
       this.plan = mode === "plan";
       this.emit({ kind: "mode", plan: this.plan });
     }
+    // How full the context is changes with each turn, and drops with a compaction, which may come in the middle of one.
+    if (payload.type === "result" || (payload.type === "system" && payload.subtype === "compact_boundary")) this.askContext();
     // Signed out, Claude still answers each turn, with an error result rather than an exit.
     if (payload.type === "result" && payload.is_error === true && SIGNED_OUT.test(String(payload.result ?? ""))) {
       // The failed turn already shows Claude's own words ("Invalid API key · Please run /login").
@@ -353,7 +369,7 @@ export class ClaudeDriver implements AgentDriver {
     const id = typeof response?.request_id === "string" ? response.request_id : undefined;
     const waiting = id ? this.pending.get(id) : undefined;
     // An answer about a task that an earlier driver asked for: nobody waits for it, and it is no news for the session.
-    if (id && !waiting && id.startsWith(TASK_REQUEST)) return true;
+    if (id && !waiting && (id.startsWith(TASK_REQUEST) || id.startsWith(CONTEXT_REQUEST))) return true;
     if (!id || !waiting) return false;
     this.pending.delete(id);
     if (response?.subtype === "error") waiting.reject(new Error(typeof response.error === "string" ? response.error : "Claude refused the request."));
@@ -382,6 +398,20 @@ export class ClaudeDriver implements AgentDriver {
 
   backgroundTasks(toolUseId?: string): Promise<void> {
     return this.request(`${TASK_REQUEST}background`, { subtype: "background_tasks", ...(toolUseId ? { tool_use_id: toolUseId } : {}) }).then(() => {});
+  }
+
+  /**
+   * Asks Claude how full its context is, and reports it. Claude answers from what it knows, without a turn; one that
+   * doesn't answer (an older Claude, or one that exits first) is left at that.
+   */
+  private askContext() {
+    this.request(`${CONTEXT_REQUEST}usage`, { subtype: "get_context_usage", detail: "summary" }).then(
+      (r) => {
+        const usage = contextUsage(r);
+        if (usage && !this.done && !this.frozen) this.emit({ kind: "context", usage });
+      },
+      () => {},
+    );
   }
 
   /** Sends a control request, and resolves with Claude's answer to it; rejects if Claude refuses, or doesn't answer in time. */

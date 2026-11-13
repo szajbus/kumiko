@@ -79,10 +79,16 @@ export class SessionStore {
 }
 
 /**
- * The events worth keeping: the chat. Deltas, init and the like are dropped, and a resumed chat looks the same. Of the
- * task events, those that say a subagent started and how it ended stay: without them a resumed chat can't tell whether
- * one in the background finished. The
- * deltas of the messages in `unfinished` are kept: in a turn still going, they are all there is of those messages yet.
+ * Claude's messages about compacting its conversation: one starting, how it ended, and where it did. Claude also sends
+ * `status` for much else, which isn't kept.
+ */
+const isCompaction = (m: Record<string, unknown>) => m.subtype === "compact_boundary" || (m.subtype === "status" && (m.status === "compacting" || m.compact_result !== undefined));
+
+/**
+ * The events worth keeping: the chat. Deltas, init and the like are dropped, and a resumed chat looks the same. Of
+ * Claude's system messages, compactions stay, and of its task events, those that say a subagent started and how it
+ * ended: without them a resumed chat can't tell whether one in the background finished. The deltas of the messages in
+ * `unfinished` are kept: in a turn still going, they are all there is of those messages yet.
  * Kinds this build doesn't know are kept: a newer Kumiko saved them, and saving the session again mustn't lose them.
  */
 export function chatEvents(events: SessionEvent[], unfinished?: ReadonlySet<string>): SessionEvent[] {
@@ -90,7 +96,7 @@ export function chatEvents(events: SessionEvent[], unfinished?: ReadonlySet<stri
     if (e.kind === "error" || e.kind === "ended") return false;
     if (e.kind !== "claude") return true;
     if (e.payload.type === "stream_event") return Boolean(unfinished?.has(String(e.payload.api_message_id)));
-    if (e.payload.type === "system") return e.payload.subtype === "task_started" || e.payload.subtype === "task_notification";
+    if (e.payload.type === "system") return e.payload.subtype === "task_started" || e.payload.subtype === "task_notification" || isCompaction(e.payload);
     return e.payload.type === "assistant" || e.payload.type === "user" || e.payload.type === "result";
   });
 }

@@ -1,5 +1,5 @@
 import type { SandboxProvider } from "@kumiko/sandbox";
-import type { AgentAsk, AskAnswer, AskClosedReason } from "@kumiko/shared";
+import type { AgentAsk, AskAnswer, AskClosedReason, ContextUsage } from "@kumiko/shared";
 import type { PendingAsk } from "./asks.js";
 import type { PendingCall, ToolHost } from "./tools.js";
 
@@ -79,6 +79,8 @@ export type AgentMessage = Record<string, unknown> & { type: string };
  * - `ask`: the agent waits on the user, mid-turn, for an answer to give with `answer`.
  * - `ask_closed`: it stopped waiting without one: the turn was stopped, or the agent exited.
  * - `mode`: the agent is planning (it waits for the user to approve a plan before changing anything), or not.
+ * - `context`: how full the agent's context is, as it said when asked: once it starts or is attached to, and after each
+ *   turn and compaction.
  * - `exit`: the process is gone; always the last event, unless the driver detaches. `requested` is true after `stop()`.
  */
 export type AgentEvent =
@@ -86,6 +88,7 @@ export type AgentEvent =
   | { kind: "ask"; ask: AgentAsk }
   | { kind: "ask_closed"; id: string; reason: AskClosedReason }
   | { kind: "mode"; plan: boolean }
+  | { kind: "context"; usage: ContextUsage }
   | { kind: "error"; message: string; hint?: string; stderr?: string[]; signedOut?: boolean }
   | { kind: "exit"; code: number; requested: boolean };
 

@@ -483,7 +483,32 @@ export type SessionEvent =
    * What woke Claude for a turn of its own: monitor `taskId` printed `line`. `at` is the seq of the event that started
    * that turn (Claude's init), as this comes once the turn is under way; missing in events recorded before it was added.
    */
-  | { seq: number; kind: "monitor_event"; payload: { taskId: string; line: string; at?: number } };
+  | { seq: number; kind: "monitor_event"; payload: { taskId: string; line: string; at?: number } }
+  /** How full Claude's context is, as it said when asked: at the start, and after each turn and compaction. */
+  | { seq: number; kind: "context"; payload: ContextUsage };
+
+/**
+ * How full the agent's context is. `tokens` of a `window`; with auto-compaction on, Claude compacts the conversation by
+ * itself once `tokens` reach `threshold`.
+ */
+export interface ContextUsage {
+  tokens: number;
+  window: number;
+  autoCompact: boolean;
+  threshold?: number;
+}
+
+/**
+ * Whether one of Claude's stream-json messages is the summary a compaction leaves: a synthetic user message, in Claude
+ * Code's own words. Chats saved before Kumiko kept Claude's `compact_boundary` messages only have this to say where one was.
+ */
+export function isCompactSummary(m: Record<string, unknown>): boolean {
+  if (m.type !== "user" || m.isSynthetic !== true || m.isReplay === true) return false;
+  const content = (m.message as { content?: unknown } | undefined)?.content;
+  const first = Array.isArray(content) ? (content[0] as { text?: unknown } | undefined)?.text : content;
+  return typeof first === "string" && first.startsWith(COMPACT_SUMMARY_START);
+}
+const COMPACT_SUMMARY_START = "This session is being continued from a previous conversation";
 
 /** A prompt that is one of Claude's commands, such as /model, to which nothing can be added. */
 export const isCommand = (text: string) => text.trimStart().startsWith("/");

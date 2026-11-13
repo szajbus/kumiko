@@ -60,6 +60,7 @@ follows mostly from the sandbox provider.
 | Resume, fork | `--resume`, `--fork-session`, `--resume-session-at` |
 | Rewind, and putting files back | `--replay-user-messages` and file checkpoints (`rewind_files`) |
 | Slash commands | `slash_commands` from `system/init` |
+| Compactions, and how full the context is | `system/status` (`compacting`, `compact_result`) and `system/compact_boundary` messages, the summary that follows them, and the `get_context_usage` control request, asked at the start and after each turn and compaction |
 | Model picker | `--model` and `/model` |
 | Login | `claude auth status`, `claude auth login` |
 | Usage in the title bar | `rate_limit_event` messages, which come with each turn, and `claude auth status` for the account |

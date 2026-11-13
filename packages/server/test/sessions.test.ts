@@ -58,6 +58,8 @@ describe("sessions", () => {
   };
   const finished = (name: string, op: string, since: number) =>
     waitFor(() => events.slice(since).find((e) => "sandbox" in e && e.sandbox === name && e.op === op && (e.type === "done" || e.type === "error")));
+  /** What a session's events are, Claude's by their type; without how full its context is, which Kumiko asks after each turn. */
+  const chatKinds = (got: SessionEvent[]) => got.filter((e) => e.kind !== "context").map((e) => (e.kind === "claude" ? e.payload.type : e.kind));
   const session = async (id: string): Promise<SessionInfo | undefined> => ((await json(await api("/api/sessions"))) as SessionInfo[]).find((s) => s.id === id);
   const sandbox = async (name: string): Promise<ProjectView> => ((await json(await api("/api/projects"))) as ProjectView[]).find((s) => s.name === name)!;
 
@@ -503,7 +505,7 @@ describe("sessions", () => {
 
     // The chat is back, without the streaming events; Claude is ready for a prompt at once.
     const resumed = await listen(id);
-    const kinds = resumed.got.map((e) => e.kind === "claude" ? e.payload.type : e.kind);
+    const kinds = chatKinds(resumed.got);
     // The `user` entries are Claude's echoes of the prompts, which carry the ids a rewind goes by.
     assert.deepEqual(kinds, ["user_prompt", "user", "assistant", "result", "user_prompt", "user", "assistant", "result"]);
     assert.equal((await session(id))?.status, "idle");
@@ -518,7 +520,7 @@ describe("sessions", () => {
     const forkId = (await json(forked)).id as string;
     assert.notEqual(forkId, id);
     const copy = await listen(forkId);
-    assert.deepEqual(copy.got.map((e) => e.kind === "claude" ? e.payload.type : e.kind), [...kinds, "user_prompt", "user", "assistant", "result"]);
+    assert.deepEqual(chatKinds(copy.got), [...kinds, "user_prompt", "user", "assistant", "result"]);
     await api(`/api/sessions/${forkId}/prompt`, { method: "POST", body: JSON.stringify({ text: "on a branch" }) });
     assert.notEqual((await idle(forkId)).claudeSessionId, claudeId);
     await waitFor(() => copy.results().length === 4);
@@ -533,7 +535,7 @@ describe("sessions", () => {
     assert.equal((await fork("nope")).status, 409, "a prompt the session never sent");
     const atId = (await json(await fork(secondId))).id as string;
     const at = await listen(atId);
-    assert.deepEqual(at.got.map((e) => e.kind === "claude" ? e.payload.type : e.kind), kinds);
+    assert.deepEqual(chatKinds(at.got), kinds);
     const secondReply = resumed.got.findLast((e) => e.kind === "claude" && e.payload.type === "assistant" && e.seq < (resumed.got.find((x) => x.kind === "user_prompt" && x.payload.text === "third")?.seq ?? 0));
     assert.ok(secondReply?.kind === "claude");
     await api(`/api/sessions/${atId}/prompt`, { method: "POST", body: JSON.stringify({ text: "where" }) });
@@ -591,7 +593,7 @@ describe("sessions", () => {
     assert.equal(await s.closed, 4409);
     const cut = await listen(id);
     await waitFor(() => cut.caughtUp() !== undefined);
-    assert.deepEqual(cut.got.slice(0, cut.caughtUp()).map((e) => (e.kind === "claude" ? e.payload.type : e.kind)), ["user_prompt", "user", "assistant", "result"]);
+    assert.deepEqual(chatKinds(cut.got.slice(0, cut.caughtUp())), ["user_prompt", "user", "assistant", "result"]);
     // The rewritten buffer has a name of its own, so a tab that missed the 4409 can't resume in it from a stale seq.
     await waitFor(() => cut.buffer());
     assert.notEqual(cut.buffer(), s.buffer());
@@ -612,7 +614,7 @@ describe("sessions", () => {
     assert.equal((await api(`/api/sessions/${id}/resume`, { method: "POST" })).status, 201);
     const back = await listen(id);
     await waitFor(() => back.caughtUp() !== undefined);
-    assert.equal(back.caughtUp(), 4);
+    assert.equal(chatKinds(back.got.slice(0, back.caughtUp())).length, 4);
     await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: "where" }) });
     await waitFor(() => back.results().length === 2);
     assert.ok(back.got.some((e) => e.kind === "claude" && JSON.stringify(e.payload).includes(`resumed at ${firstReplyId}`)), "Claude resumes at the last message of the first turn");
@@ -638,6 +640,66 @@ describe("sessions", () => {
     await waitFor(async () => (await session(id))?.status === "idle" || undefined);
     assert.deepEqual(server.working(), []);
     await api(`/api/sessions/${id}`, { method: "DELETE" });
+  });
+
+  it("keeps Claude's compactions and how full its context is, and won't go back to before a compaction", async () => {
+    const id = await startSession("one", "first");
+    const idle = (x: string) => waitFor(async () => { const i = await session(x); return i?.status === "idle" && i.claudeSessionId ? i : undefined; });
+    await idle(id);
+    const s = await listen(id);
+    const contexts = () => s.got.flatMap((e) => (e.kind === "context" ? [e.payload] : []));
+    // Asked once Claude starts, and after each turn: the fake's context grows by 500 tokens a turn.
+    await waitFor(() => contexts().some((c) => c.tokens === 20500) || undefined);
+    assert.deepEqual(contexts().at(-1), { tokens: 20500, window: 1_000_000, autoCompact: true, threshold: 967_000 });
+
+    await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: "/compact" }) });
+    await waitFor(() => contexts().at(-1)?.tokens === 7000 || undefined);
+    await idle(id);
+    await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: "after" }) });
+    await waitFor(() => contexts().at(-1)?.tokens === 7500 || undefined);
+    await idle(id);
+    const prompts = s.got.flatMap((e) => (e.kind === "user_prompt" ? [e.payload] : []));
+    assert.deepEqual(prompts.map((p) => p.text), ["first", "/compact", "after"]);
+
+    // Claude can't resume at a message from before the compaction: it would exit at once. A rewind or a fork that
+    // would cut there is refused, and the session goes on as it was.
+    const rewind = (prompt: string) => api(`/api/sessions/${id}/rewind`, { method: "POST", body: JSON.stringify({ prompt }) });
+    const refused = await rewind(prompts[1].id);
+    assert.equal(refused.status, 409);
+    assert.match((await json(refused)).error, /only has a summary/);
+    const fork = (prompt: string) => api(`/api/sessions/${id}/fork`, { method: "POST", body: JSON.stringify({ prompt }) });
+    assert.equal((await fork(prompts[0].id)).status, 409);
+    assert.equal((await session(id))?.status, "idle");
+    // Cut after what the compaction left, a fork works.
+    const forked = await fork(prompts[1].id);
+    assert.equal(forked.status, 201);
+    const forkId = (await json(forked)).id as string;
+    const copy = await listen(forkId);
+    await api(`/api/sessions/${forkId}/prompt`, { method: "POST", body: JSON.stringify({ text: "on a branch" }) });
+    await waitFor(() => copy.results().length === 3 || undefined);
+    assert.equal((await idle(forkId)).status, "idle");
+    // The copy's Claude says how full its own context is; the original's last word on it isn't copied.
+    assert.ok(!copy.got.some((e) => e.kind === "context" && e.payload.tokens === 7500));
+
+    // Closed and resumed, the chat still has the compaction and the last word on the context.
+    await api(`/api/sessions/${id}`, { method: "DELETE" });
+    const stored = JSON.parse(await readFile(join(sessionsDir, `${id}.json`), "utf8")) as StoredSession;
+    const system = stored.events.flatMap((e) => (e.kind === "claude" && e.payload.type === "system" ? [String(e.payload.subtype) + (e.payload.status ? `:${String(e.payload.status)}` : "")] : []));
+    assert.deepEqual(system, ["status:compacting", "status", "compact_boundary"]);
+    assert.ok(stored.events.some((e) => e.kind === "claude" && e.payload.type === "user" && e.payload.isSynthetic === true), "the summary");
+    // Only the latest is kept.
+    assert.deepEqual(stored.events.filter((e) => e.kind === "context").map((e) => e.payload), [{ tokens: 7500, window: 1_000_000, autoCompact: true, threshold: 967_000 }]);
+
+    // Saved by a Kumiko that didn't keep Claude's compaction messages, the summary still says where it was.
+    stored.events = stored.events.filter((e) => !(e.kind === "claude" && e.payload.type === "system"));
+    await writeFile(join(sessionsDir, `${id}.json`), JSON.stringify(stored));
+    assert.equal((await api(`/api/sessions/${id}/resume`, { method: "POST" })).status, 201);
+    await idle(id);
+    assert.equal((await rewind(prompts[1].id)).status, 409);
+
+    // Back to the first prompt, nothing of Claude's is kept, so that always works.
+    assert.equal((await rewind(prompts[0].id)).status, 200);
+    for (const x of [forkId, id]) await api(`/api/sessions/${x}`, { method: "DELETE" });
   });
 
   it("deletes saved sessions by hand, and with their sandbox", async () => {

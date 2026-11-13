@@ -54,6 +54,24 @@ Commands in the background don't make the tab say Working: a server left running
 tasks run in the background, and closing it asks first, as that stops them. Stopping a turn leaves them running; they end with
 the agent, or when the subagent that started them is done.
 
+## Compaction and context
+
+The agent can only keep so much of a conversation in mind: its context. The meter by the model, below the message box,
+shows how much of it the conversation takes. It's grey and small while there's room. From 80% of the way to where Claude
+Code compacts the conversation by itself, it says how much is left (`14% until auto-compact`), and from 95% it turns red
+and offers **Compact now**, which sends `/compact`. Hover it for the numbers; Session details, in the title bar, has
+them too, with how often the session was compacted. With auto-compaction turned off, the meter measures against the
+whole context window, and warns as that fills up.
+
+A compaction, typed as `/compact` or done by the agent by itself, shows in the chat as a line: running, then how many
+tokens the conversation took before and after, and how long it took. **Summary** on it opens what the agent kept: from
+then on, that summary is all it knows of the conversation before. A compaction in the middle of a turn splits the turn's
+folded work around its line, so it stays in sight.
+
+Everything before the last compaction stays in the chat, dimmed, as the agent no longer has it. You can't rewind or fork
+to a message there, since Claude Code can't go back to a conversation it compacted. Rewinding to the very first message
+still works: the agent starts afresh.
+
 ## When the agent asks you something
 
 The agent works without asking for permission, but it can stop in the middle of a turn to ask you something. It waits
