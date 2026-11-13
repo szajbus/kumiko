@@ -46,8 +46,11 @@ export type ChatItem =
   /**
    * A prompt we sent. `id` is what Claude knows it by; `replayed` once Claude has echoed it, which means it can be rewound
    * to. `merged` if Claude took it up in the middle of a turn it was already taking, rather than starting one for it.
+   * `shell`: the run id of the command the user ran that this prompt gave Claude (see userShell.ts).
    */
-  | { type: "user"; key: string; text: string; id: string; replayed?: boolean; merged?: boolean; attachments?: Attachment[] }
+  | { type: "user"; key: string; text: string; id: string; replayed?: boolean; merged?: boolean; attachments?: Attachment[]; shell?: string }
+  /** A command the user ran that ended without going to Claude, as the session ended or Kumiko restarted under it. */
+  | { type: "shell"; key: string; id: string }
   /** One assistant message: finished blocks, then the ones still streaming (by content index). */
   | { type: "assistant"; key: string; final: Block[]; drafts: Block[] }
   /**
@@ -397,7 +400,7 @@ function applyChatEvent(s: ChatState, ev: SessionEvent): ChatState {
 
   switch (ev.kind) {
     case "user_prompt": {
-      const item: UserItem = { type: "user", key, text: ev.payload.text, id: ev.payload.id, ...(ev.payload.attachments ? { attachments: ev.payload.attachments } : {}) };
+      const item: UserItem = { type: "user", key, text: ev.payload.text, id: ev.payload.id, ...(ev.payload.attachments ? { attachments: ev.payload.attachments } : {}), ...(ev.payload.shell ? { shell: ev.payload.shell } : {}) };
       // Sent while Claude works, it waits until Claude takes it up; see `take`.
       const next = s.inTurn ? { ...s, queued: [...s.queued, item], suggestion: undefined } : startTurn({ ...push(item), suggestion: undefined });
       // Claude hears of what was shared with the first prompt after it that isn't a command; see `sharesWaiting`.
@@ -410,6 +413,9 @@ function applyChatEvent(s: ChatState, ev: SessionEvent): ChatState {
       return push({ type: "shared", key, name: ev.payload.name, titles: ev.payload.artifacts.map((a) => a.title) });
     case "task_stop":
       return push({ type: "task_stop", key, taskId: ev.payload.taskId });
+    case "user_shell_end":
+      // One that goes to Claude shows as the prompt that gives it; this one never will.
+      return ev.payload.stopped === "ended" || ev.payload.stopped === "lost" ? push({ type: "shell", key, id: ev.payload.id }) : s;
     case "monitor_event": {
       // It comes once the turn it woke Claude for is under way: onto that turn's first line if it shows already, or
       // kept for it. Without `at`, recorded before Kumiko said which turn, it goes on the latest such line.

@@ -3,8 +3,10 @@
 
 export * from "./window.js";
 export * from "./asks.js";
+export * from "./userShell.js";
 import type { WindowOp } from "./window.js";
 import type { AgentAsk, AskAnswer, AskClosedReason } from "./asks.js";
+import type { ShellChunk, ShellStop } from "./userShell.js";
 
 export const VM_PREFIX = "km-";
 
@@ -440,7 +442,8 @@ export type EndReason = "user" | "sandbox" | "quit" | "exit";
  */
 export type SessionEvent =
   | { seq: number; kind: "claude"; payload: Record<string, unknown> & { type: string } }
-  | { seq: number; kind: "user_prompt"; payload: { text: string; id: string; attachments?: Attachment[] } }
+  /** `shell`: the id of the `user_shell` this prompt gives Claude, its `text` being "!" and the command. */
+  | { seq: number; kind: "user_prompt"; payload: { text: string; id: string; attachments?: Attachment[]; shell?: string } }
   /** Prompt `id`, sent while Claude worked, taken back before Claude read it, to be edited: it never runs. */
   | { seq: number; kind: "prompt_withdrawn"; payload: { id: string } }
   | { seq: number; kind: "interrupt"; payload: Record<string, never> }
@@ -484,6 +487,19 @@ export type SessionEvent =
    * that turn (Claude's init), as this comes once the turn is under way; missing in events recorded before it was added.
    */
   | { seq: number; kind: "monitor_event"; payload: { taskId: string; line: string; at?: number } }
+  /**
+   * The user running `command` in the sandbox, in `cwd`, from `startedAt` on: a message starting with "!". Its output
+   * follows, then its end, and then the prompt that gives Claude both (a `user_prompt` naming it as its `shell`).
+   */
+  | { seq: number; kind: "user_shell"; payload: { id: string; command: string; cwd: string; startedAt: string } }
+  /** Some of what command `id` printed, as it ran. Dropped once it ends, whose event keeps what the chat shows. */
+  | { seq: number; kind: "user_shell_output"; payload: { id: string; chunk: ShellChunk } }
+  /**
+   * Command `id` ended: with exit `code`, or `stopped`, or with an `error` if it couldn't run. `output` is what the chat
+   * keeps of what it printed, `cut` characters having been left out of its middle; `log` the file in the sandbox with
+   * all of it, written when Claude couldn't get all of it.
+   */
+  | { seq: number; kind: "user_shell_end"; payload: { id: string; code?: number; stopped?: ShellStop; error?: string; durationMs: number; output: ShellChunk[]; cut: number; log?: string } }
   /** How full Claude's context is, as it said when asked: at the start, and after each turn and compaction. */
   | { seq: number; kind: "context"; payload: ContextUsage };
 
@@ -666,6 +682,11 @@ export function checkAttachment(name: string, bytes: Uint8Array): { kind: Attach
 export interface PromptRequest {
   text: string;
   attachments?: AttachmentInput[];
+}
+
+/** Runs `command` in the session's sandbox, as a message starting with "!" does; answered with the run's id. */
+export interface ShellRequest {
+  command: string;
 }
 
 /** One of the subscription's usage limits: the current 5-hour session, the week, a model's share of the week. */

@@ -6,6 +6,7 @@ import { drafts } from "./drafts";
 import { Close, Paperclip, Return, Stop } from "./icons";
 import { expandPastes, isMultiline, nextPasteId, pasteLabel, pasteSpans, type Pastes } from "./pastes";
 import { quoteInsert } from "./quote";
+import { historyStep } from "./userShell";
 
 /** What the composer lets its owner do to it. */
 export interface ComposerHandle {
@@ -41,6 +42,11 @@ interface Props {
   draftKey?: string;
   /** Shown at the left of the line under the box, opposite the key hint. */
   footer?: ReactNode;
+  /**
+   * Given where commands run, a message starting with "!" is one to run there: typing "!" into the box turns it into
+   * a shell-mode box for the command, and the "!" into its marker. Backspace at the start turns it back.
+   */
+  shell?: { cwd: string };
   ref?: Ref<ComposerHandle>;
 }
 
@@ -53,16 +59,28 @@ const MAX_SUGGESTIONS = 8;
  * same text again right after a label opens it up into the text, and Backspace takes the label out whole.
  * Files dropped on it, pasted, or picked with the paperclip go with the message; they are listed above the text.
  */
-export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder, autoFocus, label, commands, suggestion, history = [], onTakeBack, draftKey, footer, ref }: Props) {
-  const [text, setText] = useState(() => (draftKey && drafts.get(draftKey)?.text) || "");
+export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder, autoFocus, label, commands, suggestion, history = [], onTakeBack, draftKey, footer, shell, ref }: Props) {
+  const draft = (draftKey && drafts.get(draftKey)?.text) || "";
+  // In shell mode the box holds the command, and the "!" is its marker: what the message is starts with it.
+  const [shellMode, setShellModeState] = useState(() => Boolean(shell) && draft.startsWith("!"));
+  const [text, setText] = useState(() => (shell && draft.startsWith("!") ? draft.slice(1) : draft));
+  // Read in handlers that run before a render, such as the change an edit made through `replace` sets off.
+  const shellRef = useRef(shellMode);
+  const setShellMode = (on: boolean) => {
+    shellRef.current = on;
+    setShellModeState(on);
+  };
+  // Left with Backspace: the "!" typed next is part of a prompt, until the box is sent or cleared.
+  const literal = useRef(false);
+  const value = shellMode ? `!${text}` : text;
   // Kept until the message is sent, even once a label is deleted, so undo can bring the label back.
   const [pastes, setPastes] = useState<Pastes>(() => (draftKey && drafts.get(draftKey)?.pastes) || {});
   const [files, setFiles] = useState<ComposerFile[]>(() => (draftKey && drafts.get(draftKey)?.files) || []);
   useEffect(() => {
     if (!draftKey) return;
-    if (text || files.length) drafts.set(draftKey, { text, pastes, files });
+    if (value || files.length) drafts.set(draftKey, { text: value, pastes, files });
     else drafts.delete(draftKey);
-  }, [draftKey, text, pastes, files]);
+  }, [draftKey, value, pastes, files]);
   // Why the files last dropped, pasted or picked weren't all taken.
   const [refused, setRefused] = useState<string>();
   const [dragging, setDragging] = useState(false);
@@ -75,7 +93,7 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
   const [sending, setSending] = useState(false);
   // The suggestion Backspace dropped; a new one is a different text, so it shows again.
   const [dropped, setDropped] = useState<string>();
-  const ghost = !text && suggestion && suggestion !== dropped ? suggestion : undefined;
+  const ghost = !text && !shellMode && suggestion && suggestion !== dropped ? suggestion : undefined;
   // Which of `history` is in the box while going through it, and what was being written before that, for Down to come back to.
   const [recalled, setRecalled] = useState<number>();
   const stash = useRef("");
@@ -115,6 +133,14 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
     setText(el.value);
   };
 
+  /** Puts a message in the box as an edit, in shell mode if it is a command. */
+  const putValue = (v: string) => {
+    const command = Boolean(shell) && v.startsWith("!");
+    setShellMode(command);
+    literal.current = false;
+    replace(0, box.current?.value.length ?? 0, command ? v.slice(1) : v);
+  };
+
   useImperativeHandle(ref, () => ({
     insertQuote(quoted) {
       const el = box.current;
@@ -129,7 +155,7 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
   }));
 
   // Only the command word itself is completed: once there is a space, what follows is its arguments.
-  const typed = /^\/(\S*)$/.exec(text)?.[1];
+  const typed = shellMode ? undefined : /^\/(\S*)$/.exec(text)?.[1];
   const suggestions = !dismissed && typed !== undefined && commands ? matchCommands(commands, typed).slice(0, MAX_SUGGESTIONS) : [];
   const choice = suggestions[Math.min(picked, suggestions.length - 1)];
   const complete = (name: string) => {
@@ -137,10 +163,15 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
     setPicked(0);
   };
 
-  const canSend = !disabled && !sending && (text.trim().length > 0 || files.length > 0);
+  // A command goes on its own: files can't go with it.
+  const canSend = !disabled && !sending && (shellMode ? text.trim().length > 0 && files.length === 0 : text.trim().length > 0 || files.length > 0);
 
   const attach = async (picked: File[]) => {
     if (!picked.length) return;
+    if (shellRef.current) {
+      setRefused("Files can't go with a shell command.");
+      return;
+    }
     const read = await readFiles(picked, files);
     setFiles((have) => [...have, ...read.files]);
     setRefused(read.errors.join(" ") || undefined);
@@ -151,8 +182,11 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
     if (!canSend) return;
     setSending(true);
     try {
-      if (await onSubmit(expandPastes(text, pastes).trim(), files)) {
+      const message = expandPastes(text, pastes).trim();
+      if (await onSubmit(shellMode ? `!${message}` : message, files)) {
         setText("");
+        setShellMode(false);
+        literal.current = false;
         setPastes({});
         setFresh(undefined);
         setFiles([]);
@@ -168,7 +202,7 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
   return (
     <>
       <form
-        className={`composer${dragging ? " composer-dropping" : ""}`}
+        className={`composer${dragging ? " composer-dropping" : ""}${shellMode ? " is-shell" : ""}`}
         onSubmit={(e) => {
           e.preventDefault();
           void send();
@@ -225,6 +259,11 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
             ))}
           </ul>
         )}
+        {shellMode && (
+          <span className="composer-mark" aria-hidden="true">
+            !
+          </span>
+        )}
         <div className="composer-field">
           {spans.length > 0 && (
             <div ref={marks} className="composer-marks" aria-hidden="true">
@@ -243,11 +282,17 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
             className="composer-input"
             rows={1}
             value={text}
-            placeholder={ghost ?? placeholder}
-            aria-label={label}
+            placeholder={shellMode ? "Shell command" : (ghost ?? placeholder)}
+            aria-label={shellMode ? "Shell command" : label}
             autoFocus={autoFocus}
             onChange={(e) => {
-              setText(e.target.value);
+              const typedValue = e.target.value;
+              if (!typedValue) literal.current = false;
+              if (shell && !shellRef.current && !literal.current && typedValue.startsWith("!")) {
+                setShellMode(true);
+                setText(typedValue.slice(1));
+                if (files.length) setRefused("Files can't go with a shell command.");
+              } else setText(typedValue);
               setPicked(0);
               setDismissed(false);
               setFresh(undefined);
@@ -268,7 +313,8 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
                 return;
               }
               const pasted = e.clipboardData.getData("text/plain").replace(/\r\n?/g, "\n");
-              if (!isMultiline(pasted)) return;
+              // A command is better seen whole than as a label.
+              if (shellMode || !isMultiline(pasted)) return;
               e.preventDefault();
               // The same text again, right after its label, opens the label up; anywhere else it is a new paste.
               const el = e.currentTarget;
@@ -295,8 +341,15 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
                   return;
                 }
               }
-              // A label goes as one piece, from just after it with Backspace or just before it with Delete.
               const el = e.currentTarget;
+              // Backspace at the very start takes the "!" away: the box is a prompt again, with what is in it.
+              if (shellMode && e.key === "Backspace" && el.selectionStart === 0 && el.selectionEnd === 0 && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                setShellMode(false);
+                literal.current = !text;
+                return;
+              }
+              // A label goes as one piece, from just after it with Backspace or just before it with Delete.
               if ((e.key === "Backspace" || e.key === "Delete") && el.selectionStart === el.selectionEnd && !e.nativeEvent.isComposing && !e.altKey && !e.metaKey && !e.ctrlKey) {
                 const at = el.selectionStart;
                 const label = spans.find((s) => (e.key === "Backspace" ? s.end : s.start) === at);
@@ -344,16 +397,16 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
               if ((e.key === "ArrowUp" || e.key === "ArrowDown") && el.selectionStart === el.selectionEnd && !e.nativeEvent.isComposing && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
                 const up = e.key === "ArrowUp";
                 const at = el.selectionStart;
-                const untouched = recalled !== undefined && text === history[recalled];
+                const untouched = recalled !== undefined && value === history[recalled];
                 const edge = up ? at === 0 || (untouched && !text.slice(0, at).includes("\n")) : at === text.length || (untouched && !text.slice(at).includes("\n"));
                 const from = recalled ?? history.length;
-                const to = from + (up ? -1 : 1);
-                if (edge && to >= 0 && to <= history.length && from !== to) {
+                // In shell mode, only the commands run before; otherwise everything sent.
+                const to = historyStep(history, from, up, shellMode);
+                if (edge && to !== undefined) {
                   e.preventDefault();
-                  if (recalled === undefined) stash.current = text;
+                  if (recalled === undefined) stash.current = value;
                   setRecalled(to < history.length ? to : undefined);
-                  // As an edit, so undo can bring back what was there.
-                  replace(0, text.length, to < history.length ? history[to]! : stash.current);
+                  putValue(to < history.length ? history[to]! : stash.current);
                   return;
                 }
               }
@@ -380,7 +433,7 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
             e.currentTarget.value = "";
           }}
         />
-        <button type="button" className="composer-icon" onClick={() => picker.current?.click()} aria-label="Attach files" title="Attach images, PDFs or text files (or drop or paste them)">
+        <button type="button" className="composer-icon" disabled={shellMode} onClick={() => picker.current?.click()} aria-label="Attach files" title={shellMode ? "Files can't go with a shell command" : "Attach images, PDFs or text files (or drop or paste them)"}>
           <Paperclip />
         </button>
         {onStop ? (
@@ -394,9 +447,15 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
         )}
       </form>
       <div className="composer-hint">
-        {(footer || fresh !== undefined || refused) && (
+        {(footer || shellMode || fresh !== undefined || refused) && (
           <div className="composer-footer">
-            {footer}
+            {shellMode && shell ? (
+              <span className="composer-shell" title="Runs in the sandbox. Claude gets the command and its output, and replies. Backspace at the start goes back to a message.">
+                <span className="composer-shell-label">Shell</span> <span className="composer-shell-where">in {shell.cwd}</span>
+              </span>
+            ) : (
+              footer
+            )}
             {fresh !== undefined && <span>Paste again to expand</span>}
             {refused && <span className="composer-refused">{refused}</span>}
           </div>

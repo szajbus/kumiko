@@ -21,6 +21,7 @@ import type {
   ProjectEdit,
   ProjectView,
   PromptRequest,
+  ShellRequest,
   ResumableSession,
   ResumeRequest,
   SessionDisk,
@@ -138,6 +139,10 @@ export const api = {
   /** Starts the session's Claude again and resends the prompt that failed. */
   retry: (id: string) => request("POST", `/api/sessions/${id}/retry`),
   prompt: (id: string, text: string, attachments?: AttachmentInput[]) => request("POST", `/api/sessions/${id}/prompt`, { text, attachments } satisfies PromptRequest),
+  /** Runs a command in the session's sandbox (a message starting with "!"); Claude gets it and its output once it ends. */
+  runShell: (id: string, command: string) => request<{ id: string }>("POST", `/api/sessions/${id}/shell`, { command } satisfies ShellRequest),
+  /** Stops a command the user ran. */
+  stopShell: (id: string, run: string) => request("POST", `/api/sessions/${id}/shell/${encodeURIComponent(run)}/stop`),
   /** Takes back a prompt that waits for Claude, to be edited; `withdrawn` is false once Claude has read it. */
   withdrawPrompt: (id: string, prompt: string) => request<{ withdrawn: boolean }>("POST", `/api/sessions/${id}/prompts/${encodeURIComponent(prompt)}/withdraw`),
   /** The Claude account behind a session and how much of its subscription is used. */

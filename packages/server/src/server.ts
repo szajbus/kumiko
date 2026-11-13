@@ -47,6 +47,7 @@ import {
   type LoginStartResponse,
   type LoginStatusResponse,
   type PromptRequest,
+  type ShellRequest,
   type OpKind,
   type Project,
   type ProjectEdit,
@@ -81,7 +82,8 @@ import { LoginFailed, Logins } from "./logins.js";
 import { BusyError, Operations } from "./operations.js";
 import { homeId, lockHome } from "./home.js";
 import { defaultKumikoHome, ProjectExists, ProjectRecordError, ProjectStore } from "./projects.js";
-import { AskRefused, RewindRefused, SessionEnded, SessionNotFound, SessionNotResumable, Sessions } from "./sessions.js";
+import { AskRefused, RewindRefused, SessionEnded, SessionNotFound, SessionNotResumable, Sessions, ShellRefused } from "./sessions.js";
+import { RUN_ID } from "./userShells.js";
 import { docPaneTarget, Widgets, type PaneAnswer } from "./widgets.js";
 import { SessionStore, type StoredSession } from "./store.js";
 import { TabsStore } from "./tabs.js";
@@ -222,7 +224,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       });
       broadcast({ type: "pane", session, pane, request, ...what });
     });
-  const sessions = new Sessions(opts.driver ?? (() => new ClaudeDriver(provider.exec.bind(provider), { owner })), sessionStore, widgets, opts.finishMs);
+  const sessions = new Sessions(opts.driver ?? (() => new ClaudeDriver(provider.exec.bind(provider), { owner })), sessionStore, widgets, opts.finishMs, provider.exec.bind(provider));
   widgets.sessions = sessions;
   const runs = opts.runs ?? new Runs(provider.exec.bind(provider), owner);
   const clients = new Set<WebSocket>();
@@ -464,7 +466,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     if (err instanceof BusyError || err instanceof ProjectExists || err instanceof ProjectRecordError || err instanceof MirrorRecordError) return c.json(fail(err.message), 409);
     if (err instanceof SessionNotFound || err instanceof MirrorNotFound) return c.json(fail(err.message), 404);
     if (err instanceof MirrorFetchFailed || err instanceof GhError) return c.json(fail(err.message), 502);
-    if (err instanceof SessionEnded || err instanceof SessionNotResumable || err instanceof RewindRefused || err instanceof AskRefused) return c.json(fail(err.message), 409);
+    if (err instanceof SessionEnded || err instanceof SessionNotResumable || err instanceof RewindRefused || err instanceof AskRefused || err instanceof ShellRefused) return c.json(fail(err.message), 409);
     // Anything else is a bug or a tool failing; the UI still gets JSON it can show.
     return c.json(fail(err instanceof Error ? err.message : String(err)), 500);
   });
@@ -888,6 +890,23 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     const sent = await attachments.take(req.attachments);
     sessions.prompt(id, text, sent.attachments, sent.files);
     return c.json({ ok: true }, 202);
+  });
+
+  /** Runs a command in the session's sandbox, a message starting with "!": answered with its run's id. */
+  app.post("/api/sessions/:id/shell", async (c) => {
+    const { id, sandbox } = sessionOf(c);
+    const req = await c.req.json<Partial<ShellRequest>>().catch(() => ({}) as Partial<ShellRequest>);
+    const command = typeof req.command === "string" ? req.command.trim() : "";
+    if (!command) throw new HttpError(400, "The command is empty.");
+    const ready = await readyProject(sandbox);
+    return c.json({ id: sessions.runShell(id, command, ready.env) }, 202);
+  });
+
+  app.post("/api/sessions/:id/shell/:run/stop", (c) => {
+    const run = c.req.param("run");
+    if (!RUN_ID.test(run)) throw new HttpError(400, "Which command?");
+    sessions.stopShell(sessionOf(c).id, run);
+    return c.json({ ok: true });
   });
 
   /** Takes back a prompt sent while Claude worked, before Claude reads it, to be edited: `withdrawn` false if it was too late. */

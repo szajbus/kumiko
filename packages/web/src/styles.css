@@ -24,6 +24,12 @@
   --diff-del-num: #f29b8f;
   --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  /* Shell commands the user runs: the composer in shell mode, and their cards */
+  --shell: #ec8fc6;
+  --shell-dim: #b46d97;
+  --shell-border: #6e3d5d;
+  --shell-focus: #9b5583;
+  --shell-bg: #1d161b;
 }
 
 * { box-sizing: border-box; }
@@ -990,6 +996,14 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
   color: transparent; background: #263152; border-radius: 4px; box-shadow: 0 0 0 2px #263152;
   -webkit-box-decoration-break: clone; box-decoration-break: clone;
 }
+/* Shell mode: a message starting with "!" is a command to run. Pink is the TUI's colour for it, and no other's here. */
+.composer.is-shell { border-color: var(--shell-border); background: var(--shell-bg); }
+.composer.is-shell:focus-within { border-color: var(--shell-focus); }
+.composer.is-shell .composer-input { font-family: var(--mono); font-size: 13.5px; }
+.composer-mark { flex: none; align-self: flex-start; padding: 8px 0; margin-right: -2px; font: 500 14px/1.45 var(--mono); color: var(--shell); }
+.composer-shell { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
+.composer-shell-label { color: var(--shell); }
+.composer-shell-where { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 11.5px; color: var(--shell-dim); }
 /* A bare icon, no button chrome: Enter's arrow, or Stop while a turn runs. */
 .composer-icon {
   flex: none; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--text-2);
@@ -1176,3 +1190,29 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
 .add-repo-empty { display: flex; align-items: center; justify-content: center; gap: 8px; height: 100%; padding: 16px; text-align: center; font-size: 13px; }
 .banner-error-text { color: #f6b3aa; white-space: pre-wrap; }
 .add-repo-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; font-size: 12.5px; }
+
+/* A command the user ran: its line, what it printed, and a note under it. Full width, as its output needs the room. */
+.shell-row { display: flex; align-items: flex-start; gap: 6px; min-width: 0; }
+.shell-head .msg-actions { margin: 0 0 0 auto; }
+.shell-head .msg-actions + .shell-state { margin-left: 0; }
+.shell-row:hover .msg-actions, .shell-row .msg-actions:focus-within { opacity: 1; }
+.shell { flex: 1; min-width: 0; display: flex; flex-direction: column; border: 1px solid var(--border-soft); border-left: 2px solid var(--shell-border); border-radius: 8px; background: var(--surface); }
+.shell-head { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 8px 0 12px; }
+.shell-cmd { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 13px var(--mono); color: var(--text); }
+.shell-cmd b { color: var(--shell); font-weight: 500; margin-right: 6px; }
+.shell-state { flex: none; margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.shell-state .spinner { width: 10px; height: 10px; margin: 2px; }
+.shell-time { font-variant-numeric: tabular-nums; }
+.shell-status-failed { color: var(--danger); }
+.shell-status-stopped { color: #e0a96d; }
+.shell-stop { margin-left: 0; }
+.shell-out {
+  margin: 0 12px 10px; padding: 10px 12px; border-radius: 6px; background: var(--code-bg); color: #d6dae1;
+  font: 12px/1.55 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto;
+}
+.shell-err { color: #f4b8ae; }
+.shell-gap { display: block; margin: 4px 0; padding: 2px 8px; border-radius: 4px; background: var(--surface); color: var(--muted); font: 11.5px var(--sans); }
+.shell-foot { padding: 0 12px 9px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+/* Sent while Claude worked, it waits below the chat as wide as the chat. */
+.msg-queued:has(.shell-row) { align-self: stretch; max-width: none; align-items: stretch; }
+.msg-queued:has(.shell-row) .msg-queued-note { align-self: flex-end; }

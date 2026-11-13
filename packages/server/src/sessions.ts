@@ -1,9 +1,11 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { answerFits, applyWindowOp, chatWindow, compactWindow, isBusy, isCommand, isCompactSummary, LIVE_SESSION_STATUSES, sharedNote, sharesWaiting, windowState, type Attachment, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo, type WindowOp, type WindowState, type AgentAsk, type AskAnswer, type AskClosedReason } from "@kumiko/shared";
+import { answerFits, applyWindowOp, chatWindow, chunksLength, compactWindow, isBusy, isCommand, isCompactSummary, keepEnds, LIVE_SESSION_STATUSES, mergeChunks, sharedNote, sharesWaiting, SHELL_COMMAND_MAX, SHELL_KEEP_HEAD, SHELL_KEEP_TAIL, SHELL_PROMPT_CHARS, shellPrompt, windowState, type Attachment, type ShellChunk, type ShellEnd, type ShellStop, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo, type WindowOp, type WindowState, type AgentAsk, type AskAnswer, type AskClosedReason } from "@kumiko/shared";
 import { TOOL_TIMEOUT_MS, type AgentDriver, type AgentFile, type AgentMessage, type StartOptions, type TaskOutput, type ToolHost } from "@kumiko/agent";
 import { chatEvents, type SessionStore, type StoredSession } from "./store.js";
 import { trimMessage } from "./trim.js";
+import { ShellOutput, UserShellRun, writeLog } from "./userShells.js";
+import type { SandboxProvider } from "@kumiko/sandbox";
 
 /** A SessionEvent before it has its place in the buffer. */
 type WithoutSeq<E> = E extends unknown ? Omit<E, "seq"> : never;
@@ -53,6 +55,22 @@ interface Session {
    * One Claude reads in the middle of a turn gets none, so its echo takes it off.
    */
   waiting?: string[];
+  /** Commands the user runs in the sandbox, by run id, until they end. */
+  userShells: Map<string, UserShell>;
+}
+
+/** A command the user runs, as the session follows it: what it printed so far, and what the chat has had of it. */
+interface UserShell {
+  run: UserShellRun;
+  command: string;
+  startedAt: number;
+  output: ShellOutput;
+  /** Printed but not yet in an event: output goes to the chat a few times a second, not on every write. */
+  pending: ShellChunk[];
+  flush?: NodeJS.Timeout;
+  /** Characters the chat had as the command ran; past `SHELL_STREAM_MAX` it has the rest once the command ends. */
+  streamed: number;
+  stopped?: ShellStop;
 }
 
 /**
@@ -131,6 +149,30 @@ const isWorking = isBusy;
 
 /** How long after Claude says a task ended its output is read to be kept, so the line saying how it ended is in it. */
 const OUTPUT_SETTLE_MS = 500;
+
+/** How often a running command's output goes to the chat, in ms, and how much of it, in characters, before it ends. */
+const SHELL_FLUSH_MS = 100;
+const SHELL_STREAM_MAX = 256 * 1024;
+
+/** A command can't be run or stopped: no sandbox to run it in, it is too long, or there is no such command running. */
+export class ShellRefused extends Error {}
+
+/**
+ * The commands the user ran that the events say started and never ended: they ran in a server that went away, or in
+ * the session this one was forked from. Each gets an end, keeping what it printed.
+ */
+function lostShells(events: readonly SessionEvent[], running: ReadonlyMap<string, unknown>): NewEvent[] {
+  const open = new Map<string, ShellChunk[]>();
+  for (const e of events) {
+    if (e.kind === "user_shell") open.set(e.payload.id, []);
+    else if (e.kind === "user_shell_output") open.get(e.payload.id)?.push(e.payload.chunk);
+    else if (e.kind === "user_shell_end") open.delete(e.payload.id);
+  }
+  return [...open].filter(([id]) => !running.has(id)).map(([id, chunks]) => {
+    const kept = keepEnds(chunks, SHELL_KEEP_HEAD, SHELL_KEEP_TAIL);
+    return { kind: "user_shell_end", payload: { id, stopped: "lost", durationMs: 0, output: kept.chunks, cut: kept.cut } };
+  });
+}
 
 /** How long Claude may go on with its turn after its session is closed, before it is stopped. */
 export const FINISH_MS = 30 * 60_000;
@@ -232,6 +274,8 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     private readonly store?: SessionStore,
     private readonly widgets?: SessionWidgets,
     private readonly finishMs = FINISH_MS,
+    /** Runs the commands the user sends; without it, they can't be run. */
+    private readonly exec?: SandboxProvider["exec"],
   ) {
     super();
   }
@@ -388,6 +432,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
   async rewind(id: string, promptId: string, env: string[], { files }: RewindRequest): Promise<{ text: string; attachments?: Attachment[] }> {
     const from = this.live(id);
     if (from.info.status !== "idle") throw new RewindRefused("Wait for Claude to finish, or stop it, before rewinding.");
+    if (from.userShells.size) throw new RewindRefused("Wait for your command to finish, or stop it, before rewinding.");
     const at = from.events.findIndex((e) => e.kind === "user_prompt" && e.payload.id === promptId);
     const prompt = from.events[at];
     if (prompt?.kind !== "user_prompt") throw new RewindRefused("That message can't be rewound to.");
@@ -486,8 +531,10 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
 
   /** A session with `seed` in a new buffer, not yet listed and with no driver. */
   private newSession(info: SessionInfo, seed: NewEvent[]): Session {
-    const s: Session = { info, driver: undefined!, events: [], bytes: 0, seq: 0, buffer: randomBytes(6).toString("hex"), subscribers: new Set(), blocks: new Map(), exited: Promise.resolve(), saving: Promise.resolve(), window: chatWindow() };
+    const s: Session = { info, driver: undefined!, events: [], bytes: 0, seq: 0, buffer: randomBytes(6).toString("hex"), subscribers: new Set(), blocks: new Map(), exited: Promise.resolve(), saving: Promise.resolve(), window: chatWindow(), userShells: new Map() };
     for (const ev of seed) this.push(s, ev);
+    for (const ev of lostShells(s.events, s.userShells)) this.push(s, ev);
+    this.dropShellOutput(s);
     s.info = { ...info, bufferBytes: s.bytes };
     return s;
   }
@@ -593,6 +640,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
         }
         case "exit": {
           this.closeAsks(s, "exited");
+          this.stopShells(s, "ended");
           const reason = s.ending ?? "exit";
           const failed = !s.ending && (ev.code !== 0 || s.info.status === "starting");
           // A session that stopped by itself needs the user to look; one they ended doesn't.
@@ -775,8 +823,11 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     return s;
   }
 
-  /** Sends a prompt; `attachments` are what the session records of `files`, which Claude gets. */
-  prompt(id: string, text: string, attachments: Attachment[] = [], files: AgentFile[] = []): void {
+  /**
+   * Sends a prompt; `attachments` are what the session records of `files`, which Claude gets. With `shell`, the prompt
+   * gives Claude a command the user ran, which Claude gets as `shell.text` while the chat shows `text`.
+   */
+  prompt(id: string, text: string, attachments: Attachment[] = [], files: AgentFile[] = [], shell?: { id: string; text: string }): void {
     const s = this.live(id);
     // Claude reads nothing more until what it asked is settled: a message sent meanwhile answers it, and comes next.
     for (const ask of openAsks(s.events)) {
@@ -789,13 +840,102 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     const promptId = randomUUID();
     // Artifacts other sessions shared since the last message: Claude hears of them with this one, unless it is a command.
     const note = isCommand(text) ? "" : sharedNote(sharesWaiting(s.events));
-    this.push(s, { kind: "user_prompt", payload: { text, id: promptId, ...(attachments.length ? { attachments } : {}) } });
-    s.pendingModel = /^\/model\s+(\S+)/.exec(text)?.[1];
+    this.push(s, { kind: "user_prompt", payload: { text, id: promptId, ...(attachments.length ? { attachments } : {}), ...(shell ? { shell: shell.id } : {}) } });
+    s.pendingModel = shell ? undefined : /^\/model\s+(\S+)/.exec(text)?.[1];
     s.waiting = [...(s.waiting ?? []), promptId];
-    s.driver.send(text + note, promptId, files);
+    s.driver.send((shell?.text ?? text) + note, promptId, files);
     if (s.info.status === "idle") this.setInfo(s, { status: "running" });
     // Kumiko's own record of the prompt is nowhere in Claude's output, so it is saved now.
     this.save(s);
+  }
+
+  /**
+   * Runs `command` in the session's sandbox, in its working directory, with the forwarded variables `env`, as a
+   * message starting with "!" does. Its output streams into the chat, and once it ends Claude gets the command and
+   * its output as a prompt, and replies, or reads it in the middle of the turn it is taking. Returns the run's id.
+   */
+  runShell(id: string, command: string, env: string[]): string {
+    const s = this.live(id);
+    if (!this.exec || s.driver === noDriver) throw new ShellRefused("Commands can't run in this session.");
+    if (!command.trim()) throw new ShellRefused("The command is empty.");
+    if (command.length > SHELL_COMMAND_MAX) throw new ShellRefused(`The command is too long: ${command.length.toLocaleString("en-US")} characters, of ${SHELL_COMMAND_MAX.toLocaleString("en-US")} at most.`);
+    const runId = randomBytes(6).toString("hex");
+    const { sandbox, workdir } = s.info;
+    const startedAt = Date.now();
+    this.push(s, { kind: "user_shell", payload: { id: runId, command, cwd: workdir, startedAt: new Date(startedAt).toISOString() } });
+    const shell: UserShell = { run: undefined!, command, startedAt, output: new ShellOutput(), pending: [], streamed: 0 };
+    s.userShells.set(runId, shell);
+    shell.run = new UserShellRun(this.exec, sandbox, runId, command, env, workdir, {
+      chunk: (c) => {
+        shell.output.add(c);
+        if (shell.streamed >= SHELL_STREAM_MAX) return;
+        const room = SHELL_STREAM_MAX - shell.streamed;
+        shell.pending.push(c.text.length > room ? { stream: c.stream, text: c.text.slice(0, room) } : c);
+        shell.streamed += Math.min(room, c.text.length);
+        shell.flush ??= setTimeout(() => this.flushShell(s, runId, shell), SHELL_FLUSH_MS);
+      },
+      end: (r) => void this.endShell(s, runId, shell, r),
+    });
+    return runId;
+  }
+
+  /** Stops command `runId`, which the user ran in the session. */
+  stopShell(id: string, runId: string): void {
+    const s = this.sessions.get(id);
+    if (!s) throw new SessionNotFound(`No session ${id}.`);
+    const shell = s.userShells.get(runId);
+    if (!shell) throw new ShellRefused("That command isn't running.");
+    shell.stopped ??= "user";
+    shell.run.stop();
+  }
+
+  private stopShells(s: Session, reason: ShellStop) {
+    for (const shell of s.userShells.values()) {
+      shell.stopped ??= reason;
+      shell.run.stop();
+    }
+  }
+
+  private flushShell(s: Session, runId: string, shell: UserShell) {
+    clearTimeout(shell.flush);
+    shell.flush = undefined;
+    for (const chunk of mergeChunks(shell.pending.splice(0))) if (!s.detached) this.push(s, { kind: "user_shell_output", payload: { id: runId, chunk } });
+  }
+
+  /**
+   * Command `runId` ended: the chat keeps the start and end of what it printed in place of what streamed in, and Claude
+   * gets it as a prompt, with all of it in a log in the sandbox when Claude can't get all of it.
+   */
+  private async endShell(s: Session, runId: string, shell: UserShell, r: { code?: number; error?: string }) {
+    this.flushShell(s, runId, shell);
+    const durationMs = Date.now() - shell.startedAt;
+    // An interrupted command exits with 128 plus the signal's number, as it would in a terminal; Stop says it better.
+    const end: ShellEnd = { ...(shell.stopped && (r.code === undefined || r.code > 128) ? { stopped: shell.stopped } : { code: r.code }), ...(r.error ? { error: r.error } : {}), durationMs };
+    const all = shell.output.chunks();
+    const log = this.exec && (shell.output.cut || chunksLength(all) > SHELL_PROMPT_CHARS) ? await writeLog(this.exec, s.info.sandbox, runId, all.map((c) => c.text).join("")) : undefined;
+    s.userShells.delete(runId);
+    if (s.detached) return;
+    const kept = keepEnds(all, SHELL_KEEP_HEAD, SHELL_KEEP_TAIL);
+    this.push(s, { kind: "user_shell_end", payload: { id: runId, ...end, output: kept.chunks, cut: kept.cut + shell.output.cut, ...(log ? { log } : {}) } });
+    this.dropShellOutput(s);
+    // A command that ended with its session has no Claude to tell; one ended by the user's Stop still goes to Claude.
+    if (isLive(s.info) && end.stopped !== "ended" && s.driver !== noDriver) {
+      try {
+        this.prompt(s.info.id, `!${shell.command}`, [], [], { id: runId, text: shellPrompt(shell.command, all, end, log) });
+        return;
+      } catch {
+        // Claude went as the command ended: the chat keeps it all the same.
+      }
+    }
+    this.save(s);
+  }
+
+  /** Drops the output of commands that have ended, whose end keeps what the chat shows of it. */
+  private dropShellOutput(s: Session) {
+    const ended = new Set(s.events.flatMap((e) => (e.kind === "user_shell_end" ? [e.payload.id] : [])));
+    if (!s.events.some((e) => e.kind === "user_shell_output" && ended.has(e.payload.id))) return;
+    s.events = s.events.filter((e) => !(e.kind === "user_shell_output" && ended.has(e.payload.id)));
+    s.bytes = s.events.reduce((n, e) => n + sizeOf(e), 0);
   }
 
   /**
@@ -1105,6 +1245,8 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
         // Saved once let go of, with where its output was read to and the calls it leaves pending, as they end up.
         s.detached = true;
         clearTimeout(s.closeTimer);
+        // A command can't be picked up by the next server, which only finds that it ran, as far as it had got.
+        for (const shell of s.userShells.values()) shell.run.stop();
         await s.driver.detach();
         this.save(s);
       }),
