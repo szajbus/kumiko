@@ -124,7 +124,7 @@ describe("shell commands in the chat", () => {
 
   it("keeps a command that never went to Claude in the chat where it ended", () => {
     for (const stopped of ["ended", "lost", "user"] as const) {
-      const chat = fold(applyEvent, emptyChat(), [started, end({ stopped, alone: true })]);
+      const chat: ChatState = fold(applyEvent, emptyChat(), [started, end({ stopped, alone: true })]);
       assert.deepEqual(chat.items, [{ type: "shell", key: "2", id: "aaaaaaaaaaaa" }]);
     }
     // One that goes to Claude shows as its prompt, which follows.
