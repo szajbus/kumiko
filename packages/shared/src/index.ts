@@ -492,14 +492,19 @@ export type SessionEvent =
    * follows, then its end, and then the prompt that gives Claude both (a `user_prompt` naming it as its `shell`).
    */
   | { seq: number; kind: "user_shell"; payload: { id: string; command: string; cwd: string; startedAt: string } }
-  /** Some of what command `id` printed, as it ran. Dropped once it ends, whose event keeps what the chat shows. */
-  | { seq: number; kind: "user_shell_output"; payload: { id: string; chunk: ShellChunk } }
+  /**
+   * Some of what command `id` printed, as it ran, `at` characters into its output. Past the start the chat keeps, only
+   * the latest are kept, so one can come after a gap. All are dropped once it ends, whose event keeps what the chat shows.
+   */
+  | { seq: number; kind: "user_shell_output"; payload: { id: string; chunk: ShellChunk; at: number } }
   /**
    * Command `id` ended: with exit `code`, or `stopped`, or with an `error` if it couldn't run. `output` is what the chat
    * keeps of what it printed, `cut` characters having been left out of its middle; `log` the file in the sandbox with
-   * all of it, written when Claude couldn't get all of it.
+   * all of it, written when Claude couldn't get all of it. `alone` when Claude doesn't get it: its session ended, or is
+   * closing, or Kumiko lost it; otherwise the prompt that gives it to Claude follows, once Claude isn't waiting on an
+   * answer from the user.
    */
-  | { seq: number; kind: "user_shell_end"; payload: { id: string; code?: number; stopped?: ShellStop; error?: string; durationMs: number; output: ShellChunk[]; cut: number; log?: string } }
+  | { seq: number; kind: "user_shell_end"; payload: { id: string; code?: number; stopped?: ShellStop; error?: string; durationMs: number; output: ShellChunk[]; cut: number; log?: string; alone?: true } }
   /** How full Claude's context is, as it said when asked: at the start, and after each turn and compaction. */
   | { seq: number; kind: "context"; payload: ContextUsage };
 

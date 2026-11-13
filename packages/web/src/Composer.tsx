@@ -378,8 +378,8 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
                   return;
                 }
               }
-              // A waiting message comes back before history does, from the very start of the box.
-              if (e.key === "ArrowUp" && onTakeBack && recalled === undefined && el.selectionStart === 0 && el.selectionEnd === 0 && !e.nativeEvent.isComposing && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
+              // A waiting message comes back before history does, from the very start of the box; not into a command.
+              if (e.key === "ArrowUp" && onTakeBack && !shellMode && recalled === undefined && el.selectionStart === 0 && el.selectionEnd === 0 && !e.nativeEvent.isComposing && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
                 e.preventDefault();
                 if (takingBack.current) return;
                 takingBack.current = true;

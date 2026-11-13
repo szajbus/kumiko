@@ -81,7 +81,8 @@ command ends, so does anything it left running in the background. A command has 
 
 When it ends, the agent gets the command and its output, the way Claude Code gives it a `!` command, and replies to
 it, so you can follow up with "fix that" without pasting anything. If the agent is working when the command ends, it
-reads it at its next step, as with any message sent then. Long output is cut in the middle: Claude Code gets up to
+reads it at its next step, as with any message sent then. If it's waiting on your answer to a question, it gets the
+command once you've answered. Long output is cut in the middle: Claude Code gets up to
 30,000 characters, as much as it gets of one of its own commands, and the rest is in a log in the sandbox, at
 `~/.cache/kumiko/shell/`, which the chat names. The chat keeps the first 32 KB and the last 224 KB.
 

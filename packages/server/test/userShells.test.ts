@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 import WebSocket from "ws";
-import { SHELL_PROMPT_CHARS, type ServerEvent, type SessionEvent, type SessionInfo, type SessionStreamMessage } from "@kumiko/shared";
+import { SHELL_KEEP_HEAD, SHELL_KEEP_TAIL, SHELL_PROMPT_CHARS, type ServerEvent, type SessionEvent, type SessionInfo, type SessionStreamMessage } from "@kumiko/shared";
 import { LimaProvider, MetadataStore, shellQuote } from "@kumiko/sandbox";
 import { startServer, type RunningServer, type ServerOptions } from "../src/index.js";
 import { ShellOutput } from "../src/userShells.js";
@@ -174,6 +174,77 @@ describe("commands the user runs", () => {
     await new Promise((r) => setTimeout(r, 500));
     assert.equal((await import("node:fs/promises").then((fs) => fs.stat(marker))).mtimeMs, mtimeMs);
     assert.equal((await api(`/api/sessions/${id}/shell/${r}/stop`, { method: "POST" })).status, 409);
+    sock.close();
+  });
+
+  it("says a stopped command stopped even when it exits with a code of its own", async () => {
+    const id = await idleSession();
+    const { got, sock } = await listen(id);
+    const r = await run(id, "trap 'echo caught; exit 1' INT; echo started; while :; do sleep 0.1; done");
+    await waitFor(() => got.some((e) => e.kind === "user_shell_output" && e.payload.chunk.text.includes("started")));
+    await api(`/api/sessions/${id}/shell/${r}/stop`, { method: "POST" });
+    const end = await endOf(got, r);
+    assert.equal(end.payload.stopped, "user");
+    assert.equal(end.payload.code, 1);
+    assert.match(await reply(got), /<bash-stdout>started\ncaught<\/bash-stdout><bash-stderr>Stopped by the user after [\d.]+s\.<\/bash-stderr><bash-exit-code>1<\/bash-exit-code>/);
+    sock.close();
+  });
+
+  it("holds a command that ends while Claude waits on an answer, and gives it once the question is answered", async () => {
+    const res = await api("/api/sessions", { method: "POST", body: JSON.stringify({ sandbox: "one", prompt: "ask" }) });
+    const { id } = await json(res);
+    const { got, sock } = await listen(id);
+    const ask = await waitFor(() => got.find((e) => e.kind === "ask"));
+    assert.ok(ask.kind === "ask");
+    const r = await run(id, "echo meanwhile");
+    const end = await endOf(got, r);
+    assert.equal(end.payload.alone, undefined, "it goes to Claude, later");
+    await new Promise((res) => setTimeout(res, 300));
+    assert.ok(!got.some((e) => e.kind === "user_prompt" && e.payload.shell === r), "not while Claude waits on the answer");
+    assert.ok(!got.some((e) => e.kind === "ask_answer" || e.kind === "ask_closed"), "the command didn't answer the question");
+    assert.equal((await api(`/api/sessions/${id}/asks/${ask.payload.id}`, { method: "POST", body: JSON.stringify({ kind: "skip" }) })).status, 200);
+    const answered = got.findIndex((e) => e.kind === "ask_answer");
+    const prompt = await waitFor(() => got.find((e): e is Prompted => e.kind === "user_prompt" && e.payload.shell === r));
+    assert.ok(got.indexOf(prompt) > answered);
+    assert.match(await reply(got), /<bash-stdout>meanwhile<\/bash-stdout>/);
+    sock.close();
+  });
+
+  it("keeps only the start and the latest of a long run's output while it runs", async () => {
+    const id = await idleSession();
+    const { got, sock } = await listen(id);
+    const r = await run(id, "seq 1 150000; echo last-line; sleep 30");
+    await waitFor(() => got.some((e) => e.kind === "user_shell_output" && e.payload.chunk.text.includes("last-line")), 20000);
+    await new Promise((res) => setTimeout(res, 300));
+    // A tab opening now gets the start, and as much of the end as the chat keeps.
+    const fresh = await listen(id);
+    await waitFor(() => fresh.got.some((e) => e.kind === "user_shell_output" && e.payload.chunk.text.includes("last-line")));
+    const outs = fresh.got.flatMap((e) => (e.kind === "user_shell_output" ? [e.payload] : []));
+    const kept = outs.reduce((n, o) => n + o.chunk.text.length, 0);
+    assert.ok(kept <= SHELL_KEEP_HEAD + 2 * SHELL_KEEP_TAIL, `${kept} characters kept`);
+    assert.equal(outs[0]!.at, 0);
+    assert.ok(outs[0]!.chunk.text.startsWith("1\n2\n"));
+    assert.ok(outs.some((o, i) => i > 0 && o.at > outs[i - 1]!.at + outs[i - 1]!.chunk.text.length), "there is a gap");
+    await api(`/api/sessions/${id}/shell/${r}/stop`, { method: "POST" });
+    await endOf(got, r);
+    fresh.sock.close();
+    sock.close();
+  });
+
+  it("rewinds to a command as to a message: it is gone from the chat with its prompt", async () => {
+    const id = await idleSession();
+    const { got, sock } = await listen(id);
+    const r = await run(id, "echo once");
+    const prompt = await waitFor(() => got.find((e): e is Prompted => e.kind === "user_prompt" && e.payload.shell === r));
+    await reply(got);
+    await waitFor(async () => (await session(id))?.status === "idle");
+    const res = await api(`/api/sessions/${id}/rewind`, { method: "POST", body: JSON.stringify({ prompt: prompt.payload.id }) });
+    assert.equal(res.status, 200, await res.clone().text());
+    assert.equal((await json(res)).text, "!echo once");
+    const after = await listen(id);
+    await waitFor(() => after.got.some((e) => e.kind === "user_prompt"));
+    assert.ok(!after.got.some((e) => e.kind === "user_shell" || e.kind === "user_shell_end"), "the command is gone too");
+    after.sock.close();
     sock.close();
   });
 
