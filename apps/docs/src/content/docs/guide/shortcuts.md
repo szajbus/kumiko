@@ -24,9 +24,11 @@ sidebar:
 | --- | --- |
 | <kbd>Enter</kbd> | Send |
 | <kbd>Shift</kbd>+<kbd>Enter</kbd> | New line |
+| <kbd>!</kbd> in an empty box | Shell mode: the message is a [command to run in the sandbox](/guide/prompts/#shell-commands) |
+| <kbd>Backspace</kbd> at the start of the box | Leave shell mode |
 | <kbd>Esc</kbd> | Stop the turn the agent is working on |
 | <kbd>Tab</kbd> | Take the agent's suggested message, or the highlighted slash command |
-| <kbd>↑</kbd> / <kbd>↓</kbd> | Move through slash commands, or, at the start or end of the box, through the messages you sent before |
+| <kbd>↑</kbd> / <kbd>↓</kbd> | Move through slash commands, or, at the start or end of the box, through the messages you sent before; in shell mode, through the commands you ran |
 | <kbd>↑</kbd> at the start of the box | Take back a message waiting for the agent to finish its turn, to edit it; it comes before older messages |
 
 ## The chat

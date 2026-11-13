@@ -1,6 +1,6 @@
 import { createContext, Fragment, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { formatBytes, LIVE_SESSION_STATUSES, type AskAnswer, type LoginAccount, type SessionInfo } from "@kumiko/shared";
+import { formatBytes, LIVE_SESSION_STATUSES, shellCommand, type AskAnswer, type LoginAccount, type SessionInfo } from "@kumiko/shared";
 import { api, errorMessage, type SessionStream } from "./api";
 import { fromAttachment, toInput } from "./attachments";
 import { ArtifactsButton } from "./ArtifactView";
@@ -20,6 +20,8 @@ import { Fork, Rewind } from "./icons";
 import { LoginDialog } from "./LoginDialog";
 import { QuoteButton } from "./QuoteButton";
 import { Select } from "./Select";
+import { ShellCard, UserShellsContext, type UserShellsView } from "./ShellCard";
+import { applyShellEvent, type UserShells } from "./userShell";
 import { COLORS } from "./status";
 import { UsageStrip } from "./UsageStrip";
 import { useFold } from "./useFold";
@@ -76,6 +78,7 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
   const corner = active ? headerCorner : undefined;
   useMarkSeen(session, active);
   const chat = useChat(stream.events);
+  const shells = useFold<UserShells>(stream.events, () => ({}), (state, added) => added.reduce(applyShellEvent, state));
   const context = useContextState(stream.events);
   const totalCost = useMemo(() => chat.items.reduce((sum, i) => sum + (i.type === "turn" ? (i.costUsd ?? 0) : 0), 0), [chat.items]);
   // What was sent so far, for Up in the composer; a message sent again right after itself is there once.
@@ -146,8 +149,9 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
   useEffect(() => setModel(""), [reported, idle]);
   const live = LIVE_SESSION_STATUSES.includes(session.status);
   const busy = live && !idle;
-  // The last message waiting for Claude can be taken back to be edited; not one with files, which the box can't get back.
-  const waiting = chat.queued.filter((i) => !takenBack.includes(i.id)).at(-1);
+  // The last message waiting for Claude can be taken back to be edited; not one with files, which the box can't get
+  // back, nor a command's, which has run.
+  const waiting = chat.queued.filter((i) => !takenBack.includes(i.id) && !i.shell).at(-1);
   const takeBack =
     live && waiting && !waiting.attachments?.length
       ? async () => {
@@ -165,6 +169,7 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
       : undefined;
 
   const login = useMemo(() => loginCards(chat.items, answer), [chat.items, answer]);
+  const shellsView = useMemo<UserShellsView>(() => ({ shells, session: session.id, live }), [shells, session.id, live]);
   const open = login.open;
 
   // A logged-out card that is still the last word may be out of date (logged in from another session, or before a
@@ -219,6 +224,7 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
       {corner && createPortal(<UsageStrip sessionId={session.id} live={live} turnDone={idle} cost={totalCost} bufferBytes={session.bufferBytes} context={context} items={chat.items} />, corner)}
 
       <AskContext.Provider value={live ? answerAsk : undefined}>
+        <UserShellsContext.Provider value={shellsView}>
         <Chat
           session={session.id}
           chat={chat}
@@ -251,6 +257,7 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
             }
           }
         />
+      </UserShellsContext.Provider>
       </AskContext.Provider>
 
       {loggingIn && (
@@ -345,6 +352,7 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
           suggestion={chat.suggestion}
           history={history}
           onTakeBack={takeBack}
+          shell={live ? { cwd: session.workdir } : undefined}
           draftKey={session.id}
           submitLabel="Send"
           placeholder={live ? "Message Claude…" : session.asleep ? "Start the sandbox to continue." : "This session has ended."}
@@ -362,6 +370,8 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
               else setRewinding(last);
               return Promise.resolve(Boolean(idle && last && session.claudeSessionId));
             }
+            const command = shellCommand(text);
+            if (command !== undefined) return call(() => api.runShell(session.id, command));
             return call(() => api.prompt(session.id, text, files.map(toInput)));
           }}
           autoFocus
@@ -543,7 +553,9 @@ function Chat({ session, chat, workdir, running, live, active, onRewind, onFork,
   const inner = useRef<HTMLDivElement>(null);
   // Follows new output while the view is at the bottom; scrolling up stops that until it is back at the bottom.
   const stick = useRef(true);
-  const userCount = chat.items.filter((i) => i.type === "user").length + chat.queued.length;
+  const { shells } = useContext(UserShellsContext);
+  const unsent = useMemo(() => unsentShells(shells, chat), [shells, chat]);
+  const userCount = chat.items.filter((i) => i.type === "user").length + chat.queued.length + Object.keys(shells).length;
   // A chat kept in a background tab measures as empty; following it there would lose its place.
   const shown = (el: HTMLElement) => el.clientHeight > 0;
 
@@ -661,6 +673,10 @@ function Chat({ session, chat, workdir, running, live, active, onRewind, onFork,
             <span className="spinner" aria-hidden="true" /> Waiting for Claude…
           </div>
         )}
+        {/* Commands the user runs: each goes up into the chat as the prompt that gives it to Claude, once it ends. */}
+        {unsent.map((id) => (
+          <ShellCard key={id} id={id} prompted={false} />
+        ))}
         {/* Sent while Claude works: they go up into the chat where Claude reads them. */}
         {chat.queued.map((item) => (
           <div key={item.key} className="msg-queued">
@@ -674,6 +690,12 @@ function Chat({ session, chat, workdir, running, live, active, onRewind, onFork,
     <QuoteButton root={box} onQuote={onQuote} />
     </>
   );
+}
+
+/** Commands the user ran that the chat doesn't show yet: running, or ended and on their way to Claude. */
+function unsentShells(shells: UserShells, chat: ChatState): string[] {
+  const shown = new Set([...chat.items, ...chat.queued].flatMap((i) => (i.type === "user" && i.shell ? [i.shell] : i.type === "shell" ? [i.id] : [])));
+  return Object.keys(shells).filter((id) => !shown.has(id));
 }
 
 /** How long a finished turn's work stays open before folding, so the reply is seen to arrive first. */
@@ -769,38 +791,43 @@ const COMPACTED = "Claude only has a summary of this now, so it can't go back he
 const Item = memo(function Item({ item, from, to, open, onRewind, onFork, noRewind, noFork, onAnswer, actions }: ItemProps) {
   if (actions) return <>{actions}</>;
   switch (item.type) {
-    case "user":
+    case "shell":
+      return <ShellCard id={item.id} prompted={false} />;
+    case "user": {
       // Only prompts Claude has echoed are in its history, so only those can be branched from.
+      const buttons = item.replayed && (onRewind || onFork) && (
+        <div className="msg-actions">
+          {onFork && (
+            <button
+              type="button"
+              className={`btn btn-secondary btn-compact${noFork ? " is-off" : ""}`}
+              title={noFork ? `${COMPACTED} Fork from a message after the last compaction.` : "Fork from here: a new tab with the conversation up to Claude's reply to this message"}
+              aria-label="Fork from this message"
+              aria-disabled={noFork || undefined}
+              onClick={() => !noFork && onFork(item)}
+            >
+              <Fork />
+            </button>
+          )}
+          {onRewind && (
+            <button
+              type="button"
+              className={`btn btn-secondary btn-compact${noRewind ? " is-off" : ""}`}
+              title={noRewind ? `${COMPACTED} Rewind to a message after the last compaction, or to the first one, which starts afresh.` : "Rewind to just before this message"}
+              aria-label="Rewind to this message"
+              aria-disabled={noRewind || undefined}
+              onClick={() => !noRewind && onRewind(item)}
+            >
+              <Rewind />
+            </button>
+          )}
+        </div>
+      );
+      // A command the user ran shows as itself, where the prompt that gave it to Claude is.
+      if (item.shell) return <ShellCard id={item.shell} prompted actions={buttons} />;
       return (
         <div className="msg-user-row">
-          {item.replayed && (onRewind || onFork) && (
-            <div className="msg-actions">
-              {onFork && (
-                <button
-                  type="button"
-                  className={`btn btn-secondary btn-compact${noFork ? " is-off" : ""}`}
-                  title={noFork ? `${COMPACTED} Fork from a message after the last compaction.` : "Fork from here: a new tab with the conversation up to Claude's reply to this message"}
-                  aria-label="Fork from this message"
-                  aria-disabled={noFork || undefined}
-                  onClick={() => !noFork && onFork(item)}
-                >
-                  <Fork />
-                </button>
-              )}
-              {onRewind && (
-                <button
-                  type="button"
-                  className={`btn btn-secondary btn-compact${noRewind ? " is-off" : ""}`}
-                  title={noRewind ? `${COMPACTED} Rewind to a message after the last compaction, or to the first one, which starts afresh.` : "Rewind to just before this message"}
-                  aria-label="Rewind to this message"
-                  aria-disabled={noRewind || undefined}
-                  onClick={() => !noRewind && onRewind(item)}
-                >
-                  <Rewind />
-                </button>
-              )}
-            </div>
-          )}
+          {buttons}
           <div className="msg-user">
             {item.attachments?.length ? (
               <>
@@ -819,6 +846,7 @@ const Item = memo(function Item({ item, from, to, open, onRewind, onFork, noRewi
           </div>
         </div>
       );
+    }
     case "assistant":
       return (
         <div className="msg-assistant">
