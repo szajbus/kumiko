@@ -21,8 +21,9 @@ signed in as shows at the top of the page, with its avatar.
 - **gh isn't installed:** install it (`brew install gh`), sign it in, then **Check again**.
 - **gh isn't signed in:** run `gh auth login` in Terminal, then **Check again**.
 
-Only the list of repositories to pick from needs `gh`. Fetching uses plain `git` with your usual credentials on the
-Mac, over SSH or HTTPS as `gh config get git_protocol` says, so mirrors you already have keep working without it.
+Fetching needs `gh` too. Mirrors fetch over HTTPS, and git signs in with `gh`'s token (`gh auth git-credential`),
+never with your own credential helpers or SSH keys, so it doesn't ask the macOS keychain. Kumiko never sees the token.
+If `gh` is signed out, fetching a private repository fails until you sign it in again.
 
 ## Adding a repository
 

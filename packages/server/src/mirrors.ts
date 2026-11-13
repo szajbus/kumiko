@@ -49,6 +49,11 @@ export interface MirrorOptions {
   home: string;
   /** Where a newly picked repository is fetched from. */
   remoteUrl(repo: string): string | Promise<string>;
+  /**
+   * The only git credential helper the mirrors use, in place of the user's own (the macOS keychain, say): gh's, so
+   * fetches sign in with gh's token. Without it, git asks the user's helpers.
+   */
+  credentialHelper?: string;
   /** Called after anything a mirror's view shows changes. */
   onChange?(): void;
   /** Fetches asked for within this long of the last one's end share it; 5 s by default. */
@@ -75,9 +80,9 @@ exit 1
  * The whole of a mirror's config, rewritten on every start. Only GitHub's branches and tags, pruned, so the mirror
  * holds nothing that isn't on GitHub and can always be deleted and made again. gc is Kumiko's to run, never git's on
  * its own; pushes are checked object by object; and the hooks are the mirror's own, whatever the user's
- * core.hooksPath says.
+ * core.hooksPath says. With a credential helper, the empty one before it drops the user's helpers, so only it is asked.
  */
-function mirrorConfig(dir: string, url: string): string {
+function mirrorConfig(dir: string, url: string, credentialHelper?: string): string {
   const quote = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
   return `# Written by Kumiko, and rewritten whenever it starts.
 [core]
@@ -94,7 +99,7 @@ function mirrorConfig(dir: string, url: string): string {
 \tauto = 0
 [receive]
 \tfsckObjects = true
-`;
+${credentialHelper ? `[credential]\n\thelper =\n\thelper = ${quote(credentialHelper)}\n` : ""}`;
 }
 
 /**
@@ -396,7 +401,7 @@ export class Mirrors {
 
   /** Writes the mirror's config and hooks as Kumiko has them, replacing whatever is there. */
   private async writeOwn(dir: string, url: string): Promise<void> {
-    await replace(join(dir, "config"), mirrorConfig(dir, url));
+    await replace(join(dir, "config"), mirrorConfig(dir, url, this.opts.credentialHelper));
     const hooks = join(dir, "hooks");
     await rm(hooks, { recursive: true, force: true });
     await mkdir(hooks);

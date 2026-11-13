@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -348,10 +349,20 @@ describe("the GitHub CLI", () => {
     ]);
   });
 
-  it("fetches the way the user clones", async () => {
-    assert.equal(gitHubUrl("acme/widget", await gh.protocol()), "https://github.com/acme/widget.git");
-    await writeFile(join(dir, "protocol"), "ssh\n");
-    assert.equal(gitHubUrl("acme/widget", await gh.protocol()), "git@github.com:acme/widget.git");
+  it("has mirrors fetch over HTTPS with gh's token, never asking the user's own credential helpers", async () => {
+    assert.equal(gitHubUrl("acme/widget"), "https://github.com/acme/widget.git");
+    const w = await world();
+    const mirrors = mirrorsOf(w, { credentialHelper: gh.credentialHelper() });
+    await mirrors.start();
+    const path = await mirrors.ensure("acme/widget");
+    // The user's own helper, as osxkeychain would be: it mustn't be asked.
+    const global = join(w.root, "gitconfig");
+    await writeFile(global, `[credential]\n\thelper = "!f() { echo password=from-keychain; }; f"\n`);
+    const fill = (host: string) =>
+      execFileSync("git", ["credential", "fill"], { cwd: path, input: `protocol=https\nhost=${host}\n\n`, env: { ...process.env, GIT_CONFIG_GLOBAL: global, GIT_TERMINAL_PROMPT: "0" }, stdio: "pipe" }).toString();
+    assert.match(fill("github.com"), /^password=fake-token$/m);
+    assert.throws(() => fill("example.com"), "only gh is asked, and it knows only GitHub");
+    await mirrors.close();
   });
 });
 
