@@ -1033,15 +1033,8 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
   .page, .form-main { padding-left: 16px; padding-right: 16px; }
 }
 
-.kbd {
-  font-family: var(--mono); font-size: 11px; line-height: 1;
-  padding: 2px 5px; border-radius: 4px; border: 1px solid var(--border-strong);
-  border-bottom-width: 2px; background: rgba(255, 255, 255, 0.06); color: var(--text-2);
-}
 .composer-hint { margin: 0; font-size: 12px; color: var(--muted); display: flex; align-items: center; justify-content: space-between; gap: 6px 12px; flex-wrap: wrap; }
 .composer-footer { display: flex; align-items: center; gap: 8px; }
-.composer-keys { display: flex; align-items: center; gap: 6px; margin-left: auto; }
-.composer-hint .kbd { color: var(--muted); }
 
 /* Claude's background tasks: the Tasks pane, their lines in the chat, the composer's chip and the tab's count. */
 .tasks { flex: 1; min-height: 0; display: flex; flex-direction: column; }

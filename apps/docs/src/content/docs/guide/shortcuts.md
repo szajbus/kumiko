@@ -26,7 +26,8 @@ sidebar:
 | <kbd>Shift</kbd>+<kbd>Enter</kbd> | New line |
 | <kbd>Esc</kbd> | Stop the turn the agent is working on |
 | <kbd>Tab</kbd> | Take the agent's suggested message, or the highlighted slash command |
-| <kbd>↑</kbd> / <kbd>↓</kbd> | Move through slash commands |
+| <kbd>↑</kbd> / <kbd>↓</kbd> | Move through slash commands, or, at the start or end of the box, through the messages you sent before |
+| <kbd>↑</kbd> at the start of the box | Take back a message waiting for the agent to finish its turn, to edit it; it comes before older messages |
 
 ## The chat
 

@@ -401,14 +401,6 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
             {refused && <span className="composer-refused">{refused}</span>}
           </div>
         )}
-        <span className="composer-keys">
-          {onTakeBack && (
-            <span>
-              <kbd className="kbd">↑</kbd> to edit the queued message ·{" "}
-            </span>
-          )}
-          <kbd className="kbd">Shift</kbd> + <kbd className="kbd">Enter</kbd> for a new line
-        </span>
       </div>
     </>
   );
