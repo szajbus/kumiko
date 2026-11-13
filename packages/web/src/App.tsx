@@ -9,6 +9,7 @@ import { Header, type NewSessionTab, type TabId } from "./Header";
 import { NewSession } from "./NewSession";
 import { ProjectList } from "./ProjectList";
 import { ProjectPage } from "./ProjectPage";
+import { ReposPage } from "./ReposPage";
 import { Window } from "./Window";
 
 /** How many session tabs stay mounted, the one on screen included, for switching back to at once. */
@@ -20,6 +21,8 @@ import { loadTabs, saveTabs } from "./tabs";
 type Route =
   | { view: "list" }
   | { view: "new" }
+  /** The repository mirrors, beside Projects under the home button. */
+  | { view: "repos" }
   | { view: "project"; name: string }
   | { view: "edit"; name: string }
   /** Opens another New session tab. `project`: opened from a project's page, which it starts in. */
@@ -30,6 +33,7 @@ type Route =
 
 function parseHash(): Route {
   if (location.hash === "#/new") return { view: "new" };
+  if (location.hash === "#/repos") return { view: "repos" };
   const d = /^#\/session\/draft\/([0-9]+)$/.exec(location.hash);
   if (d) return { view: "draft", key: d[1] };
   const n = /^#\/session\/new(?:\/([a-z0-9-]+))?$/.exec(location.hash);
@@ -489,6 +493,8 @@ interface BodyProps {
 
 function Body({ route, live, started, onSessionStarted }: BodyProps) {
   switch (route.view) {
+    case "repos":
+      return <ReposPage live={live} />;
     case "new":
       return <ProjectForm onCancel={() => go("#/")} onCreated={(name) => go(`#/project/${name}`)} />;
     case "project":

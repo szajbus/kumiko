@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import type {
+  AddMirrorRequest,
   AgentSetupResponse,
+  GitHubAccount,
+  GitHubReposResponse,
+  MirrorView,
+  MirrorsResponse,
   AskAnswer,
   AccountUsage,
   AttachmentInput,
@@ -73,6 +78,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return data;
 }
 
+/** "owner/name" as two path segments, each encoded. */
+const repoPath = (repo: string) => repo.split("/").map(encodeURIComponent).join("/");
+
 export const api = {
   templates: () => request<TemplatesResponse>("GET", "/api/templates"),
   defaults: () => request<DefaultsResponse>("GET", "/api/defaults"),
@@ -96,6 +104,14 @@ export const api = {
   agentSetup: (id: string) => request<AgentSetupResponse>("GET", `/api/projects/${id}/agent-setup`),
   /** Deletes the agent's setup scripts, folder and all, so the next recreate starts from the user's setup only. */
   deleteAgentSetup: (id: string) => request("DELETE", `/api/projects/${id}/agent-setup`),
+  /** Who gh on the host is signed in to GitHub as, or why it isn't. */
+  githubAccount: () => request<GitHubAccount>("GET", "/api/github/account"),
+  /** The repositories gh's account can see. */
+  githubRepos: () => request<GitHubReposResponse>("GET", "/api/github/repos"),
+  /** Picks a repository; its mirror is cloned in the background. */
+  addMirror: (repo: string, priv?: boolean) => request<MirrorView>("POST", "/api/mirrors", { repo, private: priv } satisfies AddMirrorRequest),
+  fetchMirror: (repo: string) => request("POST", `/api/mirrors/${repoPath(repo)}/fetch`),
+  removeMirror: (repo: string) => request("DELETE", `/api/mirrors/${repoPath(repo)}`),
   /** The clone's worktrees, as git on the host sees them. */
   worktrees: (id: string) => request<WorktreesResponse>("GET", `/api/projects/${id}/worktrees`),
   startSession: (project: string, prompt: string, model?: string, attachments?: AttachmentInput[]) =>
@@ -207,6 +223,8 @@ export interface LiveState {
   loaded: boolean;
   /** How many snapshots have arrived: one per connection, so it goes up when the server restarts. */
   snapshots: number;
+  /** The repository mirrors; undefined until a server that keeps them has sent them. */
+  mirrors?: MirrorsResponse;
 }
 
 /** Keeps the project list, sessions and operation logs in sync over /api/events, reconnecting when the server restarts. */
@@ -269,11 +287,13 @@ function answerPaneRequest(ev: PaneRequest) {
 function apply(s: LiveState, ev: ServerEvent): LiveState {
   switch (ev.type) {
     case "snapshot":
-      return { projects: ev.projects, unreadable: ev.unreadable, logs: ev.logs, sessions: ev.sessions, listError: ev.error, connected: true, loaded: true, snapshots: s.snapshots + 1 };
+      return { projects: ev.projects, unreadable: ev.unreadable, logs: ev.logs, sessions: ev.sessions, listError: ev.error, connected: true, loaded: true, snapshots: s.snapshots + 1, mirrors: ev.mirrors };
     case "list":
       return { ...s, projects: ev.projects, unreadable: ev.unreadable, listError: ev.error };
     case "sessions":
       return { ...s, sessions: ev.sessions };
+    case "mirrors":
+      return { ...s, mirrors: { mirrors: ev.mirrors, ...(ev.error ? { error: ev.error } : {}) } };
     case "state":
       // A new operation starts a fresh log.
       return { ...s, logs: { ...s.logs, [ev.sandbox]: [] } };

@@ -12,6 +12,13 @@ sidebar:
 | `KUMIKO_HOME` | `~/.kumiko` | Where Kumiko keeps projects, sandbox records, agent homes, Kumiko folders and sessions. Only one server runs per home; give a second Kumiko (a development one, say) a home of its own. |
 | `KUMIKO_PORT` | a free port (app), `4317` (server alone) | The server's port. |
 
+## GitHub
+
+| Variable | Default | Does |
+| --- | --- | --- |
+| `KUMIKO_GH` | `gh` | The GitHub CLI the Repos page lists your repositories with. `packages/server/fixtures/fake-gh.mjs` stands in for it, with its state in `FAKE_GH_DIR`. |
+| `KUMIKO_GITHUB_URL` | unset | When set, new mirrors fetch from `<KUMIKO_GITHUB_URL>/<owner>/<name>.git` instead of GitHub: a folder of bare repositories (`file:///…`) stands in for GitHub with the fake `gh`. |
+
 ## Sandbox provider: Lima
 
 Lima is the only sandbox provider today; see [Supported sandboxes and agents](/reference/supported/).

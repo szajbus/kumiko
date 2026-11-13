@@ -48,7 +48,7 @@ const git = (cwd, ...args) => execFileSync("git", ["-c", "user.email=demo@exampl
 
 /** A clone with a remote and three worktrees: one merged, one with uncommitted changes, one with unpushed commits. */
 function makeRepos() {
-  for (const name of ["code", ".kumiko", "origin.git"]) rmSync(join(root, name), { recursive: true, force: true });
+  for (const name of ["code", ".kumiko", "origin.git", "github", "gh"]) rmSync(join(root, name), { recursive: true, force: true });
   mkdirSync(code, { recursive: true });
   git(root, "init", "-q", "--bare", "origin.git");
   git(code, "clone", "-q", join(root, "origin.git"), "webshop");
@@ -157,11 +157,30 @@ function seedSession(id) {
   writeFileSync(join(kumikoHome, "sessions", `${id}.json`), JSON.stringify({ info, events }));
 }
 
+/** A stand-in GitHub, a folder of bare repositories, and a fake gh signed in to it, for the Repos page. */
+function makeGitHub() {
+  const repos = [
+    { full_name: "you/webshop", private: true, description: "The shop", pushed_at: "2026-11-01T10:00:00Z" },
+    { full_name: "you/api-server", private: true, description: "Orders and payments API", pushed_at: "2026-10-20T10:00:00Z" },
+    { full_name: "acme/design-tokens", private: false, description: "Colours and type", pushed_at: "2026-09-01T10:00:00Z" },
+  ];
+  for (const r of repos) {
+    mkdirSync(join(root, "github", dirname(r.full_name)), { recursive: true });
+    git(root, "clone", "-q", "--bare", join(root, "origin.git"), join(root, "github", `${r.full_name}.git`));
+  }
+  mkdirSync(join(root, "gh"), { recursive: true });
+  writeFileSync(join(root, "gh", "user.json"), JSON.stringify({ login: "you", name: "You" }));
+  writeFileSync(join(root, "gh", "repos.json"), JSON.stringify(repos.map((r) => ({ ...r, fork: false, archived: false }))));
+  return repos.map((r) => r.full_name);
+}
+
 makeRepos();
+const mirrored = makeGitHub();
 const lima = mkdtempSync(join(tmpdir(), "kumiko-demo-lima-"));
 const fixtures = join(repo, "packages/sandbox/fixtures");
 const server = spawn(process.execPath, [join(repo, "packages/server/dist/src/main.js"), "--port", String(port)], {
-  env: { ...process.env, FAKE_LIMA_DIR: lima, FAKE_LIMA_DELAY: "50", KUMIKO_LIMACTL: join(fixtures, "fake-limactl.mjs"), KUMIKO_SSH: join(fixtures, "fake-ssh.sh"), KUMIKO_HOME: kumikoHome, KUMIKO_TOKEN: token, GITHUB_TOKEN: "demo" },
+  env: { ...process.env, FAKE_LIMA_DIR: lima, FAKE_LIMA_DELAY: "50", KUMIKO_LIMACTL: join(fixtures, "fake-limactl.mjs"), KUMIKO_SSH: join(fixtures, "fake-ssh.sh"), KUMIKO_HOME: kumikoHome, KUMIKO_TOKEN: token, GITHUB_TOKEN: "demo",
+    KUMIKO_GH: join(repo, "packages/server/fixtures/fake-gh.mjs"), FAKE_GH_DIR: join(root, "gh"), KUMIKO_GITHUB_URL: `file://${join(root, "github")}` },
   stdio: "inherit",
 });
 const browser = chrome();
@@ -183,6 +202,9 @@ try {
   writeFileSync(join(bin, "claude"), `#!/bin/sh\nexec "${process.execPath}" "${join(repo, "packages/agent/fixtures/fake-claude.mjs")}" "$@"\n`);
   chmodSync(join(bin, "claude"), 0o755);
 
+  for (const r of mirrored) await call("POST", "/mirrors", { repo: r, private: r.startsWith("you/") });
+  await waitFor(async () => (await call("GET", "/mirrors")).mirrors.every((m) => m.state === "ready"), "the mirrors");
+
   const seeded = "0a1b2c3d4e5f";
   seedSession(seeded);
   const other = (await call("POST", "/sessions", { sandbox: "webshop", prompt: "Why does the dark-mode branch have two commits?" })).id;
@@ -201,6 +223,7 @@ try {
   };
   await shot("projects", "#/", 440);
   await shot("new-project", "#/new", 1400);
+  await shot("repos", "#/repos", 470);
   await shot("session", `#/session/${seeded}`, 800, `session:${seeded}`);
 } finally {
   server.kill();

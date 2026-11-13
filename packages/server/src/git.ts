@@ -3,24 +3,38 @@ import type { WorktreeStatus, WorktreesResponse } from "@kumiko/shared";
 
 const TIMEOUT_MS = 10_000;
 
-export class GitError extends Error {}
+export class GitError extends Error {
+  /** Everything git printed on stderr; the message is only its first line. */
+  constructor(message: string, readonly stderr = "") {
+    super(message);
+  }
+}
+
+export interface RunOptions {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  env?: NodeJS.ProcessEnv;
+}
 
 /** Runs git on the host as it is, without a shell, so paths and branch names are only ever arguments or output. */
-function run(cwd: string, args: string[]): Promise<string> {
+export function runGit(cwd: string, args: string[], opts: RunOptions = {}): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       "git",
       ["-C", cwd, ...args],
-      { timeout: TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" } },
+      { timeout: opts.timeoutMs ?? TIMEOUT_MS, signal: opts.signal, maxBuffer: 16 * 1024 * 1024, env: opts.env ?? { ...process.env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" } },
       (err, stdout, stderr) => {
         if (!err) return resolve(stdout);
         const code = (err as NodeJS.ErrnoException).code;
         if (code === "ENOENT") return reject(new GitError("git isn't installed on this machine, or isn't on PATH."));
-        reject(new GitError(String(stderr).trim().split("\n")[0] || err.message));
+        const all = String(stderr).trim();
+        reject(new GitError(all.split("\n")[0] || err.message, all));
       },
     );
   });
 }
+
+const run = (cwd: string, args: string[]) => runGit(cwd, args);
 
 /**
  * Settings that keep git from running commands the repository's own config names. The agent writes the clone's

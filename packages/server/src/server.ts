@@ -17,6 +17,7 @@ import {
   isWaiting,
   NAME_PATTERN,
   parseAskAnswer,
+  parseRepo,
   parseSavedTabs,
   SESSION_ID_PATTERN,
   artifactsOf,
@@ -31,8 +32,12 @@ import {
   type AgentSetupResponse,
   type AgentSetupRun,
   isBusy,
+  type AddMirrorRequest,
   type ApiError,
   type CreateProjectRequest,
+  type GitHubAccount,
+  type GitHubReposResponse,
+  type MirrorsResponse,
   type CreateResponse,
   type DefaultsResponse,
   type EditSpec,
@@ -69,6 +74,8 @@ import { AttachmentRefused, AttachmentStore, attachmentHashes } from "./attachme
 import { ArtifactContent, contentHashes } from "./content.js";
 import { filesBytes } from "./disk.js";
 import { GitError, worktreeStatuses } from "./git.js";
+import { GhError, GitHub, gitHubUrl } from "./github.js";
+import { MirrorFetchFailed, MirrorNotFound, Mirrors } from "./mirrors.js";
 import { hasToken, isLocalRequest, isToken, tokenCookie } from "./guard.js";
 import { LoginFailed, Logins } from "./logins.js";
 import { BusyError, Operations } from "./operations.js";
@@ -114,6 +121,13 @@ export interface ServerOptions {
   token?: string;
   /** How long Claude may finish its turn after its session's tab closes, in ms; 30 minutes by default. */
   finishMs?: number;
+  /** The GitHub CLI the Repos page lists the user's repositories with; defaults to `gh` (or `KUMIKO_GH`). */
+  github?: GitHub;
+  /**
+   * Where a newly picked repository's mirror fetches from. Defaults to GitHub, over SSH or HTTPS as gh's git_protocol
+   * says, or `<KUMIKO_GITHUB_URL>/<owner>/<name>.git` when that is set (for running against a stand-in).
+   */
+  repoUrl?(repo: string): string | Promise<string>;
 }
 
 export interface RunningServer {
@@ -415,6 +429,18 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     await Promise.all(saved.filter((x) => !running.includes(x.info.sandbox)).map(markRunDead));
   };
 
+  // ---- repository mirrors ------------------------------------------------------------------
+
+  const github = opts.github ?? new GitHub();
+  const githubBase = process.env.KUMIKO_GITHUB_URL;
+  const mirrors = new Mirrors({
+    home,
+    remoteUrl: opts.repoUrl ?? (async (repo) => (githubBase ? `${githubBase.replace(/\/$/, "")}/${repo}.git` : gitHubUrl(repo, await github.protocol()))),
+    onChange: () => broadcast({ type: "mirrors", ...mirrorsView() }),
+  });
+  const mirrorsView = (): MirrorsResponse => (mirrors.readError ? { mirrors: mirrors.list(), error: mirrors.readError } : { mirrors: mirrors.list() });
+  await mirrors.start();
+
   const timer = setInterval(() => void refresh(), opts.refreshMs ?? 5000);
   await refresh();
   await reopenSessions();
@@ -436,7 +462,8 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     if (err instanceof AttachmentRefused || err instanceof WindowError) return c.json(fail(err.message), 400);
     if (err instanceof LoginFailed) return c.json(fail(err.message, err.output), 422);
     if (err instanceof BusyError || err instanceof ProjectExists || err instanceof ProjectRecordError) return c.json(fail(err.message), 409);
-    if (err instanceof SessionNotFound) return c.json(fail(err.message), 404);
+    if (err instanceof SessionNotFound || err instanceof MirrorNotFound) return c.json(fail(err.message), 404);
+    if (err instanceof MirrorFetchFailed || err instanceof GhError) return c.json(fail(err.message), 502);
     if (err instanceof SessionEnded || err instanceof SessionNotResumable || err instanceof RewindRefused || err instanceof AskRefused) return c.json(fail(err.message), 409);
     // Anything else is a bug or a tool failing; the UI still gets JSON it can show.
     return c.json(fail(err instanceof Error ? err.message : String(err)), 500);
@@ -1195,6 +1222,39 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     return c.json({ ok: true, finishing }, finishing ? 202 : 200);
   });
 
+  // ---- repository mirrors ----
+
+  /** Who gh on the host is signed in to GitHub as, or why it isn't. */
+  app.get("/api/github/account", async (c) => c.json((await github.account()) satisfies GitHubAccount));
+
+  /** The repositories gh's account can see, to pick mirrors from. */
+  app.get("/api/github/repos", async (c) => c.json({ repos: await github.repos() } satisfies GitHubReposResponse));
+
+  app.get("/api/mirrors", (c) => c.json(mirrorsView()));
+
+  /** Picks a repository and starts cloning its mirror; the page follows the clone through `mirrors` events. */
+  app.post("/api/mirrors", async (c) => {
+    const req = await body<AddMirrorRequest>(c, "Body must be JSON: { repo, private }.");
+    if (!parseRepo(req?.repo)) throw new HttpError(400, "repo must be a GitHub repository, as owner/name.");
+    const view = await mirrors.add(req.repo, typeof req.private === "boolean" ? { private: req.private } : {});
+    void mirrors.ensure(req.repo).catch(() => {});
+    return c.json(view, 201);
+  });
+
+  /** Fetches the mirror from GitHub, or joins the fetch under way; answers at once, and the page follows it. */
+  app.post("/api/mirrors/:owner/:name/fetch", (c) => {
+    const repo = `${c.req.param("owner")}/${c.req.param("name")}`;
+    if (!mirrors.get(repo)) throw new MirrorNotFound(`${repo} isn't one of Kumiko's repositories.`);
+    void mirrors.fetch(repo).catch(() => {});
+    return c.json({ ok: true }, 202);
+  });
+
+  /** Unpicks the repository and deletes its mirror. */
+  app.delete("/api/mirrors/:owner/:name", async (c) => {
+    await mirrors.remove(`${c.req.param("owner")}/${c.req.param("name")}`);
+    return c.json({ ok: true });
+  });
+
   app.all("/api/*", (c) => c.json(fail("Not found."), 404));
   if (opts.webDir) app.get("*", serveWeb(opts.webDir));
 
@@ -1223,7 +1283,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       clients.add(ws);
       ws.on("close", () => clients.delete(ws));
       ws.on("error", () => clients.delete(ws));
-      ws.send(JSON.stringify({ type: "snapshot", projects: views(), unreadable, logs: ops.logs(), sessions: sessions.list(), error: listError } satisfies ServerEvent));
+      ws.send(JSON.stringify({ type: "snapshot", projects: views(), unreadable, logs: ops.logs(), sessions: sessions.list(), error: listError, mirrors: mirrorsView() } satisfies ServerEvent));
     });
   });
 
@@ -1260,6 +1320,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       clearInterval(timer);
       stats.stopAll();
       logins.cancelAll();
+      await mirrors.close();
       if (endSessions) await sessions.endAll("quit");
       else await sessions.detachAll();
       await sessions.flush();

@@ -2,6 +2,7 @@ import type { LogLine, ProjectView, SandboxStats } from "@kumiko/shared";
 import { SandboxActions, useActions, type Actions } from "./actions";
 import { useHome, useSandboxStats, type LiveState } from "./api";
 import { FinishingCard } from "./Finishing";
+import { HomeNav } from "./HomeNav";
 import { tilde } from "./format";
 import { EmptyBento, Plus } from "./icons";
 import { meters, plural, resources, statusOf, type Meter } from "./status";
@@ -23,6 +24,7 @@ export function ProjectList({ live, onOpen, onNew, onSessionStarted }: Props) {
   return (
     <>
       <main className="page">
+        <HomeNav active="projects" projects={live.projects.length} repos={live.mirrors?.mirrors.length} />
         <div className="page-head">
           <h1 className="page-title">Projects</h1>
           {live.projects.length > 0 && (

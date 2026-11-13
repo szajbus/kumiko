@@ -21,6 +21,8 @@ sandbox provider.
 | `sessions/<id>.json` | Saved chats, for resuming, with the window's panes and which version of each artifact they showed, and where the session's agent runs: its run, how much of the run's output the chat covers, any calls to Kumiko's tools the agent is waiting on, and what it asked you that it is still waiting for. |
 | `sessions/attachments/` | Files sent with prompts. |
 | `sessions/artifacts/` | Every version of an artifact a window showed, named by its SHA-256, for the window to show and a rewind to put back. Those no saved session names any more are deleted when Kumiko starts. |
+| `repos.json` | The [repositories you picked](/guide/repos/), with how each mirror's last fetch went. |
+| `mirrors/<owner>/<name>.git` | Each repository's bare mirror. Kumiko's alone: it rewrites their config and hooks on every start, and deletes folders here that aren't a picked repository's. |
 | `tabs.json` | The window's open tabs. |
 | `home-id` | This home's id, which tags the runs its server starts. |
 | `server.lock` | The running server's pid and port. One server per home: a second refuses to start. |

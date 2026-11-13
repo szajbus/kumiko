@@ -721,7 +721,7 @@ export interface ApiError {
 /** Messages on the /api/events WebSocket. */
 export type ServerEvent =
   /** `error`: the VMs couldn't be listed. `unreadable`: why each project record that can't be used can't be. */
-  | { type: "snapshot"; projects: ProjectView[]; unreadable: string[]; logs: Record<string, LogLine[]>; sessions: SessionInfo[]; error?: string }
+  | { type: "snapshot"; projects: ProjectView[]; unreadable: string[]; logs: Record<string, LogLine[]>; sessions: SessionInfo[]; error?: string; mirrors?: MirrorsResponse }
   | { type: "list"; projects: ProjectView[]; unreadable: string[]; error?: string }
   /** Sent whenever a session starts, changes status or ends. */
   | { type: "sessions"; sessions: SessionInfo[] }
@@ -734,8 +734,84 @@ export type ServerEvent =
   | { sandbox: string; op: OpKind; type: "state"; data: Operation }
   | { sandbox: string; op: OpKind; type: "log"; data: LogLine }
   | { sandbox: string; op: OpKind; type: "done"; data: Operation }
-  | { sandbox: string; op: OpKind; type: "error"; data: Operation };
+  | { sandbox: string; op: OpKind; type: "error"; data: Operation }
+  /** Sent whenever a repository mirror is added, removed, or starts or ends a fetch. */
+  | ({ type: "mirrors" } & MirrorsResponse);
 
 export function vmName(name: string): string {
   return VM_PREFIX + name;
+}
+
+/** A GitHub account or organization name: letters, digits and single dashes, up to 39 characters. */
+export const REPO_OWNER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+
+/** A GitHub repository's name, without ".git", which GitHub drops; "." and ".." aren't names. */
+export const REPO_NAME_PATTERN = /^(?!\.\.?$)(?!.*\.git$)[A-Za-z0-9._-]{1,100}$/i;
+
+/**
+ * A repository as "owner/name", checked, since it names folders on the host; undefined when it isn't one.
+ * GitHub ignores case in both parts, and so does the Mac's file system, so `key` is the lowercase form.
+ */
+export function parseRepo(repo: unknown): { owner: string; name: string; repo: string; key: string } | undefined {
+  if (typeof repo !== "string") return undefined;
+  const m = /^([^/]+)\/([^/]+)$/.exec(repo);
+  if (!m || !REPO_OWNER_PATTERN.test(m[1]) || !REPO_NAME_PATTERN.test(m[2])) return undefined;
+  return { owner: m[1], name: m[2], repo, key: repo.toLowerCase() };
+}
+
+/** A repository mirror as the Repos page shows it. */
+export interface MirrorView {
+  /** "owner/name", as GitHub spells it. */
+  repo: string;
+  /** The bare repository on the host. */
+  path: string;
+  addedAt: string;
+  private?: boolean;
+  /** `cloning` until the first fetch has worked, `fetching` during a later one. */
+  state: "cloning" | "fetching" | "ready" | "failed";
+  /** When the fetch under way started. */
+  startedAt?: string;
+  /** When the last fetch that worked ended. */
+  fetchedAt?: string;
+  /** Why the last fetch failed, and when; cleared by one that works. */
+  error?: { message: string; at: string };
+  /** On disk, in bytes, as of the last fetch or gc. */
+  size?: number;
+  branches?: number;
+  tags?: number;
+}
+
+export interface MirrorsResponse {
+  mirrors: MirrorView[];
+  /** Why Kumiko's list of repositories couldn't be read when it started. */
+  error?: string;
+}
+
+/** The GitHub account of the `gh` CLI on the host, which lists the repos to pick from. */
+export type GitHubAccount =
+  | { status: "signed-in"; login: string; name?: string; avatarUrl?: string }
+  /** gh isn't installed, or isn't on Kumiko's PATH. */
+  | { status: "missing" }
+  /** `detail`: what `gh auth status` said. */
+  | { status: "signed-out"; detail?: string }
+  /** gh is there and signed in, but asking it failed. */
+  | { status: "error"; detail: string };
+
+/** One of the user's GitHub repositories, as the picker lists them. */
+export interface GitHubRepo {
+  repo: string;
+  private: boolean;
+  fork: boolean;
+  archived: boolean;
+  description?: string;
+  pushedAt?: string;
+}
+
+export interface GitHubReposResponse {
+  repos: GitHubRepo[];
+}
+
+export interface AddMirrorRequest {
+  repo: string;
+  private?: boolean;
 }
