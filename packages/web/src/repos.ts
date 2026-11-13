@@ -2,6 +2,32 @@ import type { GitHubRepo, MirrorView } from "@kumiko/shared";
 import { ago } from "./format.ts";
 import { COLORS } from "./status.ts";
 
+const ownerOf = (r: GitHubRepo) => r.repo.slice(0, r.repo.indexOf("/"));
+const byName = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
+
+/**
+ * The owners to pick from, the account's own first and the organizations after it alphabetically, each with how many
+ * of the repos are theirs. The account is there even with none.
+ */
+export function repoOwners(repos: GitHubRepo[], login?: string): { owner: string; count: number }[] {
+  const counts = new Map<string, { owner: string; count: number }>();
+  if (login) counts.set(login.toLowerCase(), { owner: login, count: 0 });
+  for (const r of repos) {
+    const owner = ownerOf(r);
+    const c = counts.get(owner.toLowerCase()) ?? { owner, count: 0 };
+    c.count++;
+    counts.set(owner.toLowerCase(), c);
+  }
+  const mine = login?.toLowerCase();
+  return [...counts.entries()].sort(([a, x], [b, y]) => (a === mine ? -1 : b === mine ? 1 : byName(x.owner, y.owner))).map(([, c]) => c);
+}
+
+/** One owner's repos, by name, ignoring case. */
+export function reposOf(repos: GitHubRepo[], owner: string): GitHubRepo[] {
+  const o = owner.toLowerCase();
+  return repos.filter((r) => ownerOf(r).toLowerCase() === o).sort((a, b) => byName(a.repo, b.repo));
+}
+
 /** The repos whose name or description has every word of the query in it, ignoring case; all of them for none. */
 export function filterRepos(repos: GitHubRepo[], query: string): GitHubRepo[] {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);

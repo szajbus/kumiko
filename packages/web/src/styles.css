@@ -1174,6 +1174,9 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
 .add-repo-dialog { width: min(620px, calc(100vw - 32px)); }
 .dialog h2#add-repo-title { margin-bottom: 6px; }
 .add-repo-lead { margin: 0 0 14px; font-size: 13px; color: var(--text-2); }
+.add-repo-filters { display: flex; gap: 8px; }
+.add-repo-owner { flex: 0 0 auto; width: auto; max-width: 40%; }
+.add-repo-filters .add-repo-search { flex: 1; min-width: 0; }
 .add-repo-list { margin-top: 10px; height: min(340px, 50vh); overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
 .add-repo-list ul { margin: 0; padding: 0; list-style: none; }
 .add-repo-item { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 12px; border-bottom: 1px solid var(--border-soft); cursor: pointer; }
