@@ -60,8 +60,8 @@ export async function deliverFacts(dir: string, branch: string, identityEmail: s
   const flags: CardFlag[] = [];
   for (const f of files.filter((f) => f.flagged)) flags.push({ rule: "ci", subject: f.path, why: "Changes under .github/ decide what CI runs, and with which secrets." });
   for (const c of commits) {
-    if (identityEmail && c.email.toLowerCase() !== identityEmail.toLowerCase()) flags.push({ rule: "author", subject: `${c.sha.slice(0, 7)} ${c.subject}`, why: `Authored as ${c.author} <${c.email}>, not you.` });
-    if (!c.claude) flags.push({ rule: "trailer", subject: `${c.sha.slice(0, 7)} ${c.subject}`, why: "Has no Co-Authored-By: Claude trailer, so it may not be Claude's." });
+    if (identityEmail && c.email.toLowerCase() !== identityEmail.toLowerCase()) flags.push({ rule: "author", subject: `${c.sha.slice(0, 7)} ${c.subject}`, why: `The commit says it was authored by ${c.author} <${c.email}>, not you. Commits say what their maker wrote, so this is a hint, not a check.` });
+    if (!c.claude) flags.push({ rule: "trailer", subject: `${c.sha.slice(0, 7)} ${c.subject}`, why: "It has no Co-Authored-By: Claude trailer, so it may not be Claude's." });
   }
   const trailers = await squashTrailers(dir, baseSha, head);
   return {
@@ -108,10 +108,12 @@ async function mergeTree(dir: string, base: string, head: string, branch: string
   return lines[0];
 }
 
-/** Whether the user's git config signs: a signing key is set. */
+/** Whether the user's git config signs: a signing key is set, or commits are signed with the default one. */
 export async function signs(dir: string): Promise<boolean> {
-  const r = await mirrorGit(dir, ["config", "--get", "user.signingkey"], { ok: [1] });
-  return r.code === 0 && r.out.trim() !== "";
+  const key = await mirrorGit(dir, ["config", "--get", "user.signingkey"], { ok: [1] });
+  if (key.code === 0 && key.out.trim() !== "") return true;
+  const always = await mirrorGit(dir, ["config", "--type=bool", "--get", "commit.gpgsign"], { ok: [1] });
+  return always.out.trim() === "true";
 }
 
 /** The card's branch moved after it was shown. */
@@ -154,7 +156,8 @@ export async function land(
     const push = await mirrorGit(dir, ["push", "--porcelain", `--force-with-lease=refs/heads/${base}:${baseSha}`, url, `${sha}:refs/heads/${base}`], { ok: [1], timeoutMs: 5 * 60_000 });
     if (push.code === 0) return { sha, base, signed: opts.sign };
     // Someone else landed something first: merge again on top of theirs, once.
-    if (attempt === 0 && /stale info|fetch first|non-fast-forward|rejected/.test(push.out + push.err)) continue;
+    // Only for a lease that failed, not for GitHub refusing it outright (a protected branch, say).
+    if (attempt === 0 && /stale info|fetch first/.test(push.out + push.err)) continue;
     throw new Error(`GitHub refused the push to ${base}: ${(push.err + push.out).trim().split("\n").filter((l) => l.trim()).slice(-3).join(" ")}`);
   }
 }

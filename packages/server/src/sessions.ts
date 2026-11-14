@@ -289,7 +289,14 @@ function openAsks(events: readonly SessionEvent[]): AgentAsk[] {
 export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: string, info: unknown] }> {
   private sessions = new Map<string, Session>();
   /** Shows the cards for the host's tools that need approval, when Claude asks to call one. */
-  approvals?: { asked(info: SessionInfo, ask: Extract<AgentAsk, { kind: "approval" }>): void };
+  approvals?: {
+    asked(info: SessionInfo, ask: Extract<AgentAsk, { kind: "approval" }>): void;
+    /** One of Claude's messages: a tool result for an approved call that never reached Kumiko means it won't. */
+    message(info: SessionInfo, m: AgentMessage): void;
+    exited(info: SessionInfo): void;
+    /** The session was opened again by a new server: what the last one left half done. */
+    reopened(info: SessionInfo): void;
+  };
   /** Kumiko's own asks waiting for the user's answer, by ask id. */
   private hostAsks = new Map<string, (answer: AskAnswer | undefined) => void>();
 
@@ -413,6 +420,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     const driver = this.makeDriver();
     this.wire(s, driver);
     driver.attach({ sandbox: info.sandbox, run: run.id, offset: run.offset, tools: this.widgets?.tools(s.info).tools, pending: run.pending, asks: run.asks });
+    this.approvals?.reopened(s.info);
     this.emit("changed");
     // Closed while Claude worked: it goes on finishing, or, if its turn was over already, ends now.
     if (info.closing) {
@@ -655,6 +663,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
           this.push(s, { kind: "claude", payload: stamped(ev.payload) });
           this.onMessage(s, ev.payload);
           this.widgets?.message(s.info, ev.payload);
+          this.approvals?.message(s.info, ev.payload);
           break;
         case "error":
           this.push(s, { kind: "error", payload: { message: ev.message, hint: ev.hint, stderr: ev.stderr, ...(ev.signedOut ? { signedOut: true } : {}) } });
@@ -681,6 +690,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
         }
         case "exit": {
           this.closeAsks(s, "exited");
+          this.approvals?.exited(s.info);
           this.stopShells(s, "ended");
           // Commands held for an answer Claude no longer waits for never reach it now.
           for (const held of s.heldShells.splice(0)) {

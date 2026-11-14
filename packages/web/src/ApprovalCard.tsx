@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, type KeyboardEvent, type ReactNode } from "react";
 import { FOOTERS, type ApprovalCard as Card, type CardDecision, type DeliverCard, type DeliverMethod, type DeliverRoute } from "@kumiko/shared";
-import { approveLabel, barShares, cardClosed, cardTitle, commitsLabel, effectLine, filesLabel } from "./cards";
+import { approveLabel, barShares, isApproveKey, cardClosed, cardTitle, commitsLabel, effectLine, filesLabel } from "./cards";
 import type { ChatItem } from "./chat";
 import { Markdown } from "./Markdown";
 
@@ -11,6 +11,8 @@ export type CardAction = { action: "approve"; decision: CardDecision } | { actio
 export const CardContext = createContext<((askId: string, action: CardAction) => Promise<boolean>) | undefined>(undefined);
 
 const short = (sha: string) => sha.slice(0, 7);
+/** The keys that approve, as this platform writes them. */
+const APPROVE_KEYS = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘↩" : "Ctrl+Enter";
 const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 
 /**
@@ -37,7 +39,8 @@ export function ApprovalCardView({ item }: { item: AskItem }) {
       </div>
     );
   }
-  return <OpenCard card={card} decide={decide} />;
+  // A card worked out again (a stale one reviewed) starts over: its choices and text were for the old state.
+  return <OpenCard key={card.card.kind === "deliver" ? `${card.id}:${card.card.head}:${card.card.pr?.number ?? ""}` : card.id} card={card} decide={decide} />;
 }
 
 function Receipt({ card, note }: { card: Card; note?: string }) {
@@ -83,8 +86,9 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
   };
   const decision = (): CardDecision | undefined => {
     if (c.kind === "deliver") {
-      if (route === "pr") return { kind: "deliver", route, method, title: title.trim() || c.title, body };
-      return method === "squash" ? { kind: "deliver", route, method, title: title.trim() || c.title, message } : { kind: "deliver", route, method };
+      if (route === "pr") return title.trim() ? { kind: "deliver", route, method, title: title.trim(), body } : undefined;
+      if (method === "squash") return title.trim() ? { kind: "deliver", route, method, title: title.trim(), message } : undefined;
+      return { kind: "deliver", route, method };
     }
     if (c.kind === "issue") return title.trim() ? { kind: "issue", title: title.trim(), body, labels } : undefined;
     if (c.kind === "push") return { kind: "push" };
@@ -96,7 +100,7 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
   };
   // Plain Enter does nothing: approving is ⌘↩ or a click, so it can't happen by accident while typing.
   const onKey = (e: KeyboardEvent) => {
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !declining) {
+    if (isApproveKey(e) && !declining) {
       e.preventDefault();
       approve();
     }
@@ -121,12 +125,12 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
                 Decline…
               </button>
               {card.state === "stale" ? (
-                <button type="button" className="btn btn-primary btn-compact" disabled={busy || !decide} onClick={() => void send({ action: "refresh" })}>
+                <button key="refresh" type="button" className="btn btn-primary btn-compact" disabled={busy || !decide} onClick={() => void send({ action: "refresh" })}>
                   Review the new state
                 </button>
               ) : (
-                <button type="button" className="btn btn-primary btn-compact" disabled={busy || !decide} onClick={approve}>
-                  {approveLabel(c, route, method)} <span className="ac-kbd">⌘↩</span>
+                <button key="approve" type="button" className="btn btn-primary btn-compact" disabled={busy || !decide || !decision()} onClick={approve}>
+                  {approveLabel(c, route, method)} <span className="ac-kbd">{APPROVE_KEYS}</span>
                 </button>
               )}
             </>
@@ -176,7 +180,7 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
         </div>
         {declining && (
           <div className="ac-decline">
-            <textarea className="ac-ta ac-fld" autoFocus placeholder="Why not, for Claude (optional)" value={reason} onChange={(e) => setReason(e.target.value)} />
+            <textarea className="ac-ta ac-fld" autoFocus placeholder="Why not, for Claude (optional)" aria-label="Reason for declining, for Claude" value={reason} onChange={(e) => setReason(e.target.value)} />
           </div>
         )}
         {footBar("Pushes with your gh login")}
@@ -218,7 +222,7 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
         </Fields>
         {declining && (
           <div className="ac-decline">
-            <textarea className="ac-ta ac-fld" autoFocus placeholder="Why not, for Claude (optional)" value={reason} onChange={(e) => setReason(e.target.value)} />
+            <textarea className="ac-ta ac-fld" autoFocus placeholder="Why not, for Claude (optional)" aria-label="Reason for declining, for Claude" value={reason} onChange={(e) => setReason(e.target.value)} />
           </div>
         )}
         {footBar("Opens as you (gh on the Mac)".replace("Opens", c.kind === "comment" ? "Posts" : "Opens"))}
@@ -250,11 +254,11 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
         <span>
           <span className="ac-k">head</span> <code>{short(c.head)}</code>
         </span>
-        <button type="button" className={`ac-tog${open === "commits" ? " is-on" : ""}`} onClick={() => setOpen(open === "commits" ? undefined : "commits")}>
+        <button type="button" aria-expanded={open === "commits"} className={`ac-tog${open === "commits" ? " is-on" : ""}`} onClick={() => setOpen(open === "commits" ? undefined : "commits")}>
           {commitsLabel(c)} ▾
         </button>
         <span>
-          <button type="button" className={`ac-tog${open === "files" ? " is-on" : ""}`} onClick={() => setOpen(open === "files" ? undefined : "files")}>
+          <button type="button" aria-expanded={open === "files"} className={`ac-tog${open === "files" ? " is-on" : ""}`} onClick={() => setOpen(open === "files" ? undefined : "files")}>
             {filesLabel(c)} ▾
           </button>{" "}
           <span className="ac-add">+{c.added}</span> <span className="ac-del">−{c.deleted}</span>
@@ -294,8 +298,8 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
       )}
       {c.flags.length > 0 && (
         <div className="ac-flags">
-          {c.flags.map((f) => (
-            <div key={f.rule + f.subject} className="ac-flag">
+          {c.flags.map((f, i) => (
+            <div key={`${i}:${f.rule}:${f.subject}`} className="ac-flag">
               <span className="ac-warn">⚠</span>
               <div>
                 {f.rule === "ci" ? "Changes CI config: " : f.rule === "author" ? "Not authored by you: " : "No Claude trailer: "}
@@ -316,13 +320,13 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
             {!c.pr && (
               <>
                 <span className="ac-lbl">Route</span>
-                <Segments<DeliverRoute> value={route} onChange={setRoute} options={[["main", `Straight to ${c.base}`], ["pr", "Open a PR first"]]} />
+                <Segments<DeliverRoute> label="Route" value={route} onChange={setRoute} options={[["main", `Straight to ${c.base}`], ["pr", "Open a PR first"]]} />
               </>
             )}
             {!pr && (
               <>
                 <span className="ac-lbl">Method</span>
-                <Segments<DeliverMethod> value={method} onChange={setMethod} options={[["merge", "Merge commit"], ["squash", "Squash"]]} />
+                <Segments<DeliverMethod> label="Method" value={method} onChange={setMethod} options={[["merge", "Merge commit"], ["squash", "Squash"]]} />
               </>
             )}
             <span className="ac-effect">{effectLine(c, route, method)}</span>
@@ -346,7 +350,7 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
       )}
       {declining && (
         <div className="ac-decline">
-          <textarea className="ac-ta ac-fld" autoFocus placeholder="Why not, for Claude (optional)" value={reason} onChange={(e) => setReason(e.target.value)} />
+          <textarea className="ac-ta ac-fld" autoFocus placeholder="Why not, for Claude (optional)" aria-label="Reason for declining, for Claude" value={reason} onChange={(e) => setReason(e.target.value)} />
         </div>
       )}
       {footBar(pr ? "Opens as you (gh on the Mac)" : c.signs ? "Signs with your key" : "Not signed: no signing key in your git config")}
@@ -383,9 +387,9 @@ function Labels({ all, picked, onChange }: { all: { name: string; color?: string
   );
 }
 
-function Segments<T extends string>({ value, onChange, options }: { value: T; onChange(v: T): void; options: [T, string][] }) {
+function Segments<T extends string>({ label, value, onChange, options }: { label: string; value: T; onChange(v: T): void; options: [T, string][] }) {
   return (
-    <span className="ac-seg" role="radiogroup">
+    <span className="ac-seg" role="radiogroup" aria-label={label}>
       {options.map(([v, label]) => (
         <button type="button" role="radio" aria-checked={v === value} key={v} className={v === value ? "is-on" : ""} onClick={() => onChange(v)}>
           {label}
@@ -410,9 +414,10 @@ export function BodyField({ value, onChange, footer, label }: { value: string; o
   return (
     <div className="ac-fld ac-body">
       {editing ? (
-        <textarea className="ac-ta" autoFocus value={value} onChange={(e) => onChange(e.target.value)} onBlur={() => setEditing(false)} aria-label={label} />
+        // Once editing, it stays a box: going back to the preview on blur would move the buttons under the pointer.
+        <textarea className="ac-ta" autoFocus value={value} onChange={(e) => onChange(e.target.value)} aria-label={label} />
       ) : (
-        <div className="ac-md" role="button" tabIndex={0} aria-label={`${label}: click to edit`} onClick={() => setEditing(true)} onKeyDown={(e) => e.key === "Enter" && !e.metaKey && !e.ctrlKey && setEditing(true)}>
+        <div className="ac-md" role="button" tabIndex={0} aria-label={`${label}: click to edit`} onClick={(e) => !(e.target as HTMLElement).closest("a") && setEditing(true)} onKeyDown={(e) => e.key === "Enter" && !e.metaKey && !e.ctrlKey && setEditing(true)}>
           {value.trim() ? <Markdown text={value} /> : <span className="dim">Empty</span>}
         </div>
       )}

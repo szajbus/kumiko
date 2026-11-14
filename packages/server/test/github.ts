@@ -38,15 +38,20 @@ export async function fakeGitHub(root: string): Promise<FakeGitHub> {
     { stdio: "ignore", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } },
   );
   const url = `git://127.0.0.1:${port}`;
-  // Ready once it answers.
-  for (let i = 0; i < 50; i++) {
+  // Ready once it serves git; another test file may have taken the port meanwhile, which fails loudly.
+  for (let i = 0; ; i++) {
     const up = await new Promise<boolean>((resolve) => {
-      const c = createServer().listen(port, "127.0.0.1");
-      c.once("listening", () => c.close(() => resolve(false)));
-      c.once("error", () => resolve(true));
+      const child = spawn("git", ["ls-remote", `${url}/none.git`], { stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+      let err = "";
+      child.stderr!.on("data", (d) => (err += d));
+      child.on("close", () => resolve(!/Connection refused|unable to connect/i.test(err)));
     });
     if (up) break;
-    await new Promise((r) => setTimeout(r, 100));
+    if (i > 100 || daemon.exitCode !== null) {
+      daemon.kill();
+      throw new Error(`The stand-in GitHub's git daemon didn't start on port ${port}.`);
+    }
+    await new Promise((r) => setTimeout(r, 50));
   }
   return {
     base,

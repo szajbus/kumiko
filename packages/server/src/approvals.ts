@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { ToolResult, ToolSpec } from "@kumiko/agent";
+import type { AgentMessage, ToolResult, ToolSpec } from "@kumiko/agent";
 import {
   FOOTERS,
   MAX_BODY,
@@ -175,7 +175,12 @@ export function cardsOf(events: readonly SessionEvent[]): Map<string, ApprovalCa
  * card from the mirror and GitHub and shows it, or tells Claude what to fix first. The user's decision is kept in the
  * card; the call itself runs only if the card says the user approved this very call, whatever Claude's settings say.
  */
+type DecideAction = { action: "approve"; decision: CardDecision } | { action: "decline"; reason?: string } | { action: "refresh" };
+
 export class Approvals {
+  /** Cards being decided on, by ask id. */
+  private readonly deciding = new Set<string>();
+
   constructor(
     private readonly sessions: ApprovalSessions,
     private readonly opts: ApprovalOptions,
@@ -263,6 +268,49 @@ export class Approvals {
   }
 
   /**
+   * Claude got a result for a call the user approved without Kumiko having been called for it: the turn was stopped
+   * before Claude made it. The card says nothing was done, rather than waiting for Claude for ever.
+   */
+  message(info: SessionInfo, m: AgentMessage): void {
+    // A turn that ended without the call won't make it later: approvals don't outlive their turn.
+    if (m.type === "result") {
+      for (const card of cardsOf(this.sessions.events(info.id)).values()) if (card.state === "approved" && card.card.kind !== "push") this.notDone(info.id, card);
+      return;
+    }
+    if (m.type !== "user") return;
+    const content = (m.message as { content?: unknown } | undefined)?.content;
+    if (!Array.isArray(content)) return;
+    const ids = new Set((content as { type?: unknown; tool_use_id?: unknown }[]).flatMap((b) => (b?.type === "tool_result" && typeof b.tool_use_id === "string" ? [b.tool_use_id] : [])));
+    if (!ids.size) return;
+    for (const card of cardsOf(this.sessions.events(info.id)).values()) if (card.state === "approved" && card.toolUseId && ids.has(card.toolUseId)) this.notDone(info.id, card);
+  }
+
+  /**
+   * A new server opened the session: an ask whose card the last one was still working out gets one now, and a card it
+   * was carrying out when it stopped says it may be half done.
+   */
+  reopened(info: SessionInfo): void {
+    const events = this.sessions.events(info.id);
+    const cards = cardsOf(events);
+    for (const card of cards.values()) {
+      if (card.state === "working") this.sessions.putCard(info.id, { ...card, state: "failed", receipt: { ok: false, text: `Maybe not done: ${what(card)}`, meta: "Kumiko stopped while doing it; look on GitHub" } });
+    }
+    for (const e of events) {
+      if (e.kind !== "ask" || e.payload.kind !== "approval" || e.payload.host || cards.has(e.payload.id) || !this.isOpen(info.id, e.payload.id)) continue;
+      this.asked(info, e.payload);
+    }
+  }
+
+  /** Claude is gone: what the user approved that it hadn't called for yet won't be done. */
+  exited(info: SessionInfo): void {
+    for (const card of cardsOf(this.sessions.events(info.id)).values()) if (card.state === "approved" && card.card.kind !== "push") this.notDone(info.id, card);
+  }
+
+  private notDone(session: string, card: ApprovalCard) {
+    this.sessions.putCard(session, { ...card, state: "failed", receipt: { ok: false, text: `Not done: ${what(card)}`, meta: "Claude stopped before doing it" } });
+  }
+
+  /**
    * Asks the user about a push that changes CI, in the session it came from if the VM named one of this project's, or
    * else the project's most recent open one, while git in the VM waits. The answer is the user's decision on the card,
    * or a refusal when the push stops waiting (`closed`) or there's nowhere to ask.
@@ -316,7 +364,18 @@ export class Approvals {
    * The user decided on a card. Approving checks the branch is still where the card has it, and if it moved, the card
    * goes stale instead; "refresh" works the card out again; declining tells Claude, with the user's reason.
    */
-  async decide(session: string, askId: string, action: { action: "approve"; decision: CardDecision } | { action: "decline"; reason?: string } | { action: "refresh" }): Promise<ApprovalCard> {
+  async decide(session: string, askId: string, action: DecideAction): Promise<ApprovalCard> {
+    // One decision on a card at a time: an approval still checking the branch mustn't land on top of a decline.
+    if (this.deciding.has(askId)) throw new ApprovalError("This card is being decided already.");
+    this.deciding.add(askId);
+    try {
+      return await this.decideNow(session, askId, action);
+    } finally {
+      this.deciding.delete(askId);
+    }
+  }
+
+  private async decideNow(session: string, askId: string, action: DecideAction): Promise<ApprovalCard> {
     const info = this.sessions.get(session);
     if (!info) throw new ApprovalError("This session is gone.");
     const card = this.card(session, askId);
@@ -341,6 +400,7 @@ export class Approvals {
         this.sessions.answerAsk(session, askId, { kind: "deny", message: err.message });
         return next;
       }
+      this.stillWaiting(session, askId);
       const next: ApprovalCard = { ...card, card: body, state: "open" };
       delete next.moved;
       this.sessions.putCard(session, next);
@@ -356,6 +416,7 @@ export class Approvals {
       const now = await this.opts.mirrors.branchHead(card.card.repo, card.card.branch);
       if (now !== card.card.head) {
         const commits = now ? await this.opts.mirrors.countBetween(card.card.repo, card.card.head, now) : 0;
+        this.stillWaiting(session, askId);
         const next: ApprovalCard = { ...card, state: "stale", moved: { to: now ?? "", commits } };
         this.sessions.putCard(session, next);
         return next;
@@ -367,10 +428,18 @@ export class Approvals {
       const unknown = decision.labels.filter((l) => !repoLabels.some((x) => x.name === l));
       if (unknown.length) throw new ApprovalError(`The repository has no label ${unknown.join(", ")}.`);
     }
+    // Claude may have stopped waiting while the branch was checked; only then is it told yes, and only then approved.
+    this.stillWaiting(session, askId);
+    this.sessions.answerAsk(session, askId, { kind: "allow" });
     const next: ApprovalCard = { ...card, state: "approved", decision };
     this.sessions.putCard(session, next);
-    this.sessions.answerAsk(session, askId, { kind: "allow" });
     return next;
+  }
+
+  /** Throws unless Claude still waits on the card, as it was when the decision began. */
+  private stillWaiting(session: string, askId: string) {
+    const card = cardsOf(this.sessions.events(session)).get(askId);
+    if (!this.isOpen(session, askId) || (card?.state !== "open" && card?.state !== "stale")) throw new ApprovalError("Claude stopped waiting for this meanwhile; nothing was approved.");
   }
 
   private askOf(session: string, askId: string): Extract<AgentAsk, { kind: "approval" }> {
@@ -393,7 +462,8 @@ export class Approvals {
     }
     if (card.state === "done" || card.state === "failed") return { text: `Done already: ${card.receipt?.text ?? card.state}.`, isError: card.state === "failed" };
     if (card.state === "working") return { text: "This is being done already.", isError: true };
-    if (card.state !== "approved" || !card.decision) return { text: `Not approved: the user hasn't approved this ${card.state === "declined" ? "(they declined it)" : "yet"}.`, isError: true };
+    const allowed = events.some((e) => e.kind === "ask_answer" && e.payload.id === card.id && e.payload.answer.kind === "allow");
+    if (card.state !== "approved" || !card.decision || !allowed) return { text: `Not approved: the user hasn't approved this ${card.state === "declined" ? "(they declined it)" : "yet"}.`, isError: true };
     this.sessions.putCard(info.id, { ...card, state: "working" });
     try {
       const { result, receipt } = await this.run(info, card);
@@ -432,7 +502,8 @@ export class Approvals {
       }
       case "github_label_list": {
         const labels = await this.opts.github.labels(repo);
-        return { text: labels.length ? labels.map((l) => `${l.name}${l.description ? `: ${l.description}` : ""}`).join("\n") : `${repo} has no labels.` };
+        // Anyone who can triage writes the descriptions.
+        return { text: labels.length ? untrusted(`the labels of ${repo}`, labels.map((l) => `${l.name}${l.description ? `: ${l.description}` : ""}`).join("\n")) : `${repo} has no labels.` };
       }
       default:
         return { text: `There is no tool ${name}.`, isError: true };
@@ -453,6 +524,10 @@ export class Approvals {
     if (c.kind !== "deliver" || d.kind !== "deliver") throw new Error("That decision isn't for this card.");
     if (d.route === "pr") {
       const title = d.title ?? c.title;
+      // Opened from the branch by name, so it must still be the commit the user saw.
+      await this.opts.mirrors.fetch(c.repo, { force: true });
+      const now = await this.opts.mirrors.branchHead(c.repo, c.branch);
+      if (now !== c.head) throw new BranchMoved(now ?? "", 0);
       const pr = await this.opts.github.prCreate(c.repo, { base: c.base, head: c.branch, title, body: withFooter(d.body ?? c.body, FOOTERS.pr) });
       return {
         result: { text: `Opened PR #${pr.number} (${pr.url}). Nothing is on ${c.base} yet; when the user wants it landed, call deliver on ${c.branch} again.` },

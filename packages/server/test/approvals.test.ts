@@ -109,9 +109,10 @@ describe("delivering", () => {
       github: new GitHub({ gh: fakeGh }),
       repoOf: async () => "acme/widget",
       identity: async () => ({ name: "Test", email: "test@example.com" }),
-      choicesFile: join(root, "home", "choices.json"),
+      choicesFile: join(root, `choices-${++choiceFiles}`, "choices.json"),
     });
   };
+  let choiceFiles = 0;
 
   /** Pushes `branch` to GitHub as Claude would have: commits with the Claude trailer, from main, recorded as the project's. */
   const branch = async (name: string, files: Record<string, string>, opts: { from?: string; trailer?: boolean; who?: { name: string; email: string } } = {}) => {
@@ -253,7 +254,7 @@ describe("delivering", () => {
     const main = onGitHub("refs/heads/main")!;
     assert.equal(git(bare, ["rev-list", "--parents", "-n1", main]).trim().split(" ").length, 2, "one parent");
     assert.equal(git(bare, ["log", "-1", "--format=%B", main]), "Squash it, edited\n\n* one\n* two\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\n");
-    assert.deepEqual(JSON.parse(await readFile(join(root, "home", "choices.json"), "utf8")).web, { route: "main", method: "squash" });
+    assert.deepEqual(JSON.parse(await readFile(join(root, `choices-${choiceFiles}`, "choices.json"), "utf8")).web, { route: "main", method: "squash" });
     await branch("next", { nx: "x\n" });
     const next = await ask({ branch: "next", title: "Next", body: "b" });
     assert.equal((next.card!.card as DeliverCard).method, "squash", "starts at what was picked last time");
@@ -315,6 +316,53 @@ describe("delivering", () => {
     const refreshed = await approvals.decide("s1", r.id, { action: "refresh" });
     assert.equal(refreshed.state, "open");
     assert.equal((refreshed.card as DeliverCard).head, now);
+    assert.deepEqual((refreshed.card as DeliverCard).commits.map((x) => x.subject), ["Change m1", "Change m2"]);
+    assert.equal((refreshed.card as DeliverCard).squashBody, "* Change m1\n* Change m2");
+  });
+
+  it("says nothing was done when Claude stops before making a call the user approved", async () => {
+    fresh();
+    await branch("dropped", { dr: "d\n" });
+    const r = await ask({ branch: "dropped", title: "Dropped", body: "b" });
+    await approvals.decide("s1", r.id, { action: "approve", decision: { kind: "deliver", route: "main", method: "merge" } });
+    approvals.message(sessions.info, { type: "user", message: { content: [{ type: "tool_result", tool_use_id: r.toolUseId, content: "Interrupted" }] } });
+    assert.equal(sessions.card(r.id)!.state, "failed");
+    assert.equal(sessions.card(r.id)!.receipt!.meta, "Claude stopped before doing it");
+    const late = await approvals.call(sessions.info, "deliver", r.input, r.toolUseId);
+    assert.match(late.text, /^Done already/);
+    assert.equal(late.isError, true);
+
+    const r2 = await ask({ branch: "dropped", title: "Dropped", body: "b" });
+    await approvals.decide("s1", r2.id, { action: "approve", decision: { kind: "deliver", route: "main", method: "merge" } });
+    approvals.exited(sessions.info);
+    assert.equal(sessions.card(r2.id)!.state, "failed");
+  });
+
+  it("approves nothing once Claude stopped waiting while the branch was checked, and decides one way at a time", async () => {
+    fresh();
+    await branch("raced", { ra: "r\n" });
+    const r = await ask({ branch: "raced", title: "Raced", body: "b" });
+    const approving = approvals.decide("s1", r.id, { action: "approve", decision: { kind: "deliver", route: "main", method: "merge" } });
+    await assert.rejects(approvals.decide("s1", r.id, { action: "decline" }), /being decided already/);
+    // The user sent a message meanwhile, which answers the ask.
+    sessions.answerAsk("s1", r.id, { kind: "message" } as never);
+    await assert.rejects(approving, /Claude stopped waiting for this meanwhile; nothing was approved/);
+    assert.equal(sessions.card(r.id)!.state, "open");
+    const call = await approvals.call(sessions.info, "deliver", r.input, r.toolUseId);
+    assert.match(call.text, /^Not approved/);
+  });
+
+  it("finishes after a restart what the last server left: a card for an ask, and a call it was carrying out", async () => {
+    fresh();
+    await branch("restarted", { rs: "r\n" });
+    const a: Extract<AgentAsk, { kind: "approval" }> = { kind: "approval", id: "ask-r", toolUseId: "tool-r", tool: "deliver", input: { branch: "restarted", title: "R", body: "b" } };
+    sessions.ev.push({ seq: 0, kind: "ask", payload: a });
+    sessions.putCard("s1", { id: "old", at: "", state: "working", card: { kind: "comment", repo: "acme/widget", target: { type: "issue", number: 1, title: "t", state: "open", author: "a", url: "u" }, body: "b" } });
+    approvals.reopened(sessions.info);
+    assert.equal(sessions.card("old")!.state, "failed");
+    assert.match(sessions.card("old")!.receipt!.meta!, /look on GitHub/);
+    const card = await until("the card", () => sessions.card("ask-r"));
+    assert.equal(card.state, "open");
   });
 
   it("tells Claude the user declined, with their reason", async () => {
@@ -325,6 +373,8 @@ describe("delivering", () => {
     assert.equal(declined.state, "declined");
     assert.deepEqual(sessions.answer(r.id), { kind: "deny", message: "The user declined delivering nah: “Split it up.”" });
     await assert.rejects(approvals.decide("s1", r.id, { action: "decline" }), /isn't waiting/);
+    const call = await approvals.call(sessions.info, "deliver", r.input, r.toolUseId);
+    assert.match(call.text, /they declined it/);
   });
 
   it("opens a PR with Kumiko's footer, then lands it with GitHub's wording", async () => {
@@ -375,9 +425,9 @@ describe("delivering", () => {
       const list = await approvals.call(sessions.info, "github_issue_list", {}, "t-list");
       assert.match(list.text, new RegExp(`#${number} \\[open\\] Tabs flicker · by octo · bug`));
       const prs = await approvals.call(sessions.info, "github_pr_list", { state: "all" }, "t-prs");
-      assert.match(prs.text, /\[open\] PR me, edited|\[closed\]|None\./);
+      assert.match(prs.text, /#\d+ \[open\] PR me, edited · by acme · branch pr-me/);
       assert.match((await approvals.call(sessions.info, "github_issue_list", { limit: 1000 }, "t")).text, /limit is a whole number from 1 to 100/);
-      assert.equal((await approvals.call(sessions.info, "github_label_list", {}, "t-labels")).text, "bug\nui");
+      assert.match((await approvals.call(sessions.info, "github_label_list", {}, "t-labels")).text, /<untrusted source="github">\nbug\nui\n<\/untrusted>$/);
       assert.match((await approvals.call(sessions.info, "github_pr_view", { number: 999 }, "t-none")).text, /acme\/widget has no pull request #999/);
       assert.equal(sessions.ev.length, 0, "no asks, no cards");
     });

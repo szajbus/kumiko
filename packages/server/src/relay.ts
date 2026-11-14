@@ -115,8 +115,10 @@ export function vmGitConfig(repo: string, identity: { name?: string; email?: str
 export const GIT_PROXY = `#!/bin/bash
 # Written by Kumiko: git:// to ${RELAY_HOST} goes to the mirrors on the host, over the socket Kumiko forwards here.
 # socat is the proxy itself, so it ends when the connection does; what feeds it the session line, then git's side, is
-# left to end when git closes that.
-exec socat - "UNIX-CONNECT:@SOCK@" < <(printf 'kumiko-session %s\\n' "\${KUMIKO_SESSION:-}"; exec cat 2>/dev/null)
+# left to end when git closes that. git closes its side once it has sent a push, and then waits for as long as the
+# mirror's hook takes, the user deciding on a card included: by default socat would give up half a second later. A git
+# that is gone still ends it, at receive-pack's next keepalive.
+exec socat -t 7200 - "UNIX-CONNECT:@SOCK@" < <(printf 'kumiko-session %s\\n' "\${KUMIKO_SESSION:-}"; exec cat 2>/dev/null)
 `;
 
 /**
@@ -220,6 +222,8 @@ class Relay {
   private wake?: () => void;
   private readonly conns = new Set<Socket>();
   private readonly daemons = new Set<ChildProcess>();
+  /** Commands running in the VM for the relay, which the VM can make hang: killed when it stops. */
+  private readonly vmCommands = new Set<ChildProcess>();
   private readonly socket: string;
   private running?: Promise<void>;
 
@@ -229,7 +233,8 @@ class Relay {
     private readonly opts: RelayOptions,
     private readonly connections: Map<string, RelayConnection>,
   ) {
-    this.socket = join(opts.dir, `git-${id}.sock`);
+    // A name of its own: a relay started again for the project mustn't share a path the last one is still removing.
+    this.socket = join(opts.dir, `git-${id}-${randomUUID().slice(0, 8)}.sock`);
   }
 
   view(): RelayView {
@@ -248,7 +253,8 @@ class Relay {
     if (forward) setTimeout(() => forward.exitCode === null && forward.signalCode === null && forward.kill("SIGKILL"), 5000).unref();
     this.wake?.();
     for (const c of this.conns) c.destroy();
-    for (const d of this.daemons) d.kill();
+    for (const d of this.daemons) killGroup(d);
+    for (const c of this.vmCommands) c.kill();
     await this.running;
   }
 
@@ -303,8 +309,8 @@ class Relay {
   private async setUpVm(): Promise<string> {
     const identity = (await this.opts.identity?.().catch(() => ({}))) ?? {};
     const script = vmSetupScript(vmGitConfig(this.repo, identity));
-    const child = this.opts.provider.exec(this.id, `bash -c ${shellQuote(script)}`, []);
-    child.stdin!.end();
+    // Long enough for apt to install socat on a new VM.
+    const child = this.vmCommand(`bash -c ${shellQuote(script)}`, 10 * 60_000);
     const out: string[] = [];
     const err: string[] = [];
     eachLine(child.stdout!, (l) => out.push(l));
@@ -337,9 +343,19 @@ class Relay {
     if (!this.stopped) throw new Error(`The ssh connection holding the relay ended (exit ${code})${err.length ? `: ${err.slice(-2).join(" ")}` : "."}`);
   }
 
-  private async inVm(cmd: string): Promise<boolean> {
+  /** Runs `cmd` in the VM, killed after `ms` or when the relay stops. */
+  private vmCommand(cmd: string, ms: number): ChildProcess {
     const child = this.opts.provider.exec(this.id, cmd, []);
     child.stdin!.end();
+    this.vmCommands.add(child);
+    const timer = setTimeout(() => child.kill(), ms);
+    child.once("exit", () => (clearTimeout(timer), this.vmCommands.delete(child)));
+    if (this.stopped) child.kill();
+    return child;
+  }
+
+  private async inVm(cmd: string): Promise<boolean> {
+    const child = this.vmCommand(cmd, 15_000);
     child.stdout!.resume();
     child.stderr!.resume();
     return (await exitCode(child)) === 0;
@@ -350,6 +366,11 @@ class Relay {
    * mirror before a fetch, then hands the connection to a git daemon of its own, with the request it read.
    */
   private serve(conn: Socket) {
+    // The VM opens as many as it likes; more than git ever needs at once are refused.
+    if (this.conns.size >= MAX_CONNECTIONS) {
+      conn.end(pktLine("ERR Kumiko: too many git connections from this VM at once.\n"));
+      return;
+    }
     this.conns.add(conn);
     conn.on("close", () => this.conns.delete(conn));
     conn.on("error", () => conn.destroy());
@@ -396,9 +417,11 @@ class Relay {
     const connection = randomUUID();
     const daemon = spawn(
       "git",
-      ["daemon", "--inetd", "--informative-errors", "--export-all", "--enable=receive-pack", `--base-path=${this.opts.mirrors.root}`, "--strict-paths", dir],
+      ["daemon", "--inetd", "--informative-errors", "--export-all", "--enable=receive-pack", "--timeout=600", `--base-path=${this.opts.mirrors.root}`, "--strict-paths", dir],
       {
         cwd: this.opts.mirrors.root,
+        // A group of its own: the service it runs (upload-pack, receive-pack) is its child, and goes with it.
+        detached: true,
         stdio: ["pipe", "pipe", "pipe"],
         env: { ...gitEnv(), KUMIKO_SANDBOX: this.id, KUMIKO_CONNECTION: connection, ...(this.opts.hookSocket ? { KUMIKO_HOOK_SOCKET: this.opts.hookSocket } : {}) },
       },
@@ -406,7 +429,11 @@ class Relay {
     this.daemons.add(daemon);
     this.connections.set(connection, { project: this.id, repo: this.repo, ...(session ? { session } : {}) });
     // A push waiting in the hook for the user stops waiting when git in the VM goes away.
-    conn.once("close", () => this.opts.onConnectionClosed?.(connection));
+    conn.once("close", () => {
+      // What git in the VM sent is all there is: the service sees the end of it, rather than waiting for more forever.
+      daemon.stdin!.end();
+      this.opts.onConnectionClosed?.(connection);
+    });
     daemon.on("error", () => conn.destroy());
     daemon.stdin!.on("error", () => {});
     daemon.stderr!.resume();
@@ -421,6 +448,18 @@ class Relay {
     conn.pipe(daemon.stdin!);
     daemon.stdout!.pipe(conn);
     conn.resume();
+  }
+}
+
+/** The most connections one VM may have open at once. */
+const MAX_CONNECTIONS = 32;
+
+/** Kills a process Kumiko started in a group of its own, with everything it started. */
+function killGroup(child: ChildProcess) {
+  try {
+    if (child.pid) process.kill(-child.pid, "SIGTERM");
+  } catch {
+    child.kill();
   }
 }
 

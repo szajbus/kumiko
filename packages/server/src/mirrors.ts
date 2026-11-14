@@ -31,7 +31,7 @@ interface RepoRecord {
    * The branches that first reached GitHub through a project's relay, by name, with the project and when it last
    * pushed: that project's agent may update, force-push and delete them. Dropped when the branch leaves GitHub.
    */
-  created?: Record<string, { project: string; at: string; ci?: string }>;
+  created?: Record<string, { project: string; at: string; ci?: string; sha?: string }>;
 }
 
 interface Entry {
@@ -73,8 +73,8 @@ const HOOK_MESSAGE = "Kumiko: pushing to this mirror isn't allowed.";
 
 /**
  * The only hook in a mirror. A push that comes through a project's relay is in a git daemon Kumiko started, which
- * says in its environment how to reach Kumiko and which connection it is: the hook hands Kumiko the ref updates and
- * the quarantine they wait in, prints what Kumiko says, and exits with the code Kumiko gives, its last line. Kumiko
+ * says in its environment how to reach Kumiko and which connection it is: the hook hands Kumiko the quarantine the
+ * push waits in and the ref updates, prints what Kumiko says, and exits with the code Kumiko gives, its last line. Kumiko
  * pushes them on to GitHub before answering. Any other push, or one Kumiko can't be asked about, is refused.
  */
 const PRE_RECEIVE = `#!/bin/sh
@@ -83,11 +83,11 @@ if [ -z "$KUMIKO_HOOK_SOCKET" ] || [ -z "$KUMIKO_CONNECTION" ]; then
   echo "${HOOK_MESSAGE}" >&2
   exit 1
 fi
-curl -sS -N --max-time 7200 --unix-socket "$KUMIKO_HOOK_SOCKET" \\
+{
+  printf 'object-directory %s\\nalternates %s\\nquarantine %s\\n\\n' "$GIT_OBJECT_DIRECTORY" "$GIT_ALTERNATE_OBJECT_DIRECTORIES" "$GIT_QUARANTINE_PATH"
+  cat
+} | curl -sS -N --max-time 7200 --unix-socket "$KUMIKO_HOOK_SOCKET" \\
   -H "X-Kumiko-Connection: $KUMIKO_CONNECTION" \\
-  -H "X-Git-Object-Directory: $GIT_OBJECT_DIRECTORY" \\
-  -H "X-Git-Alternate-Object-Directories: $GIT_ALTERNATE_OBJECT_DIRECTORIES" \\
-  -H "X-Git-Quarantine-Path: $GIT_QUARANTINE_PATH" \\
   --data-binary @- http://kumiko/pre-receive | {
   code=1
   while IFS= read -r line; do
@@ -340,6 +340,11 @@ export class Mirrors {
       .sort((a, b) => b.at.localeCompare(a.at));
   }
 
+  /** The commit Kumiko last pushed to `branch` for its project, if it recorded one. */
+  lastPushed(repo: string, branch: string): string | undefined {
+    return this.entryOf(repo)?.record.created?.[branch]?.sha;
+  }
+
   /** The tree of `.github` the user last allowed `branch` to push with: CI changes they have seen. */
   ciAllowed(repo: string, branch: string): string | undefined {
     return this.entryOf(repo)?.record.created?.[branch]?.ci;
@@ -349,7 +354,7 @@ export class Mirrors {
    * Records pushes GitHub accepted: each branch as `project`'s, or, when deleted, as nobody's; `ci` is the tree of
    * `.github` the user allowed it to push with, if they were asked.
    */
-  async noteBranches(repo: string, project: string, changes: { branch: string; deleted: boolean; ci?: string }[]): Promise<void> {
+  async noteBranches(repo: string, project: string, changes: { branch: string; deleted: boolean; ci?: string; sha?: string }[]): Promise<void> {
     const e = this.entryOf(repo);
     if (!e || !changes.length) return;
     const created = { ...e.record.created };
@@ -358,7 +363,7 @@ export class Mirrors {
       if (c.deleted) delete created[c.branch];
       else {
         const ci = c.ci ?? (created[c.branch]?.project === project ? created[c.branch]?.ci : undefined);
-        created[c.branch] = { project, at, ...(ci ? { ci } : {}) };
+        created[c.branch] = { project, at, ...(ci ? { ci } : {}), ...(c.sha ? { sha: c.sha } : {}) };
       }
     }
     e.record.created = created;
@@ -438,6 +443,9 @@ export class Mirrors {
     const timeoutMs = this.opts.fetchTimeoutMs ?? 60 * 60_000;
     const git = (args: string[], ms = 60_000) => runGit(dir, args, { env, signal, timeoutMs: ms });
     const update: Partial<RepoRecord> = {};
+    // Which branches GitHub had, and since when the fetch looked: pushes recorded meanwhile aren't GitHub's to undo.
+    const fetchedFrom = new Date().toISOString();
+    let branchesSeen: Set<string> | undefined;
     // Never fetched yet, after a first clone that failed too: what arrives now is the whole repository in one pack.
     const first = !e.record.fetchedAt || !(await exists(join(dir, "HEAD")));
     try {
@@ -459,11 +467,7 @@ export class Mirrors {
       const names = refs.split("\n").filter(Boolean);
       update.branches = names.filter((n) => n.startsWith("refs/heads/")).length;
       update.tags = names.length - update.branches;
-      // A branch gone from GitHub is nobody's: if the agent pushes one by that name again, it is a new one.
-      if (e.record.created) {
-        const kept = Object.entries(e.record.created).filter(([b]) => names.includes(`refs/heads/${b}`));
-        update.created = kept.length ? Object.fromEntries(kept) : undefined;
-      }
+      branchesSeen = new Set(names.filter((n) => n.startsWith("refs/heads/")).map((n) => n.slice("refs/heads/".length)));
       if (first) update.gcAt = update.fetchedAt;
       else if (gcDue) {
         await git(["gc", "--quiet"], timeoutMs);
@@ -477,7 +481,13 @@ export class Mirrors {
     update.size = await runGit(dir, ["count-objects", "-v"], { env }).then(objectsSize, () => e.record.size);
     Object.assign(e.record, update);
     if (!e.record.error) delete e.record.error;
-    if (!e.record.created) delete e.record.created;
+    // A branch gone from GitHub is nobody's: if the agent pushes one by that name again, it is a new one. Read at the
+    // end, as pushes may have been recorded while the fetch ran.
+    if (branchesSeen && e.record.created) {
+      const kept = Object.entries(e.record.created).filter(([b, c]) => branchesSeen!.has(b) || c.at >= fetchedFrom);
+      if (kept.length) e.record.created = Object.fromEntries(kept);
+      else delete e.record.created;
+    }
     await this.save().catch(() => {});
   }
 

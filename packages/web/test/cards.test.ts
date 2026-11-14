@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ApprovalCard, DeliverCard, SessionEvent } from "@kumiko/shared";
-import { approveLabel, cardClosed, cardTitle, effectLine } from "../src/cards.ts";
+import { approveLabel, cardClosed, cardTitle, effectLine, isApproveKey } from "../src/cards.ts";
 import { applyEvent, emptyChat, type ChatItem } from "../src/chat.ts";
 
 const deliver: DeliverCard = {
@@ -33,13 +33,20 @@ describe("approval cards' wording", () => {
     assert.equal(approveLabel(deliver, "main", "squash"), "Squash, sign and push to main");
     assert.equal(approveLabel(deliver, "pr", "merge"), "Open pull request");
     assert.equal(approveLabel({ ...deliver, signs: false }, "main", "merge"), "Push to main");
-    assert.match(effectLine({ ...deliver, signs: false }, "main", "merge"), /not signed \(no signing key in your git config\)/);
+    assert.equal(effectLine({ ...deliver, signs: false }, "main", "merge"), "Adds one merge commit on top of main, “Merge branch 'fix-x'”. The 3 commits come along as they are.");
     const pr = { ...deliver, pr: { number: 128, title: "Fix", url: "u" } };
     assert.equal(approveLabel(pr, "main", "merge"), "Sign and land #128");
     assert.match(effectLine(pr, "main", "merge"), /“Merge pull request #128 from acme\/fix-x”\. GitHub will show #128 as merged\./);
     assert.match(effectLine(pr, "main", "squash"), /#128 is closed with a comment/);
     assert.equal(cardTitle(deliver, "pr"), "Open a PR");
     assert.equal(cardTitle(deliver), "Deliver");
+  });
+
+  it("approves only on ⌘↩ or Ctrl+Enter, never plain Enter", () => {
+    assert.equal(isApproveKey({ key: "Enter", metaKey: false, ctrlKey: false }), false);
+    assert.equal(isApproveKey({ key: "Enter", metaKey: true, ctrlKey: false }), true);
+    assert.equal(isApproveKey({ key: "Enter", metaKey: false, ctrlKey: true }), true);
+    assert.equal(isApproveKey({ key: "a", metaKey: true, ctrlKey: false }), false);
   });
 
   it("says why a card ended without being decided", () => {

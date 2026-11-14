@@ -47,7 +47,18 @@ export function parseUpdates(text: string): RefUpdate[] {
  * refused, with what to do instead: the default branch, tags, and branches someone else created. One refused ref
  * refuses the whole push, as nothing is pushed on until all of it may be.
  */
-export function decide(updates: RefUpdate[], pusher: Pusher, ctx: { defaultBranch?: string; createdBy(branch: string): string | undefined }): PushDecision {
+export function decide(
+  updates: RefUpdate[],
+  pusher: Pusher,
+  ctx: {
+    defaultBranch?: string;
+    createdBy(branch: string): string | undefined;
+    /** The project's branch was replaced on GitHub by a different one of the same name. */
+    replaced?(branch: string): boolean;
+    /** The branches there are, to catch a name that differs from one only in case, which macOS takes for the same. */
+    branches?: string[];
+  },
+): PushDecision {
   const reasons: string[] = [];
   const branches: Extract<PushDecision, { allowed: true }>["branches"] = [];
   for (const u of updates) {
@@ -58,6 +69,11 @@ export function decide(updates: RefUpdate[], pusher: Pusher, ctx: { defaultBranc
     const branch = u.ref.slice("refs/heads/".length);
     const created = ZERO.test(u.old);
     const deleted = ZERO.test(u.new);
+    const twin = [ctx.defaultBranch, ...(ctx.branches ?? [])].find((b) => b !== undefined && b !== branch && b.toLowerCase() === branch.toLowerCase());
+    if (twin) {
+      reasons.push(`${branch} differs from ${twin} only in case, which the user's Mac takes for the same branch. Pick another name.`);
+      continue;
+    }
     if (branch === ctx.defaultBranch) {
       reasons.push(`${branch} is the default branch. It changes only when the user approves delivering a branch to it: push your work to a branch of its own, and call the deliver tool.`);
       continue;
@@ -69,6 +85,10 @@ export function decide(updates: RefUpdate[], pusher: Pusher, ctx: { defaultBranc
           ? `${branch} was created from another project's sandbox, so this one can't change it. Push your work to a branch of its own.`
           : `${branch} wasn't created from this sandbox, so Kumiko won't change it. Push your work to a branch of its own.`,
       );
+      continue;
+    }
+    if (!created && ctx.replaced?.(branch)) {
+      reasons.push(`${branch} on GitHub isn't the one this sandbox pushed any more: someone replaced it. Push your work to a branch of its own.`);
       continue;
     }
     branches.push({ branch, update: u, created, deleted });
@@ -184,8 +204,9 @@ export class Pushes {
   }
 
   async close(): Promise<void> {
-    await new Promise<void>((resolve) => (this.server ? this.server.close(() => resolve()) : resolve()));
+    // Hooks still waiting (on GitHub, or on the user) are cut off rather than waited for: their pushes are refused.
     this.server?.closeAllConnections();
+    await new Promise<void>((resolve) => (this.server ? this.server.close(() => resolve()) : resolve()));
     await rm(this.opts.socket, { force: true }).catch(() => {});
   }
 
@@ -205,30 +226,38 @@ export class Pushes {
         say("Kumiko: this push didn't come through a relay Kumiko knows, so it isn't allowed.");
         return end(1);
       }
-      const updates = parseUpdates(Buffer.concat(chunks).toString("utf8"));
+      const { quarantine, updates } = parseHookBody(Buffer.concat(chunks).toString("utf8"));
       const dir = this.opts.mirrors.path(pusher.repo);
       const defaultBranch = await headBranch(dir);
-      const decision = decide(updates, pusher, { defaultBranch, createdBy: (b) => this.opts.mirrors.createdBy(pusher.repo, b) });
+      const branchNames = (await quarantineGit(dir, ["for-each-ref", "--format=%(refname:lstrip=2)", "refs/heads"], {})).out.split("\n").filter(Boolean);
+      // A branch the project pushed, whose tip on GitHub doesn't come from what it pushed last, is someone else's now.
+      const replaced = new Set<string>();
+      for (const u of updates) {
+        const branch = u.ref.replace(/^refs\/heads\//, "");
+        const last = this.opts.mirrors.lastPushed(pusher.repo, branch);
+        if (!last || ZERO.test(u.old) || last === u.old || this.opts.mirrors.createdBy(pusher.repo, branch) !== pusher.project) continue;
+        if ((await quarantineGit(dir, ["merge-base", "--is-ancestor", last, u.old], {})).code !== 0) replaced.add(branch);
+      }
+      const decision = decide(updates, pusher, {
+        defaultBranch,
+        createdBy: (b) => this.opts.mirrors.createdBy(pusher.repo, b),
+        replaced: (b) => replaced.has(b),
+        branches: branchNames,
+      });
       if (!decision.allowed) {
         for (const r of decision.reasons) say(`Kumiko: ${r}`);
         say("Kumiko: nothing was pushed.");
         return end(1);
       }
       if (!decision.branches.length) return end(0);
-      const header = (name: string) => {
-        const v = req.headers[name];
-        return typeof v === "string" && v ? v : undefined;
-      };
-      const quarantine: Quarantine = {
-        objectDirectory: header("x-git-object-directory"),
-        alternates: header("x-git-alternate-object-directories"),
-        quarantinePath: header("x-git-quarantine-path"),
-      };
+
       // GitHub runs a branch's own workflows on push, with the repository's secrets: a push whose .github differs from
       // the default branch's, in a way the user hasn't allowed for this branch, waits for them.
       const connection = String(req.headers["x-kumiko-connection"]);
       const ci = new Map<string, string>();
       const asked: ReturnType<NonNullable<PushOptions["askCi"]>>[] = [];
+      // What CI runs on the default branch now, not at the last fetch: a workflow removed there since still counts.
+      await this.opts.mirrors.fetch(pusher.repo).catch(() => {});
       const baseTree = defaultBranch ? await ciTree(dir, `refs/heads/${defaultBranch}`) : undefined;
       for (const b of decision.branches) {
         if (b.deleted) continue;
@@ -262,7 +291,7 @@ export class Pushes {
         return end(1);
       }
       for (const l of githubLines(output)) say(l);
-      await this.opts.mirrors.noteBranches(pusher.repo, pusher.project, decision.branches.map((b) => ({ branch: b.branch, deleted: b.deleted, ...(ci.has(b.branch) ? { ci: ci.get(b.branch) } : {}) })));
+      await this.opts.mirrors.noteBranches(pusher.repo, pusher.project, decision.branches.map((b) => ({ branch: b.branch, deleted: b.deleted, sha: b.update.new, ...(ci.has(b.branch) ? { ci: ci.get(b.branch) } : {}) })));
       for (const a of asked) a.done(true, "Pushed to GitHub, with its CI change");
       for (const b of decision.branches) say(`Kumiko: ${b.deleted ? "deleted" : "pushed"} ${b.branch} ${b.deleted ? "on" : "to"} GitHub (${pusher.repo}).`);
       this.opts.onPushed?.(pusher, decision.branches.map((b) => b.branch));
@@ -276,7 +305,30 @@ export class Pushes {
 
 /** The mirror's default branch: where its HEAD points, as GitHub's does. */
 export function headBranch(dir: string): Promise<string | undefined> {
+  // The full ref, cut here: --short would say "heads/main" if a tag were called main too.
   return new Promise((resolve) => {
-    execFile("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: dir, env: { ...gitEnv(), GIT_DIR: dir } }, (err, stdout) => resolve(err ? undefined : stdout.trim() || undefined));
+    execFile("git", ["symbolic-ref", "--quiet", "HEAD"], { cwd: dir, env: { ...gitEnv(), GIT_DIR: dir } }, (err, stdout) => {
+      const ref = stdout.trim();
+      resolve(!err && ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) || undefined : undefined);
+    });
   });
+}
+
+/**
+ * What the hook sends: where the push's objects wait, one "name value" line each, then an empty line, then git's ref
+ * updates. In the body, not in headers, so paths with any characters in them come through as they are.
+ */
+export function parseHookBody(text: string): { quarantine: Quarantine; updates: RefUpdate[] } {
+  const split = text.indexOf("\n\n");
+  const head = split < 0 ? "" : text.slice(0, split);
+  const quarantine: Quarantine = {};
+  for (const line of head.split("\n")) {
+    const sp = line.indexOf(" ");
+    const [name, value] = sp < 0 ? [line, ""] : [line.slice(0, sp), line.slice(sp + 1)];
+    if (!value) continue;
+    if (name === "object-directory") quarantine.objectDirectory = value;
+    else if (name === "alternates") quarantine.alternates = value;
+    else if (name === "quarantine") quarantine.quarantinePath = value;
+  }
+  return { quarantine, updates: parseUpdates(split < 0 ? text : text.slice(split + 2)) };
 }

@@ -18,17 +18,18 @@ export function cardTitle(card: ApprovalCard["card"], route?: DeliverRoute): str
 
 /** What approving does, for each route and method: so nobody has to remember what Squash does to a PR. */
 export function effectLine(c: DeliverCard, route: DeliverRoute, method: DeliverMethod): string {
-  const signed = c.signs ? "signed by you" : "not signed (no signing key in your git config)";
+  // Unsigned, the footer says why; the line only says what lands.
+  const signed = c.signs ? " signed by you" : "";
   const commits = plural(c.commits.length, "commit");
   if (route === "pr") return `Opens a pull request as you, with the title and body below. Nothing lands on ${c.base} yet: when you want it landed, Claude delivers the branch again.`;
   if (c.pr) {
     return method === "merge"
-      ? `Adds one merge commit ${signed}, “Merge pull request #${c.pr.number} from ${c.repo.split("/")[0]}/${c.branch}”. GitHub will show #${c.pr.number} as merged.`
-      : `Adds one commit ${signed} with all ${plural(c.files.length, "file")}' changes. #${c.pr.number} is closed with a comment saying where it landed.`;
+      ? `Adds one merge commit${signed}, “Merge pull request #${c.pr.number} from ${c.repo.split("/")[0]}/${c.branch}”. GitHub will show #${c.pr.number} as merged.`
+      : `Adds one commit${signed} with all ${plural(c.files.length, "file")}' changes. #${c.pr.number} is closed with a comment saying where it landed.`;
   }
   return method === "merge"
-    ? `Adds one merge commit ${signed} on top of ${c.base}, “Merge branch '${c.branch}'”. The ${commits} come along as they are.`
-    : `Adds one commit ${signed} with all ${plural(c.files.length, "file")}' changes and the message below. The ${commits} stay only on the branch.`;
+    ? `Adds one merge commit${signed} on top of ${c.base}, “Merge branch '${c.branch}'”. The ${commits} come along as they are.`
+    : `Adds one commit${signed} with all ${plural(c.files.length, "file")}' changes and the message below. The ${commits} stay only on the branch.`;
 }
 
 /** The primary button: the consequence, not "Approve". */
@@ -68,3 +69,6 @@ export function barShares(added = 0, deleted = 0): { add: number; del: number } 
   const total = added + deleted;
   return total ? { add: (added / total) * 100, del: (deleted / total) * 100 } : { add: 0, del: 0 };
 }
+
+/** Whether a key press approves a card: ⌘↩ or Ctrl+Enter, never plain Enter, which types in the card's text boxes. */
+export const isApproveKey = (e: { key: string; metaKey: boolean; ctrlKey: boolean }) => e.key === "Enter" && (e.metaKey || e.ctrlKey);

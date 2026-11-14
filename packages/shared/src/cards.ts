@@ -59,7 +59,7 @@ export interface DeliverCard {
   /** What Claude wrote: the PR's title and body, and the squash commit's subject. */
   title: string;
   body: string;
-  /** The squash commit's message under its subject, as Kumiko suggests it: one line per commit. */
+  /** The squash commit's message under its subject: one line per commit, from the commits' own subjects. */
   squashBody: string;
   /** The trailers a squash commit carries over from the branch's commits. */
   trailers: string[];

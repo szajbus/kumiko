@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -65,6 +65,7 @@ describe("delivering from a session", () => {
     await server?.close({ endSessions: true });
     github?.close();
     process.env = saved;
+    await rm(root, { recursive: true, force: true });
   });
 
   it("shows the card Claude waits on, and lands the branch once the user approves it over the API", async () => {

@@ -22,7 +22,8 @@ sandbox provider.
 | `sessions/attachments/` | Files sent with prompts. |
 | `sessions/artifacts/` | Every version of an artifact a window showed, named by its SHA-256, for the window to show and a rewind to put back. Those no saved session names any more are deleted when Kumiko starts. |
 | `repos.json` | The [repositories you picked](/guide/repos/), with how each mirror's last fetch went. |
-| `run/git-<project>.sock` | The socket each running project's VM reaches its mirror through, forwarded into the VM over SSH. Made when the relay starts, removed when it stops. |
+| `run/git-<project>-<id>.sock` | The socket each running project's VM reaches its mirror through, forwarded into the VM over SSH. Made when the relay starts, removed when it stops. |
+| `run/hook.sock` | Where the mirrors' pre-receive hooks ask Kumiko about a push. Only you can reach it. |
 | `mirrors/<owner>/<name>.git` | Each repository's bare mirror. Kumiko's alone: it rewrites their config and hooks on every start, and deletes folders here that aren't a picked repository's. |
 | `tabs.json` | The window's open tabs. |
 | `home-id` | This home's id, which tags the runs its server starts. |

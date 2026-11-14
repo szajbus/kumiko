@@ -68,7 +68,9 @@ shows GitHub's answer. Only if GitHub accepts does the mirror change, so it alwa
   Allowing it pushes it; later pushes to that branch with the same `.github/` go through by themselves. If the push
   gives up waiting, the card says so.
 - **Everything else is refused**, with a message saying why: the default branch, tags, and branches someone else
-  created, on GitHub or from another project. A push with one refused branch is refused whole.
+  created, on GitHub or from another project. A branch of the agent's that someone replaced on GitHub with one of the
+  same name counts as theirs from then on, and so does a name that differs from another branch only in case, which
+  your Mac's file system takes for the same. A push with one refused branch is refused whole.
 
 Pushes use your `gh` login, so GitHub's branch protections and rulesets don't stop them if you can bypass them:
 Kumiko's check is the gate.

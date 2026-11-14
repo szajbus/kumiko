@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -10,7 +10,7 @@ import { LimaProvider, MetadataStore } from "@kumiko/sandbox";
 import { repoFromRemote } from "@kumiko/shared";
 import { Mirrors } from "../src/mirrors.js";
 import { pktLine, readRequest, readSessionLine, Relays, remoteForms, vmGitConfig } from "../src/relay.js";
-import { decide, githubLines, parseUpdates, Pushes, type PushAnswer } from "../src/pushes.js";
+import { decide, githubLines, parseHookBody, parseUpdates, Pushes, type PushAnswer } from "../src/pushes.js";
 import type { PushCard } from "@kumiko/shared";
 import { fakeGitHub, type FakeGitHub } from "./github.js";
 import { sh } from "./repo.js";
@@ -269,6 +269,24 @@ describe("git relay", () => {
     assert.ok(onGitHub("refs/heads/yours"));
   });
 
+  it("refuses the project's branch once someone replaced it on GitHub", async () => {
+    await commit("swapped", "s1");
+    assert.equal((await push("origin", "swapped")).code, 0);
+    // Someone deletes it and pushes their own by the same name, before the mirror fetches again.
+    sh(work, "fetch", "--quiet", "origin");
+    sh(work, "push", "--quiet", "--force", "origin", "origin/main:refs/heads/swapped");
+    await mirrors.fetch("acme/widget");
+    const clone = join(vmHome, "widget");
+    await vmGit(vmHome, clone, "fetch", "--quiet");
+    const theirs = onGitHub("refs/heads/swapped");
+    await vmGit(vmHome, clone, "reset", "--quiet", "--hard", "origin/swapped");
+    await commit("swapped", "s2");
+    const r = await push("origin", "swapped");
+    assert.notEqual(r.code, 0);
+    assert.match(r.err, /someone replaced it/);
+    assert.equal(onGitHub("refs/heads/swapped"), theirs);
+  });
+
   it("refuses a whole push when any of it is refused", async () => {
     await commit("both", "b");
     const r = await push("origin", "both", "yours");
@@ -290,7 +308,8 @@ describe("git relay", () => {
     assert.match(r.err, /stale info|rejected/);
     assert.match(r.err, /Kumiko: GitHub refused the push, so nothing was pushed/);
     assert.equal(onGitHub("refs/heads/lease"), theirs);
-    assert.equal(inMirror("refs/heads/lease"), first, "the mirror didn't move");
+    assert.equal(inMirror("refs/heads/lease"), theirs, "the mirror matches GitHub, not the refused push");
+    assert.notEqual(inMirror("refs/heads/lease"), first);
   });
 
   it("waits for the user on a push that changes CI, asking in the session it came from, once per change", async () => {
@@ -310,6 +329,8 @@ describe("git relay", () => {
     assert.equal(a.card.old, undefined, "a new branch");
     assert.deepEqual(a.card.files.map((f) => [f.path, f.added]), [[".github/workflows/ci.yml", 1]]);
     assert.equal(onGitHub("refs/heads/ci"), undefined, "nothing on GitHub while it waits");
+    // The user takes their time: git in the VM has sent everything, and waits well past socat's own half-close timeout.
+    await new Promise((r) => setTimeout(r, 1500));
     a.answer({ allowed: true });
     const r = await pushing;
     assert.equal(r.code, 0, r.err);
@@ -359,7 +380,9 @@ describe("git relay", () => {
   });
 
   it("stops when the VM no longer runs, and takes its socket away", async () => {
-    const socket = join(root, "home", "run", "git-web.sock");
+    const sockets = () => readdirSync(join(root, "home", "run")).filter((f) => /^git-web-[0-9a-f]{8}\.sock$/.test(f));
+    assert.equal(sockets().length, 1);
+    const socket = join(root, "home", "run", sockets()[0]);
     assert.ok(existsSync(socket));
     relays.sync(new Map());
     assert.equal(relays.view("web"), undefined);
@@ -417,6 +440,24 @@ describe("the push policy", () => {
     }
   });
 
+  it("refuses a branch replaced on GitHub, and names that differ from another only in case", () => {
+    const replaced = decide([{ old: a, new: b, ref: "refs/heads/mine" }], pusher, { ...ctx, replaced: (br) => br === "mine" });
+    assert.ok(!replaced.allowed && /someone replaced it/.test(replaced.reasons[0]));
+    for (const ref of ["refs/heads/MAIN", "refs/heads/Mine"]) {
+      const d = decide([{ old: z, new: a, ref }], pusher, { ...ctx, branches: ["main", "mine"] });
+      assert.ok(!d.allowed && /only in case/.test(d.reasons[0]), ref);
+    }
+  });
+
+  it("reads the quarantine from the hook's body, whatever the paths hold", () => {
+    const body = `object-directory /Users/zoë/.kumiko/mirrors/a/b.git/./objects/tmp_objdir-incoming-x\nalternates /x/objects:/y\nquarantine /q\n\n${z} ${a} refs/heads/x\n`;
+    assert.deepEqual(parseHookBody(body), {
+      quarantine: { objectDirectory: "/Users/zoë/.kumiko/mirrors/a/b.git/./objects/tmp_objdir-incoming-x", alternates: "/x/objects:/y", quarantinePath: "/q" },
+      updates: [{ old: z, new: a, ref: "refs/heads/x" }],
+    });
+    assert.deepEqual(parseHookBody(`object-directory \nalternates \nquarantine \n\n${z} ${a} refs/heads/x\n`).quarantine, {});
+  });
+
   it("reads the hook's lines, and nothing else", () => {
     assert.deepEqual(parseUpdates(`${z} ${a} refs/heads/x\n\n`), [{ old: z, new: a, ref: "refs/heads/x" }]);
     assert.throws(() => parseUpdates(`${z} ${a} refs/heads/x; rm -rf /\n`.replace("refs/heads/x;", "refs/heads/x ;")));
@@ -435,7 +476,7 @@ describe("git relays, closed", () => {
   it("start nothing once closed, so a sync that was under way can't leave one running", async () => {
     let forwards = 0;
     const relays = new Relays({
-      dir: join(tmpdir(), "kumiko-relay-closed"),
+      dir: await mkdtemp(join(tmpdir(), "kumiko-relay-closed-")),
       mirrors: { ensure: async () => "", fetch: async () => {}, path: () => "", root: "" } as unknown as Mirrors,
       provider: { exec: () => { throw new Error("no VM"); }, forward: () => { forwards++; throw new Error("no VM"); } },
     });
