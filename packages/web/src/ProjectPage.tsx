@@ -500,6 +500,8 @@ const POLICY: [string, string][] = [
   ["Push, force-push or delete branches it created", "Allowed"],
   ["Push the default branch, tags, or other branches", "Refused"],
   ["Deliver to the default branch, or open a PR", "Asks you"],
+  ["Create issues, comment on issues and PRs", "Asks you"],
+  ["Read issues and PRs", "Allowed, marked untrusted"],
 ];
 
 /** Whether git in the VM reaches the mirror: only while the sandbox runs. */

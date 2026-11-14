@@ -72,6 +72,7 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<"commits" | "files">();
+  const [labels, setLabels] = useState<string[]>(c.kind === "issue" ? c.labels : []);
 
   const send = async (action: CardAction) => {
     if (!decide || busy) return;
@@ -84,7 +85,8 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
       if (route === "pr") return { kind: "deliver", route, method, title: title.trim() || c.title, body };
       return method === "squash" ? { kind: "deliver", route, method, title: title.trim() || c.title, message } : { kind: "deliver", route, method };
     }
-    return undefined;
+    if (c.kind === "issue") return title.trim() ? { kind: "issue", title: title.trim(), body, labels } : undefined;
+    return body.trim() ? { kind: "comment", body } : undefined;
   };
   const approve = () => {
     const d = decision();
@@ -98,7 +100,81 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
     }
   };
 
-  if (c.kind !== "deliver") return null;
+  const footBar = (sig: string) => (
+      <div className="ac-foot-bar">
+        <span className="ac-sig">{sig}</span>
+        <span className="chat-proposal-buttons">
+          {declining ? (
+            <>
+              <button type="button" className="btn btn-secondary btn-compact" disabled={busy} onClick={() => setDeclining(false)}>
+                Back
+              </button>
+              <button type="button" className="btn btn-secondary btn-compact" disabled={busy || !decide} onClick={() => void send({ action: "decline", ...(reason.trim() ? { reason: reason.trim() } : {}) })}>
+                Decline and tell Claude
+              </button>
+            </>
+          ) : (
+            <>
+              <button type="button" className="btn btn-secondary btn-compact" disabled={busy || !decide} onClick={() => setDeclining(true)}>
+                Decline…
+              </button>
+              {card.state === "stale" ? (
+                <button type="button" className="btn btn-primary btn-compact" disabled={busy || !decide} onClick={() => void send({ action: "refresh" })}>
+                  Review the new state
+                </button>
+              ) : (
+                <button type="button" className="btn btn-primary btn-compact" disabled={busy || !decide} onClick={approve}>
+                  {approveLabel(c, route, method)} <span className="ac-kbd">⌘↩</span>
+                </button>
+              )}
+            </>
+          )}
+        </span>
+      </div>
+  );
+
+  if (c.kind === "issue" || c.kind === "comment") {
+    const footer = c.kind === "issue" ? FOOTERS.issue : FOOTERS.comment;
+    return (
+      <div className="ac-card is-pending" role="group" aria-label={cardTitle(c)} onKeyDown={onKey}>
+        <div className="ac-head">
+          <div className="ac-title">{cardTitle(c)}</div>
+          <div className="ac-sub">
+            {c.kind === "comment" ? (
+              <>
+                <a href={c.target.url} target="_blank" rel="noreferrer">
+                  “{c.target.title}”
+                </a>{" "}
+                · {c.target.state} · by {c.target.author} · {c.repo}
+              </>
+            ) : (
+              <>
+                {c.repo} · asked {new Date(card.at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
+              </>
+            )}
+          </div>
+        </div>
+        {card.note && (
+          <div className="ac-note">
+            <div className="ac-who">Claude's note</div>
+            <div>{card.note}</div>
+          </div>
+        )}
+        <Fields hint={c.kind === "issue" ? "Written by Claude, shown as GitHub will show it. Everything above is editable. Labels come from the repository's own." : "Exactly as it will appear, under your name. Editable."}>
+          {c.kind === "issue" && <input className="ac-fld" value={title} onChange={(e) => setTitle(e.target.value)} aria-label="Issue title" />}
+          <BodyField value={body} onChange={setBody} footer={footer} label={c.kind === "issue" ? "Issue description" : "Comment"} />
+          {c.kind === "issue" && <Labels all={c.repoLabels} picked={labels} onChange={setLabels} />}
+        </Fields>
+        {declining && (
+          <div className="ac-decline">
+            <textarea className="ac-ta ac-fld" autoFocus placeholder="Why not, for Claude (optional)" value={reason} onChange={(e) => setReason(e.target.value)} />
+          </div>
+        )}
+        {footBar("Opens as you (gh on the Mac)".replace("Opens", c.kind === "comment" ? "Posts" : "Opens"))}
+      </div>
+    );
+  }
+
   const pr = route === "pr";
   return (
     <div className="ac-card is-pending" role="group" aria-label={cardTitle(c, route)} onKeyDown={onKey}>
@@ -222,36 +298,36 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
           <textarea className="ac-ta ac-fld" autoFocus placeholder="Why not, for Claude (optional)" value={reason} onChange={(e) => setReason(e.target.value)} />
         </div>
       )}
-      <div className="ac-foot-bar">
-        <span className="ac-sig">{pr ? "Opens as you (gh on the Mac)" : c.signs ? "Signs with your key" : "Not signed: no signing key in your git config"}</span>
-        <span className="chat-proposal-buttons">
-          {declining ? (
-            <>
-              <button type="button" className="btn btn-secondary btn-compact" disabled={busy} onClick={() => setDeclining(false)}>
-                Back
-              </button>
-              <button type="button" className="btn btn-secondary btn-compact" disabled={busy || !decide} onClick={() => void send({ action: "decline", ...(reason.trim() ? { reason: reason.trim() } : {}) })}>
-                Decline and tell Claude
-              </button>
-            </>
-          ) : (
-            <>
-              <button type="button" className="btn btn-secondary btn-compact" disabled={busy || !decide} onClick={() => setDeclining(true)}>
-                Decline…
-              </button>
-              {card.state === "stale" ? (
-                <button type="button" className="btn btn-primary btn-compact" disabled={busy || !decide} onClick={() => void send({ action: "refresh" })}>
-                  Review the new state
-                </button>
-              ) : (
-                <button type="button" className="btn btn-primary btn-compact" disabled={busy || !decide} onClick={approve}>
-                  {approveLabel(c, route, method)} <span className="ac-kbd">⌘↩</span>
-                </button>
-              )}
-            </>
-          )}
+      {footBar(pr ? "Opens as you (gh on the Mac)" : c.signs ? "Signs with your key" : "Not signed: no signing key in your git config")}
+    </div>
+  );
+}
+
+/** The issue's labels: only the repository's own, removed with ×, added from a list of the rest. */
+function Labels({ all, picked, onChange }: { all: { name: string; color?: string }[]; picked: string[]; onChange(l: string[]): void }) {
+  const rest = all.filter((l) => !picked.includes(l.name));
+  const color = (name: string) => all.find((l) => l.name === name)?.color;
+  return (
+    <div className="ac-labels">
+      Labels
+      {picked.map((l) => (
+        <span key={l} className="ac-label" style={color(l) ? { borderColor: `#${color(l)}`, color: `#${color(l)}` } : undefined}>
+          {l}
+          <button type="button" aria-label={`Remove ${l}`} onClick={() => onChange(picked.filter((x) => x !== l))}>
+            ×
+          </button>
         </span>
-      </div>
+      ))}
+      {rest.length > 0 && (
+        <select className="ac-label-add" value="" aria-label="Add a label" onChange={(e) => e.target.value && onChange([...picked, e.target.value])}>
+          <option value="">+ label</option>
+          {rest.map((l) => (
+            <option key={l.name} value={l.name}>
+              {l.name}
+            </option>
+          ))}
+        </select>
+      )}
     </div>
   );
 }

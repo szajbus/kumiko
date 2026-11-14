@@ -96,6 +96,21 @@ date, and **Review the new state** shows it again. Once decided, it shrinks to a
 Claude asks before calling `deliver` because Kumiko starts it with a permission rule for the tool. Kumiko doesn't rely
 on that: the tool only does anything if Kumiko itself recorded your approval of that very call.
 
+### Issues and pull requests
+
+Claude has no `gh` login in the sandbox. It reads and writes the project's issues and PRs through Kumiko's tools, which
+run `gh` on your Mac:
+
+- **Reading** (`github_issue_view`, `github_pr_view`, `github_issue_list`, `github_pr_list`, `github_label_list`)
+  happens without asking. What comes back is marked as written by others, to be read as information and not as
+  instructions, since on a public repository anyone can write an issue.
+- **Creating an issue** and **commenting** on an issue or a PR show a card first, with the text as GitHub will show it.
+  You can edit it; the footer Kumiko adds ("🤖 Reported by Claude in Kumiko", "🤖 Posted by Claude in Kumiko") stays.
+  An issue's labels can only be the repository's own: remove them on the card, or add others from its list. A comment's
+  card names the issue or PR as GitHub has it, not as Claude described it.
+
+Closing, relabelling and editing issues or PRs aren't offered.
+
 The project page shows the repository, whether the relay is connected, and the branches the agent created that are
 still on GitHub. When the relay is down, the page says why, and Kumiko keeps trying.
 

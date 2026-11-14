@@ -132,6 +132,46 @@ export class GitHub {
     return prUrl(r.stdout);
   }
 
+  /** An issue or a PR, with its comments, as Kumiko gives it to the agent; undefined when there is no such one. */
+  async item(repo: string, type: "issue" | "pr", number: number): Promise<GitHubItem | undefined> {
+    const fields = type === "pr" ? `${ITEM_FIELDS},headRefName,baseRefName,files,reviews` : ITEM_FIELDS;
+    const r = await this.run([type, "view", String(number), "--repo", repo, "--json", fields], 60_000);
+    if (r.code !== 0) {
+      if (/could not resolve|not found/i.test(r.stderr)) return undefined;
+      throw new GhError(firstLines(r.stderr) || `gh ${type} view exited with ${r.code}.`);
+    }
+    try {
+      return JSON.parse(r.stdout) as GitHubItem;
+    } catch {
+      throw new GhError(`gh ${type} view answered with something Kumiko can't read.`);
+    }
+  }
+
+  /** Issues or PRs, newest first. */
+  async items(repo: string, type: "issue" | "pr", opts: { state: "open" | "closed" | "all"; search?: string; limit: number }): Promise<GitHubItem[]> {
+    const fields = type === "pr" ? "number,title,state,author,labels,updatedAt,url,headRefName" : "number,title,state,author,labels,updatedAt,url";
+    return this.json<GitHubItem[]>([type, "list", "--repo", repo, "--state", opts.state, ...(opts.search ? ["--search", opts.search] : []), "--limit", String(opts.limit), "--json", fields], `${type} list`);
+  }
+
+  /** The repository's labels: the only ones Claude's issues may have. */
+  async labels(repo: string): Promise<{ name: string; color?: string; description?: string }[]> {
+    return this.json<{ name: string; color?: string; description?: string }[]>(["label", "list", "--repo", repo, "--limit", "500", "--json", "name,color,description"], "label list");
+  }
+
+  /** Opens an issue as the user; resolves with its number and URL. */
+  async issueCreate(repo: string, opts: { title: string; body: string; labels: string[] }): Promise<{ number: number; url: string }> {
+    const r = await this.run(["issue", "create", "--repo", repo, "--title", opts.title, ...opts.labels.flatMap((l) => ["--label", l]), "--body-file", "-"], 60_000, opts.body);
+    if (r.code !== 0) throw new GhError(firstLines(r.stderr) || `gh issue create exited with ${r.code}.`);
+    return prUrl(r.stdout);
+  }
+
+  /** Comments on an issue or a PR as the user; resolves with the comment's URL. */
+  async comment(repo: string, type: "issue" | "pr", number: number, body: string): Promise<string> {
+    const r = await this.run([type, "comment", String(number), "--repo", repo, "--body-file", "-"], 60_000, body);
+    if (r.code !== 0) throw new GhError(firstLines(r.stderr) || `gh ${type} comment exited with ${r.code}.`);
+    return r.stdout.trim().split("\n").reverse().find((l) => l.startsWith("https://"))?.trim() ?? "";
+  }
+
   /** Closes a pull request with a comment. */
   async prClose(repo: string, number: number, comment: string): Promise<void> {
     const r = await this.run(["pr", "close", String(number), "--repo", repo, "--comment", comment], 60_000);
@@ -165,6 +205,26 @@ function firstLines(text: string): string {
 /** Where git fetches a GitHub repo from: over HTTPS, with gh's token. */
 export function gitHubUrl(repo: string): string {
   return `https://github.com/${repo}.git`;
+}
+
+/** The fields Kumiko reads of an issue or a PR. */
+const ITEM_FIELDS = "number,title,state,author,body,labels,comments,url";
+
+/** An issue or a PR as gh's --json gives it. */
+export interface GitHubItem {
+  number: number;
+  title: string;
+  state: string;
+  author?: { login?: string };
+  body?: string;
+  labels?: { name: string }[];
+  comments?: { author?: { login?: string }; body?: string; createdAt?: string }[];
+  url: string;
+  updatedAt?: string;
+  headRefName?: string;
+  baseRefName?: string;
+  files?: { path: string; additions?: number; deletions?: number }[];
+  reviews?: { author?: { login?: string }; body?: string; state?: string }[];
 }
 
 /** The number and URL of the issue or PR whose URL gh printed last. */
