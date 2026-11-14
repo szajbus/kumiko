@@ -391,6 +391,27 @@ function Details({ p, home }: { p: ProjectView; home?: string }) {
             </Fact>
           </section>
           {p.relay?.state === "down" && p.relay.error && <p className="muted relay-error">{p.relay.error}</p>}
+          <div className="detail-grid github-grid">
+            <section className="card section" aria-labelledby="d-branches">
+              <h2 id="d-branches">Claude's branches</h2>
+              {!p.branches?.length && <p className="muted">None on GitHub. The branches Claude creates from this sandbox show here once it pushes them.</p>}
+              {p.branches?.map((b) => (
+                <div key={b.name} className="detail-env">
+                  <span className="mono">{b.name}</span>
+                  <span className="dim">pushed {ago(b.at)}</span>
+                </div>
+              ))}
+            </section>
+            <section className="card section" aria-labelledby="d-policy">
+              <h2 id="d-policy">What Claude can do</h2>
+              {POLICY.map(([what, how]) => (
+                <div key={what} className="detail-env">
+                  <span>{what}</span>
+                  <span className="dim">{how}</span>
+                </div>
+              ))}
+            </section>
+          </div>
         </>
       )}
 
@@ -472,6 +493,13 @@ function MeterLine({ m }: { m: Meter }) {
     </>
   );
 }
+
+/** The rules Kumiko applies to what Claude does on GitHub, which are fixed for now. */
+const POLICY: [string, string][] = [
+  ["Fetch and pull", "Allowed"],
+  ["Push, force-push or delete branches it created", "Allowed"],
+  ["Push the default branch, tags, or other branches", "Refused"],
+];
 
 /** Whether git in the VM reaches the mirror: only while the sandbox runs. */
 function RelayState({ p }: { p: ProjectView }) {

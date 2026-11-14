@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
-import { managedInstructions, setupGuide } from "../src/projects.js";
+import { githubInstructions, managedInstructions, setupGuide } from "../src/projects.js";
 import { systemPrompt } from "../src/widgets.js";
 
 /** The docs page that shows the agent's instructions word for word; from dist/test, the repo is four up. */
@@ -12,6 +12,8 @@ describe("the docs' copy of what the agent is told", () => {
     const page = await readFile(PAGE, "utf8");
     const project = { id: "web", clonePath: "<clone>", worktreesPath: "<worktrees>", createdAt: "" };
     assert.ok(page.includes("```markdown wrap\n" + managedInstructions(project) + "```\n"), "kumiko.md in the docs differs from managedInstructions()");
+    assert.ok(page.includes("```markdown wrap" + githubInstructions("<owner>/<name>") + "```\n"), "kumiko.md's GitHub section in the docs differs from githubInstructions()");
+    assert.ok(managedInstructions({ ...project, repo: "<owner>/<name>" }).endsWith(githubInstructions("<owner>/<name>")), "the GitHub section ends kumiko.md");
     const guide = setupGuide(project, { provision: "…", env: ["GITHUB_TOKEN", "NPM_TOKEN"] });
     assert.ok(page.includes("```markdown wrap\n" + guide + "```\n"), "the setup guide in the docs differs from setupGuide()");
     assert.ok(page.includes("```text wrap\n" + systemPrompt("<folder>") + "\n```\n"), "the system prompt in the docs differs from systemPrompt()");

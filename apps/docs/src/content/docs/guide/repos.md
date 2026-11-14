@@ -53,8 +53,22 @@ writes on every start and includes from `~/.gitconfig`), so `git clone`, `fetch`
 brings the mirror up to date from GitHub first. The VM reaches only its own project's repository, and `origin` in the
 clone still names GitHub, so `gh` and Claude Code see the real repository.
 
-The project page shows the repository and whether the relay is connected. When it's down, the page says why, and
-Kumiko keeps trying.
+### Pushing
+
+`git push` from the sandbox goes to the mirror too, where Kumiko checks each branch it changes before anything reaches
+GitHub. What's allowed, Kumiko pushes on to GitHub with `gh`'s token, from the mirror, and `git push` in the sandbox
+shows GitHub's answer. Only if GitHub accepts does the mirror change, so it always matches GitHub.
+
+- **Branches the agent creates** from the sandbox are pushed, and it can force-push and delete them. Kumiko records
+  which project created each one; the project page lists them.
+- **Everything else is refused**, with a message saying why: the default branch, tags, and branches someone else
+  created, on GitHub or from another project. A push with one refused branch is refused whole.
+
+Pushes use your `gh` login, so GitHub's branch protections and rulesets don't stop them if you can bypass them:
+Kumiko's check is the gate.
+
+The project page shows the repository, whether the relay is connected, and the branches the agent created that are
+still on GitHub. When the relay is down, the page says why, and Kumiko keeps trying.
 
 ## What a mirror holds
 
@@ -63,4 +77,5 @@ deleted on GitHub are deleted from it on the next fetch, so it can always be del
 
 - rewrites each mirror's config and hooks whenever it starts, and clones again a mirror that has gone missing;
 - runs `git gc` in a mirror after a fetch, once a week;
-- refuses every push to a mirror, for now, and would check the objects of one (`receive.fsckObjects`).
+- checks the objects of every push (`receive.fsckObjects`), and refuses any push that doesn't come through a project's
+  relay.

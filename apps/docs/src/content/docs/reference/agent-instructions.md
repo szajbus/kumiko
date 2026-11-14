@@ -45,6 +45,16 @@ The git clone is `<clone>`. Sessions start there.
 - Other sessions may be working in other worktrees at the same time. Leave worktrees you didn't create alone.
 ```
 
+In a project whose clone's `origin` is on GitHub, it ends with a section on that, `<owner>/<name>` standing for the repository:
+
+```markdown wrap
+## GitHub
+
+- `origin` is `<owner>/<name>` on GitHub. Git in this VM reaches it through Kumiko's mirror on the user's computer, so there are no GitHub credentials here, and none are needed: `git fetch`, `pull` and `push` work as usual.
+- Push your work to a branch of its own. Kumiko pushes the branches this sandbox creates on to GitHub, and lets you force-push and delete them.
+- Pushes to the default branch, tags, and branches this sandbox didn't create are refused, with git saying why.
+```
+
 ## The setup guide
 
 `setup.md` in the project's Kumiko folder, `~/.kumiko/shared` in the sandbox, next to the agent's

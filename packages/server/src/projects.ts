@@ -53,6 +53,17 @@ The git clone is \`${p.clonePath}\`. Sessions start there.
 - Questions and read-only exploration don't need a worktree; look around in the clone and leave it as it is.
 - If the user asks for a worktree, or names an existing one, use that.
 - Other sessions may be working in other worktrees at the same time. Leave worktrees you didn't create alone.
+${p.repo ? githubInstructions(p.repo) : ""}`;
+}
+
+/** What kumiko.md says of GitHub, in a project whose origin is on GitHub. */
+export function githubInstructions(repo: string): string {
+  return `
+## GitHub
+
+- \`origin\` is \`${repo}\` on GitHub. Git in this VM reaches it through Kumiko's mirror on the user's computer, so there are no GitHub credentials here, and none are needed: \`git fetch\`, \`pull\` and \`push\` work as usual.
+- Push your work to a branch of its own. Kumiko pushes the branches this sandbox creates on to GitHub, and lets you force-push and delete them.
+- Pushes to the default branch, tags, and branches this sandbox didn't create are refused, with git saying why.
 `;
 }
 

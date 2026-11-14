@@ -115,8 +115,8 @@ export interface RelayOptions {
   provider: Pick<SandboxProvider, "exec" | "forward">;
   /** The user's git identity on the host, for commits made in the VM. */
   identity?(): Promise<{ name?: string; email?: string }>;
-  /** More environment for the git daemon serving a connection: what the mirror's hook needs to reach Kumiko. */
-  daemonEnv?(project: string, connection: string): NodeJS.ProcessEnv;
+  /** The socket the mirror's pre-receive hook asks Kumiko about a push on; without it, every push is refused. */
+  hookSocket?: string;
   /** Called when a relay's view changes. */
   onChange?(): void;
   /** How long to wait before setting a relay up again after it failed, at first; it doubles up to a minute. */
@@ -129,6 +129,8 @@ export interface RelayOptions {
  */
 export class Relays {
   private relays = new Map<string, Relay>();
+  /** The connections being served, by the id their git daemon's hook gives: which project, and which repository. */
+  private readonly connections = new Map<string, { project: string; repo: string }>();
   /** Closed for good: a sync that was under way when Kumiko began quitting starts nothing. */
   private closed = false;
 
@@ -144,7 +146,7 @@ export class Relays {
     }
     for (const [id, repo] of want) {
       if (this.relays.has(id)) continue;
-      const relay = new Relay(id, repo, this.opts);
+      const relay = new Relay(id, repo, this.opts, this.connections);
       this.relays.set(id, relay);
       relay.start();
     }
@@ -152,6 +154,11 @@ export class Relays {
 
   view(id: string): RelayView | undefined {
     return this.relays.get(id)?.view();
+  }
+
+  /** Who a connection's git daemon serves, while it is open. */
+  connection(id: string): { project: string; repo: string } | undefined {
+    return this.connections.get(id);
   }
 
   async close(): Promise<void> {
@@ -178,6 +185,7 @@ class Relay {
     readonly id: string,
     readonly repo: string,
     private readonly opts: RelayOptions,
+    private readonly connections: Map<string, { project: string; repo: string }>,
   ) {
     this.socket = join(opts.dir, `git-${id}.sock`);
   }
@@ -337,15 +345,21 @@ class Relay {
     const daemon = spawn(
       "git",
       ["daemon", "--inetd", "--informative-errors", "--export-all", "--enable=receive-pack", `--base-path=${this.opts.mirrors.root}`, "--strict-paths", dir],
-      { cwd: this.opts.mirrors.root, stdio: ["pipe", "pipe", "pipe"], env: { ...gitEnv(), KUMIKO_SANDBOX: this.id, ...this.opts.daemonEnv?.(this.id, connection) } },
+      {
+        cwd: this.opts.mirrors.root,
+        stdio: ["pipe", "pipe", "pipe"],
+        env: { ...gitEnv(), KUMIKO_SANDBOX: this.id, KUMIKO_CONNECTION: connection, ...(this.opts.hookSocket ? { KUMIKO_HOOK_SOCKET: this.opts.hookSocket } : {}) },
+      },
     );
     this.daemons.add(daemon);
+    this.connections.set(connection, { project: this.id, repo: this.repo });
     daemon.on("error", () => conn.destroy());
     daemon.stdin!.on("error", () => {});
     daemon.stderr!.resume();
     // Once its output is all read, not when it exits: the end of the pack may still be on its way.
     daemon.on("close", () => {
       this.daemons.delete(daemon);
+      this.connections.delete(connection);
       conn.end();
     });
     // The request again, with the path as the mirror has it, whatever case the VM's URL used.

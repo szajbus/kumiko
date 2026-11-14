@@ -27,6 +27,11 @@ interface RepoRecord {
   size?: number;
   branches?: number;
   tags?: number;
+  /**
+   * The branches that first reached GitHub through a project's relay, by name, with the project and when it last
+   * pushed: that project's agent may update, force-push and delete them. Dropped when the branch leaves GitHub.
+   */
+  created?: Record<string, { project: string; at: string }>;
 }
 
 interface Entry {
@@ -67,13 +72,33 @@ export interface MirrorOptions {
 const HOOK_MESSAGE = "Kumiko: pushing to this mirror isn't allowed.";
 
 /**
- * The only hook in a mirror. Pushes are closed for now: later the hook will ask Kumiko whether each ref update is
- * allowed, so the mirror starts closed and is opened deliberately.
+ * The only hook in a mirror. A push that comes through a project's relay is in a git daemon Kumiko started, which
+ * says in its environment how to reach Kumiko and which connection it is: the hook hands Kumiko the ref updates and
+ * the quarantine they wait in, prints what Kumiko says, and exits with the code Kumiko gives, its last line. Kumiko
+ * pushes them on to GitHub before answering. Any other push, or one Kumiko can't be asked about, is refused.
  */
 const PRE_RECEIVE = `#!/bin/sh
 # Written by Kumiko, and rewritten whenever it starts.
-echo "${HOOK_MESSAGE}" >&2
-exit 1
+if [ -z "$KUMIKO_HOOK_SOCKET" ] || [ -z "$KUMIKO_CONNECTION" ]; then
+  echo "${HOOK_MESSAGE}" >&2
+  exit 1
+fi
+curl -sS -N --max-time 7200 --unix-socket "$KUMIKO_HOOK_SOCKET" \\
+  -H "X-Kumiko-Connection: $KUMIKO_CONNECTION" \\
+  -H "X-Git-Object-Directory: $GIT_OBJECT_DIRECTORY" \\
+  -H "X-Git-Alternate-Object-Directories: $GIT_ALTERNATE_OBJECT_DIRECTORIES" \\
+  -H "X-Git-Quarantine-Path: $GIT_QUARANTINE_PATH" \\
+  --data-binary @- http://kumiko/pre-receive | {
+  code=1
+  while IFS= read -r line; do
+    case "$line" in
+      "kumiko-exit "*) code=\${line#kumiko-exit } ;;
+      *) printf '%s\\n' "$line" >&2 ;;
+    esac
+  done
+  [ "$code" = 0 ] || [ "$code" = 1 ] || code=1
+  exit "$code"
+}
 `;
 
 /**
@@ -276,6 +301,43 @@ export class Mirrors {
     if (e.record.error) throw new MirrorFetchFailed(e.record.error.message);
   }
 
+  /** The URL a repository's mirror fetches from, and pushes go on to: GitHub's. */
+  url(repo: string): string {
+    const e = this.entryOf(repo);
+    if (!e) throw new MirrorNotFound(`${repo} isn't one of Kumiko's repositories.`);
+    return e.record.url;
+  }
+
+  /** The project whose agent created `branch` on GitHub through the relay, if one did. */
+  createdBy(repo: string, branch: string): string | undefined {
+    return this.entryOf(repo)?.record.created?.[branch]?.project;
+  }
+
+  /** The branches `project`'s agent created that are still on GitHub, newest push first. */
+  branchesOf(repo: string, project: string): { name: string; at: string }[] {
+    const created = this.entryOf(repo)?.record.created ?? {};
+    return Object.entries(created)
+      .filter(([, c]) => c.project === project)
+      .map(([name, c]) => ({ name, at: c.at }))
+      .sort((a, b) => b.at.localeCompare(a.at));
+  }
+
+  /** Records pushes GitHub accepted: each branch as `project`'s, or, when deleted, as nobody's. */
+  async noteBranches(repo: string, project: string, changes: { branch: string; deleted: boolean }[]): Promise<void> {
+    const e = this.entryOf(repo);
+    if (!e || !changes.length) return;
+    const created = { ...e.record.created };
+    const at = new Date().toISOString();
+    for (const c of changes) {
+      if (c.deleted) delete created[c.branch];
+      else created[c.branch] = { project, at };
+    }
+    e.record.created = created;
+    if (!Object.keys(created).length) delete e.record.created;
+    await this.save().catch(() => {});
+    this.changed();
+  }
+
   /** Unpicks a repository and deletes its mirror, stopping a fetch under way first. */
   async remove(repo: string): Promise<void> {
     const e = this.entryOf(repo);
@@ -368,6 +430,11 @@ export class Mirrors {
       const names = refs.split("\n").filter(Boolean);
       update.branches = names.filter((n) => n.startsWith("refs/heads/")).length;
       update.tags = names.length - update.branches;
+      // A branch gone from GitHub is nobody's: if the agent pushes one by that name again, it is a new one.
+      if (e.record.created) {
+        const kept = Object.entries(e.record.created).filter(([b]) => names.includes(`refs/heads/${b}`));
+        update.created = kept.length ? Object.fromEntries(kept) : undefined;
+      }
       if (first) update.gcAt = update.fetchedAt;
       else if (gcDue) {
         await git(["gc", "--quiet"], timeoutMs);
@@ -381,6 +448,7 @@ export class Mirrors {
     update.size = await runGit(dir, ["count-objects", "-v"], { env }).then(objectsSize, () => e.record.size);
     Object.assign(e.record, update);
     if (!e.record.error) delete e.record.error;
+    if (!e.record.created) delete e.record.created;
     await this.save().catch(() => {});
   }
 

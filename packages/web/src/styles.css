@@ -285,6 +285,7 @@ code, .mono { font-family: var(--mono); }
 .detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
 .detail-grid .section { gap: 10px; }
 .detail-grid p { margin: 0; }
+.github-grid { margin-top: 16px; }
 .detail-mount { padding: 10px 0; border-top: 1px solid var(--border-soft); row-gap: 4px; font-size: 13px; }
 .detail-env { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border-soft); font-size: 13px; }
 .detail-env .env-state { width: auto; }

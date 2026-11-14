@@ -312,6 +312,8 @@ export interface ProjectView extends SandboxView {
   waiting: number;
   /** The relay to the project's mirror, while the VM runs and the project has a GitHub repository. */
   relay?: RelayView;
+  /** The branches this project's agent created on GitHub that are still there, newest push first. */
+  branches?: { name: string; at: string }[];
 }
 
 /**

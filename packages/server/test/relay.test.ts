@@ -10,6 +10,7 @@ import { LimaProvider, MetadataStore } from "@kumiko/sandbox";
 import { repoFromRemote } from "@kumiko/shared";
 import { Mirrors } from "../src/mirrors.js";
 import { pktLine, readRequest, Relays, remoteForms, vmGitConfig } from "../src/relay.js";
+import { decide, githubLines, parseUpdates, Pushes } from "../src/pushes.js";
 import { fakeGitHub, type FakeGitHub } from "./github.js";
 import { sh } from "./repo.js";
 
@@ -74,7 +75,9 @@ describe("git relay", () => {
   let github: FakeGitHub;
   let mirrors: Mirrors;
   let relays: Relays;
+  let pushes: Pushes;
   let work: string;
+  let bare: string;
   let changes = 0;
   const provider = () => new LimaProvider({ limactl: join(sandboxFixtures, "fake-limactl.mjs"), ssh: join(sandboxFixtures, "fake-ssh.sh"), metadata: new MetadataStore(join(root, "sandboxes")) });
 
@@ -85,12 +88,15 @@ describe("git relay", () => {
     await mkdir(limaDir, { recursive: true });
     process.env.FAKE_LIMA_DIR = limaDir;
     github = await fakeGitHub(root);
-    ({ work } = await github.repo("acme/widget"));
+    ({ work, bare } = await github.repo("acme/widget"));
     await github.repo("acme/other");
     mirrors = new Mirrors({ home: join(root, "home"), remoteUrl: (repo) => `${github.url}/${repo.toLowerCase()}.git`, freshMs: 0 });
     await mirrors.start();
+    pushes = new Pushes({ socket: join(root, "home", "run", "hook.sock"), mirrors, connection: (id) => relays.connection(id) });
+    await pushes.start();
     relays = new Relays({
       dir: join(root, "home", "run"),
+      hookSocket: join(root, "home", "run", "hook.sock"),
       mirrors,
       provider: provider(),
       identity: async () => ({ name: "Test", email: "test@example.com" }),
@@ -100,6 +106,7 @@ describe("git relay", () => {
 
   after(async () => {
     await relays?.close();
+    await pushes?.close();
     await mirrors?.close();
     github?.close();
     await rm(root, { recursive: true, force: true });
@@ -146,14 +153,120 @@ describe("git relay", () => {
     }
   });
 
-  it("refuses pushes, as the mirror's hook does for now", async () => {
+  /** Commits a change in the VM's clone, on `branch` (made from what's checked out if it doesn't exist). */
+  const commit = async (branch: string, file: string) => {
     const clone = join(vmHome, "widget");
-    await writeFile(join(clone, "x"), "x\n");
-    await vmGit(vmHome, clone, "add", "x");
-    await vmGit(vmHome, clone, "commit", "--quiet", "-m", "x");
-    const r = await vmGit(vmHome, clone, "push", "origin", "HEAD:refs/heads/x");
+    await vmGit(vmHome, clone, "checkout", "--quiet", "-B", branch);
+    await writeFile(join(clone, file), `${file}\n`);
+    await vmGit(vmHome, clone, "add", file);
+    const r = await vmGit(vmHome, clone, "commit", "--quiet", "-m", file);
+    assert.equal(r.code, 0, r.err);
+    return (await vmGit(vmHome, clone, "rev-parse", "HEAD")).out.trim();
+  };
+  const push = (...args: string[]) => vmGit(vmHome, join(vmHome, "widget"), "push", ...args);
+  const onGitHub = (ref: string) => {
+    try {
+      return sh(bare, "rev-parse", "--verify", "--quiet", ref).trim();
+    } catch {
+      return undefined;
+    }
+  };
+  const inMirror = (ref: string) => {
+    try {
+      return sh(mirrors.path("acme/widget"), "rev-parse", "--verify", "--quiet", ref).trim();
+    } catch {
+      return undefined;
+    }
+  };
+
+  it("pushes a new branch on to GitHub, and records it as the project's", async () => {
+    const sha = await commit("fix-x", "a");
+    const r = await push("-u", "origin", "fix-x");
+    assert.equal(r.code, 0, r.err);
+    assert.match(r.err, /remote: Kumiko: pushed fix-x to GitHub \(acme\/widget\)\./);
+    assert.equal(onGitHub("refs/heads/fix-x"), sha);
+    assert.equal(inMirror("refs/heads/fix-x"), sha, "the mirror matches GitHub");
+    assert.equal(mirrors.createdBy("acme/widget", "fix-x"), "web");
+    assert.deepEqual(mirrors.branchesOf("acme/widget", "web").map((b) => b.name), ["fix-x"]);
+  });
+
+  it("force-pushes and deletes the project's own branches", async () => {
+    const clone = join(vmHome, "widget");
+    await vmGit(vmHome, clone, "commit", "--quiet", "--amend", "-m", "a, amended");
+    const amended = (await vmGit(vmHome, clone, "rev-parse", "HEAD")).out.trim();
+    const forced = await push("--force", "origin", "fix-x");
+    assert.equal(forced.code, 0, forced.err);
+    assert.equal(onGitHub("refs/heads/fix-x"), amended);
+
+    const deleted = await push("origin", "--delete", "fix-x");
+    assert.equal(deleted.code, 0, deleted.err);
+    assert.match(deleted.err, /Kumiko: deleted fix-x on GitHub/);
+    assert.equal(onGitHub("refs/heads/fix-x"), undefined);
+    assert.equal(inMirror("refs/heads/fix-x"), undefined);
+    assert.equal(mirrors.createdBy("acme/widget", "fix-x"), undefined);
+  });
+
+  it("refuses the default branch and tags, and says what to do instead", async () => {
+    const main = onGitHub("refs/heads/main");
+    await commit("main", "m");
+    const r = await push("origin", "main");
     assert.notEqual(r.code, 0);
-    assert.match(r.err, /remote: Kumiko: pushing to this mirror isn't allowed/);
+    assert.match(r.err, /remote: Kumiko: main is the default branch\. It changes only when the user approves delivering a branch to it/);
+    assert.match(r.err, /remote: Kumiko: nothing was pushed\./);
+    assert.equal(onGitHub("refs/heads/main"), main);
+    assert.equal(inMirror("refs/heads/main"), main);
+
+    await vmGit(vmHome, join(vmHome, "widget"), "tag", "v9");
+    const t = await push("origin", "v9");
+    assert.notEqual(t.code, 0);
+    assert.match(t.err, /Kumiko doesn't push tags to GitHub/);
+    assert.equal(onGitHub("refs/tags/v9"), undefined);
+    await vmGit(vmHome, join(vmHome, "widget"), "reset", "--quiet", "--hard", "origin/main");
+  });
+
+  it("refuses branches someone else created", async () => {
+    sh(work, "push", "--quiet", "origin", "main:refs/heads/yours");
+    const clone = join(vmHome, "widget");
+    await vmGit(vmHome, clone, "fetch", "--quiet");
+    await vmGit(vmHome, clone, "checkout", "--quiet", "-B", "yours", "origin/yours");
+    await commit("yours", "y");
+    const r = await push("origin", "yours");
+    assert.notEqual(r.code, 0);
+    assert.match(r.err, /yours wasn't created from this sandbox, so Kumiko won't change it/);
+    assert.equal(onGitHub("refs/heads/yours"), sh(work, "rev-parse", "HEAD").trim());
+    const d = await push("origin", "--delete", "yours");
+    assert.notEqual(d.code, 0);
+    assert.ok(onGitHub("refs/heads/yours"));
+  });
+
+  it("refuses a whole push when any of it is refused", async () => {
+    await commit("both", "b");
+    const r = await push("origin", "both", "yours");
+    assert.notEqual(r.code, 0);
+    assert.equal(onGitHub("refs/heads/both"), undefined, "the allowed branch didn't go either");
+    assert.equal(mirrors.createdBy("acme/widget", "both"), undefined);
+  });
+
+  it("passes on GitHub refusing a push whose lease is stale, and leaves the mirror as it was", async () => {
+    const first = await commit("lease", "l1");
+    assert.equal((await push("origin", "lease")).code, 0);
+    // Someone moves the branch on GitHub; the mirror hasn't fetched since.
+    sh(work, "fetch", "--quiet", "origin");
+    sh(work, "push", "--quiet", "--force", "origin", "main:refs/heads/lease");
+    const theirs = onGitHub("refs/heads/lease");
+    await commit("lease", "l2");
+    const r = await push("origin", "lease");
+    assert.notEqual(r.code, 0);
+    assert.match(r.err, /stale info|rejected/);
+    assert.match(r.err, /Kumiko: GitHub refused the push, so nothing was pushed/);
+    assert.equal(onGitHub("refs/heads/lease"), theirs);
+    assert.equal(inMirror("refs/heads/lease"), first, "the mirror didn't move");
+  });
+
+  it("refuses a push into a mirror that didn't come through a relay", async () => {
+    const r = await vmGit(vmHome, join(vmHome, "widget"), "push", mirrors.path("acme/widget"), "HEAD:refs/heads/direct");
+    assert.notEqual(r.code, 0);
+    assert.match(r.err, /Kumiko: pushing to this mirror isn't allowed/);
   });
 
   it("stops when the VM no longer runs, and takes its socket away", async () => {
@@ -186,6 +299,46 @@ describe("git relay", () => {
     assert.match(failing.view("down")!.error!, /remote port forwarding failed/);
     await until("another try", () => forwards >= 2);
     await failing.close();
+  });
+});
+
+describe("the push policy", () => {
+  const z = "0".repeat(40);
+  const a = "a".repeat(40);
+  const b = "b".repeat(40);
+  const created: Record<string, string> = { mine: "web", theirs: "api" };
+  const ctx = { defaultBranch: "main", createdBy: (br: string) => created[br] };
+  const pusher = { project: "web", repo: "acme/widget" };
+
+  it("allows new branches and the project's own, and nothing else", () => {
+    const ok = decide([{ old: z, new: a, ref: "refs/heads/new" }, { old: a, new: b, ref: "refs/heads/mine" }, { old: a, new: z, ref: "refs/heads/mine" }], pusher, ctx);
+    assert.ok(ok.allowed);
+    assert.deepEqual(ok.branches.map((x) => [x.branch, x.created, x.deleted]), [["new", true, false], ["mine", false, false], ["mine", false, true]]);
+    for (const [u, why] of [
+      [{ old: a, new: b, ref: "refs/heads/main" }, /default branch/],
+      [{ old: z, new: a, ref: "refs/heads/main" }, /default branch/],
+      [{ old: z, new: a, ref: "refs/tags/v1" }, /doesn't push tags/],
+      [{ old: z, new: a, ref: "refs/notes/x" }, /refs other than branches/],
+      [{ old: a, new: b, ref: "refs/heads/theirs" }, /another project's sandbox/],
+      [{ old: a, new: z, ref: "refs/heads/someone" }, /wasn't created from this sandbox/],
+    ] as const) {
+      const d = decide([u], pusher, ctx);
+      assert.ok(!d.allowed, u.ref);
+      assert.match(d.reasons[0], why);
+    }
+  });
+
+  it("reads the hook's lines, and nothing else", () => {
+    assert.deepEqual(parseUpdates(`${z} ${a} refs/heads/x\n\n`), [{ old: z, new: a, ref: "refs/heads/x" }]);
+    assert.throws(() => parseUpdates(`${z} ${a} refs/heads/x; rm -rf /\n`.replace("refs/heads/x;", "refs/heads/x ;")));
+    assert.throws(() => parseUpdates("nonsense"));
+  });
+
+  it("shows GitHub's lines without git's own", () => {
+    assert.deepEqual(githubLines("remote: \nremote: Create a pull request for 'x' on GitHub by visiting:\nremote:      https://github.com/acme/widget/pull/new/x\nTo https://github.com/acme/widget.git\n*\trefs/heads/x:refs/heads/x\t[new branch]\nDone\n"), [
+      "Create a pull request for 'x' on GitHub by visiting:",
+      "     https://github.com/acme/widget/pull/new/x",
+    ]);
   });
 });
 

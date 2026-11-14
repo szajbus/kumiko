@@ -78,6 +78,7 @@ import { GitError, worktreeStatuses } from "./git.js";
 import { GhError, GitHub, gitHubUrl } from "./github.js";
 import { MirrorFetchFailed, MirrorNotFound, MirrorRecordError, Mirrors } from "./mirrors.js";
 import { hostIdentity } from "./git.js";
+import { Pushes } from "./pushes.js";
 import { Relays } from "./relay.js";
 import { hasToken, isLocalRequest, isToken, tokenCookie } from "./guard.js";
 import { LoginFailed, Logins } from "./logins.js";
@@ -264,7 +265,8 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       const vm = vms.find((v) => v.name === project.id)!;
       const problem = problems.get(project.id);
       const relay = relays.view(project.id);
-      return { ...vm, project, waiting: waiting.get(project.id) ?? 0, ...(problem ? { problem } : {}), ...(relay ? { relay } : {}) };
+      const branches = project.repo ? mirrors.branchesOf(project.repo, project.id) : [];
+      return { ...vm, project, waiting: waiting.get(project.id) ?? 0, ...(problem ? { problem } : {}), ...(relay ? { relay } : {}), ...(branches.length ? { branches } : {}) };
     });
   };
 
@@ -442,12 +444,22 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     home,
     remoteUrl: opts.repoUrl ?? ((repo) => (githubBase ? `${githubBase.replace(/\/$/, "")}/${repo}.git` : gitHubUrl(repo))),
     credentialHelper: github.credentialHelper(),
-    onChange: () => broadcast({ type: "mirrors", ...mirrorsView() }),
+    onChange: () => {
+      broadcast({ type: "mirrors", ...mirrorsView() });
+      // The projects' pages list the branches their agents pushed.
+      pushListIfChanged();
+    },
   });
   // ---- the relays from projects' VMs to their mirrors ----
+  // Not under anything a VM mounts: each socket is only for the ssh forward into its own VM, and the hooks' for git on
+  // the host.
+  const runDir = join(home, "run");
+  const pushes = new Pushes({ socket: join(runDir, "hook.sock"), mirrors, connection: (id) => relays.connection(id) });
+  // Without it pushes are refused, with curl saying why; Kumiko still starts.
+  await pushes.start().catch((err) => console.error(`Pushes from sandboxes are off: Kumiko couldn't listen for the mirrors' hooks: ${err instanceof Error ? err.message : String(err)}`));
   const relays = new Relays({
-    // Not under anything a VM mounts: each socket is only for the ssh forward into its own VM.
-    dir: join(home, "run"),
+    dir: runDir,
+    hookSocket: join(runDir, "hook.sock"),
     mirrors,
     provider,
     identity: hostIdentity,
@@ -1364,6 +1376,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       stats.stopAll();
       logins.cancelAll();
       await relays.close();
+      await pushes.close();
       await mirrors.close();
       if (endSessions) await sessions.endAll("quit");
       else await sessions.detachAll();
