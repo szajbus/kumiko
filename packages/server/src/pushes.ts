@@ -56,7 +56,7 @@ export function decide(updates: RefUpdate[], pusher: Pusher, ctx: { defaultBranc
     const created = ZERO.test(u.old);
     const deleted = ZERO.test(u.new);
     if (branch === ctx.defaultBranch) {
-      reasons.push(`${branch} is the default branch. It changes only when the user approves delivering a branch to it: push your work to a branch of its own.`);
+      reasons.push(`${branch} is the default branch. It changes only when the user approves delivering a branch to it: push your work to a branch of its own, and call the deliver tool.`);
       continue;
     }
     const owner = ctx.createdBy(branch);

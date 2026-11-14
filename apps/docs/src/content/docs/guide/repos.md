@@ -67,6 +67,35 @@ shows GitHub's answer. Only if GitHub accepts does the mirror change, so it alwa
 Pushes use your `gh` login, so GitHub's branch protections and rulesets don't stop them if you can bypass them:
 Kumiko's check is the gate.
 
+### Delivering
+
+The default branch changes only through **Deliver**. When work is ready, Claude pushes its branch and calls the
+`deliver` tool, and waits while Kumiko shows you a card in the session:
+
+- **What's in it**, all worked out by Kumiko from the mirror: the branch's head commit, its commits and files with
+  their changes, and whether it merges cleanly. Flags name what needs a look: changes under `.github/`, which decide
+  what CI runs and with which secrets; commits authored by anyone but you (your global `user.email`); and commits
+  without Claude's `Co-Authored-By` trailer. Claude's own note is set apart, as a quote.
+- **Route:** straight to the default branch, or a pull request first. A PR opens as you, with Claude's title and
+  description, which you can edit, and a footer Kumiko adds: "🤖 Opened by Claude in Kumiko". To land it later,
+  Claude delivers the branch again, and the merge commit says "Merge pull request #… from …", so GitHub shows the PR
+  merged.
+- **Method:** a merge commit, or a squash: one commit with all the branch's changes, its message editable, and the
+  branch's co-author trailers carried over. Squashing a PR closes it with a comment saying where it landed.
+
+The card starts at the route and method you picked last time in the project. Approving takes a click or ⌘↩; plain
+Enter does nothing. **Decline…** lets you tell Claude why. Nothing is shown when there's nothing to decide yet: a
+branch that isn't pushed, or that doesn't merge cleanly, gets Claude told what to fix.
+
+Kumiko lands it in the mirror on your Mac: it merges, makes the commit with `git commit-tree`, signed with your key
+when your global git config has one (`user.signingkey`), and pushes it to GitHub with a lease, so it can't overwrite
+anything it didn't see. If the default branch moved meanwhile, it merges again once. A branch Claude created is then
+deleted on GitHub. The card is for the exact commit it shows: if the branch moves before you decide, it goes out of
+date, and **Review the new state** shows it again. Once decided, it shrinks to a one-line receipt.
+
+Claude asks before calling `deliver` because Kumiko starts it with a permission rule for the tool. Kumiko doesn't rely
+on that: the tool only does anything if Kumiko itself recorded your approval of that very call.
+
 The project page shows the repository, whether the relay is connected, and the branches the agent created that are
 still on GitHub. When the relay is down, the page says why, and Kumiko keeps trying.
 

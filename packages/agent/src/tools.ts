@@ -13,6 +13,23 @@ export interface ToolSpec {
   inputSchema: Record<string, unknown>;
   /** In the agent's context from the start; otherwise deferred, and loaded by the agent's tool search when it wants it. */
   alwaysLoad?: boolean;
+  /**
+   * Runs only once the user approves it: the agent asks before each call, as for its own questions, and waits however
+   * long it takes, while the call itself keeps the usual time limit. The host still checks the approval when called.
+   */
+  approval?: boolean;
+}
+
+/** The agent's name for one of the host's tools. */
+export const agentToolName = (name: string) => `mcp__${TOOLS_SERVER}__${name}`;
+
+/**
+ * The `--settings` that make the agent ask before calling the host's tools that need approval: an "ask" rule holds
+ * even with permissions bypassed, and the asking comes as a permission request (see `AskBridge`).
+ */
+export function approvalSettings(tools: ToolSpec[]): string | undefined {
+  const ask = tools.filter((t) => t.approval).map((t) => agentToolName(t.name));
+  return ask.length ? JSON.stringify({ permissions: { ask } }) : undefined;
 }
 
 export interface ToolResult {

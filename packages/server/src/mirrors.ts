@@ -289,12 +289,20 @@ export class Mirrors {
 
   /**
    * Fetches GitHub's branches and tags into the mirror, making it first if needed, and runs gc when it is due.
-   * Joins a fetch under way, and one that ended less than `freshMs` ago and worked stands in for a new one.
+   * Joins a fetch under way, and one that ended less than `freshMs` ago and worked stands in for a new one, unless
+   * `force`, which always fetches anew.
    * Rejects with git's message if the fetch fails.
    */
-  async fetch(repo: string): Promise<void> {
+  async fetch(repo: string, { force = false }: { force?: boolean } = {}): Promise<void> {
     const e = this.entryOf(repo);
     if (!e) throw new MirrorNotFound(`${repo} isn't one of Kumiko's repositories.`);
+    // Forced, for what decides what lands on GitHub: a fetch already under way may have started before the change.
+    if (force) {
+      await e.running?.catch(() => {});
+      await this.fetchEntry(e);
+      if (e.record.error) throw new MirrorFetchFailed(e.record.error.message);
+      return;
+    }
     const fresh = e.endedAt !== undefined && Date.now() - e.endedAt < (this.opts.freshMs ?? 5000) && !e.record.error;
     if (!e.running && fresh && (await exists(join(this.path(repo), "HEAD")))) return;
     await this.fetchEntry(e);
@@ -306,6 +314,16 @@ export class Mirrors {
     const e = this.entryOf(repo);
     if (!e) throw new MirrorNotFound(`${repo} isn't one of Kumiko's repositories.`);
     return e.record.url;
+  }
+
+  /** Where `branch` is in the mirror, as GitHub had it at the last fetch; undefined if it isn't there. */
+  async branchHead(repo: string, branch: string): Promise<string | undefined> {
+    return runGit(this.path(repo), ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`], { env: gitEnv() }).then((o) => o.trim() || undefined, () => undefined);
+  }
+
+  /** How many commits `to` has that `from` hasn't. */
+  async countBetween(repo: string, from: string, to: string): Promise<number> {
+    return runGit(this.path(repo), ["rev-list", "--count", `${from}..${to}`], { env: gitEnv() }).then((o) => Number(o.trim()) || 0, () => 0);
   }
 
   /** The project whose agent created `branch` on GitHub through the relay, if one did. */

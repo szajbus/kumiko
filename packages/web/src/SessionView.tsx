@@ -5,6 +5,7 @@ import { api, errorMessage, type SessionStream } from "./api";
 import { fromAttachment, toInput } from "./attachments";
 import { ArtifactsButton } from "./ArtifactView";
 import { AskCard, AskContext } from "./AskCard";
+import { CardContext, type CardAction } from "./ApprovalCard";
 import { applyEvent, backgroundAgents, startsTurn, unpromptedPlain, blocksOf, chatRows, emptyChat, inputSections, loginCards, partialToolSummary, summarize, toolState, toolSummary, type Block, type ChatItem, type ChatState, type ItemRow, type LoginAnswer, type Subagent, type ToolState, type WorkRow } from "./chat";
 import { codeWrap } from "./codeWrap";
 import { branchLimits, lastCompaction } from "./compaction";
@@ -209,6 +210,7 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
   const canBranch = idle && Boolean(session.claudeSessionId);
   /** The user's answer to what Claude asked mid-turn. */
   const answerAsk = (ask: string, answer: AskAnswer) => call(() => api.answerAsk(session.id, ask, answer));
+  const decideCard = (ask: string, action: CardAction) => call(() => api.decideCard(session.id, ask, action));
   /** The user's answer to Claude asking to start a session; accepted, its tab opens. */
   const answerProposal = (item: ProposalItem, accept: boolean, prompt?: string) =>
     call(() =>
@@ -224,6 +226,7 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
       {corner && createPortal(<UsageStrip sessionId={session.id} live={live} turnDone={idle} cost={totalCost} bufferBytes={session.bufferBytes} context={context} items={chat.items} />, corner)}
 
       <AskContext.Provider value={live ? answerAsk : undefined}>
+      <CardContext.Provider value={live ? decideCard : undefined}>
         <UserShellsContext.Provider value={shellsView}>
         <Chat
           session={session.id}
@@ -258,6 +261,7 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
           }
         />
       </UserShellsContext.Provider>
+      </CardContext.Provider>
       </AskContext.Provider>
 
       {loggingIn && (

@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { answerFits, applyWindowOp, chatWindow, chunksLength, compactWindow, isBusy, isCommand, isCompactSummary, keepEnds, LIVE_SESSION_STATUSES, mergeChunks, sharedNote, sharesWaiting, SHELL_COMMAND_MAX, SHELL_KEEP_HEAD, SHELL_KEEP_TAIL, SHELL_PROMPT_CHARS, shellPrompt, windowState, type Attachment, type ShellChunk, type ShellEnd, type ShellStop, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo, type WindowOp, type WindowState, type AgentAsk, type AskAnswer, type AskClosedReason } from "@kumiko/shared";
+import { answerFits, applyWindowOp, chatWindow, chunksLength, compactWindow, isBusy, isCommand, isCompactSummary, keepEnds, LIVE_SESSION_STATUSES, mergeChunks, sharedNote, sharesWaiting, SHELL_COMMAND_MAX, SHELL_KEEP_HEAD, SHELL_KEEP_TAIL, SHELL_PROMPT_CHARS, shellPrompt, windowState, type Attachment, type ShellChunk, type ShellEnd, type ShellStop, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo, type WindowOp, type WindowState, type AgentAsk, type AskAnswer, type AskClosedReason, type ApprovalCard } from "@kumiko/shared";
 import { TOOL_TIMEOUT_MS, type AgentDriver, type AgentFile, type AgentMessage, type StartOptions, type TaskOutput, type ToolHost } from "@kumiko/agent";
 import { chatEvents, type SessionStore, type StoredSession } from "./store.js";
 import { trimMessage } from "./trim.js";
@@ -288,6 +288,8 @@ function openAsks(events: readonly SessionEvent[]): AgentAsk[] {
 /** `rateLimit`: Claude in `sandbox` reported how much of its subscription is used, with a turn. */
 export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: string, info: unknown] }> {
   private sessions = new Map<string, Session>();
+  /** Shows the cards for the host's tools that need approval, when Claude asks to call one. */
+  approvals?: { asked(info: SessionInfo, ask: Extract<AgentAsk, { kind: "approval" }>): void };
 
   constructor(
     private readonly makeDriver: () => AgentDriver,
@@ -621,6 +623,15 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     this.push(s, { kind: "ask", payload: ask });
     this.setInfo(s, { asking: ask.kind });
     // Saved at once, with the ask among the run's, so a server that goes away now leaves it for the next.
+    this.save(s);
+    if (ask.kind === "approval") this.approvals?.asked(s.info, ask);
+  }
+
+  /** Puts the card for an approval ask into the session, or its new state; saved at once, as it binds what may run. */
+  putCard(id: string, card: ApprovalCard): void {
+    const s = this.sessions.get(id);
+    if (!s) throw new SessionNotFound(`No session ${id}.`);
+    this.push(s, { kind: "card", payload: card });
     this.save(s);
   }
 

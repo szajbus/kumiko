@@ -164,6 +164,8 @@ export const api = {
   toggleTasks: (id: string, open?: boolean) => request<WindowState>("POST", `/api/sessions/${id}/window/tasks`, open ? { open } : {}),
   /** Answers what Claude asked mid-turn: its questions, or its plan. */
   answerAsk: (id: string, ask: string, answer: AskAnswer) => request("POST", `/api/sessions/${id}/asks/${encodeURIComponent(ask)}`, answer),
+  /** Decides on an approval card: approve with the choices made on it, decline with a reason, or look again. */
+  decideCard: (id: string, ask: string, action: unknown) => request("POST", `/api/sessions/${id}/cards/${encodeURIComponent(ask)}`, action),
   /** Has Claude plan first and wait for approval, or work without asking. */
   setPlanMode: (id: string, plan: boolean) => request("POST", `/api/sessions/${id}/plan-mode`, { plan }),
   /** Closes one of the session window's panes; its widget stays, hidden. */

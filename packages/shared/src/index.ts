@@ -3,9 +3,11 @@
 
 export * from "./window.js";
 export * from "./asks.js";
+export * from "./cards.js";
 export * from "./userShell.js";
 import type { WindowOp } from "./window.js";
 import type { AgentAsk, AskAnswer, AskClosedReason } from "./asks.js";
+import type { ApprovalCard } from "./cards.js";
 import type { ShellChunk, ShellStop } from "./userShell.js";
 
 export const VM_PREFIX = "km-";
@@ -491,6 +493,8 @@ export type SessionEvent =
   | { seq: number; kind: "ask_answer"; payload: { id: string; answer: AskAnswer } }
   /** Claude stopped waiting for ask `id` without an answer. */
   | { seq: number; kind: "ask_closed"; payload: { id: string; reason: AskClosedReason } }
+  /** The card for an approval ask, whole, each time it changes; the latest for an id is how it is. */
+  | { seq: number; kind: "card"; payload: ApprovalCard }
   /**
    * The end of what background task `taskId` (Claude's id: a shell or a monitor) printed, read once it ended, so it can
    * still be read once Claude, which keeps it, is gone. `totalBytes` it printed in all; `truncated` if this is only the end.

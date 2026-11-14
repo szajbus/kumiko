@@ -17,6 +17,7 @@ import {
   isWaiting,
   NAME_PATTERN,
   parseAskAnswer,
+  parseCardDecision,
   parseRepo,
   parseSavedTabs,
   SESSION_ID_PATTERN,
@@ -79,6 +80,7 @@ import { GhError, GitHub, gitHubUrl } from "./github.js";
 import { MirrorFetchFailed, MirrorNotFound, MirrorRecordError, Mirrors } from "./mirrors.js";
 import { hostIdentity } from "./git.js";
 import { Pushes } from "./pushes.js";
+import { ApprovalError, Approvals } from "./approvals.js";
 import { Relays } from "./relay.js";
 import { hasToken, isLocalRequest, isToken, tokenCookie } from "./guard.js";
 import { LoginFailed, Logins } from "./logins.js";
@@ -478,6 +480,22 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       relays.sync(want);
     }).catch((err) => console.error(`Couldn't update the git relays: ${err instanceof Error ? err.message : String(err)}`));
   };
+  // ---- the tools that wait for the user's approval, and their cards ----
+  const approvals = new Approvals(
+    { get: (id) => sessions.get(id), events: (id) => sessions.events(id), putCard: (id, card) => sessions.putCard(id, card), answerAsk: (id, ask, answer) => sessions.answerAsk(id, ask, answer) },
+    {
+      mirrors,
+      github,
+      repoOf: async (id) => {
+        const p = projectList.find((x) => x.id === id) ?? (await projects.get(id).catch(() => undefined));
+        return p ? projects.repo(p) : null;
+      },
+      identity: hostIdentity,
+      choicesFile: join(home, "choices.json"),
+    },
+  );
+  sessions.approvals = approvals;
+  widgets.extraTools = { list: () => approvals.list(), call: (info, name, args, toolUseId) => approvals.call(info, name, args, toolUseId) };
   const mirrorsView = (): MirrorsResponse => (mirrors.readError ? { mirrors: mirrors.list(), error: mirrors.readError } : { mirrors: mirrors.list() });
   await mirrors.start();
 
@@ -1255,6 +1273,30 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     if (!answer) throw new HttpError(400, "Send an answer: answers to the questions, approve, feedback with its text, or skip.");
     sessions.answerAsk(sessionOf(c).id, c.req.param("ask"), answer);
     return c.json({ ok: true });
+  });
+
+  /**
+   * Decides on an approval card: `{ action: "approve", decision }`, `{ action: "decline", reason? }`, or
+   * `{ action: "refresh" }` to work a stale card out again. Answers with the card as it is now.
+   */
+  app.post("/api/sessions/:id/cards/:ask", async (c) => {
+    const req = await body<{ action?: unknown; decision?: unknown; reason?: unknown }>(c, "Send { action: approve | decline | refresh }.");
+    const id = sessionOf(c).id;
+    const ask = c.req.param("ask");
+    let action: Parameters<Approvals["decide"]>[2];
+    if (req.action === "approve") {
+      const decision = parseCardDecision(req.decision);
+      if (!decision) throw new HttpError(400, "Send the decision: the route and method, or the text as you left it.");
+      action = { action: "approve", decision };
+    } else if (req.action === "decline") action = { action: "decline", ...(typeof req.reason === "string" ? { reason: req.reason } : {}) };
+    else if (req.action === "refresh") action = { action: "refresh" };
+    else throw new HttpError(400, "action must be approve, decline or refresh.");
+    try {
+      return c.json(await approvals.decide(id, ask, action));
+    } catch (err) {
+      if (err instanceof ApprovalError || err instanceof AskRefused) throw new HttpError(409, err.message);
+      throw err;
+    }
   });
 
   /** Has Claude plan first, waiting for the user to approve the plan, or work without asking; `{ plan }`. */

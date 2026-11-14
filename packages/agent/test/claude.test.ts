@@ -4,7 +4,7 @@ import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { CLAUDE_COMMAND, ClaudeDriver, claudeCommand, contextUsage, exitHint, mcpConfig, Runs, RUNS_DIR, userMessage, type AgentEvent, type AgentMessage, type Exec, type ToolCallContext, type ToolHost } from "../src/index.js";
+import { approvalSettings, CLAUDE_COMMAND, ClaudeDriver, claudeCommand, contextUsage, exitHint, mcpConfig, Runs, RUNS_DIR, userMessage, type AgentEvent, type AgentMessage, type Exec, type ToolCallContext, type ToolHost } from "../src/index.js";
 import { localExec } from "./helpers.js";
 
 /** Starts a driver on the fake claude and collects its events. */
@@ -384,6 +384,42 @@ describe("ClaudeDriver", () => {
       // The answer reached Claude, which finished the turn while no driver was attached.
       assert.equal((await e.waitFor(() => e.results()[0])).result, "slow: drained");
       await e.driver.stop();
+    });
+
+    it("has Claude ask before the tools that need approval, and calls them only once the user allows", async () => {
+      const d = await drive();
+      const h = host();
+      const tools: ToolHost = {
+        list: () => [...h.tools.list(), { name: "gated", description: "Needs approval.", inputSchema: { type: "object", properties: { text: { type: "string" } } }, approval: true }],
+        call: (name, args, ctx) => h.tools.call(name, args, ctx),
+      };
+      d.driver.start({ sandbox: "test", workdir: d.home, env: [], prompt: 'widget gated {"text":"one"}', tools });
+      const ask = await d.waitFor(() => d.events.find((e): e is Extract<AgentEvent, { kind: "ask" }> => e.kind === "ask")?.ask);
+      assert.equal(ask.kind, "approval");
+      assert.ok(ask.kind === "approval" && ask.tool === "gated" && ask.input.text === "one" && ask.toolUseId);
+      assert.equal(h.calls.length, 0, "not called before the user decides");
+      assert.throws(() => d.driver.answer(ask.id, { kind: "approve" }), /isn't an answer to an approval/);
+      d.driver.answer(ask.id, { kind: "allow" });
+      assert.equal((await d.waitFor(() => d.results()[0])).result, "gated: one");
+      assert.equal(h.calls[0].ctx.toolUseId, ask.kind === "approval" ? ask.toolUseId : "");
+
+      d.driver.send('widget gated {"text":"two"}');
+      const second = await d.waitFor(() => d.events.filter((e): e is Extract<AgentEvent, { kind: "ask" }> => e.kind === "ask")[1]?.ask);
+      d.driver.answer(second.id, { kind: "deny", message: "The user declined it." });
+      assert.equal((await d.waitFor(() => d.results()[1])).result, "The user declined it.");
+      assert.equal(h.calls.length, 1);
+      // Tools without approval are never asked about.
+      d.driver.send('widget echo {"text":"hi"}');
+      assert.equal((await d.waitFor(() => d.results()[2])).result, "echo: hi");
+      assert.equal(d.events.filter((e) => e.kind === "ask").length, 2);
+      await d.driver.stop();
+    });
+
+    it("gives Claude an ask rule for each tool that needs approval", () => {
+      assert.equal(approvalSettings([{ name: "a", description: "", inputSchema: {} }]), undefined);
+      assert.equal(approvalSettings([{ name: "a", description: "", inputSchema: {}, approval: true }, { name: "b", description: "", inputSchema: {} }]), JSON.stringify({ permissions: { ask: ["mcp__kumiko__a"] } }));
+      const cmd = claudeCommand(undefined, undefined, undefined, undefined, { tools: true, settings: approvalSettings([{ name: "a", description: "", inputSchema: {}, approval: true }]) });
+      assert.ok(cmd.includes(`--settings '{"permissions":{"ask":["mcp__kumiko__a"]}}'`));
     });
 
     it("puts the config and the system prompt in the command, quoted", () => {

@@ -239,8 +239,12 @@ export class Widgets implements SessionWidgets {
     const dir = this.hostDocs(info);
     if (dir) mkdirSync(dir, { recursive: true });
     const folder = this.vmDocs(info);
+    const extra = this.extraTools;
     return {
-      tools: { list: () => toolsFor(folder), call: (name, args, ctx) => this.call(info.id, name, args, ctx.toolUseId) },
+      tools: {
+        list: () => [...toolsFor(folder), ...(extra?.list() ?? [])],
+        call: (name, args, ctx) => (extra?.list().some((t) => t.name === name) ? extra.call(this.sessions.get(info.id) ?? info, name, args, ctx.toolUseId) : this.call(info.id, name, args, ctx.toolUseId)),
+      },
       appendSystemPrompt: systemPrompt(folder),
     };
   }
@@ -250,8 +254,11 @@ export class Widgets implements SessionWidgets {
    * the session's folder, so it is the same for every session and whether or not the sandbox's home is known yet.
    */
   given(): string {
-    return JSON.stringify([toolsFor(FOLDER), systemPrompt(FOLDER)]);
+    return JSON.stringify([toolsFor(FOLDER), systemPrompt(FOLDER), this.extraTools?.list() ?? []]);
   }
+
+  /** Tools of the server's own beside the windows': the ones that need the user's approval. */
+  extraTools?: { list(): ToolSpec[]; call(info: SessionInfo, name: string, args: Record<string, unknown>, toolUseId?: string): Promise<ToolResult> };
 
   private async call(id: string, name: string, args: Record<string, unknown>, toolUseId?: string): Promise<ToolResult> {
     try {

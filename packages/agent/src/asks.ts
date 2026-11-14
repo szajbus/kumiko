@@ -46,11 +46,21 @@ function questionsOf(input: Record<string, unknown>): AgentQuestion[] {
  */
 export class AskBridge {
   private open = new Map<string, Open>();
+  /** The host's tools that need the user's approval, by the agent's name for each, to the host's. */
+  private approvals = new Map<string, string>();
 
   constructor(
     private readonly write: (line: string) => void,
     private readonly emit: (ev: { kind: "ask"; ask: AgentAsk } | { kind: "ask_closed"; id: string; reason: AskClosedReason }) => void,
   ) {}
+
+  /**
+   * The host's tools that need approval, by the host's name for each and the agent's: Claude asks before calling them,
+   * because Kumiko started it with an "ask" rule for each, and these asks become approvals.
+   */
+  setApprovalTools(tools: { name: string; agentName: string }[]) {
+    this.approvals = new Map(tools.map((t) => [t.agentName, t.name]));
+  }
 
   /** Handles one of Claude's lines if it is a permission request or cancels one; false for any other. */
   handle(msg: AgentMessage): boolean {
@@ -67,7 +77,8 @@ export class AskBridge {
     const id = String(msg.request_id);
     const tool = str(request.tool_name) ?? "";
     const input = (request.input && typeof request.input === "object" ? request.input : {}) as Record<string, unknown>;
-    if (!ASKING_TOOLS.has(tool)) {
+    const approval = this.approvals.get(tool);
+    if (!ASKING_TOOLS.has(tool) && !approval) {
       this.reply(id, { behavior: "allow" });
       return true;
     }
@@ -78,8 +89,9 @@ export class AskBridge {
       return true;
     }
     const toolUseId = str(request.tool_use_id);
-    const ask: AgentAsk =
-      tool === "ExitPlanMode"
+    const ask: AgentAsk = approval
+      ? { kind: "approval", id, ...(toolUseId ? { toolUseId } : {}), tool: approval, input }
+      : tool === "ExitPlanMode"
         ? { kind: "plan", id, ...(toolUseId ? { toolUseId } : {}), plan: str(input.plan) ?? "" }
         : { kind: "questions", id, ...(toolUseId ? { toolUseId } : {}), questions: questionsOf(input) };
     this.open.set(id, { ask, input });
@@ -106,7 +118,7 @@ export class AskBridge {
   answer(id: string, answer: AskAnswer) {
     const open = this.open.get(id);
     if (!open) throw new Error("Claude isn't waiting for that answer any more.");
-    if (!answerFits(open.ask.kind, answer)) throw new Error(`That isn't an answer to ${open.ask.kind === "plan" ? "a plan" : "questions"}.`);
+    if (!answerFits(open.ask.kind, answer)) throw new Error(`That isn't an answer to ${open.ask.kind === "plan" ? "a plan" : open.ask.kind === "approval" ? "an approval" : "questions"}.`);
     open.answer = answer;
     this.send(id, open);
   }
@@ -156,6 +168,11 @@ function permission(ask: AgentAsk, input: Record<string, unknown>, answer: AskAn
     }
     case "approve":
       return { behavior: "allow" };
+    case "allow":
+      // The input as Claude asked with it: what the user approved, the card's choices and edits, Kumiko keeps itself.
+      return { behavior: "allow", updatedInput: input };
+    case "deny":
+      return { behavior: "deny", message: answer.message };
     case "feedback":
       return { behavior: "deny", message: `The user wants changes to the plan before approving it:\n\n${answer.text}` };
     case "skip":
@@ -165,7 +182,9 @@ function permission(ask: AgentAsk, input: Record<string, unknown>, answer: AskAn
         behavior: "deny",
         message: ask.kind === "plan"
           ? "The user didn't approve the plan here: they sent a message instead, which follows. Read it before going on."
-          : "The user didn't answer here: they sent a message instead, which follows. Read it before going on.",
+          : ask.kind === "approval"
+            ? "The user didn't approve this: they sent a message instead, which follows. Read it before going on."
+            : "The user didn't answer here: they sent a message instead, which follows. Read it before going on.",
       };
   }
 }

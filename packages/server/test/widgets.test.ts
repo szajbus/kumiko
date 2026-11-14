@@ -134,7 +134,7 @@ describe("widgets", () => {
     assert.ok(existsSync(join(kumikoHome, "artifacts", id)), "the session's folder is made");
     assert.match(await ask(s, id, "system prompt"), new RegExp(`${vmHome}/\\.kumiko/shared/artifacts/${id}/`));
     const tools = JSON.parse(await ask(s, id, "tools")) as { name: string; description: string }[];
-    assert.deepEqual(tools.map((t) => t.name).sort(), ["artifact_capture", "artifact_open", "artifact_reload", "artifact_remove", "artifact_share", "session_list", "session_rename", "session_start", "window_close", "window_list"]);
+    assert.deepEqual(tools.map((t) => t.name).sort(), ["artifact_capture", "artifact_open", "artifact_reload", "artifact_remove", "artifact_share", "deliver", "session_list", "session_rename", "session_start", "window_close", "window_list"]);
     // The tool names the session's folder itself, so Claude needn't find it in its instructions.
     assert.ok(tools.find((t) => t.name === "artifact_open")?.description.includes(`${vmHome}/.kumiko/shared/artifacts/${id}/`));
     s.close();

@@ -64,6 +64,7 @@ export function githubInstructions(repo: string): string {
 - \`origin\` is \`${repo}\` on GitHub. Git in this VM reaches it through Kumiko's mirror on the user's computer, so there are no GitHub credentials here, and none are needed: \`git fetch\`, \`pull\` and \`push\` work as usual.
 - Push your work to a branch of its own. Kumiko pushes the branches this sandbox creates on to GitHub, and lets you force-push and delete them.
 - Pushes to the default branch, tags, and branches this sandbox didn't create are refused, with git saying why.
+- When work is ready, push its branch and call the \`deliver\` tool. The user chooses on a card whether it goes straight to the default branch or into a pull request first, and Kumiko lands it, signed by them. You wait for their answer. A branch with a PR open is landed by delivering it again.
 `;
 }
 
