@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { chmod, mkdir, rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { dirname } from "node:path";
+import type { CardFile, PushCard } from "@kumiko/shared";
 import { gitEnv, type Mirrors } from "./mirrors.js";
 
 /** The all-zero id git gives the old side of a new ref and the new side of a deleted one. */
@@ -18,6 +19,8 @@ export interface RefUpdate {
 export interface Pusher {
   project: string;
   repo: string;
+  /** The session the push was run from, as the VM said; only where to ask, never who may push. */
+  session?: string;
 }
 
 /** What Kumiko makes of a push: refused, with why for each ref that is, or allowed, with the branches it changes. */
@@ -112,6 +115,39 @@ export function githubLines(output: string): string[] {
     .filter((l) => l.trim() && !/^(To |Done$|Enumerating|Counting|Compressing|Writing|Total |Delta )/.test(l) && !/^[ *+=!-]\t/.test(l));
 }
 
+/** git in the mirror, seeing the objects of a push that waits in quarantine. */
+function quarantineGit(dir: string, args: string[], q: Quarantine): Promise<{ code: number; out: string }> {
+  const env: NodeJS.ProcessEnv = { ...gitEnv(), GIT_DIR: dir };
+  if (q.objectDirectory) env.GIT_OBJECT_DIRECTORY = q.objectDirectory;
+  if (q.alternates) env.GIT_ALTERNATE_OBJECT_DIRECTORIES = q.alternates;
+  return new Promise((resolve) => {
+    execFile("git", args, { cwd: dir, env, maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => resolve({ code: err ? 1 : 0, out: String(stdout) }));
+  });
+}
+
+/** The tree `.github` has at `rev`; undefined when it has none. */
+export async function ciTree(dir: string, rev: string, q: Quarantine = {}): Promise<string | undefined> {
+  const r = await quarantineGit(dir, ["rev-parse", "--verify", "--quiet", `${rev}:.github`], q);
+  return r.code === 0 ? r.out.trim() || undefined : undefined;
+}
+
+/** What a push changes under .github/ compared with the default branch, as the card shows it. */
+export async function ciPushCard(dir: string, repo: string, base: string, update: RefUpdate, q: Quarantine): Promise<PushCard> {
+  const branch = update.ref.slice("refs/heads/".length);
+  const created = ZERO.test(update.old);
+  const numstat = await quarantineGit(dir, ["diff", "--numstat", "--no-renames", `refs/heads/${base}...${update.new}`, "--", ".github"], q);
+  const files: CardFile[] = numstat.out.split("\n").filter(Boolean).map((l) => {
+    const [a, d, ...path] = l.split("\t");
+    return { path: path.join("\t"), ...(a === "-" ? {} : { added: Number(a), deleted: Number(d) }), flagged: true };
+  });
+  const count = await quarantineGit(dir, ["rev-list", "--count", update.new, created ? `^refs/heads/${base}` : `^${update.old}`], q);
+  const ff = created || (await quarantineGit(dir, ["merge-base", "--is-ancestor", update.old, update.new], q)).code === 0;
+  return { kind: "push", repo, branch, ...(created ? {} : { old: update.old }), new: update.new, fastForward: ff, commits: Number(count.out.trim()) || 0, files, base };
+}
+
+/** The user's answer to a push that waits for them: allowed, or refused with what git in the VM shows. */
+export type PushAnswer = { allowed: true } | { allowed: false; message: string };
+
 export interface PushOptions {
   /** The socket the mirrors' hooks reach Kumiko on. */
   socket: string;
@@ -120,6 +156,11 @@ export interface PushOptions {
   connection(id: string): Pusher | undefined;
   /** Called after GitHub accepted a push. */
   onPushed?(pusher: Pusher, branches: string[]): void;
+  /**
+   * Asks the user about a push that changes CI, while git in the VM waits: resolves with their answer. `done` is told
+   * how the push went once it was allowed.
+   */
+  askCi?(pusher: Pusher, connection: string, card: PushCard): { answer: Promise<PushAnswer>; done(ok: boolean, text: string): void };
 }
 
 /**
@@ -183,16 +224,46 @@ export class Pushes {
         alternates: header("x-git-alternate-object-directories"),
         quarantinePath: header("x-git-quarantine-path"),
       };
+      // GitHub runs a branch's own workflows on push, with the repository's secrets: a push whose .github differs from
+      // the default branch's, in a way the user hasn't allowed for this branch, waits for them.
+      const connection = String(req.headers["x-kumiko-connection"]);
+      const ci = new Map<string, string>();
+      const asked: ReturnType<NonNullable<PushOptions["askCi"]>>[] = [];
+      const baseTree = defaultBranch ? await ciTree(dir, `refs/heads/${defaultBranch}`) : undefined;
+      for (const b of decision.branches) {
+        if (b.deleted) continue;
+        const tree = await ciTree(dir, b.update.new, quarantine);
+        if (tree === baseTree || this.opts.mirrors.ciAllowed(pusher.repo, b.branch) === (tree ?? "none")) continue;
+        if (!this.opts.askCi || !defaultBranch) {
+          say(`Kumiko: ${b.branch} changes .github/, which decides what CI runs with the repository's secrets, and Kumiko can't ask the user about it here. Nothing was pushed.`);
+          return end(1);
+        }
+        const card = await ciPushCard(dir, pusher.repo, defaultBranch, b.update, quarantine);
+        say(`Kumiko: ${b.branch} changes ${card.files.map((f) => f.path).join(", ") || ".github/"}, which decides what CI runs with the repository's secrets.`);
+        say("Kumiko: waiting for the user to allow it in Kumiko…");
+        const ask = this.opts.askCi(pusher, connection, card);
+        asked.push(ask);
+        const answer = await ask.answer;
+        if (!answer.allowed) {
+          for (const a of asked.slice(0, -1)) a.done(false, "Another branch in the same push wasn't allowed");
+          say(`Kumiko: ${answer.message}`);
+          say("Kumiko: nothing was pushed.");
+          return end(1);
+        }
+        ci.set(b.branch, tree ?? "none");
+      }
       let output: string;
       try {
         output = await pushToGitHub(dir, this.opts.mirrors.url(pusher.repo), decision.branches.map((b) => b.update), quarantine);
       } catch (err) {
         for (const l of githubLines((err as { output?: string }).output ?? String(err))) say(l);
         say("Kumiko: GitHub refused the push, so nothing was pushed. If a branch moved on GitHub, fetch and try again.");
+        for (const a of asked) a.done(false, "GitHub refused the push");
         return end(1);
       }
       for (const l of githubLines(output)) say(l);
-      await this.opts.mirrors.noteBranches(pusher.repo, pusher.project, decision.branches.map((b) => ({ branch: b.branch, deleted: b.deleted })));
+      await this.opts.mirrors.noteBranches(pusher.repo, pusher.project, decision.branches.map((b) => ({ branch: b.branch, deleted: b.deleted, ...(ci.has(b.branch) ? { ci: ci.get(b.branch) } : {}) })));
+      for (const a of asked) a.done(true, "Pushed to GitHub, with its CI change");
       for (const b of decision.branches) say(`Kumiko: ${b.deleted ? "deleted" : "pushed"} ${b.branch} ${b.deleted ? "on" : "to"} GitHub (${pusher.repo}).`);
       this.opts.onPushed?.(pusher, decision.branches.map((b) => b.branch));
       end(0);

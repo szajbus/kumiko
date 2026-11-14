@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -108,6 +108,54 @@ describe("delivering from a session", () => {
     assert.equal(done.state, "done");
     const again = await api(`/api/sessions/${id}/cards/${card.id}`, { method: "POST", body: JSON.stringify({ action: "decline" }) });
     assert.equal(again.status, 409);
+    sock.close();
+  });
+
+  it("asks in the session a push that changes CI comes from, and pushes once the user allows it", async () => {
+    const vmHome = join(root, "lima", "vm-home");
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: vmHome, GIT_TERMINAL_PROMPT: "0" };
+    delete env.GIT_CONFIG_GLOBAL;
+    // Not sync: the relay that serves it runs in this process.
+    const vm = (...args: string[]) =>
+      new Promise<string>((resolve, reject) => execFile("git", args, { env }, (err, out, errOut) => (err ? reject(new Error(String(errOut))) : resolve(String(out)))));
+    const clone = join(vmHome, "widget");
+    await vm("clone", "--quiet", "git@github.com:acme/widget.git", clone);
+    await mkdir(join(clone, ".github"), { recursive: true });
+    await writeFile(join(clone, ".github", "ci.yml"), "on: push\n");
+    await vm("-C", clone, "checkout", "--quiet", "-b", "ci");
+    await vm("-C", clone, "add", ".github");
+    await vm("-C", clone, "-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "--quiet", "-m", "CI");
+
+    const res = await api("/api/sessions", { method: "POST", body: JSON.stringify({ sandbox: "web", prompt: "hi" }) });
+    const { id } = (await res.json()) as { id: string };
+    await waitFor(async () => ((await (await api("/api/sessions")).json()) as SessionInfo[]).find((s) => s.id === id)?.status === "idle");
+    const got: SessionEvent[] = [];
+    const sock = new WebSocket(`${server.url.replace("http", "ws")}/api/sessions/${id}/events?after=0`, { headers: { authorization: `Bearer ${server.token}` } });
+    sock.on("message", (m) => {
+      const msg = JSON.parse(String(m)) as SessionStreamMessage;
+      if (msg.kind !== "caught_up") got.push(msg);
+    });
+
+    // As Claude's Bash tool runs it: with the session Kumiko started Claude in.
+    const pushed = new Promise<{ code: number; err: string }>((done) => {
+      const child = execFile("git", ["-C", clone, "push", "origin", "ci"], { env: { ...env, KUMIKO_SESSION: id } }, (err, _out, errOut) => done({ code: err ? 1 : 0, err: String(errOut) }));
+      void child;
+    });
+    const card = await waitFor(() => got.findLast((e): e is Extract<SessionEvent, { kind: "card" }> => e.kind === "card")?.payload);
+    assert.equal(card.card.kind, "push");
+    assert.ok(got.some((e) => e.kind === "ask" && e.payload.kind === "approval" && e.payload.host === true));
+    assert.equal(((await (await api("/api/sessions")).json()) as SessionInfo[]).find((s) => s.id === id)?.asking, "approval");
+    const ok = await api(`/api/sessions/${id}/cards/${card.id}`, { method: "POST", body: JSON.stringify({ action: "approve", decision: { kind: "push" } }) });
+    assert.equal(ok.status, 200, await ok.clone().text());
+    const r = await pushed;
+    assert.equal(r.code, 0, r.err);
+    assert.ok(sh(bare, "rev-parse", "--verify", "refs/heads/ci"));
+    const done = await waitFor(() => {
+      const c = got.findLast((e): e is Extract<SessionEvent, { kind: "card" }> => e.kind === "card")?.payload;
+      return c?.state === "done" ? c : undefined;
+    });
+    assert.equal(done.receipt?.text, "Pushed to GitHub, with its CI change");
+    assert.equal(((await (await api("/api/sessions")).json()) as SessionInfo[]).find((s) => s.id === id)?.asking, undefined, "no longer waits");
     sock.close();
   });
 });

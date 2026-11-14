@@ -21,8 +21,9 @@ export type AgentAsk =
   /**
    * One of the host's tools that only runs once the user approves it, such as delivering a branch: the agent waits on
    * the card Kumiko shows for it. `tool` is the host's name for the tool, `input` what the agent called it with.
+   * `host` asks are Kumiko's own, not Claude's tool calls: a push from the session's VM waiting in the mirror's hook.
    */
-  | { kind: "approval"; id: string; toolUseId?: string; tool: string; input: Record<string, unknown> };
+  | { kind: "approval"; id: string; toolUseId?: string; tool: string; input: Record<string, unknown>; host?: boolean };
 
 /**
  * The user's answer to an ask.

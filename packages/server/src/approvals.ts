@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { ToolResult, ToolSpec } from "@kumiko/agent";
@@ -5,9 +6,12 @@ import {
   FOOTERS,
   MAX_BODY,
   MAX_TITLE,
+  LIVE_SESSION_STATUSES,
   withFooter,
   type AgentAsk,
   type ApprovalCard,
+  type AskAnswer,
+  type PushCard,
   type CardDecision,
   type DeliverCard,
   type DeliverMethod,
@@ -19,6 +23,7 @@ import { replaceFile } from "./files.js";
 import type { GitHub, GitHubItem } from "./github.js";
 import { BranchMoved, deleteBranch, deliverFacts, land, mergeMessage, NotDeliverable, signs, squashMessage } from "./landing.js";
 import type { Mirrors } from "./mirrors.js";
+import type { PushAnswer } from "./pushes.js";
 
 /** A call or decision that can't be taken as it is; the message says why, for the agent or the user. */
 export class ApprovalError extends Error {}
@@ -29,6 +34,10 @@ export interface ApprovalSessions {
   events(id: string): readonly SessionEvent[];
   putCard(id: string, card: ApprovalCard): void;
   answerAsk(id: string, askId: string, answer: { kind: "allow" } | { kind: "deny"; message: string }): void;
+  /** The open sessions, for where to ask about a push. */
+  list(): SessionInfo[];
+  hostAsk(id: string, ask: Extract<AgentAsk, { kind: "approval" }>, onAnswer: (answer: AskAnswer | undefined) => void): void;
+  closeHostAsk(id: string, askId: string): void;
 }
 
 export interface ApprovalOptions {
@@ -253,6 +262,50 @@ export class Approvals {
     return { kind: "deliver", repo, ...facts, ...(pr ? { pr } : {}), title, body, route, method: last?.method ?? "merge", signs: await signs(dir) };
   }
 
+  /**
+   * Asks the user about a push that changes CI, in the session it came from if the VM named one of this project's, or
+   * else the project's most recent open one, while git in the VM waits. The answer is the user's decision on the card,
+   * or a refusal when the push stops waiting (`closed`) or there's nowhere to ask.
+   */
+  askPush(pusher: { project: string; session?: string }, card: PushCard): { answer: Promise<PushAnswer>; done(ok: boolean, text: string): void; closed(): void } {
+    const open = this.sessions.list().filter((s) => s.sandbox === pusher.project && LIVE_SESSION_STATUSES.includes(s.status));
+    const session = open.find((s) => s.id === pusher.session) ?? open.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))[0];
+    if (!session) {
+      return {
+        answer: Promise.resolve({ allowed: false, message: "Kumiko has to ask the user about this, but no session is open in this project. Open one, and push from it." }),
+        done: () => {},
+        closed: () => {},
+      };
+    }
+    const id = randomUUID();
+    let card0: ApprovalCard = { id, at: new Date().toISOString(), state: "open", card };
+    let settle!: (a: PushAnswer) => void;
+    const answer = new Promise<PushAnswer>((r) => (settle = r));
+    let settled = false;
+    const finish = (a: PushAnswer) => {
+      if (settled) return;
+      settled = true;
+      settle(a);
+    };
+    this.sessions.hostAsk(session.id, { kind: "approval", id, tool: "push", input: { branch: card.branch, new: card.new } }, (a) => {
+      if (a?.kind === "allow") return finish({ allowed: true });
+      finish({ allowed: false, message: a?.kind === "deny" ? a.message : "The user didn't allow it: they sent a message instead." });
+    });
+    this.sessions.putCard(session.id, card0);
+    return {
+      answer,
+      done: (ok, text) => {
+        card0 = this.card(session.id, id);
+        this.sessions.putCard(session.id, { ...card0, state: ok ? "done" : "failed", receipt: { ok, text, meta: `${card.branch} · ${card.new.slice(0, 7)}` } });
+      },
+      closed: () => {
+        if (settled) return;
+        finish({ allowed: false, message: "The push stopped waiting." });
+        this.sessions.closeHostAsk(session.id, id);
+      },
+    };
+  }
+
   private card(session: string, askId: string): ApprovalCard {
     const card = cardsOf(this.sessions.events(session)).get(askId);
     if (!card) throw new ApprovalError("There's no card for that.");
@@ -470,5 +523,7 @@ function what(card: ApprovalCard): string {
       return "creating the issue";
     case "comment":
       return `commenting on #${card.card.target.number}`;
+    case "push":
+      return `pushing ${card.card.branch}`;
   }
 }

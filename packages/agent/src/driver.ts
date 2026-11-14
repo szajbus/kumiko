@@ -30,6 +30,8 @@ export interface StartOptions {
   run?: string;
   /** Tools the caller hosts for the agent; see `tools.ts`. */
   tools?: ToolHost;
+  /** Variables for Claude and every command it runs, by name; names are capitals, digits and underscores. */
+  vars?: Record<string, string>;
   /** Added to the agent's system prompt. */
   appendSystemPrompt?: string;
 }

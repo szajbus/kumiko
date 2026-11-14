@@ -11,6 +11,7 @@ export type CardAction = { action: "approve"; decision: CardDecision } | { actio
 export const CardContext = createContext<((askId: string, action: CardAction) => Promise<boolean>) | undefined>(undefined);
 
 const short = (sha: string) => sha.slice(0, 7);
+const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 
 /**
  * The card for one of Kumiko's tools that waits for the user's approval: Kumiko's facts, Claude's note, the choices,
@@ -32,7 +33,7 @@ export function ApprovalCardView({ item }: { item: AskItem }) {
     return (
       <div className="ac-receipt">
         <span className="ac-r-icon">…</span>
-        {card.state === "approved" ? "Approved; waiting for Claude to go ahead" : `Working on it: ${cardTitle(card.card, card.decision?.kind === "deliver" ? card.decision.route : undefined).toLowerCase()}`}
+        {card.state === "approved" ? (card.card.kind === "push" ? "Allowed; pushing to GitHub" : "Approved; waiting for Claude to go ahead") : `Working on it: ${lowerFirst(cardTitle(card.card, card.decision?.kind === "deliver" ? card.decision.route : undefined))}`}
       </div>
     );
   }
@@ -44,7 +45,7 @@ function Receipt({ card, note }: { card: Card; note?: string }) {
   const text = note
     ? `${cardTitle(card.card)}: ${note}`
     : card.state === "declined"
-      ? `Declined: ${cardTitle(card.card).toLowerCase()}${card.card.kind === "deliver" ? ` ${card.card.branch}` : ""}`
+      ? `Declined: ${lowerFirst(cardTitle(card.card))}${card.card.kind === "deliver" ? ` ${card.card.branch}` : ""}`
       : (card.receipt?.text ?? cardTitle(card.card));
   const meta = card.state === "declined" ? (card.reason ? `“${card.reason}”` : undefined) : card.receipt?.meta;
   return (
@@ -86,6 +87,7 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
       return method === "squash" ? { kind: "deliver", route, method, title: title.trim() || c.title, message } : { kind: "deliver", route, method };
     }
     if (c.kind === "issue") return title.trim() ? { kind: "issue", title: title.trim(), body, labels } : undefined;
+    if (c.kind === "push") return { kind: "push" };
     return body.trim() ? { kind: "comment", body } : undefined;
   };
   const approve = () => {
@@ -132,6 +134,55 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
         </span>
       </div>
   );
+
+  if (c.kind === "push") {
+    return (
+      <div className="ac-card is-pending" role="group" aria-label={cardTitle(c)} onKeyDown={onKey}>
+        <div className="ac-head">
+          <div className="ac-title">
+            Push <code className="ac-ref">{c.branch}</code>, which changes CI
+          </div>
+          <div className="ac-sub">Claude's branch · {c.repo} · its git push waits for you</div>
+        </div>
+        <div className="ac-facts">
+          <span>
+            {c.old ? <code>{short(c.old)}</code> : "new branch"} → <code>{short(c.new)}</code>
+          </span>
+          <span>{c.old ? (c.fastForward ? "fast-forward" : "force-push") : `from ${c.base}`}</span>
+          <span>
+            {c.commits} commit{c.commits === 1 ? "" : "s"}
+          </span>
+          <span className="ac-by">✓ checked by Kumiko</span>
+        </div>
+        <div className="ac-flags">
+          {(c.files.length ? c.files : [{ path: ".github/", added: undefined, deleted: undefined }]).map((f) => (
+            <div key={f.path} className="ac-flag">
+              <span className="ac-warn">⚠</span>
+              <div>
+                Changes <code>{f.path}</code> compared with {c.base}
+                {f.added !== undefined && (
+                  <>
+                    {" "}
+                    <span className="ac-add">+{f.added}</span> <span className="ac-del">−{f.deleted}</span>
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
+          <div className="ac-flag">
+            <span />
+            <div className="ac-why">GitHub runs a branch's own workflows when it's pushed, with the repository's secrets. Once you allow it, later pushes with the same .github/ go through by themselves.</div>
+          </div>
+        </div>
+        {declining && (
+          <div className="ac-decline">
+            <textarea className="ac-ta ac-fld" autoFocus placeholder="Why not, for Claude (optional)" value={reason} onChange={(e) => setReason(e.target.value)} />
+          </div>
+        )}
+        {footBar("Pushes with your gh login")}
+      </div>
+    );
+  }
 
   if (c.kind === "issue" || c.kind === "comment") {
     const footer = c.kind === "issue" ? FOOTERS.issue : FOOTERS.comment;

@@ -31,7 +31,7 @@ interface RepoRecord {
    * The branches that first reached GitHub through a project's relay, by name, with the project and when it last
    * pushed: that project's agent may update, force-push and delete them. Dropped when the branch leaves GitHub.
    */
-  created?: Record<string, { project: string; at: string }>;
+  created?: Record<string, { project: string; at: string; ci?: string }>;
 }
 
 interface Entry {
@@ -340,15 +340,26 @@ export class Mirrors {
       .sort((a, b) => b.at.localeCompare(a.at));
   }
 
-  /** Records pushes GitHub accepted: each branch as `project`'s, or, when deleted, as nobody's. */
-  async noteBranches(repo: string, project: string, changes: { branch: string; deleted: boolean }[]): Promise<void> {
+  /** The tree of `.github` the user last allowed `branch` to push with: CI changes they have seen. */
+  ciAllowed(repo: string, branch: string): string | undefined {
+    return this.entryOf(repo)?.record.created?.[branch]?.ci;
+  }
+
+  /**
+   * Records pushes GitHub accepted: each branch as `project`'s, or, when deleted, as nobody's; `ci` is the tree of
+   * `.github` the user allowed it to push with, if they were asked.
+   */
+  async noteBranches(repo: string, project: string, changes: { branch: string; deleted: boolean; ci?: string }[]): Promise<void> {
     const e = this.entryOf(repo);
     if (!e || !changes.length) return;
     const created = { ...e.record.created };
     const at = new Date().toISOString();
     for (const c of changes) {
       if (c.deleted) delete created[c.branch];
-      else created[c.branch] = { project, at };
+      else {
+        const ci = c.ci ?? (created[c.branch]?.project === project ? created[c.branch]?.ci : undefined);
+        created[c.branch] = { project, at, ...(ci ? { ci } : {}) };
+      }
     }
     e.record.created = created;
     if (!Object.keys(created).length) delete e.record.created;

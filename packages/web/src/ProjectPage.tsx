@@ -498,6 +498,7 @@ function MeterLine({ m }: { m: Meter }) {
 const POLICY: [string, string][] = [
   ["Fetch and pull", "Allowed"],
   ["Push, force-push or delete branches it created", "Allowed"],
+  ["Push changes to .github/ on its branches", "Asks you, once per change"],
   ["Push the default branch, tags, or other branches", "Refused"],
   ["Deliver to the default branch, or open a PR", "Asks you"],
   ["Create issues, comment on issues and PRs", "Asks you"],

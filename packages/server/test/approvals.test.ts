@@ -46,6 +46,11 @@ class FakeSessions implements ApprovalSessions {
   card(id: string) {
     return cardsOf(this.ev).get(id);
   }
+  list() {
+    return [this.info];
+  }
+  hostAsk() {}
+  closeHostAsk() {}
   answer(id: string) {
     return this.answers.find((a) => a.id === id)?.answer;
   }

@@ -11,6 +11,8 @@ export function cardTitle(card: ApprovalCard["card"], route?: DeliverRoute): str
       return "Create an issue";
     case "comment":
       return `Comment on ${card.target.type === "pr" ? "PR" : "issue"} #${card.target.number}`;
+    case "push":
+      return `Push ${card.branch}, which changes CI`;
   }
 }
 
@@ -42,6 +44,8 @@ export function approveLabel(card: ApprovalCard["card"], route?: DeliverRoute, m
       return "Create issue";
     case "comment":
       return "Post as you";
+    case "push":
+      return "Allow this push";
   }
 }
 

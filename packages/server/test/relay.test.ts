@@ -9,8 +9,9 @@ import { after, before, describe, it } from "node:test";
 import { LimaProvider, MetadataStore } from "@kumiko/sandbox";
 import { repoFromRemote } from "@kumiko/shared";
 import { Mirrors } from "../src/mirrors.js";
-import { pktLine, readRequest, Relays, remoteForms, vmGitConfig } from "../src/relay.js";
-import { decide, githubLines, parseUpdates, Pushes } from "../src/pushes.js";
+import { pktLine, readRequest, readSessionLine, Relays, remoteForms, vmGitConfig } from "../src/relay.js";
+import { decide, githubLines, parseUpdates, Pushes, type PushAnswer } from "../src/pushes.js";
+import type { PushCard } from "@kumiko/shared";
 import { fakeGitHub, type FakeGitHub } from "./github.js";
 import { sh } from "./repo.js";
 
@@ -18,7 +19,11 @@ const sandboxFixtures = resolve(dirname(fileURLToPath(import.meta.url)), "../../
 
 /** git as the agent runs it in the fake VM: the VM user's home and config, none of the test's. */
 function vmGit(home: string, cwd: string, ...args: string[]): Promise<{ code: number; out: string; err: string }> {
-  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, GIT_TERMINAL_PROMPT: "0" };
+  return vmGitIn(home, cwd, {}, ...args);
+}
+
+function vmGitIn(home: string, cwd: string, extra: NodeJS.ProcessEnv, ...args: string[]): Promise<{ code: number; out: string; err: string }> {
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, GIT_TERMINAL_PROMPT: "0", ...extra };
   delete env.GIT_CONFIG_GLOBAL;
   delete env.GIT_CONFIG_NOSYSTEM;
   env.GIT_CONFIG_NOSYSTEM = "1";
@@ -49,6 +54,16 @@ describe("git relay pieces", () => {
     assert.throws(() => readRequest(Buffer.from("zzzz")));
   });
 
+  it("reads the proxy's session line, if there is one, before git's request", () => {
+    const req = pktLine("git-upload-pack /acme/widget.git\0host=kumiko\0");
+    const id = "0b1c2d3e-0000-4000-8000-000000000001";
+    assert.deepEqual(readSessionLine(Buffer.concat([Buffer.from(`kumiko-session ${id}\n`), req])), { session: id, after: req });
+    assert.deepEqual(readSessionLine(Buffer.concat([Buffer.from("kumiko-session \n"), req])), { after: req }, "none named");
+    assert.deepEqual(readSessionLine(req), { after: req }, "an older proxy's");
+    assert.equal(readSessionLine(Buffer.from("kumiko-sess")), undefined, "not all there yet");
+    assert.throws(() => readSessionLine(Buffer.from("kumiko-session $(rm -rf /)\n")));
+  });
+
   it("knows GitHub's remote URLs, and nothing else", () => {
     for (const url of ["git@github.com:acme/widget.git", "git@github.com:acme/widget", "https://github.com/acme/widget.git", "https://github.com/acme/widget", "https://token@github.com/acme/widget.git", "ssh://git@github.com/acme/widget.git"]) {
       assert.equal(repoFromRemote(url)?.repo, "acme/widget", url);
@@ -77,6 +92,9 @@ describe("git relay", () => {
   let relays: Relays;
   let pushes: Pushes;
   let work: string;
+  /** What the push hook asked the user, and how the test answers: by default, it's never answered. */
+  const asks: { pusher: { project: string; session?: string }; card: PushCard; answer(a: PushAnswer): void; done: { ok: boolean; text: string }[] }[] = [];
+  const closed: string[] = [];
   let bare: string;
   let changes = 0;
   const provider = () => new LimaProvider({ limactl: join(sandboxFixtures, "fake-limactl.mjs"), ssh: join(sandboxFixtures, "fake-ssh.sh"), metadata: new MetadataStore(join(root, "sandboxes")) });
@@ -92,11 +110,23 @@ describe("git relay", () => {
     await github.repo("acme/other");
     mirrors = new Mirrors({ home: join(root, "home"), remoteUrl: (repo) => `${github.url}/${repo.toLowerCase()}.git`, freshMs: 0 });
     await mirrors.start();
-    pushes = new Pushes({ socket: join(root, "home", "run", "hook.sock"), mirrors, connection: (id) => relays.connection(id) });
+    pushes = new Pushes({
+      socket: join(root, "home", "run", "hook.sock"),
+      mirrors,
+      connection: (id) => relays.connection(id),
+      askCi: (pusher, _connection, card) => {
+        let answer!: (a: PushAnswer) => void;
+        const promise = new Promise<PushAnswer>((r) => (answer = r));
+        const entry = { pusher, card, answer, done: [] as { ok: boolean; text: string }[] };
+        asks.push(entry);
+        return { answer: promise, done: (ok, text) => entry.done.push({ ok, text }) };
+      },
+    });
     await pushes.start();
     relays = new Relays({
       dir: join(root, "home", "run"),
       hookSocket: join(root, "home", "run", "hook.sock"),
+      onConnectionClosed: (id) => closed.push(id),
       mirrors,
       provider: provider(),
       identity: async () => ({ name: "Test", email: "test@example.com" }),
@@ -261,6 +291,65 @@ describe("git relay", () => {
     assert.match(r.err, /Kumiko: GitHub refused the push, so nothing was pushed/);
     assert.equal(onGitHub("refs/heads/lease"), theirs);
     assert.equal(inMirror("refs/heads/lease"), first, "the mirror didn't move");
+  });
+
+  it("waits for the user on a push that changes CI, asking in the session it came from, once per change", async () => {
+    const clone = join(vmHome, "widget");
+    await vmGit(vmHome, clone, "fetch", "--quiet");
+    await vmGit(vmHome, clone, "checkout", "--quiet", "-B", "ci", "origin/main");
+    await mkdir(join(clone, ".github", "workflows"), { recursive: true });
+    await writeFile(join(clone, ".github", "workflows", "ci.yml"), "on: push\n");
+    await vmGit(vmHome, clone, "add", ".github");
+    await vmGit(vmHome, clone, "commit", "--quiet", "-m", "CI");
+    const session = "0b1c2d3e-0000-4000-8000-000000000001";
+    const pushing = vmGitIn(vmHome, clone, { KUMIKO_SESSION: session }, "push", "-u", "origin", "ci");
+    await until("the push to ask", () => asks.length === 1);
+    const [a] = asks;
+    assert.deepEqual(a.pusher, { project: "web", repo: "acme/widget", session });
+    assert.equal(a.card.branch, "ci");
+    assert.equal(a.card.old, undefined, "a new branch");
+    assert.deepEqual(a.card.files.map((f) => [f.path, f.added]), [[".github/workflows/ci.yml", 1]]);
+    assert.equal(onGitHub("refs/heads/ci"), undefined, "nothing on GitHub while it waits");
+    a.answer({ allowed: true });
+    const r = await pushing;
+    assert.equal(r.code, 0, r.err);
+    assert.match(r.err, /remote: Kumiko: ci changes \.github\/workflows\/ci\.yml, which decides what CI runs/);
+    assert.match(r.err, /remote: Kumiko: waiting for the user to allow it in Kumiko…/);
+    assert.ok(onGitHub("refs/heads/ci"));
+    assert.deepEqual(a.done, [{ ok: true, text: "Pushed to GitHub, with its CI change" }]);
+    assert.ok(mirrors.ciAllowed("acme/widget", "ci"));
+
+    // More work with the same .github/ goes through by itself.
+    await writeFile(join(clone, "more"), "more\n");
+    await vmGit(vmHome, clone, "add", "more");
+    await vmGit(vmHome, clone, "commit", "--quiet", "-m", "more");
+    assert.equal((await push("origin", "ci")).code, 0);
+    assert.equal(asks.length, 1);
+
+    // Another change to it asks again; refused, nothing goes.
+    await writeFile(join(clone, ".github", "workflows", "ci.yml"), "on: [push, pull_request]\n");
+    await vmGit(vmHome, clone, "commit", "--quiet", "-am", "CI again");
+    const before = onGitHub("refs/heads/ci");
+    const again = push("origin", "ci");
+    await until("the second ask", () => asks.length === 2);
+    assert.equal(asks[1].pusher.session, undefined, "no session named");
+    asks[1].answer({ allowed: false, message: "The user declined pushing ci." });
+    const refused = await again;
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.err, /remote: Kumiko: The user declined pushing ci\./);
+    assert.equal(onGitHub("refs/heads/ci"), before);
+  });
+
+  it("lets the user know a push stopped waiting when git in the VM goes", async () => {
+    const clone = join(vmHome, "widget");
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: vmHome, GIT_TERMINAL_PROMPT: "0" };
+    delete env.GIT_CONFIG_GLOBAL;
+    const git = spawn("git", ["-C", clone, "push", "origin", "ci"], { env, stdio: "ignore" });
+    await until("the third ask", () => asks.length === 3);
+    const before = closed.length;
+    git.kill("SIGKILL");
+    await until("the relay to hear the push went", () => closed.length > before);
+    asks[2].answer({ allowed: false, message: "gone" });
   });
 
   it("refuses a push into a mirror that didn't come through a relay", async () => {

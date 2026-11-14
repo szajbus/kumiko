@@ -34,9 +34,12 @@ const SESSION_ID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
  * (the id of one of that session's messages) the conversation is cut after that message. With `tools`, Claude reaches
  * the tools the driver hosts; `appendSystemPrompt` is added to its system prompt.
  */
-export function claudeCommand(resume?: string, fork?: boolean, resumeAt?: string, model?: string, extra: { tools?: boolean; appendSystemPrompt?: string; settings?: string } = {}): string {
+export function claudeCommand(resume?: string, fork?: boolean, resumeAt?: string, model?: string, extra: { tools?: boolean; appendSystemPrompt?: string; settings?: string; vars?: Record<string, string> } = {}): string {
   if (model !== undefined && !MODEL_ALIAS.test(model)) throw new Error(`Not a model: ${model}`);
   let base = model ? `${CLAUDE_COMMAND} --model ${model}` : CLAUDE_COMMAND;
+  const vars = Object.entries(extra.vars ?? {});
+  for (const [name] of vars) if (!/^[A-Z_][A-Z0-9_]*$/.test(name)) throw new Error(`Not a variable name: ${name}`);
+  if (vars.length) base = base.replace(/^env /, `env ${vars.map(([n, v]) => `${n}=${shellQuote(v)}`).join(" ")} `);
   if (extra.tools) base += ` --mcp-config ${shellQuote(mcpConfig())}`;
   if (extra.appendSystemPrompt) base += ` --append-system-prompt ${shellQuote(extra.appendSystemPrompt)}`;
   if (extra.settings) base += ` --settings ${shellQuote(extra.settings)}`;
@@ -173,11 +176,11 @@ export class ClaudeDriver implements AgentDriver {
     return this.run ? { run: this.run, offset: this.offset } : undefined;
   }
 
-  start({ sandbox, workdir, env, prompt, promptId, files, resume, fork, resumeAt, model, run, tools, appendSystemPrompt }: StartOptions): void {
+  start({ sandbox, workdir, env, prompt, promptId, files, resume, fork, resumeAt, model, run, tools, appendSystemPrompt, vars }: StartOptions): void {
     if (this.sandbox) throw new Error("This driver has already started.");
     const runId = run ?? `run-${randomBytes(6).toString("hex")}`;
     const specs = tools?.list() ?? [];
-    const command = launchCommand(runId, claudeCommand(resume, fork, resumeAt, model, { tools: Boolean(tools), appendSystemPrompt, settings: approvalSettings(specs) }), this.owner);
+    const command = launchCommand(runId, claudeCommand(resume, fork, resumeAt, model, { tools: Boolean(tools), appendSystemPrompt, settings: approvalSettings(specs), vars }), this.owner);
     if (tools) this.tools = new ToolBridge(tools, (line) => this.write(line));
     this.asks.setApprovalTools(approvalTools(specs));
     this.begin(sandbox, runId, 0);

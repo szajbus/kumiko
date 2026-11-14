@@ -88,7 +88,26 @@ export interface CommentCard {
   body: string;
 }
 
-export type ApprovalCardBody = DeliverCard | IssueCard | CommentCard;
+/**
+ * A push to one of the agent's own branches that changes what CI runs: GitHub runs a branch's own workflows on push,
+ * with the repository's secrets, so it waits in the mirror's hook for the user.
+ */
+export interface PushCard {
+  kind: "push";
+  repo: string;
+  branch: string;
+  /** Where the branch was on GitHub; undefined for a new branch. */
+  old?: string;
+  new: string;
+  fastForward: boolean;
+  /** Commits the push adds. */
+  commits: number;
+  /** The changes under .github/, compared with the default branch. */
+  files: CardFile[];
+  base: string;
+}
+
+export type ApprovalCardBody = DeliverCard | IssueCard | CommentCard | PushCard;
 
 /**
  * What the user decided on a card, with what they changed: for Deliver the route and method, for the text that goes
@@ -97,7 +116,8 @@ export type ApprovalCardBody = DeliverCard | IssueCard | CommentCard;
 export type CardDecision =
   | { kind: "deliver"; route: DeliverRoute; method: DeliverMethod; title?: string; body?: string; message?: string }
   | { kind: "issue"; title: string; body: string; labels: string[] }
-  | { kind: "comment"; body: string };
+  | { kind: "comment"; body: string }
+  | { kind: "push" };
 
 /** What happened, as the card's one-line receipt shows it. */
 export interface CardReceipt {
@@ -170,6 +190,8 @@ export function parseCardDecision(value: unknown): CardDecision | undefined {
       const body = text(v.body, MAX_BODY);
       return body?.trim() ? { kind: "comment", body } : undefined;
     }
+    case "push":
+      return { kind: "push" };
     default:
       return undefined;
   }

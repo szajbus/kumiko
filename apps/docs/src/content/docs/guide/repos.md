@@ -61,6 +61,12 @@ shows GitHub's answer. Only if GitHub accepts does the mirror change, so it alwa
 
 - **Branches the agent creates** from the sandbox are pushed, and it can force-push and delete them. Kumiko records
   which project created each one; the project page lists them.
+- **Changes to CI wait for you.** GitHub runs a branch's own workflows when it's pushed, with the repository's secrets,
+  so a push whose `.github/` differs from the default branch's waits in the mirror while Kumiko shows a card: the
+  branch, the commits, and the files under `.github/` it changes. It's shown in the session the push came from (Kumiko
+  starts Claude with `KUMIKO_SESSION`, which the VM's git proxy passes on), or else in the project's most recent one.
+  Allowing it pushes it; later pushes to that branch with the same `.github/` go through by themselves. If the push
+  gives up waiting, the card says so.
 - **Everything else is refused**, with a message saying why: the default branch, tags, and branches someone else
   created, on GitHub or from another project. A push with one refused branch is refused whole.
 

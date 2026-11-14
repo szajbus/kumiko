@@ -27,6 +27,27 @@ const MAX_REQUEST = 65520;
 /** How long a connection may take to say what it wants. */
 const REQUEST_MS = 10_000;
 
+/** The line the proxy sends before git's request: which session the command runs in. */
+const SESSION_LINE = /^kumiko-session ([0-9a-f-]{0,64})\n/;
+
+/**
+ * Reads the proxy's session line from the start of what a connection sent, if it has one: the session, if one was
+ * named, and what follows. Undefined while it may still be coming.
+ */
+export function readSessionLine(buf: Buffer): { session?: string; after: Buffer } | undefined {
+  const prefix = "kumiko-session ";
+  const head = buf.subarray(0, prefix.length).toString("latin1");
+  if (!prefix.startsWith(head) && !head.startsWith(prefix)) return { after: buf };
+  const nl = buf.indexOf(10);
+  if (nl < 0) {
+    if (buf.length > 100) throw new Error("not a session line");
+    return undefined;
+  }
+  const m = SESSION_LINE.exec(buf.subarray(0, nl + 1).toString("latin1"));
+  if (!m) throw new Error("not a session line");
+  return { ...(m[1] ? { session: m[1] } : {}), after: buf.subarray(nl + 1) };
+}
+
 /** A pkt-line: four hex digits of length, counting themselves, then the data. */
 export function pktLine(data: string | Buffer): Buffer {
   const body = typeof data === "string" ? Buffer.from(data) : data;
@@ -87,6 +108,18 @@ export function vmGitConfig(repo: string, identity: { name?: string; email?: str
 }
 
 /**
+ * The proxy git runs for git:// to Kumiko, with the host and port as arguments: there is only one place to go. It says
+ * first which of Kumiko's sessions the command runs in, if any (Kumiko starts Claude with KUMIKO_SESSION), so a push
+ * that has to wait for the user is asked about there. That line isn't trusted for anything else.
+ */
+export const GIT_PROXY = `#!/bin/bash
+# Written by Kumiko: git:// to ${RELAY_HOST} goes to the mirrors on the host, over the socket Kumiko forwards here.
+# socat is the proxy itself, so it ends when the connection does; what feeds it the session line, then git's side, is
+# left to end when git closes that.
+exec socat - "UNIX-CONNECT:@SOCK@" < <(printf 'kumiko-session %s\\n' "\${KUMIKO_SESSION:-}"; exec cat 2>/dev/null)
+`;
+
+/**
  * The script that sets git in the VM up for the relay, on every start: socat, the proxy git runs for git:// to
  * Kumiko, the config above, included from ~/.gitconfig, and no stale socket where the forward will listen. It prints
  * the socket's path.
@@ -98,14 +131,21 @@ export function vmSetupScript(config: string): string {
     `if [ -n "$need" ]; then sudo apt-get update -qq >/dev/null && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $need >/dev/null; fi`,
     `command -v socat >/dev/null || { echo "socat isn't installed in the VM, and couldn't be installed." >&2; exit 1; }`,
     `d="$HOME/.config/kumiko"; mkdir -p "$d"; sock="$d/git.sock"; rm -f "$sock"`,
-    // The proxy gets the host and port as arguments; there is only one place to go.
-    `printf '#!/bin/sh\\n# Written by Kumiko: git:// to ${RELAY_HOST} goes to the mirrors on the host, over the socket Kumiko forwards here.\\nexec socat - "UNIX-CONNECT:%s"\\n' "$sock" > "$d/git-proxy"`,
+    `cat > "$d/git-proxy.new" <<'KUMIKO_PROXY'\n${GIT_PROXY}KUMIKO_PROXY`,
+    `sed "s|@SOCK@|$sock|g" "$d/git-proxy.new" > "$d/git-proxy" && rm -f "$d/git-proxy.new"`,
     `chmod 755 "$d/git-proxy"`,
     `cat > "$d/git.config.new" <<'KUMIKO_GIT'\n${config}KUMIKO_GIT`,
     `sed "s|@DIR@|$d|g" "$d/git.config.new" > "$d/git.config" && rm -f "$d/git.config.new"`,
     `git config --global --get-all include.path 2>/dev/null | grep -qxF "$d/git.config" || git config --global --add include.path "$d/git.config"`,
     `printf 'socket %s\\n' "$sock"`,
   ].join("\n");
+}
+
+/** Who a connection is: the project whose VM it came from, its repository, and the session the proxy named, if any. */
+export interface RelayConnection {
+  project: string;
+  repo: string;
+  session?: string;
 }
 
 export interface RelayOptions {
@@ -119,6 +159,8 @@ export interface RelayOptions {
   hookSocket?: string;
   /** Called when a relay's view changes. */
   onChange?(): void;
+  /** Called when git in the VM closes a connection. */
+  onConnectionClosed?(id: string): void;
   /** How long to wait before setting a relay up again after it failed, at first; it doubles up to a minute. */
   retryMs?: number;
 }
@@ -129,8 +171,8 @@ export interface RelayOptions {
  */
 export class Relays {
   private relays = new Map<string, Relay>();
-  /** The connections being served, by the id their git daemon's hook gives: which project, and which repository. */
-  private readonly connections = new Map<string, { project: string; repo: string }>();
+  /** The connections being served, by the id their git daemon's hook gives: which project, repository and session. */
+  private readonly connections = new Map<string, RelayConnection>();
   /** Closed for good: a sync that was under way when Kumiko began quitting starts nothing. */
   private closed = false;
 
@@ -157,7 +199,7 @@ export class Relays {
   }
 
   /** Who a connection's git daemon serves, while it is open. */
-  connection(id: string): { project: string; repo: string } | undefined {
+  connection(id: string): RelayConnection | undefined {
     return this.connections.get(id);
   }
 
@@ -185,7 +227,7 @@ class Relay {
     readonly id: string,
     readonly repo: string,
     private readonly opts: RelayOptions,
-    private readonly connections: Map<string, { project: string; repo: string }>,
+    private readonly connections: Map<string, RelayConnection>,
   ) {
     this.socket = join(opts.dir, `git-${id}.sock`);
   }
@@ -282,12 +324,13 @@ class Relay {
     const ended = exitCode(child);
     let over = false;
     void ended.then(() => (over = true));
-    for (let i = 0; i < 40 && !over && !this.stopped; i++) {
+    // Checked until it shows, however long ssh takes: often at first, then once a second.
+    for (let i = 0; !over && !this.stopped; i++) {
       if (await this.inVm(`[ -S ${shellQuote(guest)} ]`)) {
         this.set("connected");
         break;
       }
-      await new Promise((r) => setTimeout(r, 250));
+      await new Promise((r) => setTimeout(r, i < 40 ? 250 : 1000));
     }
     const code = await ended;
     this.forward = undefined;
@@ -310,12 +353,21 @@ class Relay {
     this.conns.add(conn);
     conn.on("close", () => this.conns.delete(conn));
     conn.on("error", () => conn.destroy());
-    let buf = Buffer.alloc(0);
+    let buf: Buffer = Buffer.alloc(0);
     const timer = setTimeout(() => conn.destroy(), REQUEST_MS);
+    let session: string | undefined;
+    let sessionRead = false;
     const onData = (chunk: Buffer) => {
       buf = Buffer.concat([buf, chunk]);
       let read: ReturnType<typeof readRequest>;
       try {
+        if (!sessionRead) {
+          const line = readSessionLine(buf);
+          if (!line) return;
+          sessionRead = true;
+          session = line.session;
+          buf = line.after;
+        }
         read = readRequest(buf);
       } catch {
         clearTimeout(timer);
@@ -326,12 +378,12 @@ class Relay {
       clearTimeout(timer);
       conn.off("data", onData);
       conn.pause();
-      void this.handOver(conn, read.request, read.after);
+      void this.handOver(conn, read.request, read.after, session);
     };
     conn.on("data", onData);
   }
 
-  private async handOver(conn: Socket, request: GitRequest, after: Buffer) {
+  private async handOver(conn: Socket, request: GitRequest, after: Buffer, session?: string) {
     const path = relayPath(this.repo);
     if (request.path.toLowerCase().replace(/(\.git)?\/?$/, ".git") !== path) {
       conn.end(pktLine(`ERR Kumiko: this VM can only reach ${this.repo} (${relayUrl(this.repo)}), not ${request.path}.\n`));
@@ -352,7 +404,9 @@ class Relay {
       },
     );
     this.daemons.add(daemon);
-    this.connections.set(connection, { project: this.id, repo: this.repo });
+    this.connections.set(connection, { project: this.id, repo: this.repo, ...(session ? { session } : {}) });
+    // A push waiting in the hook for the user stops waiting when git in the VM goes away.
+    conn.once("close", () => this.opts.onConnectionClosed?.(connection));
     daemon.on("error", () => conn.destroy());
     daemon.stdin!.on("error", () => {});
     daemon.stderr!.resume();
