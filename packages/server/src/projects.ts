@@ -2,9 +2,9 @@ import { constants } from "node:fs";
 import { access, cp, lstat, mkdir, readdir, readFile, realpath, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, normalize } from "node:path";
-import { AGENT_SCRIPT_MAX_BYTES, AGENT_SETUP_DIR, CLAUDE_HOME_IN_VM, KUMIKO_HOME_IN_VM, NAME_PATTERN, projectMountRole, WORKTREES_SUFFIX, type Mount, type Project, type SandboxSpec } from "@kumiko/shared";
+import { AGENT_SCRIPT_MAX_BYTES, AGENT_SETUP_DIR, CLAUDE_HOME_IN_VM, KUMIKO_HOME_IN_VM, NAME_PATTERN, projectMountRole, repoFromRemote, WORKTREES_SUFFIX, type Mount, type Project, type SandboxSpec } from "@kumiko/shared";
 import { replaceFile } from "./files.js";
-import { cloneProblem } from "./git.js";
+import { cloneProblem, runGit } from "./git.js";
 
 export function defaultKumikoHome(): string {
   return process.env.KUMIKO_HOME ?? join(homedir(), ".kumiko");
@@ -303,6 +303,23 @@ export class ProjectStore {
     await replaceFile(home, SETUP_GUIDE, setupGuide(p, user));
     if (user.provision) await replaceFile(home, USER_PROVISION_COPY, user.provision.endsWith("\n") ? user.provision : `${user.provision}\n`);
     else await rm(join(home, USER_PROVISION_COPY), { force: true });
+  }
+
+  /**
+   * The project's GitHub repository, read from the clone's origin the first time it is asked for and kept in its
+   * record from then on (see \`Project.repo\`): null when origin isn't on GitHub, or the clone's config can't be read.
+   */
+  async repo(p: Project): Promise<string | null> {
+    if (p.repo !== undefined) return p.repo;
+    // Reading config runs nothing the clone's config names.
+    const origin = await runGit(p.clonePath, ["config", "--get", "remote.origin.url"]).catch(() => "");
+    const repo = repoFromRemote(origin.trim())?.repo ?? null;
+    const current = await this.get(p.id);
+    if (!current) return repo;
+    if (current.repo !== undefined) return current.repo;
+    await replaceFile(this.dir, `${p.id}.json`, JSON.stringify({ ...current, repo }, null, 2) + "\n");
+    p.repo = repo;
+    return repo;
   }
 
   /**

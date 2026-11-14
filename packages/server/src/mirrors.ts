@@ -106,7 +106,7 @@ ${credentialHelper ? `[credential]\n\thelper =\n\thelper = ${quote(credentialHel
  * The environment git runs in: the user's own, so fetches use their usual credentials and SSH setup, without any of
  * git's variables that would point it at another repository, and never waiting on a prompt nobody can see.
  */
-function gitEnv(): NodeJS.ProcessEnv {
+export function gitEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" };
   for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES"]) {
     delete env[name];

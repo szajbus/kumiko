@@ -77,6 +77,8 @@ import { filesBytes } from "./disk.js";
 import { GitError, worktreeStatuses } from "./git.js";
 import { GhError, GitHub, gitHubUrl } from "./github.js";
 import { MirrorFetchFailed, MirrorNotFound, MirrorRecordError, Mirrors } from "./mirrors.js";
+import { hostIdentity } from "./git.js";
+import { Relays } from "./relay.js";
 import { hasToken, isLocalRequest, isToken, tokenCookie } from "./guard.js";
 import { LoginFailed, Logins } from "./logins.js";
 import { BusyError, Operations } from "./operations.js";
@@ -261,7 +263,8 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     return projectList.map((project) => {
       const vm = vms.find((v) => v.name === project.id)!;
       const problem = problems.get(project.id);
-      return { ...vm, project, waiting: waiting.get(project.id) ?? 0, ...(problem ? { problem } : {}) };
+      const relay = relays.view(project.id);
+      return { ...vm, project, waiting: waiting.get(project.id) ?? 0, ...(problem ? { problem } : {}), ...(relay ? { relay } : {}) };
     });
   };
 
@@ -293,6 +296,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
           listError = err instanceof Error ? err.message : String(err);
         }
         pushListIfChanged();
+        syncRelays();
       } while (refreshAgain);
     })().finally(() => (refreshing = undefined));
     return refreshing;
@@ -440,6 +444,28 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     credentialHelper: github.credentialHelper(),
     onChange: () => broadcast({ type: "mirrors", ...mirrorsView() }),
   });
+  // ---- the relays from projects' VMs to their mirrors ----
+  const relays = new Relays({
+    // Not under anything a VM mounts: each socket is only for the ssh forward into its own VM.
+    dir: join(home, "run"),
+    mirrors,
+    provider,
+    identity: hostIdentity,
+    onChange: () => pushListIfChanged(),
+  });
+  /** One sync at a time, so a slow one can't undo what a later one set. */
+  let relaySync: Promise<void> = Promise.resolve();
+  const syncRelays = () => {
+    relaySync = relaySync.then(async () => {
+      const want = new Map<string, string>();
+      for (const p of projectList) {
+        if (infoOf(p.id).status !== "running" || ops.active().includes(p.id)) continue;
+        const repo = await projects.repo(p).catch(() => null);
+        if (repo) want.set(p.id, repo);
+      }
+      relays.sync(want);
+    }).catch((err) => console.error(`Couldn't update the git relays: ${err instanceof Error ? err.message : String(err)}`));
+  };
   const mirrorsView = (): MirrorsResponse => (mirrors.readError ? { mirrors: mirrors.list(), error: mirrors.readError } : { mirrors: mirrors.list() });
   await mirrors.start();
 
@@ -1337,6 +1363,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       clearInterval(timer);
       stats.stopAll();
       logins.cancelAll();
+      await relays.close();
       await mirrors.close();
       if (endSessions) await sessions.endAll("quit");
       else await sessions.detachAll();

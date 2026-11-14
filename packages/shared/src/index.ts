@@ -272,6 +272,12 @@ export interface Project {
   /** `<clone>__worktrees`, beside the clone, mounted at the same path in the VM. */
   worktreesPath: string;
   createdAt: string;
+  /**
+   * The GitHub repository ("owner/name") the agent fetches and pushes through Kumiko's mirror of, read once from the
+   * clone's origin and kept: the clone is the agent's to change, and which of the user's repositories it can push to
+   * mustn't be. Null when origin wasn't on GitHub; missing until it has been read.
+   */
+  repo?: string | null;
 }
 
 /** A project id from its clone's folder name: lowercase letters, digits and dashes, short enough for a sandbox name. */
@@ -304,6 +310,19 @@ export interface ProjectView extends SandboxView {
   problem?: string;
   /** Sessions in this project that are waiting on the user. */
   waiting: number;
+  /** The relay to the project's mirror, while the VM runs and the project has a GitHub repository. */
+  relay?: RelayView;
+}
+
+/**
+ * The relay that has git in a project's VM reach Kumiko's mirror of its repository: a socket on the host, forwarded
+ * into the VM over ssh.
+ */
+export interface RelayView {
+  repo: string;
+  state: "connecting" | "connected" | "down";
+  /** Why it is down. */
+  error?: string;
 }
 
 /** Creates a project from a clone. Everything but `clonePath` and `name` is the VM's spec. */
@@ -783,6 +802,16 @@ export function parseRepo(repo: unknown): { owner: string; name: string; repo: s
   const m = /^([^/]+)\/([^/]+)$/.exec(repo);
   if (!m || !REPO_OWNER_PATTERN.test(m[1]) || !REPO_NAME_PATTERN.test(m[2])) return undefined;
   return { owner: m[1], name: m[2], repo, key: repo.toLowerCase() };
+}
+
+/**
+ * The GitHub repository a git remote URL names, in any of the forms git accepts for github.com: scp-like SSH, ssh://
+ * and https://, with or without ".git". Undefined for anything else.
+ */
+export function repoFromRemote(url: unknown): ReturnType<typeof parseRepo> {
+  if (typeof url !== "string") return undefined;
+  const m = /^(?:git@github\.com:|ssh:\/\/git@github\.com(?::22)?\/|https:\/\/(?:[^@/]+@)?github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(url.trim());
+  return m ? parseRepo(m[1]) : undefined;
 }
 
 /** A repository mirror as the Repos page shows it. */

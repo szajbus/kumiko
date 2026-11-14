@@ -276,6 +276,7 @@ code, .mono { font-family: var(--mono); }
 .btn-compact { min-height: 36px; padding: 0 14px; font-size: 13px; }
 .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px 24px; padding: 16px 20px; }
 .fact { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.relay-error { margin: 8px 4px 0; font-size: 13px; white-space: pre-wrap; }
 .fact-value { font-weight: 500; overflow-wrap: anywhere; }
 .fact-value.mono { font-size: 13px; }
 .meter { display: block; height: 6px; margin-top: 2px; border-radius: 3px; background: var(--border); overflow: hidden; }

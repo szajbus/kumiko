@@ -5,5 +5,7 @@ PATH="$(dirname "$0")/fake-bin:$PATH"
 HOME="${FAKE_LIMA_DIR:-/tmp/fake-lima}/vm-home"
 mkdir -p "$HOME"
 export PATH HOME
+# A reverse socket forward (`-N -R guest:host`) has no command: the fake holds it with a small forwarder instead.
+case " $* " in *" -R "*) exec node "$(dirname "$0")/fake-forward.mjs" "$@" ;; esac
 while [ $# -gt 0 ] && [ "$1" != "bash" ]; do shift; done
 exec "$@"

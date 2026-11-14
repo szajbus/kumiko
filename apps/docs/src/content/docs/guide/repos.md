@@ -5,8 +5,8 @@ sidebar:
   order: 8
 ---
 
-Kumiko keeps a bare mirror of each GitHub repository you pick, on your Mac. Your sandboxes will get their code from
-these mirrors, so they never need GitHub credentials of their own. The mirrors are Kumiko's: it makes them, fetches
+Kumiko keeps a bare mirror of each GitHub repository you pick, on your Mac. Your sandboxes get their code from these
+mirrors, so they never need GitHub credentials of their own. The mirrors are Kumiko's: it makes them, fetches
 into them, tidies them and deletes them. Don't run git in them yourself.
 
 Open them from the home button: **Repos**, beside **Projects**.
@@ -39,6 +39,22 @@ mirror takes. A fetch that failed shows git's message under the row; what was fe
 
 - **Fetch now** (↻) fetches it from GitHub. Fetches asked for within a few seconds of each other share one.
 - **Remove** deletes the mirror. Nothing changes on GitHub, and you can add the repository again any time.
+
+## Projects
+
+A project whose clone's `origin` is on GitHub fetches through that repository's mirror. Kumiko reads `origin` when the
+sandbox first starts, keeps which repository it is in the project from then on, and adds the repository here if it
+isn't. The clone is the agent's to change, so pointing `origin` elsewhere later doesn't change which repository the
+sandbox reaches.
+
+While the sandbox runs, Kumiko holds an SSH connection to it that forwards a socket on your Mac into the VM. In the VM,
+git sends GitHub's URLs for the repository through that socket instead (`~/.config/kumiko/git.config`, which Kumiko
+writes on every start and includes from `~/.gitconfig`), so `git clone`, `fetch` and `pull` work as usual. Each fetch
+brings the mirror up to date from GitHub first. The VM reaches only its own project's repository, and `origin` in the
+clone still names GitHub, so `gh` and Claude Code see the real repository.
+
+The project page shows the repository and whether the relay is connected. When it's down, the page says why, and
+Kumiko keeps trying.
 
 ## What a mirror holds
 

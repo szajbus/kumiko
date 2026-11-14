@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { homedir } from "node:os";
 import type { WorktreeStatus, WorktreesResponse } from "@kumiko/shared";
 
 const TIMEOUT_MS = 10_000;
@@ -35,6 +36,13 @@ export function runGit(cwd: string, args: string[], opts: RunOptions = {}): Prom
 }
 
 const run = (cwd: string, args: string[]) => runGit(cwd, args);
+
+/** The user's git identity on the host, from their global config; what isn't set is left out. */
+export async function hostIdentity(): Promise<{ name?: string; email?: string }> {
+  const get = (key: string) => runGit(homedir(), ["config", "--global", "--get", key]).then((v) => v.trim() || undefined, () => undefined);
+  const [name, email] = await Promise.all([get("user.name"), get("user.email")]);
+  return { ...(name ? { name } : {}), ...(email ? { email } : {}) };
+}
 
 /**
  * Settings that keep git from running commands the repository's own config names. The agent writes the clone's

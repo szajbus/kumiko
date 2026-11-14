@@ -23,6 +23,12 @@ export interface SandboxProvider {
   edit(name: string, patch: EditSpec, log: Log): Promise<void>;
   /** Runs `cmd` in the VM with stdio piped; sessions pass the sandbox's working directory as `cwd`. */
   exec(name: string, cmd: string, env: string[], opts?: { cwd?: string }): ChildProcess;
+  /**
+   * Forwards Unix socket `guestPath` in the VM to `hostPath` on the host, for as long as the process runs: each
+   * connection to the one in the VM becomes a connection to the one on the host. It exits when the VM goes, or when the
+   * forward can't be set up (the guest path is taken, say), with why on stderr.
+   */
+  forward(name: string, guestPath: string, hostPath: string): ChildProcess;
   /** Checks a spec before `create`: errors block it, warnings (unset variables) don't. */
   validate(spec: SandboxSpec): Promise<Validation>;
   /** Templates the create form can offer, plus the one to preselect. */

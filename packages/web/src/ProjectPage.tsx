@@ -377,6 +377,23 @@ function Details({ p, home }: { p: ProjectView; home?: string }) {
         <Fact label="Created">{created ? new Date(created).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "—"}</Fact>
       </section>
 
+      {p.project.repo && (
+        <>
+          <div className="form-group-head">
+            <h2>GitHub</h2>
+          </div>
+          <section className="card facts" aria-label="GitHub">
+            <Fact label="Repository" mono>
+              {p.project.repo}
+            </Fact>
+            <Fact label="Relay">
+              <RelayState p={p} />
+            </Fact>
+          </section>
+          {p.relay?.state === "down" && p.relay.error && <p className="muted relay-error">{p.relay.error}</p>}
+        </>
+      )}
+
       {spec && (
         <div className="detail-grid">
           <section className="card section" aria-labelledby="d-mounts">
@@ -454,6 +471,20 @@ function MeterLine({ m }: { m: Meter }) {
       </span>
     </>
   );
+}
+
+/** Whether git in the VM reaches the mirror: only while the sandbox runs. */
+function RelayState({ p }: { p: ProjectView }) {
+  switch (p.relay?.state) {
+    case "connected":
+      return <span style={{ color: COLORS.running }}>Connected</span>;
+    case "connecting":
+      return <span style={{ color: COLORS.warn }}>Connecting…</span>;
+    case "down":
+      return <span style={{ color: COLORS.failed }}>Down</span>;
+    default:
+      return <span className="dim">{p.status === "running" ? "—" : "Off while the sandbox is stopped"}</span>;
+  }
 }
 
 function SetupState({ p }: { p: ProjectView }) {
