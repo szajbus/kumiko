@@ -77,30 +77,34 @@ Kumiko's check is the gate.
 
 ### Delivering
 
-The default branch changes only through **Deliver**. When work is ready, Claude pushes its branch and calls the
-`deliver` tool, and waits while Kumiko shows you a card in the session:
+The default branch changes only through a card you approve. When work is ready, Claude pushes its branch, says in
+the chat why and what it would pick, and calls the `deliver` tool. Then it waits while Kumiko shows you a card under
+that message, headed `main ← branch`, with the repository in the corner:
 
-- **What's in it**, all worked out by Kumiko from the mirror: the branch's head commit, its commits and files with
-  their changes, and whether it merges cleanly. Flags name what needs a look: changes under `.github/`, which decide
-  what CI runs and with which secrets; commits authored by anyone but you (your global `user.email`); and commits
-  without Claude's `Co-Authored-By` trailer. Claude's own note is set apart, as a quote.
-- **Route:** straight to the default branch, or a pull request first. A PR opens as you, with Claude's title and
-  description, which you can edit, and a footer Kumiko adds: "🤖 Opened by Claude in Kumiko". To land it later,
-  Claude delivers the branch again, and the merge commit says "Merge pull request #… from …", so GitHub shows the PR
-  merged.
-- **Method:** a merge commit, or a squash: one commit with all the branch's changes, its message editable, and the
-  branch's co-author trailers carried over. Squashing a PR closes it with a comment saying where it landed.
+- **What's in it**, worked out by Kumiko from the mirror: the branch's commits and files with their changes. Flags
+  name what needs a look: changes under `.github/`, which decide what CI runs and with which secrets; commits that say
+  they're authored by anyone but you (your global `user.email`); and commits without Claude's `Co-Authored-By`
+  trailer.
+- **The button** does what it says, and its ▾ menu offers the other ways, each described as GitHub describes it:
+  - **Merge and push:** one merge commit on top of the default branch, with the branch's commits as they are.
+  - **Squash and push:** one commit with all the branch's changes. Its subject is Claude's title, its message lists
+    the branch's commits, and the branch's co-author trailers follow.
+  - **Push and open pull request:** a PR opens as you, with Claude's title and description, which you can edit, and
+    the line "🤖 Opened by Claude" under it, which a checkbox leaves out. To land it later, Claude delivers the branch
+    again: then there are only the first two, a merge commit says "Merge pull request #… from …" so GitHub shows the
+    PR merged, and a squash closes the PR with a comment saying where it landed.
 
-The card starts at the route and method you picked last time in the project. Approving takes a click or ⌘↩; plain
-Enter does nothing. **Decline…** lets you tell Claude why. Nothing is shown when there's nothing to decide yet: a
-branch that isn't pushed, or that doesn't merge cleanly, gets Claude told what to fix.
+The button starts at what you picked last time in the project. **Decline…** lets you tell Claude why. Nothing is shown
+when there's nothing to decide yet: a branch that isn't pushed, or that doesn't merge cleanly, gets Claude told what to
+fix.
 
 Kumiko lands it in the mirror on your Mac: it merges, makes the commit with `git commit-tree`, signed with your key
 when there is one: named in your global git config (`user.signingkey`), or, with GPG, the one GPG has for your
 `user.email`, as `git commit -S` would use, and pushes it to GitHub with a lease, so it can't overwrite
 anything it didn't see. If the default branch moved meanwhile, it merges again once. A branch Claude created is then
 deleted on GitHub. The card is for the exact commit it shows: if the branch moves before you decide, it goes out of
-date, and **Review the new state** shows it again. Once decided, it shrinks to a one-line receipt.
+date, and **Review again** shows it again. Once decided, it shrinks to a one-line receipt, which says whether the
+commit was signed.
 
 Claude asks before calling `deliver` because Kumiko starts it with a permission rule for the tool. Kumiko doesn't rely
 on that: the tool only does anything if Kumiko itself recorded your approval of that very call.
@@ -114,7 +118,7 @@ run `gh` on your Mac:
   happens without asking. What comes back is marked as written by others, to be read as information and not as
   instructions, since on a public repository anyone can write an issue.
 - **Creating an issue** and **commenting** on an issue or a PR show a card first, with the text as GitHub will show it.
-  You can edit it; the footer Kumiko adds ("🤖 Reported by Claude in Kumiko", "🤖 Posted by Claude in Kumiko") stays.
+  You can edit it, and a checkbox leaves out the line Kumiko adds under it ("🤖 Reported by Claude", "🤖 Posted by Claude").
   An issue's labels can only be the repository's own: remove them on the card, or add others from its list. A comment's
   card names the issue or PR as GitHub has it, not as Claude described it.
 

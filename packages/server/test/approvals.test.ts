@@ -156,10 +156,9 @@ describe("delivering", () => {
     await mirrors.fetch("acme/widget");
     const last = git(work, ["rev-parse", "HEAD"]).trim();
     assert.notEqual(last, head);
-    const { card, answer } = await ask({ branch: "fix-x", title: "Fix x", body: "It fixes x.", note: "Small, I'd go straight to main." });
+    const { card, answer } = await ask({ branch: "fix-x", title: "Fix x", body: "It fixes x." });
     assert.equal(answer, undefined);
     const c = card!.card as DeliverCard;
-    assert.equal(card!.note, "Small, I'd go straight to main.");
     assert.equal(c.head, last);
     assert.equal(c.base, "main");
     assert.deepEqual(c.commits.map((x) => [x.subject, x.claude]), [["Change a.ts", true], ["Change .github/workflows/ci.yml", true], ["Someone else's", false]]);
@@ -237,7 +236,7 @@ describe("delivering", () => {
     assert.equal(mirrors.createdBy("acme/widget", "ship"), undefined);
     const card = sessions.card(r.id)!;
     assert.equal(card.state, "done");
-    assert.match(card.receipt!.text, /^Delivered ship → main as [0-9a-f]{7}$/);
+    assert.match(card.receipt!.text, /^Merged ship into main as [0-9a-f]{7}$/);
     assert.equal(card.receipt!.meta, "merge commit · signed");
     const again = await approvals.call(sessions.info, "deliver", r.input, r.toolUseId);
     assert.match(again.text, /^Done already/);
@@ -248,12 +247,13 @@ describe("delivering", () => {
     fresh();
     await branch("squashy", { q1: "1\n", q2: "2\n" });
     const r = await ask({ branch: "squashy", title: "Squash it", body: "b" });
-    await approvals.decide("s1", r.id, { action: "approve", decision: { kind: "deliver", route: "main", method: "squash", title: "Squash it, edited", message: "* one\n* two" } });
+    await approvals.decide("s1", r.id, { action: "approve", decision: { kind: "deliver", route: "main", method: "squash" } });
     const res = await approvals.call(sessions.info, "deliver", r.input, r.toolUseId);
     assert.match(res.text, /\(squashed, signed\)/);
+    assert.match(sessions.card(r.id)!.receipt!.text, /^Squashed squashy into main as /);
     const main = onGitHub("refs/heads/main")!;
     assert.equal(git(bare, ["rev-list", "--parents", "-n1", main]).trim().split(" ").length, 2, "one parent");
-    assert.equal(git(bare, ["log", "-1", "--format=%B", main]), "Squash it, edited\n\n* one\n* two\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\n");
+    assert.equal(git(bare, ["log", "-1", "--format=%B", main]), "Squash it\n\n* Change q1\n* Change q2\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\n");
     assert.deepEqual(JSON.parse(await readFile(join(root, `choices-${choiceFiles}`, "choices.json"), "utf8")).web, { route: "main", method: "squash" });
     await branch("next", { nx: "x\n" });
     const next = await ask({ branch: "next", title: "Next", body: "b" });
@@ -387,7 +387,7 @@ describe("delivering", () => {
     const db = JSON.parse(await readFile(join(root, "gh", "github.json"), "utf8"));
     const pr = db.items.find((i: { head: string }) => i.head === "pr-me");
     assert.equal(pr.title, "PR me, edited");
-    assert.equal(pr.body, "Does p, edited.\n\n🤖 Opened by Claude in Kumiko");
+    assert.equal(pr.body, "Does p, edited.\n\n🤖 Opened by Claude");
     assert.equal(sessions.card(r.id)!.receipt!.text, `Opened PR #${pr.number}`);
 
     const again = await ask({ branch: "pr-me", title: "ignored", body: "ignored" });
@@ -438,14 +438,14 @@ describe("delivering", () => {
       assert.equal(bad.card, undefined);
       assert.match((bad.answer as { message: string }).message, /acme\/widget has no label "frontend"\. Its labels: bug, ui\./);
 
-      const r = await ask({ title: "Resume list jumps", body: "It jumps.", labels: ["bug"], note: "Unrelated." }, "github_issue_create");
+      const r = await ask({ title: "Resume list jumps", body: "It jumps.", labels: ["bug"] }, "github_issue_create");
       assert.deepEqual(r.card!.card, { kind: "issue", repo: "acme/widget", title: "Resume list jumps", body: "It jumps.", labels: ["bug"], repoLabels: [{ name: "bug", color: "d73a4a" }, { name: "ui", color: "1d76db" }] });
       await assert.rejects(approvals.decide("s1", r.id, { action: "approve", decision: { kind: "issue", title: "x", body: "y", labels: ["made-up"] } }), /no label made-up/);
       await approvals.decide("s1", r.id, { action: "approve", decision: { kind: "issue", title: "Resume list jumps to the top", body: "It jumps, edited.", labels: ["bug", "ui"] } });
       const res = await approvals.call(sessions.info, "github_issue_create", r.input, r.toolUseId);
       assert.match(res.text, /^Created issue #(\d+) \(https:\/\/github\.com\/acme\/widget\/issues\/\d+\)\.$/);
       const made = (await db()).items.at(-1);
-      assert.deepEqual([made.title, made.body, made.labels], ["Resume list jumps to the top", "It jumps, edited.\n\n🤖 Reported by Claude in Kumiko", ["bug", "ui"]]);
+      assert.deepEqual([made.title, made.body, made.labels], ["Resume list jumps to the top", "It jumps, edited.\n\n🤖 Reported by Claude", ["bug", "ui"]]);
       assert.match(sessions.card(r.id)!.receipt!.text, /^Created issue #\d+$/);
     });
 
@@ -462,10 +462,26 @@ describe("delivering", () => {
       const res = await approvals.call(sessions.info, "github_issue_comment", r.input, r.toolUseId);
       assert.match(res.text, new RegExp(`^Posted a comment on #${number} \\(https://github.com/acme/widget/issues/${number}#issuecomment-\\d+\\)\\.$`));
       const issue = (await db()).items.find((i: { number: number }) => i.number === number);
-      assert.equal(issue.comments.at(-1).body, "Fixed in #2, I think.\n\n🤖 Posted by Claude in Kumiko");
+      assert.equal(issue.comments.at(-1).body, "Fixed in #2, I think.\n\n🤖 Posted by Claude");
+
+      // Unticked, the line isn't added.
+      const plain = await ask({ number, body: "Thanks!" }, "github_issue_comment");
+      await approvals.decide("s1", plain.id, { action: "approve", decision: { kind: "comment", body: "Thanks!", footer: false } });
+      await approvals.call(sessions.info, "github_issue_comment", plain.input, plain.toolUseId);
+      assert.equal((await db()).items.find((i: { number: number }) => i.number === number).comments.at(-1).body, "Thanks!");
       const unapproved = await approvals.call(sessions.info, "github_pr_comment", { number, body: "sneaky" }, "made-up");
       assert.match(unapproved.text, /^Not approved/);
     });
+  });
+
+  it("leaves the footer out of a PR when the user unticks it", async () => {
+    fresh();
+    await branch("plain-pr", { pp: "p\n" });
+    const r = await ask({ branch: "plain-pr", title: "Plain", body: "No footer." });
+    await approvals.decide("s1", r.id, { action: "approve", decision: { kind: "deliver", route: "pr", method: "merge", title: "Plain", body: "No footer.", footer: false } });
+    await approvals.call(sessions.info, "deliver", r.input, r.toolUseId);
+    const pr = JSON.parse(await readFile(join(root, "gh", "github.json"), "utf8")).items.find((i: { head?: string }) => i.head === "plain-pr");
+    assert.equal(pr.body, "No footer.");
   });
 
   it("marks text from GitHub as data, and keeps it from closing its own quote", () => {

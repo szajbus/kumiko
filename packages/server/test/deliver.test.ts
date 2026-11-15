@@ -89,7 +89,7 @@ describe("delivering from a session", () => {
     const results = () => got.filter((e) => e.kind === "claude" && e.payload.type === "result");
     await waitFor(() => results().length >= 1);
 
-    const prompt = `widget deliver ${JSON.stringify({ branch: "fix-x", title: "Fix x", body: "Fixes x.", note: "Tiny." })}`;
+    const prompt = `widget deliver ${JSON.stringify({ branch: "fix-x", title: "Fix x", body: "Fixes x." })}`;
     assert.equal((await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: prompt }) })).status, 202);
     const card = await waitFor(() => got.findLast((e): e is Extract<SessionEvent, { kind: "card" }> => e.kind === "card")?.payload);
     assert.equal(card.state, "open");
@@ -103,7 +103,7 @@ describe("delivering from a session", () => {
     assert.equal(((await ok.json()) as ApprovalCard).state, "approved");
 
     const result = await waitFor(() => results()[1]);
-    assert.match(String(result.kind === "claude" && result.payload.result), /^Delivered fix-x to main as [0-9a-f]{7} \(merge commit\)\./);
+    assert.match(String(result.kind === "claude" && result.payload.result), /^Delivered fix-x to main as [0-9a-f]{7} \(merge commit, unsigned\)\./);
     assert.equal(sh(bare, "rev-parse", "main^2").trim(), head);
     const done = got.findLast((e): e is Extract<SessionEvent, { kind: "card" }> => e.kind === "card")!.payload;
     assert.equal(done.state, "done");

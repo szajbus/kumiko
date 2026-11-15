@@ -1,6 +1,6 @@
-import { createContext, useContext, useState, type KeyboardEvent, type ReactNode } from "react";
-import { FOOTERS, type ApprovalCard as Card, type CardDecision, type DeliverCard, type DeliverMethod, type DeliverRoute } from "@kumiko/shared";
-import { approveLabel, barShares, isApproveKey, cardClosed, cardTitle, commitsLabel, effectLine, filesLabel } from "./cards";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { FOOTERS, type ApprovalCard as Card, type CardDecision, type CardFlag, type CardFile } from "@kumiko/shared";
+import { approveLabel, barShares, cardAction, cardClosed, cardVerb, commitsLabel, deliverChoices, deliverDecision, filesLabel, initialChoice, type DeliverChoice } from "./cards";
 import type { ChatItem } from "./chat";
 import { Markdown } from "./Markdown";
 
@@ -11,13 +11,11 @@ export type CardAction = { action: "approve"; decision: CardDecision } | { actio
 export const CardContext = createContext<((askId: string, action: CardAction) => Promise<boolean>) | undefined>(undefined);
 
 const short = (sha: string) => sha.slice(0, 7);
-/** The keys that approve, as this platform writes them. */
-const APPROVE_KEYS = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘↩" : "Ctrl+Enter";
-const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
+const upperFirst = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /**
- * The card for one of Kumiko's tools that waits for the user's approval: Kumiko's facts, Claude's note, the choices,
- * and a button that names what happens. Once decided it shrinks to a one-line receipt.
+ * The card for one of Kumiko's tools that waits for the user's approval: what it acts on, what Kumiko found, and a
+ * button that names what happens. Claude says why in the chat, just above it. Once decided it shrinks to a receipt.
  */
 export function ApprovalCardView({ item }: { item: AskItem }) {
   const decide = useContext(CardContext);
@@ -28,14 +26,13 @@ export function ApprovalCardView({ item }: { item: AskItem }) {
     if (closed || item.answer) return null;
     return <div className="chat-quiet">Kumiko is checking what Claude asked for…</div>;
   }
-  if (card.state === "done" || card.state === "failed") return <Receipt card={card} />;
-  if (card.state === "declined") return <Receipt card={card} />;
+  if (card.state === "done" || card.state === "failed" || card.state === "declined") return <Receipt card={card} />;
   if (closed) return <Receipt card={card} note={closed} />;
   if (card.state === "approved" || card.state === "working") {
     return (
       <div className="ac-receipt">
         <span className="ac-r-icon">…</span>
-        {card.state === "approved" ? (card.card.kind === "push" ? "Allowed; pushing to GitHub" : "Approved; waiting for Claude to go ahead") : `Working on it: ${lowerFirst(cardTitle(card.card, card.decision?.kind === "deliver" ? card.decision.route : undefined))}`}
+        {card.state === "approved" && card.card.kind !== "push" ? "Approved; waiting for Claude to go ahead" : `${upperFirst(cardAction(card))}…`}
       </div>
     );
   }
@@ -45,11 +42,7 @@ export function ApprovalCardView({ item }: { item: AskItem }) {
 
 function Receipt({ card, note }: { card: Card; note?: string }) {
   const ok = card.state === "done" && card.receipt?.ok !== false;
-  const text = note
-    ? `${cardTitle(card.card)}: ${note}`
-    : card.state === "declined"
-      ? `Declined: ${lowerFirst(cardTitle(card.card))}${card.card.kind === "deliver" ? ` ${card.card.branch}` : ""}`
-      : (card.receipt?.text ?? cardTitle(card.card));
+  const text = note ? `${upperFirst(cardAction(card))}: ${note}` : card.state === "declined" ? `Declined: ${cardAction(card)}` : (card.receipt?.text ?? upperFirst(cardAction(card)));
   const meta = card.state === "declined" ? (card.reason ? `“${card.reason}”` : undefined) : card.receipt?.meta;
   return (
     <div className={`ac-receipt ${ok ? "is-ok" : note ? "" : "is-no"}`}>
@@ -67,16 +60,14 @@ function Receipt({ card, note }: { card: Card; note?: string }) {
 
 function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, action: CardAction) => Promise<boolean> }) {
   const c = card.card;
-  const [route, setRoute] = useState<DeliverRoute>(c.kind === "deliver" ? c.route : "main");
-  const [method, setMethod] = useState<DeliverMethod>(c.kind === "deliver" ? c.method : "merge");
+  const [choice, setChoice] = useState<DeliverChoice>(c.kind === "deliver" ? initialChoice(c) : "merge");
   const [title, setTitle] = useState(c.kind === "deliver" || c.kind === "issue" ? c.title : "");
-  const [body, setBody] = useState(c.kind === "comment" || c.kind === "deliver" || c.kind === "issue" ? c.body : "");
-  const [message, setMessage] = useState(c.kind === "deliver" ? c.squashBody : "");
+  const [body, setBody] = useState(c.kind === "push" ? "" : c.body);
+  const [footer, setFooter] = useState(true);
+  const [labels, setLabels] = useState<string[]>(c.kind === "issue" ? c.labels : []);
   const [declining, setDeclining] = useState(false);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
-  const [open, setOpen] = useState<"commits" | "files">();
-  const [labels, setLabels] = useState<string[]>(c.kind === "issue" ? c.labels : []);
 
   const send = async (action: CardAction) => {
     if (!decide || busy) return;
@@ -85,30 +76,104 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
     setBusy(false);
   };
   const decision = (): CardDecision | undefined => {
-    if (c.kind === "deliver") {
-      if (route === "pr") return title.trim() ? { kind: "deliver", route, method, title: title.trim(), body } : undefined;
-      if (method === "squash") return title.trim() ? { kind: "deliver", route, method, title: title.trim(), message } : undefined;
-      return { kind: "deliver", route, method };
+    switch (c.kind) {
+      case "deliver":
+        return deliverDecision(choice, { title, body, footer });
+      case "issue":
+        return title.trim() ? { kind: "issue", title: title.trim(), body, labels, ...(footer ? {} : { footer: false }) } : undefined;
+      case "comment":
+        return body.trim() ? { kind: "comment", body, ...(footer ? {} : { footer: false }) } : undefined;
+      case "push":
+        return { kind: "push" };
     }
-    if (c.kind === "issue") return title.trim() ? { kind: "issue", title: title.trim(), body, labels } : undefined;
-    if (c.kind === "push") return { kind: "push" };
-    return body.trim() ? { kind: "comment", body } : undefined;
   };
   const approve = () => {
     const d = decision();
     if (d && card.state === "open") void send({ action: "approve", decision: d });
   };
-  // Plain Enter does nothing: approving is ⌘↩ or a click, so it can't happen by accident while typing.
-  const onKey = (e: KeyboardEvent) => {
-    if (isApproveKey(e) && !declining) {
-      e.preventDefault();
-      approve();
-    }
-  };
 
-  const footBar = (sig: string) => (
+  const stale = card.state === "stale";
+  const head = (
+    <div className="ac-head">
+      <div className="ac-title">
+        {cardVerb(c, choice)}
+        {c.kind === "deliver" && (
+          <>
+            <code className="ac-ref">{c.base}</code> <span className="ac-arrow">←</span> <code className="ac-ref">{c.branch}</code>
+            {c.pr && <span className="badge">#{c.pr.number}</span>}
+          </>
+        )}
+        {c.kind === "push" && <code className="ac-ref">{c.branch}</code>}
+        {c.kind === "comment" && (
+          <a className="ac-target" href={c.target.url} target="_blank" rel="noreferrer">
+            {c.target.title}
+          </a>
+        )}
+        {stale && <span className="badge badge-warn">out of date</span>}
+      </div>
+      <span className="ac-repo">{c.repo}</span>
+    </div>
+  );
+
+  const decline = (
+    <button type="button" className="btn btn-secondary btn-compact" disabled={busy || !decide} onClick={() => setDeclining(true)}>
+      Decline…
+    </button>
+  );
+  const primary = stale ? (
+    <button key="refresh" type="button" className="btn btn-primary btn-compact" disabled={busy || !decide} onClick={() => void send({ action: "refresh" })}>
+      Review again
+    </button>
+  ) : c.kind === "deliver" ? (
+    <SplitButton key="approve" label={approveLabel(c, choice)} disabled={busy || !decide || !decision()} menuDisabled={busy || !decide} onClick={approve} choices={deliverChoices(c)} choice={choice} onChoose={setChoice} />
+  ) : (
+    <button key="approve" type="button" className="btn btn-primary btn-compact" disabled={busy || !decide || !decision()} onClick={approve}>
+      {approveLabel(c)}
+    </button>
+  );
+
+  return (
+    <div className="ac-card is-pending" role="group" aria-label={cardVerb(c, choice)}>
+      {head}
+      {c.kind === "deliver" && <Facts commits={c.commits} files={c.files} added={c.added} deleted={c.deleted} />}
+      {c.kind === "push" && (
+        <div className="ac-facts">
+          <span>{c.old ? (c.fastForward ? "fast-forward" : "force-push") : "new branch"}</span>
+          <span>
+            {c.commits} commit{c.commits === 1 ? "" : "s"}
+          </span>
+        </div>
+      )}
+      {(c.kind === "deliver" || c.kind === "push") && !stale && <Flags flags={c.kind === "deliver" ? c.flags : pushFlags(c.files)} />}
+      {stale && c.kind === "deliver" && (
+        <div className="ac-stale">
+          {c.branch} moved to {short(card.moved?.to ?? "")} ({card.moved?.commits ?? 0} new commit{card.moved?.commits === 1 ? "" : "s"}) after this card was shown.
+        </div>
+      )}
+      {!stale && c.kind === "deliver" && choice === "pr" && (
+        <div className="ac-fields">
+          <input className="ac-fld" value={title} onChange={(e) => setTitle(e.target.value)} aria-label="Pull request title" />
+          <BodyField value={body} onChange={setBody} footer={FOOTERS.pr} footerOn={footer} onFooter={setFooter} label="Pull request description" />
+        </div>
+      )}
+      {c.kind === "issue" && (
+        <div className="ac-fields">
+          <input className="ac-fld" value={title} onChange={(e) => setTitle(e.target.value)} aria-label="Issue title" />
+          <BodyField value={body} onChange={setBody} footer={FOOTERS.issue} footerOn={footer} onFooter={setFooter} label="Issue description" />
+          <Labels all={c.repoLabels} picked={labels} onChange={setLabels} />
+        </div>
+      )}
+      {c.kind === "comment" && (
+        <div className="ac-fields">
+          <BodyField value={body} onChange={setBody} footer={FOOTERS.comment} footerOn={footer} onFooter={setFooter} label="Comment" />
+        </div>
+      )}
+      {declining && (
+        <div className="ac-decline">
+          <textarea className="ac-ta ac-fld" autoFocus placeholder="Why not, for Claude (optional)" aria-label="Reason for declining, for Claude" value={reason} onChange={(e) => setReason(e.target.value)} />
+        </div>
+      )}
       <div className="ac-foot-bar">
-        <span className="ac-sig">{sig}</span>
         <span className="chat-proposal-buttons">
           {declining ? (
             <>
@@ -121,161 +186,38 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
             </>
           ) : (
             <>
-              <button type="button" className="btn btn-secondary btn-compact" disabled={busy || !decide} onClick={() => setDeclining(true)}>
-                Decline…
-              </button>
-              {card.state === "stale" ? (
-                <button key="refresh" type="button" className="btn btn-primary btn-compact" disabled={busy || !decide} onClick={() => void send({ action: "refresh" })}>
-                  Review the new state
-                </button>
-              ) : (
-                <button key="approve" type="button" className="btn btn-primary btn-compact" disabled={busy || !decide || !decision()} onClick={approve}>
-                  {approveLabel(c, route, method)} <span className="ac-kbd">{APPROVE_KEYS}</span>
-                </button>
-              )}
+              {decline}
+              {primary}
             </>
           )}
         </span>
       </div>
+    </div>
   );
+}
 
-  if (c.kind === "push") {
-    return (
-      <div className="ac-card is-pending" role="group" aria-label={cardTitle(c)} onKeyDown={onKey}>
-        <div className="ac-head">
-          <div className="ac-title">
-            {/* The comma stays with the branch: the title's items are spaced apart. */}
-            Push
-            <span>
-              <code className="ac-ref">{c.branch}</code>,
-            </span>
-            which changes CI
-          </div>
-          <div className="ac-sub">Claude's branch · {c.repo} · its git push waits for you</div>
-        </div>
-        <div className="ac-facts">
-          <span>
-            {c.old ? <code>{short(c.old)}</code> : "new branch"} → <code>{short(c.new)}</code>
-          </span>
-          <span>{c.old ? (c.fastForward ? "fast-forward" : "force-push") : `from ${c.base}`}</span>
-          <span>
-            {c.commits} commit{c.commits === 1 ? "" : "s"}
-          </span>
-          <span className="ac-by">✓ checked by Kumiko</span>
-        </div>
-        <div className="ac-flags">
-          {(c.files.length ? c.files : [{ path: ".github/", added: undefined, deleted: undefined }]).map((f) => (
-            <div key={f.path} className="ac-flag">
-              <span className="ac-warn">⚠</span>
-              <div>
-                Changes <code>{f.path}</code> compared with {c.base}
-                {f.added !== undefined && (
-                  <>
-                    {" "}
-                    <span className="ac-add">+{f.added}</span> <span className="ac-del">−{f.deleted}</span>
-                  </>
-                )}
-              </div>
-            </div>
-          ))}
-          <div className="ac-flag">
-            <span />
-            <div className="ac-why">GitHub runs a branch's own workflows when it's pushed, with the repository's secrets. Once you allow it, later pushes with the same .github/ go through by themselves.</div>
-          </div>
-        </div>
-        {declining && (
-          <div className="ac-decline">
-            <textarea className="ac-ta ac-fld" autoFocus placeholder="Why not, for Claude (optional)" aria-label="Reason for declining, for Claude" value={reason} onChange={(e) => setReason(e.target.value)} />
-          </div>
-        )}
-        {footBar("Pushes with your gh login")}
-      </div>
-    );
-  }
+/** The push card's one flag per .github/ file, saying why it waits. */
+const pushFlags = (files: CardFile[]): CardFlag[] =>
+  (files.length ? files : [{ path: ".github/" }]).map((f) => ({ rule: "ci", subject: f.path, why: "GitHub runs this branch's own workflows when it's pushed, with the repository's secrets." }));
 
-  if (c.kind === "issue" || c.kind === "comment") {
-    const footer = c.kind === "issue" ? FOOTERS.issue : FOOTERS.comment;
-    return (
-      <div className="ac-card is-pending" role="group" aria-label={cardTitle(c)} onKeyDown={onKey}>
-        <div className="ac-head">
-          <div className="ac-title">{cardTitle(c)}</div>
-          <div className="ac-sub">
-            {c.kind === "comment" ? (
-              <>
-                <a href={c.target.url} target="_blank" rel="noreferrer">
-                  “{c.target.title}”
-                </a>{" "}
-                · {c.target.state} · by {c.target.author} · {c.repo}
-              </>
-            ) : (
-              <>
-                {c.repo} · asked {new Date(card.at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
-              </>
-            )}
-          </div>
-        </div>
-        {card.note && (
-          <div className="ac-note">
-            <div className="ac-who">Claude's note</div>
-            <div>{card.note}</div>
-          </div>
-        )}
-        <Fields hint={c.kind === "issue" ? "Written by Claude, shown as GitHub will show it. Everything above is editable. Labels come from the repository's own." : "Exactly as it will appear, under your name. Editable."}>
-          {c.kind === "issue" && <input className="ac-fld" value={title} onChange={(e) => setTitle(e.target.value)} aria-label="Issue title" />}
-          <BodyField value={body} onChange={setBody} footer={footer} label={c.kind === "issue" ? "Issue description" : "Comment"} />
-          {c.kind === "issue" && <Labels all={c.repoLabels} picked={labels} onChange={setLabels} />}
-        </Fields>
-        {declining && (
-          <div className="ac-decline">
-            <textarea className="ac-ta ac-fld" autoFocus placeholder="Why not, for Claude (optional)" aria-label="Reason for declining, for Claude" value={reason} onChange={(e) => setReason(e.target.value)} />
-          </div>
-        )}
-        {footBar("Opens as you (gh on the Mac)".replace("Opens", c.kind === "comment" ? "Posts" : "Opens"))}
-      </div>
-    );
-  }
-
-  const pr = route === "pr";
+function Facts({ commits, files, added, deleted }: { commits: { sha: string; subject: string; claude: boolean }[]; files: CardFile[]; added: number; deleted: number }) {
+  const [open, setOpen] = useState<"commits" | "files">();
   return (
-    <div className="ac-card is-pending" role="group" aria-label={cardTitle(c, route)} onKeyDown={onKey}>
-      <div className="ac-head">
-        <div className="ac-title">
-          {cardTitle(c, route)} <code className="ac-ref">{c.branch}</code> <span className="ac-arrow">→</span> <code className="ac-ref">{c.base}</code>
-          {c.pr && <span className="badge">PR #{c.pr.number}</span>}
-          {card.state === "stale" && <span className="badge badge-warn">out of date</span>}
-        </div>
-        <div className="ac-sub">
-          {c.pr ? `${c.pr.title} · ` : ""}
-          {c.repo} · asked {new Date(card.at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
-        </div>
-      </div>
-      {card.note && (
-        <div className="ac-note">
-          <div className="ac-who">Claude's note</div>
-          <div>{card.note}</div>
-        </div>
-      )}
+    <>
       <div className="ac-facts">
-        <span>
-          <span className="ac-k">head</span> <code>{short(c.head)}</code>
-        </span>
         <button type="button" aria-expanded={open === "commits"} className={`ac-tog${open === "commits" ? " is-on" : ""}`} onClick={() => setOpen(open === "commits" ? undefined : "commits")}>
-          {commitsLabel(c)} ▾
+          {commitsLabel({ commits })} ▾
         </button>
         <span>
           <button type="button" aria-expanded={open === "files"} className={`ac-tog${open === "files" ? " is-on" : ""}`} onClick={() => setOpen(open === "files" ? undefined : "files")}>
-            {filesLabel(c)} ▾
+            {filesLabel({ files })} ▾
           </button>{" "}
-          <span className="ac-add">+{c.added}</span> <span className="ac-del">−{c.deleted}</span>
+          <span className="ac-add">+{added}</span> <span className="ac-del">−{deleted}</span>
         </span>
-        <span>
-          <span className="ac-dot" /> merges cleanly
-        </span>
-        <span className="ac-by">✓ checked by Kumiko</span>
       </div>
       {open === "commits" && (
         <div className="ac-panel">
-          {c.commits.map((x) => (
+          {commits.map((x) => (
             <div key={x.sha} className="ac-row">
               <code className="ac-sha">{short(x.sha)}</code>
               <span>{x.subject}</span>
@@ -286,7 +228,7 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
       )}
       {open === "files" && (
         <div className="ac-panel">
-          {c.files.map((f) => {
+          {files.map((f) => {
             const bar = barShares(f.added, f.deleted);
             return (
               <div key={f.path} className="ac-row ac-file">
@@ -301,65 +243,69 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
           })}
         </div>
       )}
-      {c.flags.length > 0 && (
-        <div className="ac-flags">
-          {c.flags.map((f, i) => (
-            <div key={`${i}:${f.rule}:${f.subject}`} className="ac-flag">
-              <span className="ac-warn">⚠</span>
-              <div>
-                {f.rule === "ci" ? "Changes CI config: " : f.rule === "author" ? "Not authored by you: " : "No Claude trailer: "}
-                <code>{f.subject}</code>
-                <div className="ac-why">{f.why}</div>
-              </div>
-            </div>
+    </>
+  );
+}
+
+function Flags({ flags }: { flags: CardFlag[] }) {
+  if (!flags.length) return null;
+  return (
+    <div className="ac-flags">
+      {flags.map((f, i) => (
+        <div key={`${i}:${f.rule}:${f.subject}`} className="ac-flag">
+          <span className="ac-warn">⚠</span>
+          <div>
+            {f.rule === "ci" ? "Changes CI config: " : f.rule === "author" ? "Not authored by you: " : "No Claude trailer: "}
+            <code>{f.subject}</code>
+            <div className="ac-why">{f.why}</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** The primary button with a menu of the other ways to do it; the main part does the one it shows. */
+function SplitButton({ label, disabled, menuDisabled, onClick, choices, choice, onChoose }: { label: string; disabled: boolean; menuDisabled: boolean; onClick(): void; choices: { choice: DeliverChoice; label: string; description: string }[]; choice: DeliverChoice; onChoose(c: DeliverChoice): void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    const escape = (e: globalThis.KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", escape);
+    return () => (document.removeEventListener("mousedown", away), document.removeEventListener("keydown", escape));
+  }, [open]);
+  return (
+    <span className="ac-split" ref={ref}>
+      <button type="button" className="btn btn-primary btn-compact" disabled={disabled} onClick={onClick}>
+        {label}
+      </button>
+      <button type="button" className="btn btn-primary btn-compact ac-caret" aria-label="Other ways" aria-haspopup="menu" aria-expanded={open} disabled={menuDisabled} onClick={() => setOpen(!open)}>
+        ▾
+      </button>
+      {open && (
+        <div className="ac-menu" role="menu">
+          {choices.map((c) => (
+            <button
+              key={c.choice}
+              type="button"
+              role="menuitemradio"
+              aria-checked={c.choice === choice}
+              className={`ac-opt${c.choice === choice ? " is-on" : ""}`}
+              onClick={() => (onChoose(c.choice), setOpen(false))}
+            >
+              <span className="ac-ck">{c.choice === choice ? "✓" : ""}</span>
+              <span>
+                <b>{c.label}</b>
+                <span className="ac-opt-d">{c.description}</span>
+              </span>
+            </button>
           ))}
         </div>
       )}
-      {card.state === "stale" ? (
-        <div className="ac-stale">
-          {c.branch} moved from {short(c.head)} to {short(card.moved?.to ?? "")} ({card.moved?.commits ?? 0} new commit{card.moved?.commits === 1 ? "" : "s"}) after this card was shown. Nothing was delivered.
-        </div>
-      ) : (
-        <>
-          <div className="ac-choose">
-            {!c.pr && (
-              <>
-                <span className="ac-lbl">Route</span>
-                <Segments<DeliverRoute> label="Route" value={route} onChange={setRoute} options={[["main", `Straight to ${c.base}`], ["pr", "Open a PR first"]]} />
-              </>
-            )}
-            {!pr && (
-              <>
-                <span className="ac-lbl">Method</span>
-                <Segments<DeliverMethod> label="Method" value={method} onChange={setMethod} options={[["merge", "Merge commit"], ["squash", "Squash"]]} />
-              </>
-            )}
-            <span className="ac-effect">{effectLine(c, route, method)}</span>
-          </div>
-          {pr && (
-            <Fields hint="Written by Claude, shown as GitHub will show it. Edit before opening, if you like.">
-              <input className="ac-fld" value={title} onChange={(e) => setTitle(e.target.value)} aria-label="Pull request title" />
-              <BodyField value={body} onChange={setBody} footer={FOOTERS.pr} label="Pull request description" />
-            </Fields>
-          )}
-          {!pr && method === "squash" && (
-            <Fields hint="The squash commit's message: the title from Claude, one line per commit.">
-              <input className="ac-fld" value={title} onChange={(e) => setTitle(e.target.value)} aria-label="Commit subject" />
-              <div className="ac-fld ac-body">
-                <textarea className="ac-ta mono" value={message} onChange={(e) => setMessage(e.target.value)} aria-label="Commit message" />
-                {c.trailers.length > 0 && <span className="ac-foot mono">{c.trailers.join("\n")} · carried over by Kumiko</span>}
-              </div>
-            </Fields>
-          )}
-        </>
-      )}
-      {declining && (
-        <div className="ac-decline">
-          <textarea className="ac-ta ac-fld" autoFocus placeholder="Why not, for Claude (optional)" aria-label="Reason for declining, for Claude" value={reason} onChange={(e) => setReason(e.target.value)} />
-        </div>
-      )}
-      {footBar(pr ? "Opens as you (gh on the Mac)" : c.signs ? "Signs with your key" : "Not signed: no signing key in your git config")}
-    </div>
+    </span>
   );
 }
 
@@ -392,29 +338,11 @@ function Labels({ all, picked, onChange }: { all: { name: string; color?: string
   );
 }
 
-function Segments<T extends string>({ label, value, onChange, options }: { label: string; value: T; onChange(v: T): void; options: [T, string][] }) {
-  return (
-    <span className="ac-seg" role="radiogroup" aria-label={label}>
-      {options.map(([v, label]) => (
-        <button type="button" role="radio" aria-checked={v === value} key={v} className={v === value ? "is-on" : ""} onClick={() => onChange(v)}>
-          {label}
-        </button>
-      ))}
-    </span>
-  );
-}
-
-function Fields({ hint, children }: { hint: string; children: ReactNode }) {
-  return (
-    <div className="ac-fields">
-      {children}
-      <span className="ac-hint">{hint}</span>
-    </div>
-  );
-}
-
-/** Text that goes public: rendered as GitHub would until clicked, then a box to edit; Kumiko's footer under it. */
-export function BodyField({ value, onChange, footer, label }: { value: string; onChange(v: string): void; footer: string; label: string }) {
+/**
+ * Text that goes public: rendered as GitHub would until clicked, then a box to edit, which it stays. Under it the line
+ * Kumiko adds, with a checkbox to leave it out.
+ */
+export function BodyField({ value, onChange, footer, footerOn, onFooter, label }: { value: string; onChange(v: string): void; footer: string; footerOn: boolean; onFooter(on: boolean): void; label: string }): ReactNode {
   const [editing, setEditing] = useState(false);
   return (
     <div className="ac-fld ac-body">
@@ -422,11 +350,14 @@ export function BodyField({ value, onChange, footer, label }: { value: string; o
         // Once editing, it stays a box: going back to the preview on blur would move the buttons under the pointer.
         <textarea className="ac-ta" autoFocus value={value} onChange={(e) => onChange(e.target.value)} aria-label={label} />
       ) : (
-        <div className="ac-md" role="button" tabIndex={0} aria-label={`${label}: click to edit`} onClick={(e) => !(e.target as HTMLElement).closest("a") && setEditing(true)} onKeyDown={(e) => e.key === "Enter" && !e.metaKey && !e.ctrlKey && setEditing(true)}>
+        <div className="ac-md" role="button" tabIndex={0} aria-label={`${label}: click to edit`} onClick={(e) => !(e.target as HTMLElement).closest("a") && setEditing(true)} onKeyDown={(e) => e.key === "Enter" && setEditing(true)}>
           {value.trim() ? <Markdown text={value} /> : <span className="dim">Empty</span>}
         </div>
       )}
-      <span className="ac-foot">{footer} · added by Kumiko, not editable</span>
+      <label className={`ac-foot${footerOn ? "" : " is-off"}`}>
+        <span>{footer}</span>
+        <input type="checkbox" checked={footerOn} onChange={(e) => onFooter(e.target.checked)} aria-label={`Add “${footer}”`} />
+      </label>
     </div>
   );
 }

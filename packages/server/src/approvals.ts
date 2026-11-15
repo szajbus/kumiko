@@ -54,30 +54,28 @@ export interface ApprovalOptions {
 const DELIVER: ToolSpec = {
   name: "deliver",
   description:
-    "Deliver a pushed branch to the GitHub repository's default branch, or open a pull request for it. Kumiko shows the user a card with the branch's commits and changes, the user chooses straight to the default branch or a PR first, and you wait for their answer. Kumiko lands it on the user's computer, signed by them, and tells you what happened. Push the branch first. If it doesn't merge cleanly, you're told to merge the default branch into it first, and no card is shown. A branch with a PR open is landed by delivering it again.",
+    "Deliver a pushed branch to the GitHub repository's default branch, or open a pull request for it. Kumiko shows the user a card with the branch's commits and changes, the user chooses to merge it, squash it, or open a pull request, and you wait for their answer. Say in your message before the call why, and what you'd pick: the user reads it just above the card. Kumiko lands it on the user's computer, signed by them, and tells you what happened. Push the branch first. If it doesn't merge cleanly, you're told to merge the default branch into it first, and no card is shown. A branch with a PR open is landed by delivering it again.",
   inputSchema: {
     type: "object",
     properties: {
       branch: { type: "string", description: "The branch to deliver, as pushed to origin." },
       title: { type: "string", description: "A title for the work: the PR's title if the user opens one, and the commit's subject if they squash it." },
       body: { type: "string", description: "What the work does and why, in Markdown: the PR's description if the user opens one." },
-      note: { type: "string", description: "Optional: why you'd deliver it, or which route you'd pick and why, for the user to read on the card." },
     },
     required: ["branch", "title", "body"],
   },
   approval: true,
 };
 
-const NOTE = { type: "string", description: "Optional: why, for the user to read on the card." };
 
 const GITHUB_TOOLS: ToolSpec[] = [
   {
     name: "github_issue_create",
     description:
-      "Create an issue in the project's GitHub repository, as the user. Kumiko shows the user a card with the title, body and labels as GitHub will show them, which they can edit, and you wait for their answer. Labels must be the repository's own: see github_label_list.",
+      "Create an issue in the project's GitHub repository, as the user. Kumiko shows the user a card with the title, body and labels as GitHub will show them, which they can edit, and you wait for their answer. Say in your message before the call why. Labels must be the repository's own: see github_label_list.",
     inputSchema: {
       type: "object",
-      properties: { title: { type: "string" }, body: { type: "string", description: "Markdown." }, labels: { type: "array", items: { type: "string" } }, note: NOTE },
+      properties: { title: { type: "string" }, body: { type: "string", description: "Markdown." }, labels: { type: "array", items: { type: "string" } } },
       required: ["title", "body"],
     },
     approval: true,
@@ -85,13 +83,13 @@ const GITHUB_TOOLS: ToolSpec[] = [
   {
     name: "github_issue_comment",
     description: "Comment on an issue in the project's GitHub repository, as the user. Kumiko shows the user a card with the comment as GitHub will show it, which they can edit, and you wait for their answer.",
-    inputSchema: { type: "object", properties: { number: { type: "integer" }, body: { type: "string", description: "Markdown." }, note: NOTE }, required: ["number", "body"] },
+    inputSchema: { type: "object", properties: { number: { type: "integer" }, body: { type: "string", description: "Markdown." } }, required: ["number", "body"] },
     approval: true,
   },
   {
     name: "github_pr_comment",
-    description: "Comment on a pull request in the project's GitHub repository, as the user. Kumiko shows the user a card with the comment as GitHub will show it, which they can edit, and you wait for their answer.",
-    inputSchema: { type: "object", properties: { number: { type: "integer" }, body: { type: "string", description: "Markdown." }, note: NOTE }, required: ["number", "body"] },
+    description: "Comment on a pull request in the project's GitHub repository, as the user. Kumiko shows the user a card with the comment as GitHub will show it, which they can edit, and you wait for their answer. Say in your message before the call why.",
+    inputSchema: { type: "object", properties: { number: { type: "integer" }, body: { type: "string", description: "Markdown." } }, required: ["number", "body"] },
     approval: true,
   },
   {
@@ -196,8 +194,6 @@ export class Approvals {
       let card: ApprovalCard;
       try {
         card = { id: ask.id, ...(ask.toolUseId ? { toolUseId: ask.toolUseId } : {}), at: new Date().toISOString(), state: "open", card: await this.cardFor(info, ask.tool, ask.input) };
-        const note = typeof ask.input.note === "string" && ask.input.note.trim() ? ask.input.note.trim().slice(0, 2000) : undefined;
-        if (note) card.note = note;
       } catch (err) {
         const message = err instanceof NotDeliverable || err instanceof ApprovalError ? err.message : `Kumiko couldn't check this: ${err instanceof Error ? err.message : String(err)}`;
         try {
@@ -514,11 +510,11 @@ export class Approvals {
     const c = card.card;
     const d = card.decision!;
     if (c.kind === "issue" && d.kind === "issue") {
-      const issue = await this.opts.github.issueCreate(c.repo, { title: d.title, body: withFooter(d.body, FOOTERS.issue), labels: d.labels });
+      const issue = await this.opts.github.issueCreate(c.repo, { title: d.title, body: withFooter(d.body, FOOTERS.issue, d.footer !== false), labels: d.labels });
       return { result: { text: `Created issue #${issue.number} (${issue.url}).` }, receipt: { ok: true, text: `Created issue #${issue.number}`, meta: "as you", url: issue.url, link: "Open issue" } };
     }
     if (c.kind === "comment" && d.kind === "comment") {
-      const url = await this.opts.github.comment(c.repo, c.target.type, c.target.number, withFooter(d.body, FOOTERS.comment));
+      const url = await this.opts.github.comment(c.repo, c.target.type, c.target.number, withFooter(d.body, FOOTERS.comment, d.footer !== false));
       return { result: { text: `Posted a comment on #${c.target.number}${url ? ` (${url})` : ""}.` }, receipt: { ok: true, text: `Commented on #${c.target.number}`, meta: "as you", ...(url ? { url, link: "Open comment" } : {}) } };
     }
     if (c.kind !== "deliver" || d.kind !== "deliver") throw new Error("That decision isn't for this card.");
@@ -528,7 +524,7 @@ export class Approvals {
       await this.opts.mirrors.fetch(c.repo, { force: true });
       const now = await this.opts.mirrors.branchHead(c.repo, c.branch);
       if (now !== c.head) throw new BranchMoved(now ?? "", 0);
-      const pr = await this.opts.github.prCreate(c.repo, { base: c.base, head: c.branch, title, body: withFooter(d.body ?? c.body, FOOTERS.pr) });
+      const pr = await this.opts.github.prCreate(c.repo, { base: c.base, head: c.branch, title, body: withFooter(d.body ?? c.body, FOOTERS.pr, d.footer !== false) });
       return {
         result: { text: `Opened PR #${pr.number} (${pr.url}). Nothing is on ${c.base} yet; when the user wants it landed, call deliver on ${c.branch} again.` },
         receipt: { ok: true, text: `Opened PR #${pr.number}`, meta: "as you", url: pr.url, link: "Open PR" },
@@ -536,7 +532,7 @@ export class Approvals {
     }
     const dir = this.opts.mirrors.path(c.repo);
     const url = this.opts.mirrors.url(c.repo);
-    const message = d.method === "merge" ? mergeMessage(c.repo, c.branch, c.pr) : squashMessage(d.title ?? c.title, d.message ?? c.squashBody, c.trailers);
+    const message = d.method === "merge" ? mergeMessage(c.repo, c.branch, c.pr) : squashMessage(c.title, c.squashBody, c.trailers);
     const landed = await land(dir, url, { branch: c.branch, head: c.head, method: d.method, message, sign: c.signs, fetch: () => this.opts.mirrors.fetch(c.repo, { force: true }) });
     const short = landed.sha.slice(0, 7);
     const notes: string[] = [];
@@ -552,10 +548,10 @@ export class Approvals {
       notes.push(`${c.branch} was deleted on GitHub.`);
     }
     await this.opts.mirrors.fetch(c.repo, { force: true }).catch(() => {});
-    const how = `${d.method === "merge" ? "merge commit" : "squashed"}${landed.signed ? ", signed" : ""}`;
+    const how = `${d.method === "merge" ? "merge commit" : "squashed"}, ${landed.signed ? "signed" : "unsigned"}`;
     return {
       result: { text: `Delivered ${c.branch} to ${landed.base} as ${short} (${how}). ${notes.join(" ")}${notes.length ? " " : ""}Update with git fetch --prune, and git pull --ff-only on ${landed.base}.` },
-      receipt: { ok: true, text: `Delivered ${c.branch} → ${landed.base} as ${short}`, meta: how.replace(", ", " · "), url: `https://github.com/${c.repo}/commit/${landed.sha}`, link: "View on GitHub" },
+      receipt: { ok: true, text: `${d.method === "merge" ? "Merged" : "Squashed"} ${c.branch} into ${landed.base} as ${short}`, meta: how.replace(", ", " · "), url: `https://github.com/${c.repo}/commit/${landed.sha}`, link: "View on GitHub" },
     };
   }
 

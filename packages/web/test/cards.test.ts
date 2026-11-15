@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ApprovalCard, DeliverCard, SessionEvent } from "@kumiko/shared";
-import { approveLabel, cardClosed, cardTitle, effectLine, isApproveKey } from "../src/cards.ts";
+import { approveLabel, cardAction, cardClosed, cardVerb, deliverChoices, deliverDecision, initialChoice } from "../src/cards.ts";
 import { applyEvent, emptyChat, type ChatItem } from "../src/chat.ts";
 
 const deliver: DeliverCard = {
@@ -25,28 +25,45 @@ const deliver: DeliverCard = {
 };
 
 describe("approval cards' wording", () => {
-  it("says what each route and method does, and names the button after it", () => {
-    assert.match(effectLine(deliver, "main", "merge"), /^Adds one merge commit signed by you on top of main, “Merge branch 'fix-x'”\. The 3 commits come along as they are\.$/);
-    assert.match(effectLine(deliver, "main", "squash"), /^Adds one commit signed by you with all 2 files' changes/);
-    assert.match(effectLine(deliver, "pr", "merge"), /^Opens a pull request as you/);
-    assert.equal(approveLabel(deliver, "main", "merge"), "Sign and push to main");
-    assert.equal(approveLabel(deliver, "main", "squash"), "Squash, sign and push to main");
-    assert.equal(approveLabel(deliver, "pr", "merge"), "Open pull request");
-    assert.equal(approveLabel({ ...deliver, signs: false }, "main", "merge"), "Push to main");
-    assert.equal(effectLine({ ...deliver, signs: false }, "main", "merge"), "Adds one merge commit on top of main, “Merge branch 'fix-x'”. The 3 commits come along as they are.");
-    const pr = { ...deliver, pr: { number: 128, title: "Fix", url: "u" } };
-    assert.equal(approveLabel(pr, "main", "merge"), "Sign and land #128");
-    assert.match(effectLine(pr, "main", "merge"), /“Merge pull request #128 from acme\/fix-x”\. GitHub will show #128 as merged\./);
-    assert.match(effectLine(pr, "main", "squash"), /#128 is closed with a comment/);
-    assert.equal(cardTitle(deliver, "pr"), "Open a PR");
-    assert.equal(cardTitle(deliver), "Deliver");
+  it("offers merge, squash and a PR, each said the way GitHub says it, and starts at the last pick", () => {
+    assert.deepEqual(deliverChoices(deliver), [
+      { choice: "merge", label: "Merge and push", description: "All 3 commits from this branch will be added to main via a merge commit." },
+      { choice: "squash", label: "Squash and push", description: "The 3 commits from this branch will be combined into one commit in main." },
+      { choice: "pr", label: "Push and open pull request", description: "A pull request will be opened from this branch." },
+    ]);
+    const one = { ...deliver, commits: deliver.commits.slice(0, 1) };
+    assert.equal(deliverChoices(one)[0].description, "The commit from this branch will be added to main via a merge commit.");
+    assert.equal(initialChoice(deliver), "merge");
+    assert.equal(initialChoice({ ...deliver, method: "squash" }), "squash");
+    assert.equal(initialChoice({ ...deliver, route: "pr" }), "pr");
   });
 
-  it("approves only on ⌘↩ or Ctrl+Enter, never plain Enter", () => {
-    assert.equal(isApproveKey({ key: "Enter", metaKey: false, ctrlKey: false }), false);
-    assert.equal(isApproveKey({ key: "Enter", metaKey: true, ctrlKey: false }), true);
-    assert.equal(isApproveKey({ key: "Enter", metaKey: false, ctrlKey: true }), true);
-    assert.equal(isApproveKey({ key: "a", metaKey: true, ctrlKey: false }), false);
+  it("offers no PR for a branch that has one, and says what happens to it", () => {
+    const pr = { ...deliver, route: "pr" as const, pr: { number: 128, title: "Fix", url: "u" } };
+    assert.deepEqual(deliverChoices(pr).map((c) => c.choice), ["merge", "squash"]);
+    assert.match(deliverChoices(pr)[0].description, /, and #128 will show as merged\.$/);
+    assert.match(deliverChoices(pr)[1].description, /, and #128 will be closed\.$/);
+    assert.equal(initialChoice(pr), "merge", "a PR can't be the start when one is open");
+  });
+
+  it("sends what the choice means, and the PR's text only for a PR", () => {
+    const text = { title: " Fix x ", body: "b", footer: true };
+    assert.deepEqual(deliverDecision("merge", text), { kind: "deliver", route: "main", method: "merge" });
+    assert.deepEqual(deliverDecision("squash", text), { kind: "deliver", route: "main", method: "squash" });
+    assert.deepEqual(deliverDecision("pr", text), { kind: "deliver", route: "pr", method: "merge", title: "Fix x", body: "b" });
+    assert.deepEqual(deliverDecision("pr", { ...text, footer: false }), { kind: "deliver", route: "pr", method: "merge", title: "Fix x", body: "b", footer: false });
+    assert.equal(deliverDecision("pr", { ...text, title: "  " }), undefined, "no PR without a title");
+  });
+
+  it("names the card and its button after what happens", () => {
+    assert.equal(cardVerb(deliver, "merge"), "Merge");
+    assert.equal(cardVerb(deliver, "pr"), "Open a PR");
+    assert.equal(approveLabel(deliver, "squash"), "Squash and push");
+    assert.equal(approveLabel(deliver, "pr"), "Push and open pull request");
+    const card = (decision?: ApprovalCard["decision"]): ApprovalCard => ({ id: "a", at: "", state: "declined", card: deliver, ...(decision ? { decision } : {}) });
+    assert.equal(cardAction(card()), "merge fix-x into main");
+    assert.equal(cardAction(card({ kind: "deliver", route: "main", method: "squash" })), "squash fix-x into main");
+    assert.equal(cardAction(card({ kind: "deliver", route: "pr", method: "merge" })), "open a PR for fix-x");
   });
 
   it("says why a card ended without being decided", () => {
