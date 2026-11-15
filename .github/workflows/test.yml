@@ -23,6 +23,8 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      # The git relay's tests run socat in the fake VM, as the real one does.
+      - run: sudo apt-get install -y -qq socat
       # The tests don't launch Electron, so don't download it.
       - run: npm ci
         env:

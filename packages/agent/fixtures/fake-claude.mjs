@@ -9,7 +9,9 @@
 //   "signed out" answers with an error result, as Claude does without a login
 //   "tools"      replies with the tools of the SDK MCP server (see below), as JSON
 //   "widget N J" calls that server's tool N with the arguments J (JSON), and replies with what it answered; a call
-//                interrupted while waiting is cancelled, as Claude does
+//                interrupted while waiting is cancelled, as Claude does. When --settings has a permissions.ask rule
+//                naming the tool, it asks first with a `can_use_tool` request, as Claude 2.1.309 does even with
+//                permissions bypassed: a denial is the tool's result, and an allow calls it with the updatedInput
 //   "write J"    writes a file as Claude's Write tool does, J being its input as JSON ({ file_path, content });
 //                a path starting with ~/ is in $HOME. "write-slow J" streams the input over ~3s first. Its result
 //                carries a `tool_use_result` as Claude 2.1.309's does: type "create", or "update" with a structuredPatch
@@ -117,6 +119,7 @@ const mcpServer = (() => {
   return Object.keys(servers).find((name) => servers[name].type === "sdk");
 })();
 const systemPrompt = args.includes("--append-system-prompt") ? args[args.indexOf("--append-system-prompt") + 1] : undefined;
+const askRules = args.includes("--settings") ? (JSON.parse(args[args.indexOf("--settings") + 1]).permissions?.ask ?? []) : [];
 let mcpTools = [];
 let mcpRequests = 0;
 const answers = new Map(); // control request id -> resolve(response)
@@ -534,8 +537,16 @@ async function turn({ text, files, auto }) {
 
   if (text.startsWith("widget ")) {
     const [, name, json] = /^widget (\S+)\s*(.*)$/s.exec(text);
-    const call = await toolCall(id, `mcp__${mcpServer}__${name}`, JSON.parse(json || "{}"), async (toolUseId) => {
-      const message = { method: "tools/call", params: { name, arguments: JSON.parse(json || "{}"), _meta: { "claudecode/toolUseId": toolUseId } }, jsonrpc: "2.0", id: ++rpcId };
+    const full = `mcp__${mcpServer}__${name}`;
+    const call = await toolCall(id, full, JSON.parse(json || "{}"), async (toolUseId) => {
+      let input = JSON.parse(json || "{}");
+      if (askRules.includes(full) && args.includes("--permission-prompt-tool")) {
+        const r = await permission(full, input, toolUseId, (cancel) => (onCancel = cancel));
+        if (!r) return { text: REJECTED, isError: true };
+        if (r.behavior === "deny") return { text: r.message, isError: true };
+        input = r.updatedInput ?? input;
+      }
+      const message = { method: "tools/call", params: { name, arguments: input, _meta: { "claudecode/toolUseId": toolUseId } }, jsonrpc: "2.0", id: ++rpcId };
       const res = await mcp(message, (cancel) => (onCancel = cancel));
       if (!res) return { text: "The user doesn't want to proceed with this tool use.", isError: true };
       const parts = res.result?.content?.map((c) => (c.type === "image" ? ` [image ${c.mimeType}, ${Buffer.from(c.data, "base64").length} bytes]` : c.text));

@@ -27,6 +27,11 @@ interface RepoRecord {
   size?: number;
   branches?: number;
   tags?: number;
+  /**
+   * The branches that first reached GitHub through a project's relay, by name, with the project and when it last
+   * pushed: that project's agent may update, force-push and delete them. Dropped when the branch leaves GitHub.
+   */
+  created?: Record<string, { project: string; at: string; ci?: string; sha?: string }>;
 }
 
 interface Entry {
@@ -67,13 +72,33 @@ export interface MirrorOptions {
 const HOOK_MESSAGE = "Kumiko: pushing to this mirror isn't allowed.";
 
 /**
- * The only hook in a mirror. Pushes are closed for now: later the hook will ask Kumiko whether each ref update is
- * allowed, so the mirror starts closed and is opened deliberately.
+ * The only hook in a mirror. A push that comes through a project's relay is in a git daemon Kumiko started, which
+ * says in its environment how to reach Kumiko and which connection it is: the hook hands Kumiko the quarantine the
+ * push waits in and the ref updates, prints what Kumiko says, and exits with the code Kumiko gives, its last line. Kumiko
+ * pushes them on to GitHub before answering. Any other push, or one Kumiko can't be asked about, is refused.
  */
 const PRE_RECEIVE = `#!/bin/sh
 # Written by Kumiko, and rewritten whenever it starts.
-echo "${HOOK_MESSAGE}" >&2
-exit 1
+if [ -z "$KUMIKO_HOOK_SOCKET" ] || [ -z "$KUMIKO_CONNECTION" ]; then
+  echo "${HOOK_MESSAGE}" >&2
+  exit 1
+fi
+{
+  printf 'object-directory %s\\nalternates %s\\nquarantine %s\\n\\n' "$GIT_OBJECT_DIRECTORY" "$GIT_ALTERNATE_OBJECT_DIRECTORIES" "$GIT_QUARANTINE_PATH"
+  cat
+} | curl -sS -N --max-time 7200 --unix-socket "$KUMIKO_HOOK_SOCKET" \\
+  -H "X-Kumiko-Connection: $KUMIKO_CONNECTION" \\
+  --data-binary @- http://kumiko/pre-receive | {
+  code=1
+  while IFS= read -r line; do
+    case "$line" in
+      "kumiko-exit "*) code=\${line#kumiko-exit } ;;
+      *) printf '%s\\n' "$line" >&2 ;;
+    esac
+  done
+  [ "$code" = 0 ] || [ "$code" = 1 ] || code=1
+  exit "$code"
+}
 `;
 
 /**
@@ -106,7 +131,7 @@ ${credentialHelper ? `[credential]\n\thelper =\n\thelper = ${quote(credentialHel
  * The environment git runs in: the user's own, so fetches use their usual credentials and SSH setup, without any of
  * git's variables that would point it at another repository, and never waiting on a prompt nobody can see.
  */
-function gitEnv(): NodeJS.ProcessEnv {
+export function gitEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" };
   for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES"]) {
     delete env[name];
@@ -264,16 +289,87 @@ export class Mirrors {
 
   /**
    * Fetches GitHub's branches and tags into the mirror, making it first if needed, and runs gc when it is due.
-   * Joins a fetch under way, and one that ended less than `freshMs` ago and worked stands in for a new one.
+   * Joins a fetch under way, and one that ended less than `freshMs` ago and worked stands in for a new one, unless
+   * `force`, which always fetches anew.
    * Rejects with git's message if the fetch fails.
    */
-  async fetch(repo: string): Promise<void> {
+  async fetch(repo: string, { force = false }: { force?: boolean } = {}): Promise<void> {
     const e = this.entryOf(repo);
     if (!e) throw new MirrorNotFound(`${repo} isn't one of Kumiko's repositories.`);
+    // Forced, for what decides what lands on GitHub: a fetch already under way may have started before the change.
+    if (force) {
+      await e.running?.catch(() => {});
+      await this.fetchEntry(e);
+      if (e.record.error) throw new MirrorFetchFailed(e.record.error.message);
+      return;
+    }
     const fresh = e.endedAt !== undefined && Date.now() - e.endedAt < (this.opts.freshMs ?? 5000) && !e.record.error;
     if (!e.running && fresh && (await exists(join(this.path(repo), "HEAD")))) return;
     await this.fetchEntry(e);
     if (e.record.error) throw new MirrorFetchFailed(e.record.error.message);
+  }
+
+  /** The URL a repository's mirror fetches from, and pushes go on to: GitHub's. */
+  url(repo: string): string {
+    const e = this.entryOf(repo);
+    if (!e) throw new MirrorNotFound(`${repo} isn't one of Kumiko's repositories.`);
+    return e.record.url;
+  }
+
+  /** Where `branch` is in the mirror, as GitHub had it at the last fetch; undefined if it isn't there. */
+  async branchHead(repo: string, branch: string): Promise<string | undefined> {
+    return runGit(this.path(repo), ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`], { env: gitEnv() }).then((o) => o.trim() || undefined, () => undefined);
+  }
+
+  /** How many commits `to` has that `from` hasn't. */
+  async countBetween(repo: string, from: string, to: string): Promise<number> {
+    return runGit(this.path(repo), ["rev-list", "--count", `${from}..${to}`], { env: gitEnv() }).then((o) => Number(o.trim()) || 0, () => 0);
+  }
+
+  /** The project whose agent created `branch` on GitHub through the relay, if one did. */
+  createdBy(repo: string, branch: string): string | undefined {
+    return this.entryOf(repo)?.record.created?.[branch]?.project;
+  }
+
+  /** The branches `project`'s agent created that are still on GitHub, newest push first. */
+  branchesOf(repo: string, project: string): { name: string; at: string }[] {
+    const created = this.entryOf(repo)?.record.created ?? {};
+    return Object.entries(created)
+      .filter(([, c]) => c.project === project)
+      .map(([name, c]) => ({ name, at: c.at }))
+      .sort((a, b) => b.at.localeCompare(a.at));
+  }
+
+  /** The commit Kumiko last pushed to `branch` for its project, if it recorded one. */
+  lastPushed(repo: string, branch: string): string | undefined {
+    return this.entryOf(repo)?.record.created?.[branch]?.sha;
+  }
+
+  /** The tree of `.github` the user last allowed `branch` to push with: CI changes they have seen. */
+  ciAllowed(repo: string, branch: string): string | undefined {
+    return this.entryOf(repo)?.record.created?.[branch]?.ci;
+  }
+
+  /**
+   * Records pushes GitHub accepted: each branch as `project`'s, or, when deleted, as nobody's; `ci` is the tree of
+   * `.github` the user allowed it to push with, if they were asked.
+   */
+  async noteBranches(repo: string, project: string, changes: { branch: string; deleted: boolean; ci?: string; sha?: string }[]): Promise<void> {
+    const e = this.entryOf(repo);
+    if (!e || !changes.length) return;
+    const created = { ...e.record.created };
+    const at = new Date().toISOString();
+    for (const c of changes) {
+      if (c.deleted) delete created[c.branch];
+      else {
+        const ci = c.ci ?? (created[c.branch]?.project === project ? created[c.branch]?.ci : undefined);
+        created[c.branch] = { project, at, ...(ci ? { ci } : {}), ...(c.sha ? { sha: c.sha } : {}) };
+      }
+    }
+    e.record.created = created;
+    if (!Object.keys(created).length) delete e.record.created;
+    await this.save().catch(() => {});
+    this.changed();
   }
 
   /** Unpicks a repository and deletes its mirror, stopping a fetch under way first. */
@@ -347,6 +443,9 @@ export class Mirrors {
     const timeoutMs = this.opts.fetchTimeoutMs ?? 60 * 60_000;
     const git = (args: string[], ms = 60_000) => runGit(dir, args, { env, signal, timeoutMs: ms });
     const update: Partial<RepoRecord> = {};
+    // Which branches GitHub had, and since when the fetch looked: pushes recorded meanwhile aren't GitHub's to undo.
+    const fetchedFrom = new Date().toISOString();
+    let branchesSeen: Set<string> | undefined;
     // Never fetched yet, after a first clone that failed too: what arrives now is the whole repository in one pack.
     const first = !e.record.fetchedAt || !(await exists(join(dir, "HEAD")));
     try {
@@ -368,6 +467,7 @@ export class Mirrors {
       const names = refs.split("\n").filter(Boolean);
       update.branches = names.filter((n) => n.startsWith("refs/heads/")).length;
       update.tags = names.length - update.branches;
+      branchesSeen = new Set(names.filter((n) => n.startsWith("refs/heads/")).map((n) => n.slice("refs/heads/".length)));
       if (first) update.gcAt = update.fetchedAt;
       else if (gcDue) {
         await git(["gc", "--quiet"], timeoutMs);
@@ -381,6 +481,13 @@ export class Mirrors {
     update.size = await runGit(dir, ["count-objects", "-v"], { env }).then(objectsSize, () => e.record.size);
     Object.assign(e.record, update);
     if (!e.record.error) delete e.record.error;
+    // A branch gone from GitHub is nobody's: if the agent pushes one by that name again, it is a new one. Read at the
+    // end, as pushes may have been recorded while the fetch ran.
+    if (branchesSeen && e.record.created) {
+      const kept = Object.entries(e.record.created).filter(([b, c]) => branchesSeen!.has(b) || c.at >= fetchedFrom);
+      if (kept.length) e.record.created = Object.fromEntries(kept);
+      else delete e.record.created;
+    }
     await this.save().catch(() => {});
   }
 

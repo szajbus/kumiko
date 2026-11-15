@@ -9,6 +9,7 @@ import type { ProjectView, ServerEvent, WorktreesResponse } from "@kumiko/shared
 import { LimaProvider, MetadataStore } from "@kumiko/sandbox";
 import { startServer, type RunningServer } from "../src/index.js";
 import { makeClone, sh } from "./repo.js";
+import { fakeGitHub, type FakeGitHub } from "./github.js";
 
 const fixtures = resolve(dirname(fileURLToPath(import.meta.url)), "../../../sandbox/fixtures");
 
@@ -21,6 +22,7 @@ describe("server", () => {
   let home: string;
   const events: ServerEvent[] = [];
   let ws: WebSocket;
+  let github: FakeGitHub;
 
   before(async () => {
     root = await realpath(await mkdtemp(join(tmpdir(), "kumiko-server-test-")));
@@ -34,6 +36,10 @@ describe("server", () => {
     await writeFile(join(limaDir, "wm-foreign.json"), JSON.stringify({ name: "wm-foreign", status: "Running" }));
     process.env.FAKE_LIMA_DIR = limaDir;
     process.env.FAKE_LIMA_DELAY = "150";
+    github = await fakeGitHub(root);
+    await github.repo("acme/widget");
+    await github.repo("acme/other");
+    process.env.KUMIKO_GITHUB_URL = github.url;
     const env = () => ({ TOKEN: "abc" });
     const provider = new LimaProvider({
       limactl: join(fixtures, "fake-limactl.mjs"),
@@ -50,6 +56,8 @@ describe("server", () => {
   after(async () => {
     ws.close();
     await server.close();
+    github.close();
+    delete process.env.KUMIKO_GITHUB_URL;
   });
 
   const api = (path: string, init: RequestInit = {}) =>
@@ -485,6 +493,53 @@ describe("server", () => {
     assert.ok(!(await projects()).some((p) => p.name === "stray"));
     await remove("outside");
   });
+
+  const waitAsync = async (fn: () => Promise<unknown>, ms = 10000) => {
+    const end = Date.now() + ms;
+    for (;;) {
+      const v = await fn();
+      if (v) return v;
+      if (Date.now() > end) throw new Error("timed out");
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  };
+
+  it("relays git from a running VM to the mirror of the repository origin named when it was first read", async () => {
+    const clone = await makeClone(root, "repo-gh");
+    sh(clone, "remote", "set-url", "origin", "git@github.com:acme/widget.git");
+    const since = events.length;
+    assert.equal((await post("/api/projects", spec({ name: "gh", clonePath: clone }))).status, 202);
+    assert.equal((await finished("gh", "creating", since)).type, "done");
+    const connected = await waitAsync(async () => (await project("gh"))?.relay?.state === "connected" || undefined, 20_000).catch(() => undefined);
+    const p = await project("gh");
+    assert.ok(connected, JSON.stringify(p?.relay));
+    assert.deepEqual(p!.relay, { repo: "acme/widget", state: "connected" });
+    assert.equal(p!.project.repo, "acme/widget");
+    assert.equal(JSON.parse(await readFile(join(dataDir, "projects", "gh.json"), "utf8")).repo, "acme/widget", "kept in the record");
+
+    // The clone is the agent's to change: pointing origin at another repository doesn't change which one it reaches.
+    sh(clone, "remote", "set-url", "origin", "git@github.com:acme/other.git");
+    let at = events.length;
+    assert.equal((await api("/api/projects/gh/restart", { method: "POST" })).status, 202);
+    assert.equal((await finished("gh", "restarting", at)).type, "done");
+    await waitAsync(async () => (await project("gh"))?.relay?.state === "connected" || undefined, 20_000);
+    assert.equal((await project("gh"))!.relay!.repo, "acme/widget");
+
+    at = events.length;
+    assert.equal((await api("/api/projects/gh/stop", { method: "POST" })).status, 202);
+    await finished("gh", "stopping", at);
+    await waitAsync(async () => (await project("gh"))?.relay === undefined || undefined);
+    await remove("gh");
+  });
+
+  it("gives projects whose origin isn't on GitHub no relay", async () => {
+    await create("local");
+    await new Promise((r) => setTimeout(r, 500));
+    const p = await project("local");
+    assert.equal(p!.relay, undefined);
+    assert.equal(p!.project.repo, null);
+    await remove("local");
+  });
 });
 
 describe("server errors", () => {
@@ -539,4 +594,5 @@ describe("web UI", () => {
       await server.close();
     }
   });
+
 });

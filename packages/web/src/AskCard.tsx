@@ -2,6 +2,7 @@ import { createContext, useContext, useId, useState, type KeyboardEvent } from "
 import type { AgentQuestion, AskAnswer } from "@kumiko/shared";
 import { answersOf, askOutcome, askPosition, noPicks, pick, pickOwn, planTitle, splitAnswer, typeOwn, type Picks } from "./asks";
 import type { ChatItem } from "./chat";
+import { ApprovalCardView } from "./ApprovalCard";
 import { Markdown } from "./Markdown";
 
 type AskItem = Extract<ChatItem, { type: "ask" }>;
@@ -11,6 +12,7 @@ export const AskContext = createContext<((id: string, answer: AskAnswer) => Prom
 
 /** Claude asking the user mid-turn: its questions, or its plan to approve. Answered or not, it stays in the chat. */
 export function AskCard({ item }: { item: AskItem }) {
+  if (item.ask.kind === "approval") return <ApprovalCardView item={item} />;
   return item.ask.kind === "plan" ? <PlanCard item={item} plan={item.ask.plan} /> : <QuestionsCard item={item} questions={item.ask.questions} />;
 }
 

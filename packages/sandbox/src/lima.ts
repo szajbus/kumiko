@@ -563,4 +563,17 @@ export class LimaProvider implements SandboxProvider {
     child.stdin!.write(execScript(cmd, env, this.env(), opts.cwd));
     return child;
   }
+
+  /**
+   * Holds an ssh connection of its own with a reverse forward of a Unix socket, rather than adding it to Lima's shared
+   * connection: that one comes and goes with Lima's own use of it, and the forward would go with it. Keepalives make a
+   * VM that went away without closing the connection end it within a minute.
+   */
+  forward(name: string, guestPath: string, hostPath: string): ChildProcess {
+    const vm = vmName(name);
+    const sshConfig = join(this.limaHome(), vm, "ssh.config");
+    const args = ["-F", sshConfig, "-o", "ControlMaster=no", "-o", "ControlPath=none", "-o", "ExitOnForwardFailure=yes",
+      "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-N", "-T", "-R", `${guestPath}:${hostPath}`, `lima-${vm}`];
+    return spawn(this.ssh, args, { stdio: ["ignore", "ignore", "pipe"] });
+  }
 }

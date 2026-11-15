@@ -4,7 +4,10 @@ import { eachLine, shellQuote } from "@kumiko/sandbox";
 import type { AskAnswer, ContextUsage } from "@kumiko/shared";
 import { AskBridge, type PendingAsk } from "./asks.js";
 import type { AgentDriver, AgentEvent, AgentFile, AgentMessage, AttachOptions, Exec, RunPosition, StartOptions, TaskOutput } from "./driver.js";
-import { mcpConfig, ToolBridge, type PendingCall } from "./tools.js";
+import { agentToolName, approvalSettings, mcpConfig, ToolBridge, type PendingCall, type ToolSpec } from "./tools.js";
+
+/** The host's tools that need approval, by both names. */
+const approvalTools = (specs: ToolSpec[]) => specs.filter((t) => t.approval).map((t) => ({ name: t.name, agentName: agentToolName(t.name) }));
 import { ATTACHED, attachCommand, closeInputCommand, execOutput, launchCommand, removeCommand, RUN_EXIT_TYPE, RUN_GONE, RUN_LOST, signalCommand, stderrCommand } from "./runs.js";
 
 /**
@@ -31,11 +34,15 @@ const SESSION_ID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
  * (the id of one of that session's messages) the conversation is cut after that message. With `tools`, Claude reaches
  * the tools the driver hosts; `appendSystemPrompt` is added to its system prompt.
  */
-export function claudeCommand(resume?: string, fork?: boolean, resumeAt?: string, model?: string, extra: { tools?: boolean; appendSystemPrompt?: string } = {}): string {
+export function claudeCommand(resume?: string, fork?: boolean, resumeAt?: string, model?: string, extra: { tools?: boolean; appendSystemPrompt?: string; settings?: string; vars?: Record<string, string> } = {}): string {
   if (model !== undefined && !MODEL_ALIAS.test(model)) throw new Error(`Not a model: ${model}`);
   let base = model ? `${CLAUDE_COMMAND} --model ${model}` : CLAUDE_COMMAND;
+  const vars = Object.entries(extra.vars ?? {});
+  for (const [name] of vars) if (!/^[A-Z_][A-Z0-9_]*$/.test(name)) throw new Error(`Not a variable name: ${name}`);
+  if (vars.length) base = base.replace(/^env /, `env ${vars.map(([n, v]) => `${n}=${shellQuote(v)}`).join(" ")} `);
   if (extra.tools) base += ` --mcp-config ${shellQuote(mcpConfig())}`;
   if (extra.appendSystemPrompt) base += ` --append-system-prompt ${shellQuote(extra.appendSystemPrompt)}`;
+  if (extra.settings) base += ` --settings ${shellQuote(extra.settings)}`;
   if (resume === undefined) return base;
   if (!SESSION_ID.test(resume)) throw new Error(`Not a Claude session id: ${resume}`);
   if (resumeAt !== undefined && !SESSION_ID.test(resumeAt)) throw new Error(`Not a Claude message id: ${resumeAt}`);
@@ -169,11 +176,13 @@ export class ClaudeDriver implements AgentDriver {
     return this.run ? { run: this.run, offset: this.offset } : undefined;
   }
 
-  start({ sandbox, workdir, env, prompt, promptId, files, resume, fork, resumeAt, model, run, tools, appendSystemPrompt }: StartOptions): void {
+  start({ sandbox, workdir, env, prompt, promptId, files, resume, fork, resumeAt, model, run, tools, appendSystemPrompt, vars }: StartOptions): void {
     if (this.sandbox) throw new Error("This driver has already started.");
     const runId = run ?? `run-${randomBytes(6).toString("hex")}`;
-    const command = launchCommand(runId, claudeCommand(resume, fork, resumeAt, model, { tools: Boolean(tools), appendSystemPrompt }), this.owner);
+    const specs = tools?.list() ?? [];
+    const command = launchCommand(runId, claudeCommand(resume, fork, resumeAt, model, { tools: Boolean(tools), appendSystemPrompt, settings: approvalSettings(specs), vars }), this.owner);
     if (tools) this.tools = new ToolBridge(tools, (line) => this.write(line));
+    this.asks.setApprovalTools(approvalTools(specs));
     this.begin(sandbox, runId, 0);
     this.connect(this.exec(sandbox, command, env, { cwd: workdir }), true);
     if (prompt !== undefined) this.send(prompt, promptId, files);
@@ -184,6 +193,7 @@ export class ClaudeDriver implements AgentDriver {
     if (this.sandbox) throw new Error("This driver has already started.");
     const command = attachCommand(run, offset);
     if (tools) this.tools = new ToolBridge(tools, (line) => this.write(line));
+    this.asks.setApprovalTools(approvalTools(tools?.list() ?? []));
     this.begin(sandbox, run, offset);
     this.connect(this.exec(sandbox, command, []), false);
     if (pending?.length) this.tools?.rerun(pending);

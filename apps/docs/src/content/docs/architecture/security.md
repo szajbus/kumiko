@@ -17,6 +17,14 @@ whether you run it in a terminal or an editor such as VS Code runs it when you o
 doesn't override the clone's. Kumiko's own git on your Mac turns these off, so the worktree statuses it shows run
 none of them.
 
+The sandbox has no GitHub credentials. When the clone's `origin` is on GitHub, git in the VM reaches the repository
+only through a socket Kumiko forwards in, which serves that one repository's [mirror](/guide/repos/#projects). Kumiko
+decides each push there and pushes what it allows on to GitHub itself, with your `gh` login: the agent's own branches,
+never the default branch, tags, or anyone else's branches. The default branch changes only when you approve a card to
+[merge a branch into it](/guide/repos/#merging-into-the-default-branch), and Kumiko signs that on your Mac. Which repository a project reaches is read from `origin`
+once and kept, so the agent can't point it elsewhere. Your `gh` login can bypass branch protections, so this check is
+the one that holds.
+
 Lima gives each VM an address (`host.lima.internal`, 192.168.5.2) that leads to your Mac's `127.0.0.1`. Through it the
 agent could reach every service listening there, such as databases, dev servers and other apps' local APIs, and many
 of those trust anything on localhost. Kumiko has Lima block this address, unless the project allows it (**This Mac's

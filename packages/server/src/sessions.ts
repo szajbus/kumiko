@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { answerFits, applyWindowOp, chatWindow, chunksLength, compactWindow, isBusy, isCommand, isCompactSummary, keepEnds, LIVE_SESSION_STATUSES, mergeChunks, sharedNote, sharesWaiting, SHELL_COMMAND_MAX, SHELL_KEEP_HEAD, SHELL_KEEP_TAIL, SHELL_PROMPT_CHARS, shellPrompt, windowState, type Attachment, type ShellChunk, type ShellEnd, type ShellStop, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo, type WindowOp, type WindowState, type AgentAsk, type AskAnswer, type AskClosedReason } from "@kumiko/shared";
+import { answerFits, applyWindowOp, chatWindow, chunksLength, compactWindow, isBusy, isCommand, isCompactSummary, keepEnds, LIVE_SESSION_STATUSES, mergeChunks, sharedNote, sharesWaiting, SHELL_COMMAND_MAX, SHELL_KEEP_HEAD, SHELL_KEEP_TAIL, SHELL_PROMPT_CHARS, shellPrompt, windowState, type Attachment, type ShellChunk, type ShellEnd, type ShellStop, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo, type WindowOp, type WindowState, type AgentAsk, type AskAnswer, type AskClosedReason, type ApprovalCard } from "@kumiko/shared";
 import { TOOL_TIMEOUT_MS, type AgentDriver, type AgentFile, type AgentMessage, type StartOptions, type TaskOutput, type ToolHost } from "@kumiko/agent";
 import { chatEvents, type SessionStore, type StoredSession } from "./store.js";
 import { trimMessage } from "./trim.js";
@@ -288,6 +288,17 @@ function openAsks(events: readonly SessionEvent[]): AgentAsk[] {
 /** `rateLimit`: Claude in `sandbox` reported how much of its subscription is used, with a turn. */
 export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: string, info: unknown] }> {
   private sessions = new Map<string, Session>();
+  /** Shows the cards for the host's tools that need approval, when Claude asks to call one. */
+  approvals?: {
+    asked(info: SessionInfo, ask: Extract<AgentAsk, { kind: "approval" }>): void;
+    /** One of Claude's messages: a tool result for an approved call that never reached Kumiko means it won't. */
+    message(info: SessionInfo, m: AgentMessage): void;
+    exited(info: SessionInfo): void;
+    /** The session was opened again by a new server: what the last one left half done. */
+    reopened(info: SessionInfo): void;
+  };
+  /** Kumiko's own asks waiting for the user's answer, by ask id. */
+  private hostAsks = new Map<string, (answer: AskAnswer | undefined) => void>();
 
   constructor(
     private readonly makeDriver: () => AgentDriver,
@@ -402,10 +413,14 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     const s = this.newSession(info, stored.events);
     // Deltas saved mid-turn are dropped like any others once their message is finished.
     for (const e of s.events) if (e.kind === "claude") this.countBlocks(s, e.payload);
+    // Kumiko's own asks waited on a server that is gone: what waited on them (a push) went with it.
+    for (const ask of openAsks(s.events)) if (ask.kind === "approval" && ask.host) this.push(s, { kind: "ask_closed", payload: { id: ask.id, reason: "exited" } });
+    s.info = { ...s.info, asking: openAsks(s.events).at(-1)?.kind };
     this.sessions.set(info.id, s);
     const driver = this.makeDriver();
     this.wire(s, driver);
     driver.attach({ sandbox: info.sandbox, run: run.id, offset: run.offset, tools: this.widgets?.tools(s.info).tools, pending: run.pending, asks: run.asks });
+    this.approvals?.reopened(s.info);
     this.emit("changed");
     // Closed while Claude worked: it goes on finishing, or, if its turn was over already, ends now.
     if (info.closing) {
@@ -591,7 +606,8 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     if (lost.length) this.push(s, { kind: "tasks_lost", payload: { taskIds: lost } });
     s.tasks = undefined;
     s.waiting = driverOpts.prompt !== undefined && driverOpts.promptId ? [driverOpts.promptId] : [];
-    driver.start({ ...driverOpts, run: `${s.info.id}-${randomBytes(4).toString("hex")}`, ...widgets });
+    // Which session Claude is, for the commands it runs: a git push that waits for the user says where to ask.
+    driver.start({ ...driverOpts, run: `${s.info.id}-${randomBytes(4).toString("hex")}`, ...widgets, vars: { KUMIKO_SESSION: s.info.id } });
     if (s.info.planMode) driver.setPlanMode(true);
     // What the last process asked is closed now: commands held for its answer go to this one.
     this.releaseShells(s);
@@ -599,8 +615,9 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
 
   /** Records that Claude stopped waiting for everything it asked, for `reason`. */
   private closeAsks(s: Session, reason: AskClosedReason) {
-    for (const ask of openAsks(s.events)) this.push(s, { kind: "ask_closed", payload: { id: ask.id, reason } });
-    if (s.info.asking) this.setInfo(s, { asking: undefined });
+    // Kumiko's own asks aren't Claude's, and wait on whatever asked them, not on this process.
+    for (const ask of openAsks(s.events)) if (!(ask.kind === "approval" && ask.host && this.hostAsks.has(ask.id))) this.push(s, { kind: "ask_closed", payload: { id: ask.id, reason } });
+    this.setInfo(s, { asking: openAsks(s.events).at(-1)?.kind });
   }
 
   /** Claude asked the user something, as `driver` reports it. */
@@ -622,6 +639,15 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     this.setInfo(s, { asking: ask.kind });
     // Saved at once, with the ask among the run's, so a server that goes away now leaves it for the next.
     this.save(s);
+    if (ask.kind === "approval") this.approvals?.asked(s.info, ask);
+  }
+
+  /** Puts the card for an approval ask into the session, or its new state; saved at once, as it binds what may run. */
+  putCard(id: string, card: ApprovalCard): void {
+    const s = this.sessions.get(id);
+    if (!s) throw new SessionNotFound(`No session ${id}.`);
+    this.push(s, { kind: "card", payload: card });
+    this.save(s);
   }
 
   /** Makes `driver` the session's. Once another replaces it, or the session is detached, nothing it says reaches the session. */
@@ -637,6 +663,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
           this.push(s, { kind: "claude", payload: stamped(ev.payload) });
           this.onMessage(s, ev.payload);
           this.widgets?.message(s.info, ev.payload);
+          this.approvals?.message(s.info, ev.payload);
           break;
         case "error":
           this.push(s, { kind: "error", payload: { message: ev.message, hint: ev.hint, stderr: ev.stderr, ...(ev.signedOut ? { signedOut: true } : {}) } });
@@ -663,6 +690,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
         }
         case "exit": {
           this.closeAsks(s, "exited");
+          this.approvals?.exited(s.info);
           this.stopShells(s, "ended");
           // Commands held for an answer Claude no longer waits for never reach it now.
           for (const held of s.heldShells.splice(0)) {
@@ -1078,16 +1106,45 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     if (s.info.status !== "running" && s.info.status !== "starting") this.save(s);
   }
 
+  /**
+   * Asks the user something on Kumiko's own behalf, in the session, as Claude's asks are: the tab shows it waits on
+   * them, and a message they send meanwhile answers it. `onAnswer` gets the answer, or undefined if it closes without one.
+   */
+  hostAsk(id: string, ask: Extract<AgentAsk, { kind: "approval" }>, onAnswer: (answer: AskAnswer | undefined) => void): void {
+    const s = this.live(id);
+    this.hostAsks.set(ask.id, onAnswer);
+    this.push(s, { kind: "ask", payload: { ...ask, host: true } });
+    this.setInfo(s, { asking: ask.kind });
+    this.save(s);
+  }
+
+  /** Closes one of Kumiko's own asks without an answer: what waited on it stopped waiting. */
+  closeHostAsk(id: string, askId: string): void {
+    const s = this.sessions.get(id);
+    this.hostAsks.delete(askId);
+    if (!s || !openAsks(s.events).some((a) => a.id === askId)) return;
+    this.push(s, { kind: "ask_closed", payload: { id: askId, reason: "interrupted" } });
+    this.setInfo(s, { asking: openAsks(s.events).at(-1)?.kind });
+    this.save(s);
+  }
+
   /** Answers what Claude asked, ask `askId`. Throws AskRefused if it isn't waiting for that, or the answer doesn't fit. */
   answerAsk(id: string, askId: string, answer: AskAnswer): void {
     const s = this.live(id);
     const ask = openAsks(s.events).find((a) => a.id === askId);
     if (!ask) throw new AskRefused("That has been answered already, or Claude stopped waiting for it.");
     if (!answerFits(ask.kind, answer)) throw new AskRefused("That isn't an answer to this.");
-    try {
-      s.driver.answer(askId, answer);
-    } catch (err) {
-      throw new AskRefused(err instanceof Error ? err.message : String(err));
+    if (ask.kind === "approval" && ask.host) {
+      const waiting = this.hostAsks.get(askId);
+      if (!waiting) throw new AskRefused("Nothing is waiting for that any more.");
+      this.hostAsks.delete(askId);
+      waiting(answer);
+    } else {
+      try {
+        s.driver.answer(askId, answer);
+      } catch (err) {
+        throw new AskRefused(err instanceof Error ? err.message : String(err));
+      }
     }
     this.push(s, { kind: "ask_answer", payload: { id: askId, answer } });
     this.setInfo(s, { asking: openAsks(s.events).at(-1)?.kind });

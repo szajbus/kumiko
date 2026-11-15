@@ -17,7 +17,7 @@ sidebar:
 | Variable | Default | Does |
 | --- | --- | --- |
 | `KUMIKO_GH` | `gh` | The GitHub CLI the Repos page lists your repositories with, and whose token mirrors fetch with. `packages/server/fixtures/fake-gh.mjs` stands in for it, with its state in `FAKE_GH_DIR`. |
-| `KUMIKO_GITHUB_URL` | unset | When set, new mirrors fetch from `<KUMIKO_GITHUB_URL>/<owner>/<name>.git` instead of GitHub: a folder of bare repositories (`file:///…`) stands in for GitHub with the fake `gh`. |
+| `KUMIKO_GITHUB_URL` | unset | When set, new mirrors fetch from `<KUMIKO_GITHUB_URL>/<owner>/<name>.git` instead of GitHub: a folder of bare repositories (`file:///…`), or a `git daemon` serving one (`git://…`), stands in for GitHub with the fake `gh`. |
 
 ## Sandbox provider: Lima
 

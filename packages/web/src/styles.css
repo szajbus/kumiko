@@ -276,6 +276,7 @@ code, .mono { font-family: var(--mono); }
 .btn-compact { min-height: 36px; padding: 0 14px; font-size: 13px; }
 .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px 24px; padding: 16px 20px; }
 .fact { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.relay-error { margin: 8px 4px 0; font-size: 13px; white-space: pre-wrap; }
 .fact-value { font-weight: 500; overflow-wrap: anywhere; }
 .fact-value.mono { font-size: 13px; }
 .meter { display: block; height: 6px; margin-top: 2px; border-radius: 3px; background: var(--border); overflow: hidden; }
@@ -284,6 +285,7 @@ code, .mono { font-family: var(--mono); }
 .detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
 .detail-grid .section { gap: 10px; }
 .detail-grid p { margin: 0; }
+.github-grid { margin-top: 16px; }
 .detail-mount { padding: 10px 0; border-top: 1px solid var(--border-soft); row-gap: 4px; font-size: 13px; }
 .detail-env { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border-soft); font-size: 13px; }
 .detail-env .env-state { width: auto; }
@@ -675,6 +677,8 @@ a.artifact-copy { text-decoration: none; }
 .chat-inner { max-width: 860px; margin: 0 auto; padding: 20px 24px 12px; display: flex; flex-direction: column; gap: 12px; }
 /* Rows out of view are skipped by the browser, sized as they were when last shown, so a long chat lays out quickly. */
 .chat-inner > * { content-visibility: auto; contain-intrinsic-size: auto 90px; }
+/* That clips what overflows a row: an approval card's open menu would be cut off at the card's top. */
+.chat-inner > *:has(.ac-menu), .chat-inner > .chat-row > *:has(.ac-menu) { content-visibility: visible; }
 .session-foot { flex: none; max-width: 860px; width: 100%; margin: 0 auto; padding: 8px 24px 18px; display: flex; flex-direction: column; gap: 8px; }
 
 .msg-user {
@@ -1219,3 +1223,65 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
 /* Sent while Claude worked, it waits below the chat as wide as the chat. */
 .msg-queued:has(.shell-row) { align-self: stretch; max-width: none; align-items: stretch; }
 .msg-queued:has(.shell-row) .msg-queued-note { align-self: flex-end; }
+
+/* Approval cards: what Kumiko shows when Claude calls a tool that waits for the user, such as delivering a branch. */
+.ac-card { border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface-2); overflow-wrap: anywhere; }
+.ac-card.is-pending { border-color: #4a5a8a; box-shadow: 0 0 0 3px rgba(143, 166, 240, 0.08); }
+.ac-head { padding: 12px 14px 10px; display: flex; align-items: flex-start; gap: 12px; }
+.ac-repo { margin-left: auto; color: var(--muted); font-size: 12.5px; white-space: nowrap; padding-top: 2px; }
+.ac-target { font-weight: 400; color: var(--muted); }
+.ac-title { font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ac-ref { font: 500 13px var(--mono); background: rgba(0, 0, 0, 0.3); border: 1px solid var(--border); border-radius: 5px; padding: 0 6px; }
+.ac-arrow { color: var(--muted); font-weight: 400; }
+.ac-facts { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 14px; padding: 0 0 9px; font-size: 13px; color: var(--text-2); align-items: center; }
+.ac-add { color: #7fd3a6; font: 12.5px var(--mono); }
+.ac-del { color: #f29b8f; font: 12.5px var(--mono); }
+.ac-tog { font: inherit; font-size: 13px; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; border-bottom: 1px dotted rgba(143, 166, 240, 0.5); }
+.ac-panel { margin: 0 14px 10px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 7px; background: rgba(0, 0, 0, 0.18); font-size: 12.5px; }
+.ac-row { display: grid; grid-template-columns: 70px 1fr auto; gap: 10px; padding: 3px 0; align-items: center; }
+.ac-row.ac-file { grid-template-columns: 1fr 70px 90px; }
+.ac-sha { color: var(--muted); }
+.ac-co { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; }
+.ac-path { font-family: var(--mono); color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac-path.is-flagged { color: #f0cf96; }
+.ac-n { font-family: var(--mono); text-align: right; color: var(--muted); }
+.ac-bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--border-soft); }
+.ac-bar i { display: block; } .ac-bar .a { background: #4cc38a; } .ac-bar .d { background: #e0675c; }
+.ac-flags { margin: 0 14px 10px; border: 1px solid #5c4a2b; background: rgba(240, 207, 150, 0.06); border-radius: 7px; }
+.ac-flag { display: grid; grid-template-columns: 16px 1fr; gap: 8px; padding: 7px 10px; font-size: 13px; }
+.ac-flag + .ac-flag { border-top: 1px solid rgba(92, 74, 43, 0.6); }
+.ac-warn { color: #f0cf96; }
+.ac-why { color: var(--muted); font-size: 12.5px; }
+.ac-fields { margin: 0 14px; padding: 6px 0 10px; display: flex; flex-direction: column; gap: 6px; }
+.ac-fld { border: 1px solid var(--border); border-radius: 6px; background: rgba(0, 0, 0, 0.25); padding: 6px 9px; font: inherit; font-size: 13.5px; color: var(--text); }
+.ac-body { display: flex; flex-direction: column; }
+.ac-ta { field-sizing: content; min-height: 4lh; resize: vertical; background: transparent; border: 0; color: var(--text-2); font: inherit; font-size: 13px; padding: 0; outline: none; }
+.ac-md { cursor: text; color: var(--text-2); font-size: 13px; min-height: 2lh; }
+.ac-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); border-top: 1px dashed var(--border); margin-top: 6px; padding-top: 4px; font-size: 12px; cursor: pointer; }
+.ac-foot.is-off span { text-decoration: line-through; opacity: 0.55; }
+.ac-foot input { margin: 0; accent-color: var(--primary); }
+.ac-decline { margin: 0 14px 10px; }
+.ac-decline .ac-ta { width: 100%; min-height: 2lh; }
+.ac-unsigned { margin: 0 14px 10px; color: #f0cf96; font-size: 12.5px; }
+.ac-stale { margin: 0 14px 10px; padding: 8px 10px; border: 1px solid #5c2b2e; background: rgba(240, 122, 106, 0.06); border-radius: 7px; font-size: 13px; color: #f6b3aa; }
+.ac-foot-bar { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 10px 14px 12px; border-top: 1px solid var(--border); background: rgba(0, 0, 0, 0.12); border-radius: 0 0 10px 10px; }
+.ac-split { position: relative; display: inline-flex; }
+.ac-split > .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.ac-caret { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 1px solid rgba(255, 255, 255, 0.22); padding: 0 9px; }
+.ac-menu { position: absolute; right: 0; bottom: calc(100% + 6px); width: 340px; padding: 6px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface-2); box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55); z-index: 5; display: flex; flex-direction: column; }
+.ac-opt { display: grid; grid-template-columns: 18px 1fr; gap: 6px; padding: 8px 10px; border: 0; border-radius: 7px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.ac-opt + .ac-opt { border-top: 1px solid var(--border-soft); border-top-left-radius: 0; border-top-right-radius: 0; }
+.ac-opt:hover, .ac-opt.is-on { background: rgba(143, 166, 240, 0.1); }
+.ac-opt b { font-weight: 600; font-size: 13.5px; }
+.ac-opt-d { display: block; margin-top: 2px; color: var(--muted); font-size: 12.5px; line-height: 1.4; }
+.ac-ck { color: var(--accent); }
+.ac-receipt { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); font-size: 13px; color: var(--text-2); flex-wrap: wrap; }
+.ac-r-icon { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; background: rgba(143, 166, 240, 0.12); color: var(--accent); flex: none; }
+.ac-receipt.is-ok .ac-r-icon { background: rgba(127, 211, 166, 0.12); color: #7fd3a6; }
+.ac-receipt.is-no .ac-r-icon { background: rgba(240, 122, 106, 0.12); color: var(--danger, #f07a6a); }
+.ac-r-meta { color: var(--muted); font-size: 12.5px; }
+.ac-receipt a { margin-left: auto; font-size: 12.5px; text-decoration: none; }
+.ac-labels { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 12.5px; color: var(--muted); }
+.ac-label { font-size: 12px; border-radius: 999px; padding: 0 4px 0 8px; border: 1px solid var(--border-strong); color: var(--text-2); display: inline-flex; align-items: center; gap: 2px; }
+.ac-label button { background: none; border: 0; color: inherit; opacity: 0.6; cursor: pointer; font: inherit; padding: 0 2px; }
+.ac-label-add { font: inherit; font-size: 12px; color: var(--muted); background: transparent; border: 1px dashed var(--border-strong); border-radius: 999px; padding: 0 8px; }

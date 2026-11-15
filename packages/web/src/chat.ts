@@ -1,4 +1,4 @@
-import { isCommand, type AgentAsk, type AskAnswer, type AskClosedReason, type Attachment, type EndReason, type LoginAccount, type SessionEvent } from "@kumiko/shared";
+import { isCommand, type AgentAsk, type ApprovalCard, type AskAnswer, type AskClosedReason, type Attachment, type EndReason, type LoginAccount, type SessionEvent } from "@kumiko/shared";
 import { applyTaskEvent, emptyTasks, reportsEnd, type Task, type TasksState } from "./tasks.ts";
 import { applyCompaction, compactionFollowUp, settleCompactions } from "./compaction.ts";
 
@@ -68,7 +68,7 @@ export type ChatItem =
   /** Claude asking to start a new session on `prompt`; `accepted` once the user has answered, with the `session` it started. */
   | { type: "proposal"; key: string; id: string; prompt: string; title?: string; artifacts?: string[]; accepted?: boolean; session?: string }
   /** Claude asking the user, mid-turn: questions, or a plan to approve. `answer` once the user gave one; `closed` if Claude stopped waiting first. */
-  | { type: "ask"; key: string; ask: AgentAsk; answer?: AskAnswer; closed?: AskClosedReason }
+  | { type: "ask"; key: string; ask: AgentAsk; answer?: AskAnswer; closed?: AskClosedReason; card?: ApprovalCard }
   /** Another session, `name`d then, sharing copies of artifacts with this one; `told` once Claude has heard of it, with a prompt. */
   | { type: "shared"; key: string; name: string; titles: string[]; told?: boolean }
   | { type: "ended"; key: string; reason: EndReason; code?: number }
@@ -475,6 +475,13 @@ function applyChatEvent(s: ChatState, ev: SessionEvent): ChatState {
       const items = [...s.items];
       const item = items[index] as Extract<ChatItem, { type: "ask" }>;
       items[index] = ev.kind === "ask_answer" ? { ...item, answer: ev.payload.answer } : { ...item, closed: ev.payload.reason };
+      return { ...s, items };
+    }
+    case "card": {
+      const index = s.items.findIndex((i) => i.type === "ask" && i.ask.id === ev.payload.id);
+      if (index < 0) return s;
+      const items = [...s.items];
+      items[index] = { ...(items[index] as Extract<ChatItem, { type: "ask" }>), card: ev.payload };
       return { ...s, items };
     }
     case "proposal_answer": {

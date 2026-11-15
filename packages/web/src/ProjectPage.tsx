@@ -377,6 +377,44 @@ function Details({ p, home }: { p: ProjectView; home?: string }) {
         <Fact label="Created">{created ? new Date(created).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "—"}</Fact>
       </section>
 
+      {p.project.repo && (
+        <>
+          <div className="form-group-head">
+            <h2>GitHub</h2>
+          </div>
+          <section className="card facts" aria-label="GitHub">
+            <Fact label="Repository" mono>
+              {p.project.repo}
+            </Fact>
+            <Fact label="Relay">
+              <RelayState p={p} />
+            </Fact>
+          </section>
+          {p.relay?.state === "down" && p.relay.error && <p className="muted relay-error">{p.relay.error}</p>}
+          <div className="detail-grid github-grid">
+            <section className="card section" aria-labelledby="d-branches">
+              <h2 id="d-branches">Claude's branches</h2>
+              {!p.branches?.length && <p className="muted">None on GitHub. The branches Claude creates from this sandbox show here once it pushes them.</p>}
+              {p.branches?.map((b) => (
+                <div key={b.name} className="detail-env">
+                  <span className="mono">{b.name}</span>
+                  <span className="dim">pushed {ago(b.at)}</span>
+                </div>
+              ))}
+            </section>
+            <section className="card section" aria-labelledby="d-policy">
+              <h2 id="d-policy">What Claude can do</h2>
+              {POLICY.map(([what, how]) => (
+                <div key={what} className="detail-env">
+                  <span>{what}</span>
+                  <span className="dim">{how}</span>
+                </div>
+              ))}
+            </section>
+          </div>
+        </>
+      )}
+
       {spec && (
         <div className="detail-grid">
           <section className="card section" aria-labelledby="d-mounts">
@@ -454,6 +492,31 @@ function MeterLine({ m }: { m: Meter }) {
       </span>
     </>
   );
+}
+
+/** The rules Kumiko applies to what Claude does on GitHub, which are fixed for now. */
+const POLICY: [string, string][] = [
+  ["Fetch and pull", "Allowed"],
+  ["Push, force-push or delete branches it created", "Allowed"],
+  ["Push changes to .github/ on its branches", "Asks you, once per change"],
+  ["Push the default branch, tags, or other branches", "Refused"],
+  ["Merge into the default branch, or open a PR", "Asks you"],
+  ["Create issues, comment on issues and PRs", "Asks you"],
+  ["Read issues and PRs", "Allowed, marked untrusted"],
+];
+
+/** Whether git in the VM reaches the mirror: only while the sandbox runs. */
+function RelayState({ p }: { p: ProjectView }) {
+  switch (p.relay?.state) {
+    case "connected":
+      return <span style={{ color: COLORS.running }}>Connected</span>;
+    case "connecting":
+      return <span style={{ color: COLORS.warn }}>Connecting…</span>;
+    case "down":
+      return <span style={{ color: COLORS.failed }}>Down</span>;
+    default:
+      return <span className="dim">{p.status === "running" ? "—" : "Off while the sandbox is stopped"}</span>;
+  }
 }
 
 function SetupState({ p }: { p: ProjectView }) {

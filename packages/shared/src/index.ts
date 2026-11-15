@@ -3,9 +3,11 @@
 
 export * from "./window.js";
 export * from "./asks.js";
+export * from "./cards.js";
 export * from "./userShell.js";
 import type { WindowOp } from "./window.js";
 import type { AgentAsk, AskAnswer, AskClosedReason } from "./asks.js";
+import type { ApprovalCard } from "./cards.js";
 import type { ShellChunk, ShellStop } from "./userShell.js";
 
 export const VM_PREFIX = "km-";
@@ -272,6 +274,12 @@ export interface Project {
   /** `<clone>__worktrees`, beside the clone, mounted at the same path in the VM. */
   worktreesPath: string;
   createdAt: string;
+  /**
+   * The GitHub repository ("owner/name") the agent fetches and pushes through Kumiko's mirror of, read once from the
+   * clone's origin and kept: the clone is the agent's to change, and which of the user's repositories it can push to
+   * mustn't be. Null when origin wasn't on GitHub; missing until it has been read.
+   */
+  repo?: string | null;
 }
 
 /** A project id from its clone's folder name: lowercase letters, digits and dashes, short enough for a sandbox name. */
@@ -304,6 +312,21 @@ export interface ProjectView extends SandboxView {
   problem?: string;
   /** Sessions in this project that are waiting on the user. */
   waiting: number;
+  /** The relay to the project's mirror, while the VM runs and the project has a GitHub repository. */
+  relay?: RelayView;
+  /** The branches this project's agent created on GitHub that are still there, newest push first. */
+  branches?: { name: string; at: string }[];
+}
+
+/**
+ * The relay that has git in a project's VM reach Kumiko's mirror of its repository: a socket on the host, forwarded
+ * into the VM over ssh.
+ */
+export interface RelayView {
+  repo: string;
+  state: "connecting" | "connected" | "down";
+  /** Why it is down. */
+  error?: string;
 }
 
 /** Creates a project from a clone. Everything but `clonePath` and `name` is the VM's spec. */
@@ -470,6 +493,8 @@ export type SessionEvent =
   | { seq: number; kind: "ask_answer"; payload: { id: string; answer: AskAnswer } }
   /** Claude stopped waiting for ask `id` without an answer. */
   | { seq: number; kind: "ask_closed"; payload: { id: string; reason: AskClosedReason } }
+  /** The card for an approval ask, whole, each time it changes; the latest for an id is how it is. */
+  | { seq: number; kind: "card"; payload: ApprovalCard }
   /**
    * The end of what background task `taskId` (Claude's id: a shell or a monitor) printed, read once it ended, so it can
    * still be read once Claude, which keeps it, is gone. `totalBytes` it printed in all; `truncated` if this is only the end.
@@ -783,6 +808,16 @@ export function parseRepo(repo: unknown): { owner: string; name: string; repo: s
   const m = /^([^/]+)\/([^/]+)$/.exec(repo);
   if (!m || !REPO_OWNER_PATTERN.test(m[1]) || !REPO_NAME_PATTERN.test(m[2])) return undefined;
   return { owner: m[1], name: m[2], repo, key: repo.toLowerCase() };
+}
+
+/**
+ * The GitHub repository a git remote URL names, in any of the forms git accepts for github.com: scp-like SSH, ssh://
+ * and https://, with or without ".git". Undefined for anything else.
+ */
+export function repoFromRemote(url: unknown): ReturnType<typeof parseRepo> {
+  if (typeof url !== "string") return undefined;
+  const m = /^(?:git@github\.com:|ssh:\/\/git@github\.com(?::22)?\/|https:\/\/(?:[^@/]+@)?github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(url.trim());
+  return m ? parseRepo(m[1]) : undefined;
 }
 
 /** A repository mirror as the Repos page shows it. */

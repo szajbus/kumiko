@@ -17,6 +17,7 @@ import {
   isWaiting,
   NAME_PATTERN,
   parseAskAnswer,
+  parseCardDecision,
   parseRepo,
   parseSavedTabs,
   SESSION_ID_PATTERN,
@@ -77,6 +78,10 @@ import { filesBytes } from "./disk.js";
 import { GitError, worktreeStatuses } from "./git.js";
 import { GhError, GitHub, gitHubUrl } from "./github.js";
 import { MirrorFetchFailed, MirrorNotFound, MirrorRecordError, Mirrors } from "./mirrors.js";
+import { hostIdentity } from "./git.js";
+import { Pushes } from "./pushes.js";
+import { ApprovalError, Approvals } from "./approvals.js";
+import { Relays } from "./relay.js";
 import { hasToken, isLocalRequest, isToken, tokenCookie } from "./guard.js";
 import { LoginFailed, Logins } from "./logins.js";
 import { BusyError, Operations } from "./operations.js";
@@ -261,7 +266,9 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     return projectList.map((project) => {
       const vm = vms.find((v) => v.name === project.id)!;
       const problem = problems.get(project.id);
-      return { ...vm, project, waiting: waiting.get(project.id) ?? 0, ...(problem ? { problem } : {}) };
+      const relay = relays.view(project.id);
+      const branches = project.repo ? mirrors.branchesOf(project.repo, project.id) : [];
+      return { ...vm, project, waiting: waiting.get(project.id) ?? 0, ...(problem ? { problem } : {}), ...(relay ? { relay } : {}), ...(branches.length ? { branches } : {}) };
     });
   };
 
@@ -293,6 +300,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
           listError = err instanceof Error ? err.message : String(err);
         }
         pushListIfChanged();
+        syncRelays();
       } while (refreshAgain);
     })().finally(() => (refreshing = undefined));
     return refreshing;
@@ -438,8 +446,77 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     home,
     remoteUrl: opts.repoUrl ?? ((repo) => (githubBase ? `${githubBase.replace(/\/$/, "")}/${repo}.git` : gitHubUrl(repo))),
     credentialHelper: github.credentialHelper(),
-    onChange: () => broadcast({ type: "mirrors", ...mirrorsView() }),
+    onChange: () => {
+      broadcast({ type: "mirrors", ...mirrorsView() });
+      // The projects' pages list the branches their agents pushed.
+      pushListIfChanged();
+    },
   });
+  // ---- the relays from projects' VMs to their mirrors ----
+  // Not under anything a VM mounts: each socket is only for the ssh forward into its own VM, and the hooks' for git on
+  // the host.
+  const runDir = join(home, "run");
+  /** Pushes waiting for the user, by relay connection: they stop waiting when git in the VM goes. */
+  const waitingPushes = new Map<string, () => void>();
+  const pushes = new Pushes({
+    socket: join(runDir, "hook.sock"),
+    mirrors,
+    connection: (id) => relays.connection(id),
+    askCi: (pusher, connection, card) => {
+      const asked = approvals.askPush(pusher, card);
+      waitingPushes.set(connection, asked.closed);
+      void asked.answer.finally(() => waitingPushes.delete(connection));
+      return asked;
+    },
+  });
+  // Without it pushes are refused, with curl saying why; Kumiko still starts.
+  await pushes.start().catch((err) => console.error(`Pushes from sandboxes are off: Kumiko couldn't listen for the mirrors' hooks: ${err instanceof Error ? err.message : String(err)}`));
+  const relays = new Relays({
+    dir: runDir,
+    hookSocket: join(runDir, "hook.sock"),
+    onConnectionClosed: (id) => waitingPushes.get(id)?.(),
+    mirrors,
+    provider,
+    identity: hostIdentity,
+    onChange: () => pushListIfChanged(),
+  });
+  /** One sync at a time, so a slow one can't undo what a later one set. */
+  let relaySync: Promise<void> = Promise.resolve();
+  const syncRelays = () => {
+    relaySync = relaySync.then(async () => {
+      const want = new Map<string, string>();
+      for (const p of projectList) {
+        if (infoOf(p.id).status !== "running" || ops.active().includes(p.id)) continue;
+        const repo = await projects.repo(p).catch(() => null);
+        if (repo) want.set(p.id, repo);
+      }
+      relays.sync(want);
+    }).catch((err) => console.error(`Couldn't update the git relays: ${err instanceof Error ? err.message : String(err)}`));
+  };
+  // ---- the tools that wait for the user's approval, and their cards ----
+  const approvals = new Approvals(
+    {
+      get: (id) => sessions.get(id),
+      events: (id) => sessions.events(id),
+      putCard: (id, card) => sessions.putCard(id, card),
+      answerAsk: (id, ask, answer) => sessions.answerAsk(id, ask, answer),
+      list: () => sessions.list(),
+      hostAsk: (id, ask, onAnswer) => sessions.hostAsk(id, ask, onAnswer),
+      closeHostAsk: (id, ask) => sessions.closeHostAsk(id, ask),
+    },
+    {
+      mirrors,
+      github,
+      repoOf: async (id) => {
+        const p = projectList.find((x) => x.id === id) ?? (await projects.get(id).catch(() => undefined));
+        return p ? projects.repo(p) : null;
+      },
+      identity: hostIdentity,
+      choicesFile: join(home, "choices.json"),
+    },
+  );
+  sessions.approvals = approvals;
+  widgets.extraTools = { list: () => approvals.list(), call: (info, name, args, toolUseId) => approvals.call(info, name, args, toolUseId) };
   const mirrorsView = (): MirrorsResponse => (mirrors.readError ? { mirrors: mirrors.list(), error: mirrors.readError } : { mirrors: mirrors.list() });
   await mirrors.start();
 
@@ -1219,6 +1296,30 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     return c.json({ ok: true });
   });
 
+  /**
+   * Decides on an approval card: `{ action: "approve", decision }`, `{ action: "decline", reason? }`, or
+   * `{ action: "refresh" }` to work a stale card out again. Answers with the card as it is now.
+   */
+  app.post("/api/sessions/:id/cards/:ask", async (c) => {
+    const req = await body<{ action?: unknown; decision?: unknown; reason?: unknown }>(c, "Send { action: approve | decline | refresh }.");
+    const id = sessionOf(c).id;
+    const ask = c.req.param("ask");
+    let action: Parameters<Approvals["decide"]>[2];
+    if (req.action === "approve") {
+      const decision = parseCardDecision(req.decision);
+      if (!decision) throw new HttpError(400, "Send the decision: the route and method, or the text as you left it.");
+      action = { action: "approve", decision };
+    } else if (req.action === "decline") action = { action: "decline", ...(typeof req.reason === "string" ? { reason: req.reason } : {}) };
+    else if (req.action === "refresh") action = { action: "refresh" };
+    else throw new HttpError(400, "action must be approve, decline or refresh.");
+    try {
+      return c.json(await approvals.decide(id, ask, action));
+    } catch (err) {
+      if (err instanceof ApprovalError || err instanceof AskRefused) throw new HttpError(409, err.message);
+      throw err;
+    }
+  });
+
   /** Has Claude plan first, waiting for the user to approve the plan, or work without asking; `{ plan }`. */
   app.post("/api/sessions/:id/plan-mode", async (c) => {
     const { plan } = await body<{ plan?: unknown }>(c, "Send { plan: true } or { plan: false }.");
@@ -1337,6 +1438,8 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       clearInterval(timer);
       stats.stopAll();
       logins.cancelAll();
+      await relays.close();
+      await pushes.close();
       await mirrors.close();
       if (endSessions) await sessions.endAll("quit");
       else await sessions.detachAll();

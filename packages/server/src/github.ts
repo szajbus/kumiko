@@ -35,9 +35,9 @@ export class GitHub {
   }
 
   /** Runs gh without a shell; resolves with its exit code, and rejects only when it can't run at all. */
-  private run(args: string[], timeoutMs = this.opts.timeoutMs ?? 30_000): Promise<GhResult> {
+  private run(args: string[], timeoutMs = this.opts.timeoutMs ?? 30_000, input?: string): Promise<GhResult> {
     return new Promise((resolve, reject) => {
-      execFile(
+      const child = execFile(
         this.gh,
         args,
         // No prompts, update notices or colours: gh's output is read, not shown to a terminal.
@@ -49,6 +49,8 @@ export class GitHub {
           resolve({ code: typeof code === "number" ? code : 0, stdout: String(stdout), stderr: String(stderr) });
         },
       );
+      child.stdin?.on("error", () => {});
+      child.stdin?.end(input ?? "");
     });
   }
 
@@ -101,6 +103,81 @@ export class GitHub {
     return repos.sort((a, b) => (b.pushedAt ?? "").localeCompare(a.pushedAt ?? ""));
   }
 
+  /** Runs gh and parses what it prints as JSON; rejects with gh's message when it fails. */
+  private async json<T>(args: string[], what: string): Promise<T> {
+    const r = await this.run(args, 60_000);
+    if (r.code !== 0) throw new GhError(firstLines(r.stderr) || `gh ${what} exited with ${r.code}.`);
+    try {
+      return JSON.parse(r.stdout) as T;
+    } catch {
+      throw new GhError(`gh ${what} answered with something Kumiko can't read.`);
+    }
+  }
+
+  /** The open pull request from `branch` in `repo` itself (one origin, no forks), if there is one. */
+  async prForBranch(repo: string, branch: string): Promise<{ number: number; title: string; url: string } | undefined> {
+    const prs = await this.json<{ number: number; title: string; url: string; headRepositoryOwner?: { login?: string } }[]>(
+      ["pr", "list", "--repo", repo, "--head", branch, "--state", "open", "--json", "number,title,url,headRepositoryOwner", "--limit", "10"],
+      "pr list",
+    );
+    const owner = repo.split("/")[0].toLowerCase();
+    const pr = prs.find((p) => !p.headRepositoryOwner?.login || p.headRepositoryOwner.login.toLowerCase() === owner);
+    return pr && { number: pr.number, title: pr.title, url: pr.url };
+  }
+
+  /** Opens a pull request as the user; resolves with its number and URL. The body goes on stdin, never as an argument. */
+  async prCreate(repo: string, opts: { base: string; head: string; title: string; body: string }): Promise<{ number: number; url: string }> {
+    const r = await this.run(["pr", "create", "--repo", repo, "--base", opts.base, "--head", opts.head, "--title", opts.title, "--body-file", "-"], 60_000, opts.body);
+    if (r.code !== 0) throw new GhError(firstLines(r.stderr) || `gh pr create exited with ${r.code}.`);
+    return prUrl(r.stdout);
+  }
+
+  /** An issue or a PR, with its comments, as Kumiko gives it to the agent; undefined when there is no such one. */
+  async item(repo: string, type: "issue" | "pr", number: number): Promise<GitHubItem | undefined> {
+    const fields = type === "pr" ? `${ITEM_FIELDS},headRefName,baseRefName,files,reviews` : ITEM_FIELDS;
+    const r = await this.run([type, "view", String(number), "--repo", repo, "--json", fields], 60_000);
+    if (r.code !== 0) {
+      if (/could not resolve|not found/i.test(r.stderr)) return undefined;
+      throw new GhError(firstLines(r.stderr) || `gh ${type} view exited with ${r.code}.`);
+    }
+    try {
+      return JSON.parse(r.stdout) as GitHubItem;
+    } catch {
+      throw new GhError(`gh ${type} view answered with something Kumiko can't read.`);
+    }
+  }
+
+  /** Issues or PRs, newest first. */
+  async items(repo: string, type: "issue" | "pr", opts: { state: "open" | "closed" | "all"; search?: string; limit: number }): Promise<GitHubItem[]> {
+    const fields = type === "pr" ? "number,title,state,author,labels,updatedAt,url,headRefName" : "number,title,state,author,labels,updatedAt,url";
+    return this.json<GitHubItem[]>([type, "list", "--repo", repo, "--state", opts.state, ...(opts.search ? ["--search", opts.search] : []), "--limit", String(opts.limit), "--json", fields], `${type} list`);
+  }
+
+  /** The repository's labels: the only ones Claude's issues may have. */
+  async labels(repo: string): Promise<{ name: string; color?: string; description?: string }[]> {
+    return this.json<{ name: string; color?: string; description?: string }[]>(["label", "list", "--repo", repo, "--limit", "500", "--json", "name,color,description"], "label list");
+  }
+
+  /** Opens an issue as the user; resolves with its number and URL. */
+  async issueCreate(repo: string, opts: { title: string; body: string; labels: string[] }): Promise<{ number: number; url: string }> {
+    const r = await this.run(["issue", "create", "--repo", repo, "--title", opts.title, ...opts.labels.flatMap((l) => ["--label", l]), "--body-file", "-"], 60_000, opts.body);
+    if (r.code !== 0) throw new GhError(firstLines(r.stderr) || `gh issue create exited with ${r.code}.`);
+    return prUrl(r.stdout);
+  }
+
+  /** Comments on an issue or a PR as the user; resolves with the comment's URL. */
+  async comment(repo: string, type: "issue" | "pr", number: number, body: string): Promise<string> {
+    const r = await this.run([type, "comment", String(number), "--repo", repo, "--body-file", "-"], 60_000, body);
+    if (r.code !== 0) throw new GhError(firstLines(r.stderr) || `gh ${type} comment exited with ${r.code}.`);
+    return r.stdout.trim().split("\n").reverse().find((l) => l.startsWith("https://"))?.trim() ?? "";
+  }
+
+  /** Closes a pull request with a comment. */
+  async prClose(repo: string, number: number, comment: string): Promise<void> {
+    const r = await this.run(["pr", "close", String(number), "--repo", repo, "--comment", comment], 60_000);
+    if (r.code !== 0) throw new GhError(firstLines(r.stderr) || `gh pr close exited with ${r.code}.`);
+  }
+
   /**
    * The git credential helper that has gh hand git its token, as `gh auth setup-git` sets up: git runs it through a
    * shell, so the path is quoted. The token stays between gh and git; Kumiko never sees it.
@@ -128,4 +205,31 @@ function firstLines(text: string): string {
 /** Where git fetches a GitHub repo from: over HTTPS, with gh's token. */
 export function gitHubUrl(repo: string): string {
   return `https://github.com/${repo}.git`;
+}
+
+/** The fields Kumiko reads of an issue or a PR. */
+const ITEM_FIELDS = "number,title,state,author,body,labels,comments,url";
+
+/** An issue or a PR as gh's --json gives it. */
+export interface GitHubItem {
+  number: number;
+  title: string;
+  state: string;
+  author?: { login?: string };
+  body?: string;
+  labels?: { name: string }[];
+  comments?: { author?: { login?: string }; body?: string; createdAt?: string }[];
+  url: string;
+  updatedAt?: string;
+  headRefName?: string;
+  baseRefName?: string;
+  files?: { path: string; additions?: number; deletions?: number }[];
+  reviews?: { author?: { login?: string }; body?: string; state?: string }[];
+}
+
+/** The number and URL of the issue or PR whose URL gh printed last. */
+export function prUrl(stdout: string): { number: number; url: string } {
+  const url = stdout.trim().split("\n").reverse().find((l) => /^https:\/\/\S+\/(pull|issues)\/\d+/.test(l.trim()))?.trim();
+  if (!url) throw new GhError("gh didn't say where it opened it.");
+  return { number: Number(/\/(\d+)(?:#.*)?$/.exec(url)![1]), url };
 }

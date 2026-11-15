@@ -17,7 +17,13 @@ export interface AgentQuestion {
 export type AgentAsk =
   | { kind: "questions"; id: string; toolUseId?: string; questions: AgentQuestion[] }
   /** A plan, in Markdown, that the agent waits on before changing anything. */
-  | { kind: "plan"; id: string; toolUseId?: string; plan: string };
+  | { kind: "plan"; id: string; toolUseId?: string; plan: string }
+  /**
+   * One of the host's tools that only runs once the user approves it, such as delivering a branch: the agent waits on
+   * the card Kumiko shows for it. `tool` is the host's name for the tool, `input` what the agent called it with.
+   * `host` asks are Kumiko's own, not Claude's tool calls: a push from the session's VM waiting in the mirror's hook.
+   */
+  | { kind: "approval"; id: string; toolUseId?: string; tool: string; input: Record<string, unknown>; host?: boolean };
 
 /**
  * The user's answer to an ask.
@@ -25,13 +31,17 @@ export type AgentAsk =
  *   wasn't answered.
  * - `approve`, `feedback`: to a plan; feedback sends it back to be planned further.
  * - `skip`: questions the user chose not to answer.
- * - `message`: either kind, answered by a message the user sent instead, which the agent reads next.
+ * - `allow`, `deny`: to an approval, decided on its card; `deny` carries what the agent is told. Only Kumiko itself
+ *   gives these, never the API: approving means Kumiko has checked what the card shows.
+ * - `message`: any kind, answered by a message the user sent instead, which the agent reads next.
  */
 export type AskAnswer =
   | { kind: "answers"; answers: Record<string, string[]> }
   | { kind: "approve" }
   | { kind: "feedback"; text: string }
   | { kind: "skip" }
+  | { kind: "allow" }
+  | { kind: "deny"; message: string }
   | { kind: "message" };
 
 /** Why the agent stopped waiting without an answer: the turn was stopped, or the agent itself went. */
@@ -40,6 +50,7 @@ export type AskClosedReason = "interrupted" | "exited";
 /** Whether `answer` is one an ask of `kind` takes. */
 export function answerFits(kind: AgentAsk["kind"], answer: AskAnswer): boolean {
   if (answer.kind === "message") return true;
+  if (kind === "approval") return answer.kind === "allow" || answer.kind === "deny";
   return kind === "questions" ? answer.kind === "answers" || answer.kind === "skip" : answer.kind === "approve" || answer.kind === "feedback";
 }
 
