@@ -7,7 +7,7 @@
 import { execFileSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import { workspaceDiskName } from "@kumiko/shared";
-import { exitCode, LimaProvider, type Log } from "../src/index.js";
+import { exitCode, LimaProvider, shellQuote, type Log } from "../src/index.js";
 
 const { values } = parseArgs({
   options: {
@@ -29,7 +29,7 @@ const check = (ok: boolean, what: string, detail = "") => {
 
 /** Runs a script in the VM, from /workspace, and returns its output; fails on a non-zero exit. */
 async function vm(script: string): Promise<string> {
-  const child = provider.exec(name, `bash -c ${JSON.stringify(`set -e\n${script}`)}`, [], { cwd: "/workspace" });
+  const child = provider.exec(name, `bash -c ${shellQuote(`set -e\n${script}`)}`, [], { cwd: "/workspace" });
   child.stdin!.end();
   let out = "";
   child.stdout!.on("data", (c) => (out += c));
