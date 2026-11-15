@@ -177,6 +177,7 @@ describe("delivering", () => {
       [{ branch: "main", title: "t", body: "b" }, /main is the branch work is delivered to/],
       [{ branch: "--upload-pack=x", title: "t", body: "b" }, /isn't a branch name/],
       [{ branch: "fix-x", title: "", body: "b" }, /title must be a non-empty string/],
+      [{ branch: "fix-x", title: "Fix\n\nCo-authored-by: Mallory <m@example.com>", body: "b" }, /title must be one line/],
     ];
     for (const [input, why] of cases) {
       const r = await ask(input);
@@ -243,9 +244,13 @@ describe("delivering", () => {
     assert.equal(onGitHub("refs/heads/main"), main);
   });
 
-  it("squashes into one signed commit with the branch's co-authors, and remembers the choice", async () => {
+  it("squashes into one signed commit with Claude's co-author trailer, and remembers the choice", async () => {
     fresh();
     await branch("squashy", { q1: "1\n", q2: "2\n" });
+    // A commit naming someone else as co-author: they mustn't become one of the user's signed commit.
+    git(work, ["commit", "--quiet", "--allow-empty", "-m", "Tidy\n\nCo-authored-by: Mallory <m@example.com>\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"]);
+    git(work, ["push", "--quiet", "origin", "squashy"]);
+    await mirrors.fetch("acme/widget");
     const r = await ask({ branch: "squashy", title: "Squash it", body: "b" });
     await approvals.decide("s1", r.id, { action: "approve", decision: { kind: "deliver", route: "main", method: "squash" } });
     const res = await approvals.call(sessions.info, "deliver", r.input, r.toolUseId);
@@ -253,7 +258,7 @@ describe("delivering", () => {
     assert.match(sessions.card(r.id)!.receipt!.text, /^Squashed squashy into main as /);
     const main = onGitHub("refs/heads/main")!;
     assert.equal(git(bare, ["rev-list", "--parents", "-n1", main]).trim().split(" ").length, 2, "one parent");
-    assert.equal(git(bare, ["log", "-1", "--format=%B", main]), "Squash it\n\n* Change q1\n* Change q2\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\n");
+    assert.equal(git(bare, ["log", "-1", "--format=%B", main]), "Squash it\n\n* Change q1\n* Change q2\n* Tidy\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\n");
     assert.deepEqual(JSON.parse(await readFile(join(root, `choices-${choiceFiles}`, "choices.json"), "utf8")).web, { route: "main", method: "squash" });
     await branch("next", { nx: "x\n" });
     const next = await ask({ branch: "next", title: "Next", body: "b" });
@@ -287,7 +292,7 @@ describe("delivering", () => {
       head,
       method: "merge",
       message: "Merge branch 'lease'\n",
-      sign: false,
+      sign: undefined,
       fetch: async () => {
         await mirrors.fetch("acme/widget");
         if (fetches++ > 0) return;

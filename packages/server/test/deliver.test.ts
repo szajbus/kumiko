@@ -42,6 +42,9 @@ describe("delivering from a session", () => {
     const vmHome = join(limaDir, "vm-home");
     process.env.FAKE_LIMA_DIR = limaDir;
     process.env.FAKE_GH_DIR = join(root, "gh");
+    // GPG with no keys: whatever the developer's own has, the commits here are unsigned.
+    process.env.GNUPGHOME = join(root, "gnupg");
+    await mkdir(join(root, "gnupg"), { recursive: true, mode: 0o700 });
     process.env.KUMIKO_GH = fakeGh;
     await mkdir(join(root, "gh"), { recursive: true });
     await writeFile(join(root, "gh", "user.json"), JSON.stringify({ login: "acme" }));

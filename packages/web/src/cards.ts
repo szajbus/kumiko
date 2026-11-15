@@ -28,9 +28,16 @@ export function deliverChoices(c: DeliverCard): { choice: DeliverChoice; label: 
   return choices;
 }
 
-/** The decision a choice sends, with the PR's text when it opens one. */
-export function deliverDecision(choice: DeliverChoice, pr: { title: string; body: string; footer: boolean }): CardDecision | undefined {
-  if (choice !== "pr") return { kind: "deliver", route: "main", method: choice };
+/**
+ * The decision a choice sends, with the PR's text when it opens one. A squash takes a title the user edited (before
+ * switching from the PR) as its subject; otherwise Claude's.
+ */
+export function deliverDecision(choice: DeliverChoice, pr: { title: string; body: string; footer: boolean; original?: string }): CardDecision | undefined {
+  if (choice === "merge") return { kind: "deliver", route: "main", method: "merge" };
+  if (choice === "squash") {
+    const title = pr.title.trim();
+    return { kind: "deliver", route: "main", method: "squash", ...(title && title !== pr.original?.trim() ? { title } : {}) };
+  }
   return pr.title.trim() ? { kind: "deliver", route: "pr", method: "merge", title: pr.title.trim(), body: pr.body, ...(pr.footer ? {} : { footer: false }) } : undefined;
 }
 
@@ -46,7 +53,7 @@ export function unsignedWarning(c: DeliverCard, choice: DeliverChoice): string |
 export function cardVerb(card: ApprovalCard["card"], choice?: DeliverChoice): string {
   switch (card.kind) {
     case "deliver":
-      return choice === "pr" ? "Open a PR" : "Merge";
+      return choice === "pr" ? "Open a PR" : choice === "squash" ? "Squash" : "Merge";
     case "issue":
       return "Create an issue";
     case "comment":
@@ -75,9 +82,11 @@ export function cardAction(card: ApprovalCard): string {
   const c = card.card;
   switch (c.kind) {
     case "deliver": {
+      // Declined, it has no decision: then what the card offered first.
       const d = card.decision?.kind === "deliver" ? card.decision : undefined;
-      if (d?.route === "pr") return `open a PR for ${c.branch}`;
-      return `${d?.method === "squash" ? "squash" : "merge"} ${c.branch} into ${c.base}`;
+      const choice: DeliverChoice = d ? (d.route === "pr" ? "pr" : d.method) : initialChoice(c);
+      if (choice === "pr") return `open a PR for ${c.branch}`;
+      return `${choice} ${c.branch} into ${c.base}`;
     }
     case "issue":
       return "create the issue";

@@ -80,13 +80,17 @@ export async function deliverFacts(dir: string, branch: string, identityEmail: s
 
 const isCi = (path: string) => path === ".github" || path.startsWith(".github/");
 
-/** The Co-Authored-By trailers of the branch's commits, each once, in the order they first appear. */
+/**
+ * Claude's Co-Authored-By trailers from the branch's commits, each once. Only Claude's: the commits are the agent's to
+ * write, and anyone else they name would show on GitHub as a co-author of a commit the user signed.
+ */
 async function squashTrailers(dir: string, base: string, head: string): Promise<string[]> {
   const r = await mirrorGit(dir, ["log", "--reverse", "--format=%(trailers:key=Co-authored-by,unfold,separator=%x01)%x1e", `${base}..${head}`]);
   const seen = new Set<string>();
   const out: string[] = [];
   for (const t of r.out.split(/[\x01\x1e\n]/).map((x) => x.trim()).filter(Boolean)) {
     const line = t.replace(/^co-authored-by:\s*/i, "Co-Authored-By: ");
+    if (!CLAUDE_TRAILER.test(line)) continue;
     if (!seen.has(line.toLowerCase())) {
       seen.add(line.toLowerCase());
       out.push(line);
@@ -109,26 +113,47 @@ async function mergeTree(dir: string, base: string, head: string, branch: string
 }
 
 /**
- * Whether Kumiko can sign with the user's key: their config names one, or signs every commit, or, with GPG (git's
- * default format), GPG has a secret key for their email, which is what `git commit-tree -S` uses when none is named.
+ * How Kumiko signs what it lands: with the key the user's git config names, or else, with GPG (git's default format),
+ * with a usable key GPG has for their email, named exactly, so the card's promise and the signature come from the same
+ * lookup. git's own fallback asks GPG for "name <email>", which a key whose user ID differs (a comment, another
+ * spelling) doesn't match, and then fails. Undefined: Kumiko doesn't sign, even with commit.gpgsign on.
  */
-export async function signs(dir: string): Promise<boolean> {
-  const get = async (key: string, type?: string) => {
-    const r = await mirrorGit(dir, ["config", ...(type ? [`--type=${type}`] : []), "--get", key], { ok: [1] });
+export async function signingKey(dir: string): Promise<{ key?: string } | undefined> {
+  const get = async (key: string) => {
+    const r = await mirrorGit(dir, ["config", "--get", key], { ok: [1] });
     return r.code === 0 ? r.out.trim() : "";
   };
-  if (await get("user.signingkey")) return true;
-  if ((await get("commit.gpgsign", "bool")) === "true") return true;
+  if (await get("user.signingkey")) return {};
   const format = (await get("gpg.format")) || "openpgp";
-  const email = await get("user.email");
-  if (format !== "openpgp" || !email) return false;
-  const gpg = (await get("gpg.openpgp.program")) || (await get("gpg.program")) || "gpg";
-  return new Promise((resolve) => {
-    execFile(gpg, ["--batch", "--with-colons", "--list-secret-keys", `<${email}>`], { env: gitEnv(), timeout: 10_000 }, (err, stdout) =>
-      resolve(!err && /^sec:/m.test(String(stdout))),
-    );
+  const email = (await get("committer.email")) || (await get("user.email"));
+  if (format !== "openpgp" || !email) return undefined;
+  // git reads gpg.program and gpg.openpgp.program as one setting: the last one set wins.
+  const programs = await mirrorGit(dir, ["config", "--get-regexp", "^gpg\\.(openpgp\\.)?program$"], { ok: [1] });
+  const gpg = programs.out.trim().split("\n").filter(Boolean).at(-1)?.replace(/^\S+\s+/, "") || "gpg";
+  const out = await new Promise<string>((resolve) => {
+    execFile(gpg, ["--batch", "--with-colons", "--fixed-list-mode", "--list-secret-keys", `<${email}>`], { env: gitEnv(), timeout: 10_000 }, (err, stdout) => resolve(err ? "" : String(stdout)));
   });
+  const key = usableKey(out);
+  return key ? { key } : undefined;
 }
+
+/**
+ * The fingerprint of the first secret key in GPG's colon listing that can sign: not expired, revoked or disabled, and
+ * able to sign, itself or through a subkey (a capital S).
+ */
+export function usableKey(colons: string): string | undefined {
+  let candidate = false;
+  for (const line of colons.split("\n")) {
+    const f = line.split(":");
+    if (f[0] === "sec") candidate = !["e", "r", "d", "i"].includes(f[1]) && (f[11] ?? "").includes("S") && !(f[14] ?? "").startsWith("#");
+    else if (f[0] === "fpr" && candidate) return f[9] || undefined;
+    else if (f[0] !== "fpr" && f[0] !== "grp") candidate = false;
+  }
+  return undefined;
+}
+
+/** Whether Kumiko will sign what it lands. */
+export const signs = async (dir: string) => (await signingKey(dir)) !== undefined;
 
 /** The card's branch moved after it was shown. */
 export class BranchMoved extends Error {
@@ -151,7 +176,7 @@ export interface Landed {
 export async function land(
   dir: string,
   url: string,
-  opts: { branch: string; head: string; method: DeliverMethod; message: string; sign: boolean; fetch(): Promise<void> },
+  opts: { branch: string; head: string; method: DeliverMethod; message: string; sign: { key?: string } | undefined; fetch(): Promise<void> },
 ): Promise<Landed> {
   for (let attempt = 0; ; attempt++) {
     await opts.fetch();
@@ -165,10 +190,12 @@ export async function land(
     const baseSha = (await rev(dir, `refs/heads/${base}`))!;
     const tree = await mergeTree(dir, baseSha, opts.head, opts.branch, base);
     const parents = opts.method === "merge" ? ["-p", baseSha, "-p", opts.head] : ["-p", baseSha];
-    const commit = await mirrorGit(dir, ["commit-tree", ...(opts.sign ? ["-S"] : []), tree, ...parents, "-F", "-"], { input: opts.message, timeoutMs: 5 * 60_000 });
+    // Not signing means not signing: commit.gpgsign would otherwise have git try the lookup that just found nothing.
+    const sign = opts.sign ? [opts.sign.key ? `-S${opts.sign.key}` : "-S"] : ["--no-gpg-sign"];
+    const commit = await mirrorGit(dir, ["commit-tree", ...sign, tree, ...parents, "-F", "-"], { input: opts.message, timeoutMs: 5 * 60_000 });
     const sha = commit.out.trim();
     const push = await mirrorGit(dir, ["push", "--porcelain", `--force-with-lease=refs/heads/${base}:${baseSha}`, url, `${sha}:refs/heads/${base}`], { ok: [1], timeoutMs: 5 * 60_000 });
-    if (push.code === 0) return { sha, base, signed: opts.sign };
+    if (push.code === 0) return { sha, base, signed: opts.sign !== undefined };
     // Someone else landed something first: merge again on top of theirs, once.
     // Only for a lease that failed, not for GitHub refusing it outright (a protected branch, say).
     if (attempt === 0 && /stale info|fetch first/.test(push.out + push.err)) continue;

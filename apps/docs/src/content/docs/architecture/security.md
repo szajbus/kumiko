@@ -21,7 +21,7 @@ The sandbox has no GitHub credentials. When the clone's `origin` is on GitHub, g
 only through a socket Kumiko forwards in, which serves that one repository's [mirror](/guide/repos/#projects). Kumiko
 decides each push there and pushes what it allows on to GitHub itself, with your `gh` login: the agent's own branches,
 never the default branch, tags, or anyone else's branches. The default branch changes only when you approve a card to
-[deliver](/guide/repos/#delivering) a branch, and Kumiko signs that on your Mac. Which repository a project reaches is read from `origin`
+[merge a branch into it](/guide/repos/#merging-into-the-default-branch), and Kumiko signs that on your Mac. Which repository a project reaches is read from `origin`
 once and kept, so the agent can't point it elsewhere. Your `gh` login can bypass branch protections, so this check is
 the one that holds.
 

@@ -168,17 +168,19 @@ export const MAX_BODY = 60_000;
 export function parseCardDecision(value: unknown): CardDecision | undefined {
   const v = value as Record<string, unknown> | null;
   const text = (x: unknown, max: number) => (typeof x === "string" && x.length <= max ? x : undefined);
+  // Titles are one line, as on GitHub; a squash commit's subject too.
+  const line = (x: unknown) => (typeof x === "string" && !/[\r\n]/.test(x) ? text(x, MAX_TITLE)?.trim() : undefined);
   switch (v?.kind) {
     case "deliver": {
       if (v.route !== "main" && v.route !== "pr") return undefined;
       if (v.method !== "merge" && v.method !== "squash") return undefined;
-      const title = v.title === undefined ? undefined : text(v.title, MAX_TITLE)?.trim();
+      const title = v.title === undefined ? undefined : line(v.title);
       const body = v.body === undefined ? undefined : text(v.body, MAX_BODY);
       if ((v.title !== undefined && !title) || (v.body !== undefined && body === undefined)) return undefined;
       return { kind: "deliver", route: v.route, method: v.method, ...(title ? { title } : {}), ...(body !== undefined ? { body } : {}), ...footerOf(v) };
     }
     case "issue": {
-      const title = text(v.title, MAX_TITLE)?.trim();
+      const title = line(v.title);
       const body = text(v.body, MAX_BODY);
       const labels = Array.isArray(v.labels) && v.labels.every((l) => typeof l === "string" && l.length <= 100) ? (v.labels as string[]) : undefined;
       return title && body !== undefined && labels ? { kind: "issue", title, body, labels, ...footerOf(v) } : undefined;

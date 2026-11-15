@@ -49,7 +49,8 @@ describe("approval cards' wording", () => {
   it("sends what the choice means, and the PR's text only for a PR", () => {
     const text = { title: " Fix x ", body: "b", footer: true };
     assert.deepEqual(deliverDecision("merge", text), { kind: "deliver", route: "main", method: "merge" });
-    assert.deepEqual(deliverDecision("squash", text), { kind: "deliver", route: "main", method: "squash" });
+    assert.deepEqual(deliverDecision("squash", text), { kind: "deliver", route: "main", method: "squash", title: "Fix x" }, "a title the user changed");
+    assert.deepEqual(deliverDecision("squash", { ...text, original: "Fix x" }), { kind: "deliver", route: "main", method: "squash" }, "Claude's, unchanged");
     assert.deepEqual(deliverDecision("pr", text), { kind: "deliver", route: "pr", method: "merge", title: "Fix x", body: "b" });
     assert.deepEqual(deliverDecision("pr", { ...text, footer: false }), { kind: "deliver", route: "pr", method: "merge", title: "Fix x", body: "b", footer: false });
     assert.equal(deliverDecision("pr", { ...text, title: "  " }), undefined, "no PR without a title");
@@ -65,10 +66,12 @@ describe("approval cards' wording", () => {
   it("names the card and its button after what happens", () => {
     assert.equal(cardVerb(deliver, "merge"), "Merge");
     assert.equal(cardVerb(deliver, "pr"), "Open a PR");
+    assert.equal(cardVerb(deliver, "squash"), "Squash");
     assert.equal(approveLabel(deliver, "squash"), "Squash and push");
     assert.equal(approveLabel(deliver, "pr"), "Push and open pull request");
     const card = (decision?: ApprovalCard["decision"]): ApprovalCard => ({ id: "a", at: "", state: "declined", card: deliver, ...(decision ? { decision } : {}) });
     assert.equal(cardAction(card()), "merge fix-x into main");
+    assert.equal(cardAction({ ...card(), card: { ...deliver, route: "pr" } }), "open a PR for fix-x", "declined, it names what the card offered");
     assert.equal(cardAction(card({ kind: "deliver", route: "main", method: "squash" })), "squash fix-x into main");
     assert.equal(cardAction(card({ kind: "deliver", route: "pr", method: "merge" })), "open a PR for fix-x");
   });

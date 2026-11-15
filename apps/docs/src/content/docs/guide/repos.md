@@ -75,7 +75,7 @@ shows GitHub's answer. Only if GitHub accepts does the mirror change, so it alwa
 Pushes use your `gh` login, so GitHub's branch protections and rulesets don't stop them if you can bypass them:
 Kumiko's check is the gate.
 
-### Delivering
+### Merging into the default branch
 
 The default branch changes only through a card you approve. When work is ready, Claude pushes its branch, says in
 the chat why and what it would pick, and calls the `deliver` tool. Then it waits while Kumiko shows you a card under
@@ -88,7 +88,8 @@ that message, headed `main ← branch`, with the repository in the corner:
 - **The button** does what it says, and its ▾ menu offers the other ways, each described as GitHub describes it:
   - **Merge and push:** one merge commit on top of the default branch, with the branch's commits as they are.
   - **Squash and push:** one commit with all the branch's changes. Its subject is Claude's title, its message lists
-    the branch's commits, and the branch's co-author trailers follow.
+    the branch's commits, and Claude's co-author trailer follows. Anyone else the commits name as a co-author isn't
+    carried over, as they'd show on GitHub as co-authors of a commit you signed.
   - **Push and open pull request:** a PR opens as you, with Claude's title and description, which you can edit, and
     the line "🤖 Opened by Claude" under it, which a checkbox leaves out. To land it later, Claude delivers the branch
     again: then there are only the first two, a merge commit says "Merge pull request #… from …" so GitHub shows the
@@ -105,7 +106,8 @@ anything it didn't see. If the default branch moved meanwhile, it merges again o
 deleted on GitHub. The card is for the exact commit it shows: if the branch moves before you decide, it goes out of
 date, and **Review again** shows it again. Once decided, it shrinks to a one-line receipt, which says whether the
 commit was signed. The card says nothing about signing, except when there's no key to sign with: then a line warns
-that the commit won't be signed.
+that the commit won't be signed. With GPG and no key named in your config, Kumiko signs with a GPG key for your
+email that can sign (not expired or revoked); if there's none, it doesn't sign, even with `commit.gpgsign` on.
 
 Claude asks before calling `deliver` because Kumiko starts it with a permission rule for the tool. Kumiko doesn't rely
 on that: the tool only does anything if Kumiko itself recorded your approval of that very call.

@@ -1233,12 +1233,9 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
 .ac-title { font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .ac-ref { font: 500 13px var(--mono); background: rgba(0, 0, 0, 0.3); border: 1px solid var(--border); border-radius: 5px; padding: 0 6px; }
 .ac-arrow { color: var(--muted); font-weight: 400; }
-.ac-sub { color: var(--muted); font-size: 12.5px; margin-top: 1px; }
 .ac-facts { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 14px; padding: 0 0 9px; font-size: 13px; color: var(--text-2); align-items: center; }
-.ac-k { color: var(--muted); }
 .ac-add { color: #7fd3a6; font: 12.5px var(--mono); }
 .ac-del { color: #f29b8f; font: 12.5px var(--mono); }
-.ac-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; background: #7fd3a6; }
 .ac-tog { font: inherit; font-size: 13px; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; border-bottom: 1px dotted rgba(143, 166, 240, 0.5); }
 .ac-panel { margin: 0 14px 10px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 7px; background: rgba(0, 0, 0, 0.18); font-size: 12.5px; }
 .ac-row { display: grid; grid-template-columns: 70px 1fr auto; gap: 10px; padding: 3px 0; align-items: center; }
@@ -1259,7 +1256,6 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
 .ac-fld { border: 1px solid var(--border); border-radius: 6px; background: rgba(0, 0, 0, 0.25); padding: 6px 9px; font: inherit; font-size: 13.5px; color: var(--text); }
 .ac-body { display: flex; flex-direction: column; }
 .ac-ta { field-sizing: content; min-height: 4lh; resize: vertical; background: transparent; border: 0; color: var(--text-2); font: inherit; font-size: 13px; padding: 0; outline: none; }
-.ac-ta.mono { font-family: var(--mono); font-size: 12.5px; }
 .ac-md { cursor: text; color: var(--text-2); font-size: 13px; min-height: 2lh; }
 .ac-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); border-top: 1px dashed var(--border); margin-top: 6px; padding-top: 4px; font-size: 12px; cursor: pointer; }
 .ac-foot.is-off span { text-decoration: line-through; opacity: 0.55; }

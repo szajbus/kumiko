@@ -21,7 +21,7 @@ import {
 } from "@kumiko/shared";
 import { replaceFile } from "./files.js";
 import type { GitHub, GitHubItem } from "./github.js";
-import { BranchMoved, deleteBranch, deliverFacts, land, mergeMessage, NotDeliverable, signs, squashMessage } from "./landing.js";
+import { BranchMoved, deleteBranch, deliverFacts, land, mergeMessage, NotDeliverable, signingKey, signs, squashMessage } from "./landing.js";
 import type { Mirrors } from "./mirrors.js";
 import type { PushAnswer } from "./pushes.js";
 
@@ -251,6 +251,8 @@ export class Approvals {
   private async deliverCard(info: SessionInfo, input: Record<string, unknown>): Promise<DeliverCard> {
     const branch = str(input.branch, "branch", 200)!.trim();
     const title = str(input.title, "title", MAX_TITLE)!.trim();
+    // It becomes a squash commit's subject, which the card doesn't show: no paragraphs hidden after a line break.
+    if (/[\r\n]/.test(title)) throw new ApprovalError("title must be one line.");
     const body = str(input.body, "body", MAX_BODY)!;
     const repo = await this.repo(info);
     await this.opts.mirrors.fetch(repo, { force: true });
@@ -532,8 +534,8 @@ export class Approvals {
     }
     const dir = this.opts.mirrors.path(c.repo);
     const url = this.opts.mirrors.url(c.repo);
-    const message = d.method === "merge" ? mergeMessage(c.repo, c.branch, c.pr) : squashMessage(c.title, c.squashBody, c.trailers);
-    const landed = await land(dir, url, { branch: c.branch, head: c.head, method: d.method, message, sign: c.signs, fetch: () => this.opts.mirrors.fetch(c.repo, { force: true }) });
+    const message = d.method === "merge" ? mergeMessage(c.repo, c.branch, c.pr) : squashMessage(d.title ?? c.title, c.squashBody, c.trailers);
+    const landed = await land(dir, url, { branch: c.branch, head: c.head, method: d.method, message, sign: await signingKey(dir), fetch: () => this.opts.mirrors.fetch(c.repo, { force: true }) });
     const short = landed.sha.slice(0, 7);
     const notes: string[] = [];
     if (c.pr && d.method === "squash") {

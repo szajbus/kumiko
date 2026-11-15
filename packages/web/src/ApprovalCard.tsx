@@ -78,7 +78,7 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
   const decision = (): CardDecision | undefined => {
     switch (c.kind) {
       case "deliver":
-        return deliverDecision(choice, { title, body, footer });
+        return deliverDecision(choice, { title, body, footer, original: c.title });
       case "issue":
         return title.trim() ? { kind: "issue", title: title.trim(), body, labels, ...(footer ? {} : { footer: false }) } : undefined;
       case "comment":
@@ -266,14 +266,22 @@ function Flags({ flags }: { flags: CardFlag[] }) {
   );
 }
 
-/** The primary button with a menu of the other ways to do it; the main part does the one it shows. */
+/**
+ * The primary button with a list of the other ways to do it; the main part does the one it shows. A disclosure, not an
+ * ARIA menu: the choices are buttons Tab reaches, and focus goes back to ▾ once one is picked or the list closes.
+ */
 function SplitButton({ label, disabled, menuDisabled, onClick, choices, choice, onChoose }: { label: string; disabled: boolean; menuDisabled: boolean; onClick(): void; choices: { choice: DeliverChoice; label: string; description: string }[]; choice: DeliverChoice; onChoose(c: DeliverChoice): void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement>(null);
+  const caret = useRef<HTMLButtonElement>(null);
+  const close = (refocus: boolean) => {
+    setOpen(false);
+    if (refocus) caret.current?.focus();
+  };
   useEffect(() => {
     if (!open) return;
     const away = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
-    const escape = (e: globalThis.KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    const escape = (e: globalThis.KeyboardEvent) => e.key === "Escape" && close(true);
     document.addEventListener("mousedown", away);
     document.addEventListener("keydown", escape);
     return () => (document.removeEventListener("mousedown", away), document.removeEventListener("keydown", escape));
@@ -283,20 +291,13 @@ function SplitButton({ label, disabled, menuDisabled, onClick, choices, choice, 
       <button type="button" className="btn btn-primary btn-compact" disabled={disabled} onClick={onClick}>
         {label}
       </button>
-      <button type="button" className="btn btn-primary btn-compact ac-caret" aria-label="Other ways" aria-haspopup="menu" aria-expanded={open} disabled={menuDisabled} onClick={() => setOpen(!open)}>
+      <button ref={caret} type="button" className="btn btn-primary btn-compact ac-caret" aria-label="Other ways" aria-expanded={open} aria-controls={open ? "ac-choices" : undefined} disabled={menuDisabled} onClick={() => setOpen(!open)}>
         ▾
       </button>
       {open && (
-        <div className="ac-menu" role="menu">
+        <div className="ac-menu" id="ac-choices">
           {choices.map((c) => (
-            <button
-              key={c.choice}
-              type="button"
-              role="menuitemradio"
-              aria-checked={c.choice === choice}
-              className={`ac-opt${c.choice === choice ? " is-on" : ""}`}
-              onClick={() => (onChoose(c.choice), setOpen(false))}
-            >
+            <button key={c.choice} type="button" aria-pressed={c.choice === choice} className={`ac-opt${c.choice === choice ? " is-on" : ""}`} onClick={() => (onChoose(c.choice), close(true))}>
               <span className="ac-ck">{c.choice === choice ? "✓" : ""}</span>
               <span>
                 <b>{c.label}</b>
@@ -351,7 +352,11 @@ export function BodyField({ value, onChange, footer, footerOn, onFooter, label }
         // Once editing, it stays a box: going back to the preview on blur would move the buttons under the pointer.
         <textarea className="ac-ta" autoFocus value={value} onChange={(e) => onChange(e.target.value)} aria-label={label} />
       ) : (
-        <div className="ac-md" role="button" tabIndex={0} aria-label={`${label}: click to edit`} onClick={(e) => !(e.target as HTMLElement).closest("a") && setEditing(true)} onKeyDown={(e) => e.key === "Enter" && setEditing(true)}>
+        <div className="ac-md" role="button" tabIndex={0} aria-label={`${label}: click to edit`} onClick={(e) => !(e.target as HTMLElement).closest("a") && setEditing(true)} onKeyDown={(e) => {
+            if (e.key !== "Enter" && e.key !== " ") return;
+            e.preventDefault();
+            setEditing(true);
+          }}>
           {value.trim() ? <Markdown text={value} /> : <span className="dim">Empty</span>}
         </div>
       )}
