@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { FOOTERS, type ApprovalCard as Card, type CardDecision, type CardFlag, type CardFile } from "@kumiko/shared";
-import { approveLabel, barShares, cardAction, cardClosed, cardVerb, commitsLabel, deliverChoices, deliverDecision, filesLabel, initialChoice, type DeliverChoice } from "./cards";
+import { approveLabel, barShares, cardAction, cardClosed, cardVerb, commitsLabel, deliverChoices, deliverDecision, filesLabel, initialChoice, unsignedWarning, type DeliverChoice } from "./cards";
 import type { ChatItem } from "./chat";
 import { Markdown } from "./Markdown";
 
@@ -168,6 +168,7 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
           <BodyField value={body} onChange={setBody} footer={FOOTERS.comment} footerOn={footer} onFooter={setFooter} label="Comment" />
         </div>
       )}
+      {!stale && c.kind === "deliver" && unsignedWarning(c, choice) && <div className="ac-unsigned">{unsignedWarning(c, choice)}</div>}
       {declining && (
         <div className="ac-decline">
           <textarea className="ac-ta ac-fld" autoFocus placeholder="Why not, for Claude (optional)" aria-label="Reason for declining, for Claude" value={reason} onChange={(e) => setReason(e.target.value)} />

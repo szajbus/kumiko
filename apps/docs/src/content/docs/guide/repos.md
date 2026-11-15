@@ -104,7 +104,8 @@ when there is one: named in your global git config (`user.signingkey`), or, with
 anything it didn't see. If the default branch moved meanwhile, it merges again once. A branch Claude created is then
 deleted on GitHub. The card is for the exact commit it shows: if the branch moves before you decide, it goes out of
 date, and **Review again** shows it again. Once decided, it shrinks to a one-line receipt, which says whether the
-commit was signed.
+commit was signed. The card says nothing about signing, except when there's no key to sign with: then a line warns
+that the commit won't be signed.
 
 Claude asks before calling `deliver` because Kumiko starts it with a permission rule for the tool. Kumiko doesn't rely
 on that: the tool only does anything if Kumiko itself recorded your approval of that very call.

@@ -34,6 +34,14 @@ export function deliverDecision(choice: DeliverChoice, pr: { title: string; body
   return pr.title.trim() ? { kind: "deliver", route: "pr", method: "merge", title: pr.title.trim(), body: pr.body, ...(pr.footer ? {} : { footer: false }) } : undefined;
 }
 
+/**
+ * The one thing the card says about signing: that it won't happen, when Kumiko lands a commit and the user's git
+ * config gives it no key. Signing otherwise goes unmentioned; the receipt says which it was.
+ */
+export function unsignedWarning(c: DeliverCard, choice: DeliverChoice): string | undefined {
+  return choice !== "pr" && !c.signs ? "Won't be signed: there's no signing key in your git config." : undefined;
+}
+
 /** The card's verb: what approving does. */
 export function cardVerb(card: ApprovalCard["card"], choice?: DeliverChoice): string {
   switch (card.kind) {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ApprovalCard, DeliverCard, SessionEvent } from "@kumiko/shared";
-import { approveLabel, cardAction, cardClosed, cardVerb, deliverChoices, deliverDecision, initialChoice } from "../src/cards.ts";
+import { approveLabel, cardAction, cardClosed, cardVerb, deliverChoices, deliverDecision, initialChoice, unsignedWarning } from "../src/cards.ts";
 import { applyEvent, emptyChat, type ChatItem } from "../src/chat.ts";
 
 const deliver: DeliverCard = {
@@ -53,6 +53,13 @@ describe("approval cards' wording", () => {
     assert.deepEqual(deliverDecision("pr", text), { kind: "deliver", route: "pr", method: "merge", title: "Fix x", body: "b" });
     assert.deepEqual(deliverDecision("pr", { ...text, footer: false }), { kind: "deliver", route: "pr", method: "merge", title: "Fix x", body: "b", footer: false });
     assert.equal(deliverDecision("pr", { ...text, title: "  " }), undefined, "no PR without a title");
+  });
+
+  it("warns only when a commit Kumiko lands won't be signed", () => {
+    assert.equal(unsignedWarning(deliver, "merge"), undefined);
+    assert.equal(unsignedWarning({ ...deliver, signs: false }, "merge"), "Won't be signed: there's no signing key in your git config.");
+    assert.equal(unsignedWarning({ ...deliver, signs: false }, "squash"), "Won't be signed: there's no signing key in your git config.");
+    assert.equal(unsignedWarning({ ...deliver, signs: false }, "pr"), undefined, "a PR lands nothing yet");
   });
 
   it("names the card and its button after what happens", () => {
