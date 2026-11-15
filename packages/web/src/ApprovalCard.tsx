@@ -144,7 +144,12 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
       <div className="ac-card is-pending" role="group" aria-label={cardTitle(c)} onKeyDown={onKey}>
         <div className="ac-head">
           <div className="ac-title">
-            Push <code className="ac-ref">{c.branch}</code>, which changes CI
+            {/* The comma stays with the branch: the title's items are spaced apart. */}
+            Push
+            <span>
+              <code className="ac-ref">{c.branch}</code>,
+            </span>
+            which changes CI
           </div>
           <div className="ac-sub">Claude's branch · {c.repo} · its git push waits for you</div>
         </div>
