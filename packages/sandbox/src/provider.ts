@@ -7,12 +7,13 @@ export type Log = (line: string, kind?: LineKind) => void;
 
 export interface SandboxProvider {
   id: "lima";
-  list(): Promise<SandboxInfo[]>;                      // km- instances only
+  list(): Promise<SandboxInfo[]>;                      // Kumiko's instances only
   /** Creates the VM, starts it and provisions it: Claude Code, the user's script, then the agent's scripts in `agentSetup`. */
   create(spec: SandboxSpec, log: Log, agentSetup?: AgentSetupRun): Promise<void>;
   start(name: string, log: Log): Promise<void>;
   stop(name: string, log: Log): Promise<void>;
-  delete(name: string, log: Log): Promise<void>;
+  /** Deletes the VM and its record, and its workspace disk unless `keepWorkspace` (a recreate keeps it). */
+  delete(name: string, log: Log, opts?: { keepWorkspace?: boolean }): Promise<void>;
   /**
    * Checks an edit before `edit`: errors block it (e.g. resources changed while running), warnings don't.
    * With `recreate`, the VM is rebuilt from the result, so only the spec itself has to be valid. With `restart`, the VM

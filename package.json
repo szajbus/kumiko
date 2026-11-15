@@ -23,6 +23,7 @@
     "dist:app": "npm run build && npm run dist:mac-arm64-app -w @kumiko/desktop",
     "release": "node scripts/release.mjs",
     "roundtrip": "npm run build && node packages/sandbox/dist/scripts/roundtrip.js",
+    "workspace-disk-check": "npm run build && node packages/sandbox/dist/scripts/workspace-disk.js",
     "projects-check": "npm run build && node packages/server/dist/scripts/projects-check.js",
     "drive": "npm run build && node packages/agent/dist/scripts/drive.js",
     "tools-check": "npm run build && node packages/agent/dist/scripts/tools-check.js",

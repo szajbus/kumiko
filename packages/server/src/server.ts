@@ -769,11 +769,11 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
 
   /**
    * Deletes the VM and creates it again from `spec`, its sessions asleep meanwhile. They can continue: Claude's
-   * history is in the project's Claude home, on the host.
+   * history is in the project's Claude home, on the host. A workspace disk is kept, and attached to the new VM.
    */
   const recreate = async (project: Project, spec: SandboxSpec, log: Log) => {
     await endSessions(project.id, log, { sleep: true });
-    await provider.delete(project.id, log);
+    await provider.delete(project.id, log, { keepWorkspace: true });
     await projects.writeManaged(project, setupOf(spec));
     await provider.create(spec, log, await agentSetup(project));
   };

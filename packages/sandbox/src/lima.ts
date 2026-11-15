@@ -10,6 +10,8 @@ import {
   sameMounts,
   vmName,
   VM_PREFIX,
+  WORKSPACE_DIR,
+  workspaceDiskName,
   type EditSpec,
   type SandboxInfo,
   type SandboxMeta,
@@ -48,6 +50,24 @@ interface LimaInstance {
 
 /** The first Lima that can keep a VM off the host's loopback: `networkOpts.hostLoopback`. */
 const HOST_LOOPBACK_SINCE = [2, 3, 0];
+
+/** The first Lima that can mount a disk where it's told (`additionalDisks[].mountPoint`), which a workspace disk needs. */
+const DISK_MOUNT_POINT_SINCE = [2, 3, 0];
+
+/** The fields Kumiko reads from `limactl disk ls --json`. */
+interface LimaDisk {
+  name: string;
+  size: number;
+  /** The instance using it, or "" when none is. */
+  instance?: string;
+}
+
+/**
+ * The `--set` expression that attaches a sandbox's workspace disk and mounts it at /workspace. Lima formats it (ext4)
+ * on the first boot only: a disk that has a filesystem, such as one kept from the VM before, is mounted as it is.
+ */
+export const workspaceDiskExpression = (name: string) =>
+  `.additionalDisks = ${JSON.stringify([{ name: workspaceDiskName(name), format: true, fsType: "ext4", mountPoint: WORKSPACE_DIR }])}`;
 
 /** Whether the VM can reach the host's loopback as Lima has it configured now; Lima's default is that it can. */
 const reachesLoopback = (inst: LimaInstance) => inst.config?.networkOpts?.hostLoopback !== false;
@@ -99,6 +119,7 @@ function toStatus(s: string): SandboxStatus {
 }
 
 const gib = (bytes?: number) => (bytes ? Math.round((bytes / GiB) * 10) / 10 : undefined);
+const gib_ = (bytes: number) => Math.round((bytes / GiB) * 10) / 10;
 
 /** Single-quotes a value for bash. */
 export function shellQuote(value: string): string {
@@ -229,6 +250,44 @@ export class LimaProvider implements SandboxProvider {
     await this.limactlRun(args, { log });
   }
 
+  /** Kumiko's Lima disks: those named for one of its VMs. */
+  private async disks(): Promise<LimaDisk[]> {
+    const res = await this.limactlRun(["disk", "ls", "--json"], { captureStdout: true });
+    return (parseLimaList(res.stdout) as unknown as LimaDisk[]).filter((d) => d.name.startsWith(VM_PREFIX));
+  }
+
+  private async disk(name: string): Promise<LimaDisk | undefined> {
+    return (await this.disks()).find((d) => d.name === workspaceDiskName(name));
+  }
+
+  /**
+   * Makes sure the sandbox's workspace disk is there, at least `gib` big: one kept from the VM before is used as it is,
+   * grown if it is smaller. Fails if another VM uses it.
+   */
+  private async ensureWorkspace(name: string, gib: number, log: Log): Promise<void> {
+    const version = await this.limaVersion();
+    if (!version || !atLeast(version, DISK_MOUNT_POINT_SINCE)) {
+      throw new ProviderError(`A workspace disk needs Lima ${DISK_MOUNT_POINT_SINCE.join(".")} or later; ${version ? `this is Lima ${version.join(".")}` : "Kumiko couldn't tell which Lima this is"}. Upgrade Lima first (brew upgrade lima).`);
+    }
+    const disk = workspaceDiskName(name);
+    const have = await this.disk(name);
+    if (have?.instance && have.instance !== vmName(name)) throw new ProviderError(`The workspace disk ${disk} is in use by ${have.instance}.`);
+    if (!have) {
+      const args = ["disk", "create", disk, `--size=${gib}GiB`, "--format=raw"];
+      log(`$ ${commandLine("limactl", args)}`, "cmd");
+      await this.limactlRun(args, { log });
+      return;
+    }
+    log(`Using the workspace disk ${disk}, kept from before (${gib_(have.size)} GiB).`, "note");
+    if (have.size < gib * GiB) await this.resizeWorkspace(name, gib, log);
+  }
+
+  private async resizeWorkspace(name: string, gib: number, log: Log): Promise<void> {
+    const args = ["disk", "resize", workspaceDiskName(name), `--size=${gib}GiB`];
+    log(`$ ${commandLine("limactl", args)}`, "cmd");
+    await this.limactlRun(args, { log });
+  }
+
   private async instances(): Promise<LimaInstance[]> {
     const res = await this.limactlRun(["list", "--format", "json"], { captureStdout: true });
     return parseLimaList(res.stdout).filter((i) => i.name.startsWith(VM_PREFIX));
@@ -240,6 +299,12 @@ export class LimaProvider implements SandboxProvider {
    */
   async list(): Promise<SandboxInfo[]> {
     const [instances, { metas, errors }, version] = await Promise.all([this.instances(), this.metadata.readAll(), this.limaVersion()]);
+    // Lima is asked about disks only when a sandbox has one.
+    const disks = [...metas.values()].some((m) => m.spec.workspaceGiB !== undefined) ? await this.disks() : [];
+    const workspaceGiB = (name: string) => {
+      const d = metas.get(name)?.spec.workspaceGiB !== undefined ? disks.find((x) => x.name === workspaceDiskName(name)) : undefined;
+      return d ? { workspaceGiB: gib(d.size) } : {};
+    };
     /** Why a VM of Kumiko's reaches the host's loopback though its spec says it shouldn't; a stopped one is set on start. */
     const loopbackOpen = (i: LimaInstance, spec: SandboxSpec | undefined): string | undefined => {
       if (!spec || spec.hostLoopback === true || !reachesLoopback(i)) return undefined;
@@ -249,7 +314,7 @@ export class LimaProvider implements SandboxProvider {
     };
     const absent: SandboxInfo[] = [...metas]
       .filter(([name]) => !instances.some((i) => i.name === vmName(name)))
-      .map(([name, meta]) => ({ name, status: "absent", meta }));
+      .map(([name, meta]) => ({ name, status: "absent", meta, ...workspaceGiB(name) }));
     return instances
       .map((i): SandboxInfo => {
         const name = i.name.slice(VM_PREFIX.length);
@@ -260,6 +325,7 @@ export class LimaProvider implements SandboxProvider {
           cpus: i.cpus,
           memoryGiB: gib(i.memory),
           diskGiB: gib(i.disk),
+          ...workspaceGiB(name),
           meta: metas.get(name),
           ...(errors.has(name) ? { metaError: errors.get(name) } : {}),
           ...(open ? { hostLoopbackOpen: open } : {}),
@@ -316,12 +382,16 @@ export class LimaProvider implements SandboxProvider {
       `--memory=${spec.memoryGiB}`,
       `--disk=${spec.diskGiB}`,
     ];
+    const sets: string[] = [];
     if (spec.mounts.length === 0) args.push("--mount-none");
-    else args.push(`--set=${mountsExpression(spec.mounts)}`);
+    else sets.push(mountsExpression(spec.mounts));
+    if (spec.workspaceGiB !== undefined) sets.push(workspaceDiskExpression(spec.name));
+    if (sets.length) args.push(`--set=${sets.join(" | ")}`);
     args.push(spec.template || "template:default");
 
-    log(`$ ${commandLine("limactl", args)}`, "cmd");
     // A failed create keeps the record: it is the spec a recreate builds the VM from.
+    if (spec.workspaceGiB !== undefined) await this.ensureWorkspace(spec.name, spec.workspaceGiB, log);
+    log(`$ ${commandLine("limactl", args)}`, "cmd");
     await this.limactlRun(args, { log });
     await this.start(spec.name, log);
   }
@@ -413,18 +483,26 @@ export class LimaProvider implements SandboxProvider {
     log("Stopped.", "ok");
   }
 
-  /** Deletes the VM and Kumiko's record of it. A VM that is already gone only has its record removed. */
-  async delete(name: string, log: Log): Promise<void> {
+  /**
+   * Deletes the VM, its workspace disk unless `keepWorkspace`, and Kumiko's record of it. A VM that is already gone
+   * only has its record and disk removed.
+   */
+  async delete(name: string, log: Log, opts: { keepWorkspace?: boolean } = {}): Promise<void> {
     const vm = vmName(name);
     if (!(await this.instances()).some((i) => i.name === vm)) {
-      await this.metadata.remove(name);
       log(`${vm} doesn't exist; nothing to delete.`, "note");
-      return;
+    } else {
+      log(`$ limactl delete --force ${vm}`, "cmd");
+      await this.limactlRun(["delete", "--force", vm], { log });
     }
-    log(`$ limactl delete --force ${vm}`, "cmd");
-    await this.limactlRun(["delete", "--force", vm], { log });
+    const disk = await this.disk(name);
+    if (disk && !opts.keepWorkspace) {
+      const args = ["disk", "delete", disk.name];
+      log(`$ ${commandLine("limactl", args)}`, "cmd");
+      await this.limactlRun(args, { log });
+    }
     await this.metadata.remove(name);
-    log("Deleted.", "ok");
+    log(disk && opts.keepWorkspace ? `Deleted. The workspace disk ${disk.name} is kept.` : "Deleted.", "ok");
   }
 
   async validateEdit(name: string, patch: EditSpec, opts: { recreate?: boolean; restart?: boolean } = {}): Promise<Validation> {
@@ -442,9 +520,10 @@ export class LimaProvider implements SandboxProvider {
       log(`$ ${commandLine("limactl", args)}`, "cmd");
       await this.limactlRun(args, { log });
     }
+    if (plan.growWorkspace) await this.resizeWorkspace(name, plan.spec.workspaceGiB!, log);
     await this.metadata.update(name, { spec: plan.spec });
     if (plan.prepareShells) await this.prepareShells(name, plan.spec.workdir, log);
-    log(plan.limaArgs.length ? "Saved. Resource and mount changes apply on the next start." : "Saved.", "ok");
+    log(plan.limaArgs.length || plan.growWorkspace ? "Saved. Resource and mount changes apply on the next start." : "Saved.", "ok");
   }
 
   /** Works out what an edit changes and which `limactl edit` flags that needs. */
@@ -452,7 +531,7 @@ export class LimaProvider implements SandboxProvider {
     name: string,
     patch: EditSpec,
     { recreate = false, restart = false }: { recreate?: boolean; restart?: boolean } = {},
-  ): Promise<Validation & { limaArgs: string[]; prepareShells?: boolean }> {
+  ): Promise<Validation & { limaArgs: string[]; growWorkspace?: boolean; prepareShells?: boolean }> {
     const vm = vmName(name);
     let meta: SandboxMeta | undefined;
     try {
@@ -468,8 +547,8 @@ export class LimaProvider implements SandboxProvider {
     }
 
     // Only these fields can change; an empty provision string clears the script.
-    const { cpus, memoryGiB, diskGiB, mounts, env, provision, workdir, hostLoopback } = patch;
-    const defined = Object.fromEntries(Object.entries({ cpus, memoryGiB, diskGiB, mounts, env, provision, workdir, hostLoopback }).filter(([, v]) => v !== undefined));
+    const { cpus, memoryGiB, diskGiB, workspaceGiB, mounts, env, provision, workdir, hostLoopback } = patch;
+    const defined = Object.fromEntries(Object.entries({ cpus, memoryGiB, diskGiB, workspaceGiB, mounts, env, provision, workdir, hostLoopback }).filter(([, v]) => v !== undefined));
     const merged: SandboxSpec = { ...meta.spec, ...defined, name: meta.spec.name, template: meta.spec.template };
     const v = await validateSpec(merged, this.env());
     const { spec } = v;
@@ -496,12 +575,23 @@ export class LimaProvider implements SandboxProvider {
     }
     if (sets.length) limaArgs.push(`--set=${sets.join(" | ")}`);
 
-    if (limaArgs.length && !restart && toStatus(inst.status) !== "stopped") {
+    // The workspace disk comes with the VM and can only grow; growing it needs the VM stopped, as Lima won't resize a disk in use.
+    let growWorkspace = false;
+    if (spec.workspaceGiB !== meta.spec.workspaceGiB) {
+      const disk = meta.spec.workspaceGiB === undefined ? undefined : await this.disk(name);
+      const now = disk?.size ?? (meta.spec.workspaceGiB ?? 0) * GiB;
+      if (meta.spec.workspaceGiB === undefined) errors.push("This sandbox has no workspace disk. Recreate it to add one.");
+      else if (spec.workspaceGiB === undefined) errors.push("The workspace disk can't be removed.");
+      else if (spec.workspaceGiB * GiB < now) errors.push(`The workspace disk can only grow; it is ${gib(now)} GiB now.`);
+      else growWorkspace = spec.workspaceGiB * GiB > now;
+    }
+
+    if ((limaArgs.length || growWorkspace) && !restart && toStatus(inst.status) !== "stopped") {
       errors.push(`Stop ${vm} to change its resources, mounts or access to your Mac's localhost, or save and restart it. Variables and the provisioning script can change while it runs.`);
     }
     // A stopped VM gets its new working directory on the next start; a running one right after saving.
     const prepareShells = spec.workdir !== (meta.spec.workdir) && toStatus(inst.status) === "running";
-    return { errors, warnings: v.warnings, spec, limaArgs, prepareShells };
+    return { errors, warnings: v.warnings, spec, limaArgs, growWorkspace, prepareShells };
   }
 
   private async runProvisioning(name: string, log: Log): Promise<void> {

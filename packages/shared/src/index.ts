@@ -24,7 +24,7 @@ export const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export const DEFAULTS = { cpus: 4, memoryGiB: 4, diskGiB: 100 } as const;
 
 /** The smallest resources a sandbox can have. */
-export const MINIMUMS = { cpus: 1, memoryGiB: 1, diskGiB: 10 } as const;
+export const MINIMUMS = { cpus: 1, memoryGiB: 1, diskGiB: 10, workspaceGiB: 1 } as const;
 
 /** The working directory in the VM of a sandbox whose spec names none. A project's VM works in its clone instead. */
 export const WORKSPACE_DIR = "/workspace";
@@ -123,6 +123,11 @@ export interface SandboxSpec {
   cpus: number;
   memoryGiB: number;
   diskGiB: number;
+  /**
+   * The size of the sandbox's workspace disk: a Lima disk of its own, mounted at /workspace, which outlives the VM. It
+   * is kept when the VM is recreated and deleted with the sandbox. Missing: no workspace disk.
+   */
+  workspaceGiB?: number;
   mounts: Mount[];         // guestPath defaults to the host path
   env: string[];           // names of host variables to forward; values never stored
   provision?: string;      // shell script, run once after first start
@@ -140,7 +145,7 @@ export interface SandboxSpec {
  * and forwarded variables and the provisioning script can change anytime. Saved with a recreate, anything but
  * name and template can change. Name and template are fixed.
  */
-export type EditSpec = Partial<Pick<SandboxSpec, "cpus" | "memoryGiB" | "diskGiB" | "mounts" | "env" | "provision" | "workdir" | "hostLoopback">>;
+export type EditSpec = Partial<Pick<SandboxSpec, "cpus" | "memoryGiB" | "diskGiB" | "workspaceGiB" | "mounts" | "env" | "provision" | "workdir" | "hostLoopback">>;
 
 /** A spec as validated, which has its defaults filled in. */
 export type ValidSpec = SandboxSpec & { workdir: string };
@@ -196,6 +201,8 @@ export interface SandboxInfo {
   name: string;            // short name, without "km-"
   status: SandboxStatus;
   cpus?: number; memoryGiB?: number; diskGiB?: number;
+  /** The workspace disk's size, as Lima has it; missing when the sandbox has none, or it is gone. */
+  workspaceGiB?: number;
   /** Kumiko's metadata, when this sandbox was created by Kumiko. */
   meta?: SandboxMeta;
   /** Set when Kumiko has a record of this sandbox that it can't read; `meta` is then missing. */
@@ -791,6 +798,11 @@ export type ServerEvent =
 
 export function vmName(name: string): string {
   return VM_PREFIX + name;
+}
+
+/** The Lima disk holding a sandbox's /workspace, which outlives its VM. */
+export function workspaceDiskName(name: string): string {
+  return `${vmName(name)}-workspace`;
 }
 
 /** A GitHub account or organization name: letters, digits and single dashes, up to 39 characters. */
