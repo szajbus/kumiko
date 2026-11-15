@@ -96,7 +96,8 @@ Enter does nothing. **Decline…** lets you tell Claude why. Nothing is shown wh
 branch that isn't pushed, or that doesn't merge cleanly, gets Claude told what to fix.
 
 Kumiko lands it in the mirror on your Mac: it merges, makes the commit with `git commit-tree`, signed with your key
-when your global git config has one (`user.signingkey`), and pushes it to GitHub with a lease, so it can't overwrite
+when there is one: named in your global git config (`user.signingkey`), or, with GPG, the one GPG has for your
+`user.email`, as `git commit -S` would use, and pushes it to GitHub with a lease, so it can't overwrite
 anything it didn't see. If the default branch moved meanwhile, it merges again once. A branch Claude created is then
 deleted on GitHub. The card is for the exact commit it shows: if the branch moves before you decide, it goes out of
 date, and **Review the new state** shows it again. Once decided, it shrinks to a one-line receipt.

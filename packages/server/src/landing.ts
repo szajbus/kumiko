@@ -108,12 +108,26 @@ async function mergeTree(dir: string, base: string, head: string, branch: string
   return lines[0];
 }
 
-/** Whether the user's git config signs: a signing key is set, or commits are signed with the default one. */
+/**
+ * Whether Kumiko can sign with the user's key: their config names one, or signs every commit, or, with GPG (git's
+ * default format), GPG has a secret key for their email, which is what `git commit-tree -S` uses when none is named.
+ */
 export async function signs(dir: string): Promise<boolean> {
-  const key = await mirrorGit(dir, ["config", "--get", "user.signingkey"], { ok: [1] });
-  if (key.code === 0 && key.out.trim() !== "") return true;
-  const always = await mirrorGit(dir, ["config", "--type=bool", "--get", "commit.gpgsign"], { ok: [1] });
-  return always.out.trim() === "true";
+  const get = async (key: string, type?: string) => {
+    const r = await mirrorGit(dir, ["config", ...(type ? [`--type=${type}`] : []), "--get", key], { ok: [1] });
+    return r.code === 0 ? r.out.trim() : "";
+  };
+  if (await get("user.signingkey")) return true;
+  if ((await get("commit.gpgsign", "bool")) === "true") return true;
+  const format = (await get("gpg.format")) || "openpgp";
+  const email = await get("user.email");
+  if (format !== "openpgp" || !email) return false;
+  const gpg = (await get("gpg.openpgp.program")) || (await get("gpg.program")) || "gpg";
+  return new Promise((resolve) => {
+    execFile(gpg, ["--batch", "--with-colons", "--list-secret-keys", `<${email}>`], { env: gitEnv(), timeout: 10_000 }, (err, stdout) =>
+      resolve(!err && /^sec:/m.test(String(stdout))),
+    );
+  });
 }
 
 /** The card's branch moved after it was shown. */
