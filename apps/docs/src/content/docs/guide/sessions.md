@@ -5,14 +5,14 @@ sidebar:
   order: 2
 ---
 
-A session is one conversation with the agent, in one tab. The agent runs in the project's sandbox, starting in the
-clone, and keeps running between your messages until you close the tab, even while Kumiko itself isn't running. <kbd>Cmd</kbd>+<kbd>T</kbd> opens a new one.
+A session is one conversation with the agent, in one tab. The agent runs in the sandbox, starting in
+`/workspace`, above its repos, and keeps running between your messages until you close the tab, even while Kumiko itself isn't running. <kbd>Cmd</kbd>+<kbd>T</kbd> opens a new one.
 
 ![A session: the first turn's tool calls folded into one line, the agent's reply, and the turn's time, cost and tokens.](../../../assets/screenshots/session.png)
 
 ## File edits
 
-When the agent edits or writes a file, its tool line names the file, relative to the project's folder, and how many
+When the agent edits or writes a file, its tool line names the file, relative to `/workspace`, and how many
 lines it added and removed, e.g. `src/app.py +12 −3`. A new file says so, and a failed edit says why. Open the line to
 see the change as a diff, with line numbers and a few lines around it; a long one shows its first 30 lines, with
 **Show all** for the rest. A turn's folded work says how many files it changed, its subagents' included.
@@ -94,22 +94,22 @@ Once answered, the card stays in the chat, with your answers.
 
 ## Tabs
 
-Each project's tabs sit together, behind a label with the project's name in a colour of its own, so a tab only needs
+Each sandbox's tabs sit together, behind a label with the sandbox's name in a colour of its own, so a tab only needs
 the session's name: the one given with `/rename`, or else the first words of your opening message. Hover a tab for its
-project and state.
+sandbox and state.
 
-- Drag a tab to move it among its project's tabs, or drag the label to move the project's tabs together.
-- Click the label to open the project.
-- A New session tab sits with the project picked in it, and moves if you pick another.
+- Drag a tab to move it among its sandbox's tabs, or drag the label to move the sandbox's tabs together.
+- Click the label to open the sandbox.
+- A New session tab sits with the sandbox picked in it, and moves if you pick another.
 
 ## Sessions working together
 
-A session's agent knows about the other sessions of its project, and no other project's:
+A session's agent knows about the other sessions of its sandbox, and no other sandbox's:
 
 - **It can list them**, by their names and descriptions, open ones and saved ones, to find work already under way.
 - **It can ask to start a new one** when separate work comes up, such as a bug found along the way. The chat shows the
   opening prompt it wrote, and any artifacts it wants to give the new session, with **Start session** and **Decline**.
-  Nothing starts until you accept; then the session opens in a tab of its own, in the clone, with that prompt and
+  Nothing starts until you accept; then the session opens in a tab of its own, in `/workspace`, with that prompt and
   copies of those artifacts, and nothing else of the conversation. The agent isn't told what you chose.
 - **It can share artifacts with another open session.** The other session gets copies, as they are then, in its window
   for you to show, and its chat says what came from where. Its agent is told with your next message there, by a note
@@ -123,7 +123,7 @@ A session's agent knows about the other sessions of its project, and no other pr
   in the background count as working: the session ends once they are done and the agent has reported on them.
 - <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> closes the tab and deletes the saved session, after asking. If the agent
   is working, it can finish its turn first (**Delete when done**, the default) or stop now (**Stop and delete**).
-- While the agent finishes, the Projects tab and the project's page list the session under **Finishing**, to **Open**
+- While the agent finishes, the Sandboxes tab and the sandbox's page list the session under **Finishing**, to **Open**
   again, the agent still working, or to **Stop now**. <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> brings it back too,
   even one being deleted, until the agent is done. Queued messages aren't sent: the turn under way is all it finishes.
   If the agent asks you something meanwhile, the session says **Needs attention**: **Open** it to answer, or it is
@@ -131,7 +131,7 @@ A session's agent knows about the other sessions of its project, and no other pr
 - **Quitting the app** leaves the agent working. If it is working in any session, Kumiko says so, and offers **Stop
   Claude and Quit** instead, which ends every session at once. A session finishing after its tab closed goes on
   finishing when Kumiko is back. On macOS, closing the window leaves the app running.
-- **Stopping, restarting, recreating or deleting the sandbox** ends its sessions. So does the sandbox stopping outside
+- **Stopping, restarting, rebuilding or deleting the sandbox** ends its sessions. So does the sandbox stopping outside
   Kumiko.
 
 An ended session's tab stays open, with its transcript, until you close it.

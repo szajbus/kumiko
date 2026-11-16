@@ -1,16 +1,16 @@
-import { useCallback, useEffect, useState } from "react";
-import { isBusy, isWaiting, projectMountRole, vmName, type LogLine, type ProjectView, type ResumableSession, type WorktreeStatus, type WorktreesResponse } from "@kumiko/shared";
+import { useEffect, useState } from "react";
+import { isBusy, isWaiting, sandboxMountRole, vmName, WORKSPACE_DIR, workspaceDiskName, type LogLine, type SandboxView, type ResumableSession } from "@kumiko/shared";
 import { SandboxActions, useActions } from "./actions";
 import { AgentSetupCard } from "./AgentSetup";
 import { api, errorMessage, useHome, useSandboxStats, type LiveState } from "./api";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { FinishingItem } from "./Finishing";
 import { ago, tilde } from "./format";
-import { Folder, Pencil, Plus, Redo, Resume } from "./icons";
+import { Disk, Folder, Pencil, Plus, Resume } from "./icons";
 import { LogPanel } from "./LogPanel";
 import { resumableKey } from "./resumable";
 import { COLORS, failedAgentScripts, meters, plural, sandboxCreatedAt, sessionState, statusOf, type Meter } from "./status";
-import { projectSessions } from "./wake";
+import { sandboxSessions } from "./wake";
 
 interface Props {
   id: string;
@@ -22,9 +22,9 @@ interface Props {
   onSessionStarted(id: string): void;
 }
 
-/** One project: what needs the user (sessions waiting, worktrees with work in them), then its VM and the VM's log. */
-export function ProjectPage({ id, live, onBack, onEdit, onNewSession, onSessionStarted }: Props) {
-  const p = live.projects.find((x) => x.name === id);
+/** One sandbox: what needs the user (sessions waiting) and its repos, then its VM and the VM's log. */
+export function SandboxPage({ id, live, onBack, onEdit, onNewSession, onSessionStarted }: Props) {
+  const p = live.sandboxes.find((x) => x.name === id);
   const lines = live.logs[id] ?? [];
   const actions = useActions({ onDeleted: onBack });
   const home = useHome();
@@ -32,7 +32,7 @@ export function ProjectPage({ id, live, onBack, onEdit, onNewSession, onSessionS
   return (
     <>
       <main className="page">
-        <Breadcrumbs items={[{ label: "Projects", href: "#/" }, { label: id }]} />
+        <Breadcrumbs items={[{ label: "Sandboxes", href: "#/" }, { label: id }]} />
         {!p ? (
           <div className="page-head">
             <div className="detail-title">
@@ -41,12 +41,12 @@ export function ProjectPage({ id, live, onBack, onEdit, onNewSession, onSessionS
             </div>
           </div>
         ) : (
-          <DetailHead p={p} home={home} lines={lines}>
+          <DetailHead p={p} lines={lines}>
             <button
               type="button"
               className="btn btn-primary btn-compact"
               disabled={p.status !== "running" || p.busy}
-              title={p.status === "running" ? "Start a Claude session in this project" : "Start the sandbox first"}
+              title={p.status === "running" ? "Start a Claude session in this sandbox" : "Start the sandbox first"}
               onClick={onNewSession}
             >
               <Plus />
@@ -60,16 +60,10 @@ export function ProjectPage({ id, live, onBack, onEdit, onNewSession, onSessionS
           </DetailHead>
         )}
 
-        {!p && live.loaded && <div className="banner banner-warn">There is no project {id}{lines.length ? "; its last log is below." : "."}</div>}
-        {p?.problem && (
-          <div className="banner banner-error">
-            <strong>A folder this project needs is missing.</strong>
-            <span>{p.problem}</span>
-          </div>
-        )}
+        {!p && live.loaded && <div className="banner banner-warn">There is no sandbox {id}{lines.length ? "; its last log is below." : "."}</div>}
         {p?.metaError && (
           <div className="banner banner-error">
-            <strong>Kumiko's record of this project's sandbox is unreadable.</strong>
+            <strong>Kumiko's record of this sandbox's VM is unreadable.</strong>
             <span className="mono">{p.metaError}</span>
           </div>
         )}
@@ -84,14 +78,14 @@ export function ProjectPage({ id, live, onBack, onEdit, onNewSession, onSessionS
         )}
         {p?.status === "absent" && !p.busy && (
           <div className="banner banner-warn">
-            {p.vm} doesn't exist: its creation failed, or it was deleted outside Kumiko. Recreate it from the menu to use this project.
+            {p.vm} doesn't exist: its creation failed, or it was deleted outside Kumiko. Rebuild it from the menu to use this sandbox.
           </div>
         )}
 
         {p && (
           <div className="detail-grid">
             <SessionsCard id={id} live={live} onOpened={onSessionStarted} />
-            <WorktreesCard p={p} home={home} />
+            <ReposCard p={p} onAdd={onEdit} />
           </div>
         )}
 
@@ -106,16 +100,13 @@ export function ProjectPage({ id, live, onBack, onEdit, onNewSession, onSessionS
   );
 }
 
-function DetailHead({ p, home, lines, children }: { p: ProjectView; home?: string; lines: LogLine[]; children: React.ReactNode }) {
+function DetailHead({ p, lines, children }: { p: SandboxView; lines: LogLine[]; children: React.ReactNode }) {
   const status = statusOf(p, lines);
   return (
     <div className="page-head">
       <div className="detail-title">
         <h1 className="page-title">{p.name}</h1>
         <span className="row-sub">
-          <span className="mono dim" title={p.project.clonePath}>
-            {tilde(p.project.clonePath, home)}
-          </span>
           <span className="badge mono">{p.vm}</span>
         </span>
       </div>
@@ -134,11 +125,11 @@ function DetailHead({ p, home, lines, children }: { p: ProjectView; home?: strin
 const CLOSED_SHOWN = 5;
 
 /**
- * The project's sessions: the open ones, those waiting on the user first, then those Claude finishes after their tab
+ * The sandbox's sessions: the open ones, those waiting on the user first, then those Claude finishes after their tab
  * closed, then the closed ones, most recent first, to resume.
  */
 function SessionsCard({ id, live, onOpened }: { id: string; live: LiveState; onOpened(id: string): void }) {
-  // Re-read when a session opens or closes, or a project (and its saved sessions) goes.
+  // Re-read when a session opens or closes, or a sandbox (and its saved sessions) goes.
   const [saved, setSaved] = useState<ResumableSession[]>([]);
   const key = resumableKey(live);
   useEffect(() => {
@@ -148,7 +139,7 @@ function SessionsCard({ id, live, onOpened }: { id: string; live: LiveState; onO
       current = false;
     };
   }, [key]);
-  const { open, closed } = projectSessions(id, live.sessions, saved);
+  const { open, closed } = sandboxSessions(id, live.sessions, saved);
   const finishing = live.sessions.filter((s) => s.sandbox === id && s.closing);
   const waiting = open.filter(isWaiting).length;
   const [all, setAll] = useState(false);
@@ -235,121 +226,64 @@ function SessionsCard({ id, live, onOpened }: { id: string; live: LiveState; onO
   );
 }
 
-const POLL_MS = 10_000;
+const REPO_STATE = {
+  cloned: { text: "Cloned", badge: "badge-ok" },
+  cloning: { text: "Cloning…", badge: "" },
+  failed: { text: "Clone failed", badge: "badge-failed" },
+} as const;
 
-/** Reads the project's worktrees now, then every 10 seconds while the window is visible. */
-function useWorktrees(id: string, enabled: boolean) {
-  const [data, setData] = useState<WorktreesResponse | undefined>();
-  const [error, setError] = useState<string | undefined>();
-  const [loading, setLoading] = useState(false);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      setData(await api.worktrees(id));
-      setError(undefined);
-    } catch (err) {
-      // The last good list stays up; the error says why it may be stale.
-      setError(errorMessage(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [id]);
-
-  useEffect(() => {
-    if (!enabled) return;
-    void load();
-    const timer = setInterval(() => document.visibilityState === "visible" && void load(), POLL_MS);
-    const onVisible = () => document.visibilityState === "visible" && void load();
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [enabled, load]);
-
-  return { data, error, loading, reload: load };
-}
-
-/** What needs doing with a worktree comes first: uncommitted or unpushed work, then ones ready to clean up. */
-const rank = (w: WorktreeStatus) => (w.main ? 0 : w.dirty || w.unpushed > 0 ? 1 : w.merged || w.prunable ? 2 : 3);
-
-function WorktreesCard({ p, home }: { p: ProjectView; home?: string }) {
-  const { data, error, loading, reload } = useWorktrees(p.name, !p.problem);
-  const list = [...(data?.worktrees ?? [])].sort((a, b) => rank(a) - rank(b));
-  const inWorktrees = (path: string) => (path.startsWith(p.project.worktreesPath + "/") ? path.slice(p.project.worktreesPath.length + 1) : tilde(path, home));
-
+/** The sandbox's repos, each with its folder in /workspace and how its clone is, as Kumiko last found it. */
+function ReposCard({ p, onAdd }: { p: SandboxView; onAdd(): void }) {
   return (
-    <section className="card section" aria-labelledby="p-worktrees">
+    <section className="card section" aria-labelledby="p-repos">
       <div className="card-head">
-        <h2 id="p-worktrees">Worktrees</h2>
-        <button type="button" className="icon-btn icon-btn-small" title="Check again" aria-label="Check worktrees again" disabled={loading || Boolean(p.problem)} onClick={() => void reload()}>
-          <Redo />
+        <h2 id="p-repos">Repos</h2>
+        <button type="button" className="btn btn-secondary btn-small" disabled={p.busy || Boolean(p.metaError)} onClick={onAdd}>
+          <Plus />
+          Add repo
         </button>
       </div>
-      {p.problem && <p className="muted">Unavailable while a folder is missing.</p>}
-      {error && <div className="banner banner-error">{error}</div>}
-      {!p.problem && !data && !error && <p className="muted">Reading…</p>}
-      {data && list.length === 1 && <p className="muted">No worktrees yet. Claude makes one in {tilde(p.project.worktreesPath, home)} when a task changes code.</p>}
+      {p.repos.length === 0 && <p className="muted">No repos yet. Add one from your mirrors, and Kumiko clones it into {WORKSPACE_DIR}.</p>}
       <ul className="item-list">
-        {list.map((w) => (
-          <li key={w.path} className="item">
-            <div className="item-main">
-              <span className="item-title mono">{w.branch ?? `detached at ${w.head?.slice(0, 7) ?? "?"}`}</span>
-              {/* Worktrees usually sit in a folder named after their branch; only say where when it isn't. */}
-              {(w.main || inWorktrees(w.path) !== w.branch) && (
-                <span className="mono dim item-sub" title={w.path}>
-                  {w.main ? "the clone" : inWorktrees(w.path)}
+        {p.repos.map((r) => {
+          const slash = r.repo.indexOf("/");
+          return (
+            <li key={r.repo} className="item">
+              <div className="item-main">
+                <span className="item-title">
+                  <span className="dim">{r.repo.slice(0, slash + 1)}</span>
+                  {r.repo.slice(slash + 1)}
                 </span>
-              )}
-            </div>
-            <span className="item-badges">
-              <WorktreeBadges w={w} />
-            </span>
-          </li>
-        ))}
+                <span className="mono dim item-sub">
+                  {WORKSPACE_DIR}/{r.folder}
+                </span>
+                {r.state === "failed" && r.error && <span className="item-sub item-error" title={r.error}>{r.error}</span>}
+              </div>
+              <span className="item-badges">
+                {r.state === "pending" ? (
+                  <span className="dim item-quiet">{p.status === "running" ? "Not cloned yet" : "Cloned when the sandbox starts"}</span>
+                ) : r.state === "cloning" ? (
+                  <span className="row-status item-state" style={{ color: COLORS.warn }}>
+                    <span className="spinner" aria-hidden="true" />
+                    {REPO_STATE.cloning.text}
+                  </span>
+                ) : (
+                  <span className={`badge ${REPO_STATE[r.state].badge}`} title={r.error}>
+                    {REPO_STATE[r.state].text}
+                  </span>
+                )}
+              </span>
+            </li>
+          );
+        })}
       </ul>
-      {data && (
-        <p className="muted form-note">
-          {data.defaultBranch ? (
-            <>
-              Merged means contained in <span className="mono">{data.defaultBranch}</span> as of the last fetch.
-            </>
-          ) : (
-            "No remote default branch, so nothing shows as merged."
-          )}
-        </p>
-      )}
     </section>
   );
 }
 
-function WorktreeBadges({ w }: { w: WorktreeStatus }) {
-  if (w.prunable) return <span className="badge badge-warn" title="Its folder is gone; `git worktree prune` removes the entry.">Folder gone</span>;
-  if (w.error) return <span className="badge badge-warn" title={w.error}>Can't read</span>;
-  const clean = !w.dirty && w.unpushed === 0;
-  return (
-    <>
-      {w.locked && <span className="badge">Locked</span>}
-      {w.dirty && <span className="badge badge-warn">Uncommitted changes</span>}
-      {w.unpushed > 0 && (
-        <span className="badge badge-sessions" title={w.upstream ? `Ahead of ${w.upstream}` : "On no remote"}>
-          {plural(w.unpushed, "unpushed commit")}
-        </span>
-      )}
-      {w.merged && (
-        <span className="badge badge-ok" title="Contained in the remote's default branch">
-          {clean ? "Merged · ready to clean up" : "Merged"}
-        </span>
-      )}
-      {clean && !w.merged && !w.locked && <span className="dim item-quiet">Clean</span>}
-    </>
-  );
-}
+const MOUNT_ROLE = { "claude-home": "Claude home", "kumiko-home": "Kumiko folder" } as const;
 
-const MOUNT_ROLE = { clone: "Clone", worktrees: "Worktrees", "claude-home": "Claude home", "kumiko-home": "Kumiko folder" } as const;
-
-function Details({ p, home }: { p: ProjectView; home?: string }) {
+function Details({ p, home }: { p: SandboxView; home?: string }) {
   const spec = p.meta?.spec;
   const envSet = useEnvSet(spec?.env ?? []);
   const gib = (n?: number) => (n === undefined ? "—" : `${n} GiB`);
@@ -358,6 +292,9 @@ function Details({ p, home }: { p: ProjectView; home?: string }) {
   // While it runs, each resource shows how much of it is in use, empty until the first reading is in.
   const usage = p.status === "running" && !p.busy ? (stats ? meters(stats) : []) : undefined;
   const meter = (label: Meter["label"]) => usage && <MeterLine m={usage.find((m) => m.label === label) ?? { label, text: "—", color: COLORS.stopped }} />;
+  const workspace = p.workspaceGiB ?? spec?.workspaceGiB;
+  // The Claude home and Kumiko folder first, as the form lists them, then the user's own.
+  const mounts = spec ? [...spec.mounts.filter((m) => sandboxMountRole(m)), ...spec.mounts.filter((m) => !sandboxMountRole(m))] : [];
 
   return (
     <>
@@ -367,7 +304,8 @@ function Details({ p, home }: { p: ProjectView; home?: string }) {
       <section className="card facts" aria-label="Sandbox">
         <Fact label="CPUs" usage={meter("CPU")}>{p.cpus ?? spec?.cpus ?? "—"}</Fact>
         <Fact label="Memory" usage={meter("Memory")}>{gib(p.memoryGiB ?? spec?.memoryGiB)}</Fact>
-        <Fact label="Disk" usage={meter("Disk")}>{gib(p.diskGiB ?? spec?.diskGiB)}</Fact>
+        <Fact label="Workspace" usage={meter("Workspace")}>{gib(workspace)}</Fact>
+        <Fact label="System disk" usage={meter("Disk")}>{gib(p.diskGiB ?? spec?.diskGiB)}</Fact>
         <Fact label="Template" mono>
           {spec ? spec.template || "template:default" : "—"}
         </Fact>
@@ -377,50 +315,27 @@ function Details({ p, home }: { p: ProjectView; home?: string }) {
         <Fact label="Created">{created ? new Date(created).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "—"}</Fact>
       </section>
 
-      {p.project.repo && (
-        <>
-          <div className="form-group-head">
-            <h2>GitHub</h2>
-          </div>
-          <section className="card facts" aria-label="GitHub">
-            <Fact label="Repository" mono>
-              {p.project.repo}
-            </Fact>
-            <Fact label="Relay">
-              <RelayState p={p} />
-            </Fact>
-          </section>
-          {p.relay?.state === "down" && p.relay.error && <p className="muted relay-error">{p.relay.error}</p>}
-          <div className="detail-grid github-grid">
-            <section className="card section" aria-labelledby="d-branches">
-              <h2 id="d-branches">Claude's branches</h2>
-              {!p.branches?.length && <p className="muted">None on GitHub. The branches Claude creates from this sandbox show here once it pushes them.</p>}
-              {p.branches?.map((b) => (
-                <div key={b.name} className="detail-env">
-                  <span className="mono">{b.name}</span>
-                  <span className="dim">pushed {ago(b.at)}</span>
-                </div>
-              ))}
-            </section>
-            <section className="card section" aria-labelledby="d-policy">
-              <h2 id="d-policy">What Claude can do</h2>
-              {POLICY.map(([what, how]) => (
-                <div key={what} className="detail-env">
-                  <span>{what}</span>
-                  <span className="dim">{how}</span>
-                </div>
-              ))}
-            </section>
-          </div>
-        </>
-      )}
-
       {spec && (
         <div className="detail-grid">
           <section className="card section" aria-labelledby="d-mounts">
             <h2 id="d-mounts">Mounts</h2>
-            {spec.mounts.map((m) => {
-              const role = projectMountRole(p.project, m);
+            {workspace !== undefined && (
+              <div className="detail-mount mount-grid">
+                <span className="mount-icon">
+                  <Disk />
+                </span>
+                <span className="mono path">
+                  Workspace disk <span className="dim">{workspaceDiskName(p.name)}</span>
+                </span>
+                <span className="row-sub">
+                  <span className="badge">Persistent</span>
+                </span>
+                <span className="mount-at">at</span>
+                <span className="mono path">{WORKSPACE_DIR}</span>
+              </div>
+            )}
+            {mounts.map((m) => {
+              const role = sandboxMountRole(m);
               return (
                 <div key={m.hostPath + (m.guestPath ?? "")} className="detail-mount mount-grid">
                   <span className="mount-icon">
@@ -494,32 +409,7 @@ function MeterLine({ m }: { m: Meter }) {
   );
 }
 
-/** The rules Kumiko applies to what Claude does on GitHub, which are fixed for now. */
-const POLICY: [string, string][] = [
-  ["Fetch and pull", "Allowed"],
-  ["Push, force-push or delete branches it created", "Allowed"],
-  ["Push changes to .github/ on its branches", "Asks you, once per change"],
-  ["Push the default branch, tags, or other branches", "Refused"],
-  ["Merge into the default branch, or open a PR", "Asks you"],
-  ["Create issues, comment on issues and PRs", "Asks you"],
-  ["Read issues and PRs", "Allowed, marked untrusted"],
-];
-
-/** Whether git in the VM reaches the mirror: only while the sandbox runs. */
-function RelayState({ p }: { p: ProjectView }) {
-  switch (p.relay?.state) {
-    case "connected":
-      return <span style={{ color: COLORS.running }}>Connected</span>;
-    case "connecting":
-      return <span style={{ color: COLORS.warn }}>Connecting…</span>;
-    case "down":
-      return <span style={{ color: COLORS.failed }}>Down</span>;
-    default:
-      return <span className="dim">{p.status === "running" ? "—" : "Off while the sandbox is stopped"}</span>;
-  }
-}
-
-function SetupState({ p }: { p: ProjectView }) {
+function SetupState({ p }: { p: SandboxView }) {
   switch (p.meta?.setup) {
     case "ready": {
       const failed = failedAgentScripts(p);

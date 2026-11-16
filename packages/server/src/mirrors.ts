@@ -28,10 +28,10 @@ interface RepoRecord {
   branches?: number;
   tags?: number;
   /**
-   * The branches that first reached GitHub through a project's relay, by name, with the project and when it last
-   * pushed: that project's agent may update, force-push and delete them. Dropped when the branch leaves GitHub.
+   * The branches that first reached GitHub through a sandbox's relay, by name, with the sandbox and when it last
+   * pushed: that sandbox's agent may update, force-push and delete them. Dropped when the branch leaves GitHub.
    */
-  created?: Record<string, { project: string; at: string; ci?: string; sha?: string }>;
+  created?: Record<string, { sandbox: string; at: string; ci?: string; sha?: string }>;
 }
 
 interface Entry {
@@ -72,7 +72,7 @@ export interface MirrorOptions {
 const HOOK_MESSAGE = "Kumiko: pushing to this mirror isn't allowed.";
 
 /**
- * The only hook in a mirror. A push that comes through a project's relay is in a git daemon Kumiko started, which
+ * The only hook in a mirror. A push that comes through a sandbox's relay is in a git daemon Kumiko started, which
  * says in its environment how to reach Kumiko and which connection it is: the hook hands Kumiko the quarantine the
  * push waits in and the ref updates, prints what Kumiko says, and exits with the code Kumiko gives, its last line. Kumiko
  * pushes them on to GitHub before answering. Any other push, or one Kumiko can't be asked about, is refused.
@@ -159,7 +159,7 @@ function gitMessage(err: unknown): string {
 
 /**
  * The bare mirrors of the GitHub repositories the user picked, one per repository at `mirrors/<owner>/<name>.git`
- * in Kumiko's home, shared by every project that uses it. Kumiko owns them completely: it makes them, fetches into
+ * in Kumiko's home, shared by every sandbox that uses it. Kumiko owns them completely: it makes them, fetches into
  * them, runs gc in them, rewrites their config and hooks on every start, and deletes them. Nobody else runs git there.
  */
 export class Mirrors {
@@ -326,21 +326,21 @@ export class Mirrors {
     return runGit(this.path(repo), ["rev-list", "--count", `${from}..${to}`], { env: gitEnv() }).then((o) => Number(o.trim()) || 0, () => 0);
   }
 
-  /** The project whose agent created `branch` on GitHub through the relay, if one did. */
+  /** The sandbox whose agent created `branch` on GitHub through the relay, if one did. */
   createdBy(repo: string, branch: string): string | undefined {
-    return this.entryOf(repo)?.record.created?.[branch]?.project;
+    return this.entryOf(repo)?.record.created?.[branch]?.sandbox;
   }
 
-  /** The branches `project`'s agent created that are still on GitHub, newest push first. */
-  branchesOf(repo: string, project: string): { name: string; at: string }[] {
+  /** The branches `sandbox`'s agent created that are still on GitHub, newest push first. */
+  branchesOf(repo: string, sandbox: string): { name: string; at: string }[] {
     const created = this.entryOf(repo)?.record.created ?? {};
     return Object.entries(created)
-      .filter(([, c]) => c.project === project)
+      .filter(([, c]) => c.sandbox === sandbox)
       .map(([name, c]) => ({ name, at: c.at }))
       .sort((a, b) => b.at.localeCompare(a.at));
   }
 
-  /** The commit Kumiko last pushed to `branch` for its project, if it recorded one. */
+  /** The commit Kumiko last pushed to `branch` for its sandbox, if it recorded one. */
   lastPushed(repo: string, branch: string): string | undefined {
     return this.entryOf(repo)?.record.created?.[branch]?.sha;
   }
@@ -351,10 +351,10 @@ export class Mirrors {
   }
 
   /**
-   * Records pushes GitHub accepted: each branch as `project`'s, or, when deleted, as nobody's; `ci` is the tree of
+   * Records pushes GitHub accepted: each branch as `sandbox`'s, or, when deleted, as nobody's; `ci` is the tree of
    * `.github` the user allowed it to push with, if they were asked.
    */
-  async noteBranches(repo: string, project: string, changes: { branch: string; deleted: boolean; ci?: string; sha?: string }[]): Promise<void> {
+  async noteBranches(repo: string, sandbox: string, changes: { branch: string; deleted: boolean; ci?: string; sha?: string }[]): Promise<void> {
     const e = this.entryOf(repo);
     if (!e || !changes.length) return;
     const created = { ...e.record.created };
@@ -362,8 +362,8 @@ export class Mirrors {
     for (const c of changes) {
       if (c.deleted) delete created[c.branch];
       else {
-        const ci = c.ci ?? (created[c.branch]?.project === project ? created[c.branch]?.ci : undefined);
-        created[c.branch] = { project, at, ...(ci ? { ci } : {}), ...(c.sha ? { sha: c.sha } : {}) };
+        const ci = c.ci ?? (created[c.branch]?.sandbox === sandbox ? created[c.branch]?.ci : undefined);
+        created[c.branch] = { sandbox, at, ...(ci ? { ci } : {}), ...(c.sha ? { sha: c.sha } : {}) };
       }
     }
     e.record.created = created;

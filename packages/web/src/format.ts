@@ -1,8 +1,8 @@
-import type { EndReason, SessionInfo } from "@kumiko/shared";
+import type { EndReason, SandboxRepo, SessionInfo } from "@kumiko/shared";
 
 // Text the UI shows for numbers, times and sessions. Plain functions, so they can be tested without a browser.
 
-/** A session's name: from /rename, or else the first words of the opening prompt. Its tab shows it under its project's label. */
+/** A session's name: from /rename, or else the first words of the opening prompt. Its tab shows it under its sandbox's label. */
 export function sessionName(s: Pick<SessionInfo, "prompt" | "title">): string {
   const words = (s.title ?? s.prompt).split(/\s+/).filter(Boolean);
   let text = "";
@@ -13,13 +13,13 @@ export function sessionName(s: Pick<SessionInfo, "prompt" | "title">): string {
   return text;
 }
 
-/** A session's title where its project doesn't show otherwise: the project, then its name. */
+/** A session's title where its sandbox doesn't show otherwise: the sandbox, then its name. */
 export function sessionTitle(s: Pick<SessionInfo, "sandbox" | "prompt" | "title">): string {
   return `${s.sandbox} · ${sessionName(s)}`;
 }
 
-/** The hue a project's tab group would like, from its name, so it stays the same from run to run. */
-export function projectHue(name: string): number {
+/** The hue a sandbox's tab group would like, from its name, so it stays the same from run to run. */
+export function sandboxHue(name: string): number {
   // FNV-1a: close names still land far apart.
   let h = 0x811c9dc5;
   for (const c of name) h = Math.imul(h ^ c.codePointAt(0)!, 0x01000193) >>> 0;
@@ -31,15 +31,15 @@ export function projectHue(name: string): number {
 const hueGap = (a: number, b: number) => Math.min(Math.abs(a - b), 360 - Math.abs(a - b));
 
 /**
- * The hues of the open projects' tab groups: each its own, unless one before it by name has it already; then the free
+ * The hues of the open sandboxes' tab groups: each its own, unless one before it by name has it already; then the free
  * one furthest from those taken, so it doesn't land beside the one it clashed with. By name, so dragging groups around
  * doesn't change them.
  */
-export function projectHues(names: readonly string[]): Map<string, number> {
+export function sandboxHues(names: readonly string[]): Map<string, number> {
   const hues = new Map<string, number>();
   const taken: number[] = [];
   for (const name of [...new Set(names)].sort()) {
-    const wanted = projectHue(name);
+    const wanted = sandboxHue(name);
     const free = Array.from({ length: 12 }, (_, i) => i * 30).filter((h) => !taken.includes(h));
     const room = (h: number) => Math.min(...taken.map((t) => hueGap(h, t)));
     const hue = !free.length || free.includes(wanted) ? wanted : free.reduce((a, b) => (room(b) > room(a) || (room(b) === room(a) && hueGap(b, wanted) < hueGap(a, wanted)) ? b : a));
@@ -47,6 +47,12 @@ export function projectHues(names: readonly string[]): Map<string, number> {
     taken.push(hue);
   }
   return hues;
+}
+
+/** How a sandbox's repos are named in short: each by its name, or as owner/name where two share a name. */
+export function repoLabels(repos: readonly Pick<SandboxRepo, "repo">[]): string[] {
+  const name = (repo: string) => repo.slice(repo.indexOf("/") + 1).toLowerCase();
+  return repos.map((r) => (repos.filter((o) => name(o.repo) === name(r.repo)).length > 1 ? r.repo : r.repo.slice(r.repo.indexOf("/") + 1)));
 }
 
 /** "max" → "Max". */

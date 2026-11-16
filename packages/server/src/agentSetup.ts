@@ -4,7 +4,7 @@ import { AGENT_SCRIPT_MAX_BYTES, AGENT_SCRIPT_PATTERN, AGENT_SETUP_DIR, type Age
 import { openIn, removeIn } from "./files.js";
 
 /**
- * The agent's setup scripts in a project's Kumiko folder, in the order they run: by name, byte by byte, so `10-…` comes before `20-…`
+ * The agent's setup scripts in a sandbox's Kumiko folder, in the order they run: by name, byte by byte, so `10-…` comes before `20-…`
  * whatever the locale. The folder is the agent's to change, so each file is opened as it really is there (see `openIn`):
  * a link, or a folder on the way that leads elsewhere, is ignored rather than followed out to the host.
  */

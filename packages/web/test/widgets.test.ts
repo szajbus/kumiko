@@ -63,7 +63,7 @@ describe("the chat's lines for widget tools", () => {
     assert.deepEqual(widgetLine("mcp__kumiko__artifact_share", { session: "s2", artifacts: ["w2", "/x/notes.md"] }, w), { label: "Shared", title: "The plan, notes.md with session s2" });
     assert.deepEqual(widgetLine("mcp__kumiko__artifact_share", { session: "s2", artifacts: ["w2"] }, w, new Map([["s2", "Flaky upload"]])), { label: "Shared", title: "The plan with Flaky upload" });
     assert.deepEqual(widgetLine("mcp__kumiko__artifact_share", {}, w), { label: "Shared", title: undefined });
-    assert.deepEqual(widgetLine("mcp__kumiko__session_list", {}, w), { label: "Looked at the project's sessions" });
+    assert.deepEqual(widgetLine("mcp__kumiko__session_list", {}, w), { label: "Looked at the sandbox's sessions" });
   });
 
   it("leave other tools as they are", () => {

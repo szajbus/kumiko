@@ -135,7 +135,7 @@ function commandLine(cmd: string, args: string[]): string {
 const LOCAL_BIN_ON_PATH = `case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac`;
 
 /**
- * Points Claude at the project's Claude home, mounted at ~/.claude. Without it Claude writes `.claude.json` beside
+ * Points Claude at the sandbox's Claude home, mounted at ~/.claude. Without it Claude writes `.claude.json` beside
  * ~/.claude, on the VM's disk, and the login and settings in it are lost when the VM is recreated.
  */
 export const CLAUDE_CONFIG_EXPORT = `export CLAUDE_CONFIG_DIR="$HOME"/${CLAUDE_HOME_IN_VM.slice(2)}`;
@@ -448,7 +448,7 @@ export class LimaProvider implements SandboxProvider {
    *   ~/.config/kumiko/shell.sh, sourced from the end of ~/.bashrc, which only interactive shells reach.
    */
   private async prepareShells(name: string, workdir: string, log: Log): Promise<void> {
-    const env = `# Written by Kumiko on every start: ~/.local/bin (Claude Code) on PATH, and Claude's config in the project's Claude home.\n` +
+    const env = `# Written by Kumiko on every start: ~/.local/bin (Claude Code) on PATH, and Claude's config in the sandbox's Claude home.\n` +
       `${LOCAL_BIN_ON_PATH}\n${CLAUDE_CONFIG_EXPORT}\n`;
     const rc = `# Written by Kumiko on every start: interactive shells that land in ~ move to the working directory.\n` +
       `if [ "$PWD" = "$HOME" ]; then cd ${shellPath(workdir)} 2>/dev/null || true; fi\n`;

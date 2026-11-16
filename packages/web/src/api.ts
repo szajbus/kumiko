@@ -10,7 +10,7 @@ import type {
   AccountUsage,
   AttachmentInput,
   ApiError,
-  CreateProjectRequest,
+  CreateSandboxRequest,
   CreateResponse,
   DefaultsResponse,
   ForkRequest,
@@ -18,8 +18,8 @@ import type {
   LoginStartResponse,
   LoginStatusResponse,
   LogLine,
-  ProjectEdit,
-  ProjectView,
+  SandboxEdit,
+  SandboxView,
   PromptRequest,
   ShellRequest,
   ResumableSession,
@@ -36,7 +36,6 @@ import type {
   StartSessionRequest,
   TemplatesResponse,
   WindowState,
-  WorktreesResponse,
 } from "@kumiko/shared";
 
 declare global {
@@ -89,22 +88,22 @@ export const api = {
   tabs: () => request<SavedTabs | null>("GET", "/api/tabs"),
   saveTabs: (tabs: SavedTabs) => request("PUT", "/api/tabs", tabs),
   env: (names: string[]) => request<Record<string, boolean>>("GET", `/api/env?names=${encodeURIComponent(names.join(","))}`),
-  create: (req: CreateProjectRequest) => request<CreateResponse>("POST", "/api/projects", req),
-  start: (id: string) => request("POST", `/api/projects/${id}/start`),
-  stop: (id: string) => request("POST", `/api/projects/${id}/stop`),
-  recreate: (id: string) => request("POST", `/api/projects/${id}/recreate`),
-  restart: (id: string) => request("POST", `/api/projects/${id}/restart`),
-  remove: (id: string) => request("DELETE", `/api/projects/${id}`),
+  create: (req: CreateSandboxRequest) => request<CreateResponse>("POST", "/api/sandboxes", req),
+  start: (name: string) => request("POST", `/api/sandboxes/${name}/start`),
+  stop: (name: string) => request("POST", `/api/sandboxes/${name}/stop`),
+  recreate: (name: string) => request("POST", `/api/sandboxes/${name}/recreate`),
+  restart: (name: string) => request("POST", `/api/sandboxes/${name}/restart`),
+  remove: (name: string) => request("DELETE", `/api/sandboxes/${name}`),
   /**
    * Saves in place; with `restart`, stops the VM, saves and starts it again; with `recreate`, deletes the VM and creates it
    * again from the changed spec.
    */
-  edit: (id: string, patch: ProjectEdit, how?: "restart" | "recreate") =>
-    request<{ warnings: string[] }>("PATCH", `/api/projects/${id}${how ? `?${how}=1` : ""}`, patch),
-  /** The agent's setup scripts in the project's Claude home, with how each went when the VM was created. */
-  agentSetup: (id: string) => request<AgentSetupResponse>("GET", `/api/projects/${id}/agent-setup`),
-  /** Deletes the agent's setup scripts, folder and all, so the next recreate starts from the user's setup only. */
-  deleteAgentSetup: (id: string) => request("DELETE", `/api/projects/${id}/agent-setup`),
+  edit: (name: string, patch: SandboxEdit, how?: "restart" | "recreate") =>
+    request<{ warnings: string[] }>("PATCH", `/api/sandboxes/${name}${how ? `?${how}=1` : ""}`, patch),
+  /** The agent's setup scripts in the sandbox's Kumiko folder, with how each went when the VM was created. */
+  agentSetup: (name: string) => request<AgentSetupResponse>("GET", `/api/sandboxes/${name}/agent-setup`),
+  /** Deletes the agent's setup scripts, folder and all, so the next rebuild starts from the user's setup only. */
+  deleteAgentSetup: (name: string) => request("DELETE", `/api/sandboxes/${name}/agent-setup`),
   /** Who gh on the host is signed in to GitHub as, or why it isn't. */
   githubAccount: () => request<GitHubAccount>("GET", "/api/github/account"),
   /** The repositories gh's account can see. */
@@ -113,15 +112,13 @@ export const api = {
   addMirror: (repo: string, priv?: boolean) => request<MirrorView>("POST", "/api/mirrors", { repo, private: priv } satisfies AddMirrorRequest),
   fetchMirror: (repo: string) => request("POST", `/api/mirrors/${repoPath(repo)}/fetch`),
   removeMirror: (repo: string) => request("DELETE", `/api/mirrors/${repoPath(repo)}`),
-  /** The clone's worktrees, as git on the host sees them. */
-  worktrees: (id: string) => request<WorktreesResponse>("GET", `/api/projects/${id}/worktrees`),
-  startSession: (project: string, prompt: string, model?: string, attachments?: AttachmentInput[]) =>
-    request<{ id: string }>("POST", "/api/sessions", { sandbox: project, prompt, model, attachments } satisfies StartSessionRequest),
+  startSession: (sandbox: string, prompt: string, model?: string, attachments?: AttachmentInput[]) =>
+    request<{ id: string }>("POST", "/api/sessions", { sandbox, prompt, model, attachments } satisfies StartSessionRequest),
   /** The user has seen the session, so it no longer waits on them. */
   seen: (id: string) => request("POST", `/api/sessions/${id}/seen`),
-  /** Whether the session's project is logged in now; starts nothing. */
+  /** Whether the session's sandbox is logged in now; starts nothing. */
   loginStatus: (id: string) => request<LoginStatusResponse>("GET", `/api/sessions/${id}/login`),
-  /** Starts logging Claude in for the session's project: a sign-in URL, or who it is logged in as already. */
+  /** Starts logging Claude in for the session's sandbox: a sign-in URL, or who it is logged in as already. */
   login: (id: string) => request<LoginStartResponse>("POST", `/api/sessions/${id}/login`),
   /** Finishes the login with the code the sign-in page shows. */
   loginCode: (id: string, code: string) => request<LoginAccount>("POST", `/api/sessions/${id}/login/code`, { code }),
@@ -217,8 +214,8 @@ export const api = {
 const wsUrl = (path: string) => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${path}`;
 
 export interface LiveState {
-  projects: ProjectView[];
-  /** Why each project record the server can't use can't be; those projects aren't in `projects`. */
+  sandboxes: SandboxView[];
+  /** Why each sandbox record the server can't use can't be; those sandboxes aren't in `sandboxes`. */
   unreadable: string[];
   logs: Record<string, LogLine[]>;
   /** Agent sessions, live and ended, in the order they started. */
@@ -234,9 +231,9 @@ export interface LiveState {
   mirrors?: MirrorsResponse;
 }
 
-/** Keeps the project list, sessions and operation logs in sync over /api/events, reconnecting when the server restarts. */
+/** Keeps the sandbox list, sessions and operation logs in sync over /api/events, reconnecting when the server restarts. */
 export function useLiveState(): LiveState {
-  const [state, setState] = useState<LiveState>({ projects: [], unreadable: [], logs: {}, sessions: [], connected: false, loaded: false, snapshots: 0 });
+  const [state, setState] = useState<LiveState>({ sandboxes: [], unreadable: [], logs: {}, sessions: [], connected: false, loaded: false, snapshots: 0 });
   const retry = useRef(0);
 
   useEffect(() => {
@@ -294,9 +291,9 @@ function answerPaneRequest(ev: PaneRequest) {
 function apply(s: LiveState, ev: ServerEvent): LiveState {
   switch (ev.type) {
     case "snapshot":
-      return { projects: ev.projects, unreadable: ev.unreadable, logs: ev.logs, sessions: ev.sessions, listError: ev.error, connected: true, loaded: true, snapshots: s.snapshots + 1, mirrors: ev.mirrors };
+      return { sandboxes: ev.sandboxes, unreadable: ev.unreadable, logs: ev.logs, sessions: ev.sessions, listError: ev.error, connected: true, loaded: true, snapshots: s.snapshots + 1, mirrors: ev.mirrors };
     case "list":
-      return { ...s, projects: ev.projects, unreadable: ev.unreadable, listError: ev.error };
+      return { ...s, sandboxes: ev.sandboxes, unreadable: ev.unreadable, listError: ev.error };
     case "sessions":
       return { ...s, sessions: ev.sessions };
     case "mirrors":

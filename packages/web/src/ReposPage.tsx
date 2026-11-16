@@ -9,7 +9,7 @@ import { filterRepos, highlight, mirrorStatus, repoOwners, reposOf } from "./rep
 
 /**
  * The repository mirrors: the GitHub repos the user picked, each kept by Kumiko as a bare mirror on the host, which
- * the projects' sandboxes get their code from. The gh login on the host lists the repos to pick from.
+ * the sandboxes get their code from. The gh login on the host lists the repos to pick from.
  */
 export function ReposPage({ live }: { live: LiveState }) {
   const home = useHome();
@@ -36,7 +36,7 @@ export function ReposPage({ live }: { live: LiveState }) {
   return (
     <>
       <main className="page">
-        <HomeNav active="repos" projects={live.projects.length} repos={mirrors.length} />
+        <HomeNav active="repos" sandboxes={live.sandboxes.length} repos={mirrors.length} />
         <div className="page-head">
           <div className="detail-title">
             <h1 className="page-title">Repository mirrors</h1>
@@ -78,7 +78,7 @@ export function ReposPage({ live }: { live: LiveState }) {
         {live.loaded && mirrors.length === 0 && (
           <div className="empty-state">
             <h2>No mirrors yet</h2>
-            <p className="muted">Pick the GitHub repositories your projects work on. Kumiko keeps a mirror of each on this Mac, so the sandboxes never need GitHub credentials.</p>
+            <p className="muted">Pick the GitHub repositories your sandboxes work on. Kumiko keeps a mirror of each on this Mac, so the sandboxes never need GitHub credentials.</p>
             {signedIn && (
               <button type="button" className="btn btn-primary" onClick={() => setAdding(true)}>
                 <Plus />
@@ -254,7 +254,7 @@ function CopyCommand({ command }: { command: string }) {
  * A searchable list of one owner's repos, by name: the gh account's own at first, or an organization's picked above.
  * Picking one adds it, and the dialog stays for more.
  */
-function AddRepoDialog({ login, added, onAdd, onClose }: { login?: string; added: MirrorView[]; onAdd(r: GitHubRepo): void; onClose(): void }) {
+export function AddRepoDialog({ login, added, onAdd, onClose }: { login?: string; added: MirrorView[]; onAdd(r: GitHubRepo): void; onClose(): void }) {
   const ref = useRef<HTMLDialogElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const [repos, setRepos] = useState<GitHubRepo[] | undefined>();

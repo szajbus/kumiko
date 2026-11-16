@@ -74,6 +74,15 @@ export const Folder = () => (
   </svg>
 );
 
+/** A disk of the sandbox's own, such as its workspace disk. */
+export const Disk = () => (
+  <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+    <rect x="2.5" y="4" width="13" height="10" rx="1.5" fill="none" stroke="#C3C8D1" strokeWidth="1.3" />
+    <path d="M2.5 10.5h13" stroke="#C3C8D1" strokeWidth="1.3" />
+    <circle cx="12.5" cy="12.25" r="0.8" fill="#C3C8D1" />
+  </svg>
+);
+
 export const Cross = () => (
   <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
     <path d="M3 3l8 8M11 3l-8 8" stroke="#C3C8D1" strokeWidth="1.5" strokeLinecap="round" />

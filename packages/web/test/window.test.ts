@@ -310,7 +310,7 @@ describe("external sites", () => {
 
   it("load in a frame in the app's page over HTTPS only, or from what the page makes", () => {
     for (const url of ["https://example.com/", "about:srcdoc", "about:blank", "data:text/html,x", "blob:https://x/1"]) assert.equal(frameMayLoad(url), true, url);
-    for (const url of ["http://192.168.1.1/", "http://127.0.0.1:4317/api/projects", "file:///etc/hosts", "javascript:alert(1)"]) assert.equal(frameMayLoad(url), false, url);
+    for (const url of ["http://192.168.1.1/", "http://127.0.0.1:4317/api/sandboxes", "file:///etc/hosts", "javascript:alert(1)"]) assert.equal(frameMayLoad(url), false, url);
   });
 
   it("reach this machine from a preview only, and private networks from neither", () => {

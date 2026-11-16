@@ -17,7 +17,7 @@ const header = (headers: AnyHeaders, k: string) => (headers instanceof Headers ?
 
 /**
  * The server only listens on 127.0.0.1, but a web page in any browser can still send it requests: other sites, and
- * pages served from this machine, including a project's dev server shown in a preview pane, which runs code from the
+ * pages served from this machine, including a sandbox's dev server shown in a preview pane, which runs code from the
  * sandbox. So a request's Host must be local (against DNS rebinding), and its Origin, when a browser sends one, must be
  * the server's own: a local host on `port`. The dev UI's proxy rewrites its own pages' requests to that origin.
  */

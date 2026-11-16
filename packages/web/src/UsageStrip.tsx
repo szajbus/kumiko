@@ -91,7 +91,7 @@ export function UsageStrip({ sessionId, live, turnDone, cost, bufferBytes, conte
       }
     >
       {usage && (usage.email || usage.plan) && (
-        <div className="usage-account" title="Claude account this project is logged in to">
+        <div className="usage-account" title="Claude account this sandbox is logged in to">
           <span className="usage-email">{usage.email ?? "Logged in"}</span>
           {usage.plan && <span className="badge">{planName(usage.plan)}</span>}
         </div>

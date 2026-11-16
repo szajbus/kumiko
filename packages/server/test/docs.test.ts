@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
-import { githubInstructions, managedInstructions, setupGuide } from "../src/projects.js";
+import { githubInstructions, managedInstructions, setupGuide } from "../src/sandboxes.js";
 import { systemPrompt } from "../src/widgets.js";
 
 /** The docs page that shows the agent's instructions word for word; from dist/test, the repo is four up. */
@@ -10,11 +10,12 @@ const PAGE = new URL("../../../../apps/docs/src/content/docs/reference/agent-ins
 describe("the docs' copy of what the agent is told", () => {
   it("is what Kumiko writes", async () => {
     const page = await readFile(PAGE, "utf8");
-    const project = { id: "web", clonePath: "<clone>", worktreesPath: "<worktrees>", createdAt: "" };
-    assert.ok(page.includes("```markdown wrap\n" + managedInstructions(project) + "```\n"), "kumiko.md in the docs differs from managedInstructions()");
-    assert.ok(page.includes("```markdown wrap" + githubInstructions("<owner>/<name>") + "```\n"), "kumiko.md's GitHub section in the docs differs from githubInstructions()");
-    assert.ok(managedInstructions({ ...project, repo: "<owner>/<name>" }).endsWith(githubInstructions("<owner>/<name>")), "the GitHub section ends kumiko.md");
-    const guide = setupGuide(project, { provision: "…", env: ["GITHUB_TOKEN", "NPM_TOKEN"] });
+    const sandbox = { name: "<sandbox>", repos: [{ repo: "<owner>/<name>", folder: "<folder>" }] };
+    const mounts = [{ hostPath: "<folder on your Mac>", writable: true }];
+    assert.ok(page.includes("```markdown wrap\n" + managedInstructions(sandbox, mounts) + "```\n"), "kumiko.md in the docs differs from managedInstructions()");
+    assert.ok(managedInstructions(sandbox, mounts).endsWith(githubInstructions(false)), "the GitHub section ends kumiko.md");
+    assert.ok(page.includes("```markdown wrap" + githubInstructions(true) + "```\n"), "kumiko.md's GitHub section for several repos in the docs differs from githubInstructions()");
+    const guide = setupGuide({ provision: "…", env: ["GITHUB_TOKEN", "NPM_TOKEN"] });
     assert.ok(page.includes("```markdown wrap\n" + guide + "```\n"), "the setup guide in the docs differs from setupGuide()");
     assert.ok(page.includes("```text wrap\n" + systemPrompt("<folder>") + "\n```\n"), "the system prompt in the docs differs from systemPrompt()");
   });

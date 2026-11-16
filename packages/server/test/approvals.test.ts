@@ -107,7 +107,7 @@ describe("delivering", () => {
     approvals = new Approvals(sessions, {
       mirrors,
       github: new GitHub({ gh: fakeGh }),
-      repoOf: async () => "acme/widget",
+      reposOf: async () => ["acme/widget"],
       identity: async () => ({ name: "Test", email: "test@example.com" }),
       choicesFile: join(root, `choices-${++choiceFiles}`, "choices.json"),
     });

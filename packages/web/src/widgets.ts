@@ -148,7 +148,7 @@ export function widgetLine(name: string, input: Record<string, unknown>, w: Wind
     case `${TOOL_PREFIX}session_rename`:
       return { label: "Named the session", title: str(input.title) };
     case `${TOOL_PREFIX}session_list`:
-      return { label: "Looked at the project's sessions" };
+      return { label: "Looked at the sandbox's sessions" };
     case `${TOOL_PREFIX}artifact_share`: {
       // By the artifacts' titles where this window has them, else their files' names.
       const names = (Array.isArray(input.artifacts) ? input.artifacts : []).flatMap((a) => {

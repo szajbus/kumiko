@@ -174,7 +174,7 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
   const open = login.open;
 
   // A logged-out card that is still the last word may be out of date (logged in from another session, or before a
-  // reload): ask whether the project is logged in now. Nothing shows until the answer is in.
+  // reload): ask whether the sandbox is logged in now. Nothing shows until the answer is in.
   useEffect(() => {
     if (!open || answer?.key === open) return;
     let current = true;
@@ -255,7 +255,7 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
                   }}
                 />
               ) : (
-                <LoggedOutCard project={session.sandbox} onLogIn={() => setLoggingIn(true)} />
+                <LoggedOutCard sandbox={session.sandbox} onLogIn={() => setLoggingIn(true)} />
               ),
             }
           }
@@ -267,7 +267,7 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
       {loggingIn && (
         <LoginDialog
           sessionId={session.id}
-          project={session.sandbox}
+          sandbox={session.sandbox}
           onClose={() => setLoggingIn(false)}
           onDone={(account) => {
             setLoggingIn(false);
@@ -462,7 +462,7 @@ function ProposalCard({ item, onAnswer }: { item: ProposalItem; onAnswer?: Answe
       ) : (
         onAnswer && (
           <div className="chat-error-actions">
-            <span>It starts in this project, in a tab of its own, with nothing of this conversation but the prompt, which you can change first.</span>
+            <span>It starts in this sandbox, in a tab of its own, with nothing of this conversation but the prompt, which you can change first.</span>
             <span className="chat-proposal-buttons">
               <button type="button" className="btn btn-secondary btn-compact" disabled={sending !== undefined} onClick={() => void answer(false)}>
                 Decline
@@ -479,13 +479,13 @@ function ProposalCard({ item, onAnswer }: { item: ProposalItem; onAnswer?: Answe
 }
 
 
-/** In place of the last logged-out card, while the project still isn't logged in. */
-function LoggedOutCard({ project, onLogIn }: { project: string; onLogIn(): void }) {
+/** In place of the last logged-out card, while the sandbox still isn't logged in. */
+function LoggedOutCard({ sandbox, onLogIn }: { sandbox: string; onLogIn(): void }) {
   return (
     <div className="chat-error" role="alert">
       <strong>Claude isn't logged in.</strong>
       <div className="chat-error-actions">
-        <span>Log in once for the project {project}; all its sessions use it.</span>
+        <span>Log in once for the sandbox {sandbox}; all its sessions use it.</span>
         <button type="button" className="btn btn-primary btn-compact" onClick={onLogIn}>
           Log in
         </button>
@@ -494,7 +494,7 @@ function LoggedOutCard({ project, onLogIn }: { project: string; onLogIn(): void 
   );
 }
 
-/** In place of the last logged-out card once the project is logged in, offering to send the failed prompt again. */
+/** In place of the last logged-out card once the sandbox is logged in, offering to send the failed prompt again. */
 function LoggedInCard({ account, retried, busy, onRetry }: { account: LoginAccount; retried?: boolean; busy: boolean; onRetry(): void }) {
   return (
     <div className="chat-ok" role="status">

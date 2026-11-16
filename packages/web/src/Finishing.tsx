@@ -49,7 +49,7 @@ export function FinishingItem({ s, onOpened }: { s: SessionInfo; onOpened(id: st
   );
 }
 
-/** Every session Claude is finishing after its tab closed, for the Projects tab; nothing if there are none. */
+/** Every session Claude is finishing after its tab closed, for the Sandboxes tab; nothing if there are none. */
 export function FinishingCard({ sessions, onOpened }: { sessions: readonly SessionInfo[]; onOpened(id: string): void }) {
   const list = finishing(sessions);
   if (!list.length) return null;

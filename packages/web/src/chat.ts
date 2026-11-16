@@ -818,7 +818,7 @@ export function partialString(json: string, key: string): string | undefined {
 }
 
 /**
- * What is known about the login behind one logged-out card: `account` when the project is logged in now (from this
+ * What is known about the login behind one logged-out card: `account` when the sandbox is logged in now (from this
  * tab, or found so on asking), none when it was asked and isn't. `retried` once Retry was pressed after logging in.
  */
 export interface LoginAnswer {
@@ -838,8 +838,8 @@ export interface LoginCards {
 
 /**
  * Which logged-out cards show. Only the last can, and only while it says something: green once `answer` says the
- * project is logged in, red while it isn't and no turn has worked since. Until `answer` covers the open card the
- * project may have logged in elsewhere, so nothing shows.
+ * sandbox is logged in, red while it isn't and no turn has worked since. Until `answer` covers the open card the
+ * sandbox may have logged in elsewhere, so nothing shows.
  */
 export function loginCards(items: readonly ChatItem[], answer?: LoginAnswer): LoginCards {
   const at = items.findLastIndex((i) => i.type === "error" && i.signedOut === true);

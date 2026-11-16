@@ -1,11 +1,11 @@
 ---
 title: Logging the agent in
-description: Log a project's agent in from Kumiko, by pasting a code into the login dialog.
+description: Log a sandbox's agent in from Kumiko, by pasting a code into the login dialog.
 sidebar:
   order: 5
 ---
 
-The agent needs a login before it can work. You log in once per project, from Kumiko, and every session of the project
+The agent needs a login before it can work. You log in once per sandbox, from Kumiko, and every session of the sandbox
 uses it. It's kept even if you rebuild the sandbox.
 
 You can log in with your own Claude subscription: see [Using your Claude subscription](/guide/subscription/) for why
@@ -13,7 +13,7 @@ that's fine.
 
 ## The login dialog
 
-The first time you send a message in a project, the reply is a card saying **Claude isn't logged in**, and the
+The first time you send a message in a sandbox, the reply is a card saying **Claude isn't logged in**, and the
 **Log in to Claude** dialog opens. If it doesn't (you weren't looking at the tab, say), choose **Log in** on the card,
 or type `/login`.
 
@@ -29,4 +29,4 @@ gets to work.
 - **A wrong code** shows the agent's own message in the dialog. Choose **Try again** for a fresh sign-in link.
 - **The dialog waits 10 minutes** for a code. After that, or if you choose **Cancel**, start again with **Log in** on the
   card.
-- **Another session is logging in** to the same project: the dialog joins that login instead of starting a second one.
+- **Another session is logging in** to the same sandbox: the dialog joins that login instead of starting a second one.

@@ -63,7 +63,7 @@ export interface DeliverCard {
   squashBody: string;
   /** The trailers a squash commit carries over from the branch's commits. */
   trailers: string[];
-  /** The choices the card starts at: what the user picked last time in this project. */
+  /** The choices the card starts at: what the user picked last time in this sandbox. */
   route: DeliverRoute;
   method: DeliverMethod;
   /** Whether Kumiko signs what it writes to the default branch: the user's git config has a signing key. */

@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { vmName, type LineKind, type LogLine, type OpKind, type Operation, type SandboxInfo, type SandboxView, type ServerEvent } from "@kumiko/shared";
+import { vmName, type LineKind, type LogLine, type OpKind, type Operation, type SandboxInfo, type VmView, type ServerEvent } from "@kumiko/shared";
 import type { Log } from "@kumiko/sandbox";
 
 const MAX_LOG_LINES = 5000;
@@ -91,15 +91,15 @@ export class Operations extends EventEmitter<{ event: [ServerEvent]; settled: [s
    * Merges the provider's list with operations and live session counts.
    * Sandboxes being created show before Lima knows them.
    */
-  views(infos: SandboxInfo[], sessions: Map<string, number> = new Map()): SandboxView[] {
-    const views: SandboxView[] = infos.map((i) => this.view(i, sessions));
+  views(infos: SandboxInfo[], sessions: Map<string, number> = new Map()): VmView[] {
+    const views: VmView[] = infos.map((i) => this.view(i, sessions));
     for (const name of this.active()) {
       if (!infos.some((i) => i.name === name)) views.push(this.view({ name, status: "unknown" }, sessions));
     }
     return views.sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  private view(info: SandboxInfo, sessions: Map<string, number>): SandboxView {
+  private view(info: SandboxInfo, sessions: Map<string, number>): VmView {
     const operation = this.get(info.name);
     return { ...info, vm: vmName(info.name), provider: "lima", operation, busy: Boolean(operation && !operation.endedAt), sessions: sessions.get(info.name) ?? 0 };
   }

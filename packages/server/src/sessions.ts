@@ -548,7 +548,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     return true;
   }
 
-  /** Deletes every saved session of a project that is going away: Claude's transcripts go with its Claude home. */
+  /** Deletes every saved session of a sandbox that is going away: Claude's transcripts go with its Claude home. */
   async deleteSavedFor(sandbox: string): Promise<void> {
     if (!this.store) return;
     await this.flush();

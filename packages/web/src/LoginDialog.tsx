@@ -3,9 +3,9 @@ import type { LoginAccount } from "@kumiko/shared";
 import { api, errorMessage, RequestError } from "./api";
 
 interface Props {
-  /** The session the login is started from; the login itself is its project's. */
+  /** The session the login is started from; the login itself is its sandbox's. */
   sessionId: string;
-  project: string;
+  sandbox: string;
   onDone(account: LoginAccount): void;
   onClose(): void;
 }
@@ -17,10 +17,10 @@ type Step =
   | { step: "failed"; message: string; details: string[] };
 
 /**
- * Logs Claude in for a project: the sandbox's Claude prints a sign-in link, the user signs in in their browser, and
- * pastes back the code the page shows. If the project is logged in already, it says so and closes.
+ * Logs Claude in for a sandbox: the sandbox's Claude prints a sign-in link, the user signs in in their browser, and
+ * pastes back the code the page shows. If the sandbox is logged in already, it says so and closes.
  */
-export function LoginDialog({ sessionId, project, onDone, onClose }: Props) {
+export function LoginDialog({ sessionId, sandbox, onDone, onClose }: Props) {
   const ref = useRef<HTMLDialogElement>(null);
   const [state, setState] = useState<Step>({ step: "starting" });
   const [code, setCode] = useState("");
@@ -73,7 +73,7 @@ export function LoginDialog({ sessionId, project, onDone, onClose }: Props) {
       <h2 id="login-title">Log in to Claude</h2>
       <form className="dialog-body login-steps" onSubmit={submit}>
         <p>
-          Claude in <strong>{project}</strong> needs a login. You only do this once per project.
+          Claude in <strong>{sandbox}</strong> needs a login. You only do this once per sandbox.
         </p>
         {state.step === "starting" && (
           <p className="muted">
