@@ -114,9 +114,9 @@ export type ApprovalCardBody = DeliverCard | IssueCard | CommentCard | PushCard;
  * public the text as they left it.
  */
 export type CardDecision =
-  | { kind: "deliver"; route: DeliverRoute; method: DeliverMethod; title?: string; body?: string; footer?: boolean }
-  | { kind: "issue"; title: string; body: string; labels: string[]; footer?: boolean }
-  | { kind: "comment"; body: string; footer?: boolean }
+  | { kind: "deliver"; route: DeliverRoute; method: DeliverMethod; title?: string; body?: string }
+  | { kind: "issue"; title: string; body: string; labels: string[] }
+  | { kind: "comment"; body: string }
   | { kind: "push" };
 
 /** What happened, as the card's one-line receipt shows it. */
@@ -150,16 +150,6 @@ export interface ApprovalCard {
   receipt?: CardReceipt;
 }
 
-/** The line Kumiko adds under what it posts for Claude; the user can untick it on the card. */
-export const FOOTERS = {
-  pr: "🤖 Opened by Claude",
-  issue: "🤖 Reported by Claude",
-  comment: "🤖 Posted by Claude",
-} as const;
-
-/** Text as it goes to GitHub: the user's, then the footer, unless they unticked it. */
-export const withFooter = (text: string, footer: string, add = true) => (add ? `${text.trimEnd()}\n\n${footer}` : text.trimEnd());
-
 /** The longest title and body Kumiko takes for an issue, a PR or a comment; GitHub's own limit is 65536 characters. */
 export const MAX_TITLE = 256;
 export const MAX_BODY = 60_000;
@@ -177,17 +167,17 @@ export function parseCardDecision(value: unknown): CardDecision | undefined {
       const title = v.title === undefined ? undefined : line(v.title);
       const body = v.body === undefined ? undefined : text(v.body, MAX_BODY);
       if ((v.title !== undefined && !title) || (v.body !== undefined && body === undefined)) return undefined;
-      return { kind: "deliver", route: v.route, method: v.method, ...(title ? { title } : {}), ...(body !== undefined ? { body } : {}), ...footerOf(v) };
+      return { kind: "deliver", route: v.route, method: v.method, ...(title ? { title } : {}), ...(body !== undefined ? { body } : {}) };
     }
     case "issue": {
       const title = line(v.title);
       const body = text(v.body, MAX_BODY);
       const labels = Array.isArray(v.labels) && v.labels.every((l) => typeof l === "string" && l.length <= 100) ? (v.labels as string[]) : undefined;
-      return title && body !== undefined && labels ? { kind: "issue", title, body, labels, ...footerOf(v) } : undefined;
+      return title && body !== undefined && labels ? { kind: "issue", title, body, labels } : undefined;
     }
     case "comment": {
       const body = text(v.body, MAX_BODY);
-      return body?.trim() ? { kind: "comment", body, ...footerOf(v) } : undefined;
+      return body?.trim() ? { kind: "comment", body } : undefined;
     }
     case "push":
       return { kind: "push" };
@@ -195,6 +185,3 @@ export function parseCardDecision(value: unknown): CardDecision | undefined {
       return undefined;
   }
 }
-
-/** Whether the footer goes, when the decision says: only an explicit false leaves it out. */
-const footerOf = (v: Record<string, unknown>) => (v.footer === false ? { footer: false } : {});

@@ -398,7 +398,7 @@ describe("delivering", () => {
     assert.deepEqual(sessions.prompts, [{ text: "See this.", attachments: [shot] }]);
   });
 
-  it("opens a PR with Kumiko's footer, then lands it with GitHub's wording", async () => {
+  it("opens a PR with the text as the user left it, then lands it with GitHub's wording", async () => {
     fresh();
     const head = await branch("pr-me", { p: "p\n" });
     const r = await ask({ branch: "pr-me", title: "PR me", body: "Does p." });
@@ -408,7 +408,7 @@ describe("delivering", () => {
     const db = JSON.parse(await readFile(join(root, "gh", "github.json"), "utf8"));
     const pr = db.items.find((i: { head: string }) => i.head === "pr-me");
     assert.equal(pr.title, "PR me, edited");
-    assert.equal(pr.body, "Does p, edited.\n\n🤖 Opened by Claude");
+    assert.equal(pr.body, "Does p, edited.");
     assert.equal(sessions.card(r.id)!.receipt!.text, `Opened PR #${pr.number}`);
 
     const again = await ask({ branch: "pr-me", title: "ignored", body: "ignored" });
@@ -453,7 +453,7 @@ describe("delivering", () => {
       assert.equal(sessions.ev.length, 0, "no asks, no cards");
     });
 
-    it("creates an issue with the repository's labels only, as edited on the card, with Kumiko's footer", async () => {
+    it("creates an issue with the repository's labels only, as edited on the card", async () => {
       fresh();
       const bad = await ask({ title: "T", body: "B", labels: ["frontend"] }, "github_issue_create");
       assert.equal(bad.card, undefined);
@@ -466,7 +466,7 @@ describe("delivering", () => {
       const res = await approvals.call(sessions.info, "github_issue_create", r.input, r.toolUseId);
       assert.match(res.text, /^Created issue #(\d+) \(https:\/\/github\.com\/acme\/widget\/issues\/\d+\)\.$/);
       const made = (await db()).items.at(-1);
-      assert.deepEqual([made.title, made.body, made.labels], ["Resume list jumps to the top", "It jumps, edited.\n\n🤖 Reported by Claude", ["bug", "ui"]]);
+      assert.deepEqual([made.title, made.body, made.labels], ["Resume list jumps to the top", "It jumps, edited.", ["bug", "ui"]]);
       assert.match(sessions.card(r.id)!.receipt!.text, /^Created issue #\d+$/);
     });
 
@@ -483,26 +483,11 @@ describe("delivering", () => {
       const res = await approvals.call(sessions.info, "github_issue_comment", r.input, r.toolUseId);
       assert.match(res.text, new RegExp(`^Posted a comment on #${number} \\(https://github.com/acme/widget/issues/${number}#issuecomment-\\d+\\)\\.$`));
       const issue = (await db()).items.find((i: { number: number }) => i.number === number);
-      assert.equal(issue.comments.at(-1).body, "Fixed in #2, I think.\n\n🤖 Posted by Claude");
+      assert.equal(issue.comments.at(-1).body, "Fixed in #2, I think.");
 
-      // Unticked, the line isn't added.
-      const plain = await ask({ number, body: "Thanks!" }, "github_issue_comment");
-      await approvals.decide("s1", plain.id, { action: "approve", decision: { kind: "comment", body: "Thanks!", footer: false } });
-      await approvals.call(sessions.info, "github_issue_comment", plain.input, plain.toolUseId);
-      assert.equal((await db()).items.find((i: { number: number }) => i.number === number).comments.at(-1).body, "Thanks!");
       const unapproved = await approvals.call(sessions.info, "github_pr_comment", { number, body: "sneaky" }, "made-up");
       assert.match(unapproved.text, /^Not approved/);
     });
-  });
-
-  it("leaves the footer out of a PR when the user unticks it", async () => {
-    fresh();
-    await branch("plain-pr", { pp: "p\n" });
-    const r = await ask({ branch: "plain-pr", title: "Plain", body: "No footer." });
-    await approvals.decide("s1", r.id, { action: "approve", decision: { kind: "deliver", route: "pr", method: "merge", title: "Plain", body: "No footer.", footer: false } });
-    await approvals.call(sessions.info, "deliver", r.input, r.toolUseId);
-    const pr = JSON.parse(await readFile(join(root, "gh", "github.json"), "utf8")).items.find((i: { head?: string }) => i.head === "plain-pr");
-    assert.equal(pr.body, "No footer.");
   });
 
   it("marks text from GitHub as data, and keeps it from closing its own quote", () => {

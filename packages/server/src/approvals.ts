@@ -3,11 +3,9 @@ import { mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { AgentFile, AgentMessage, ToolResult, ToolSpec } from "@kumiko/agent";
 import {
-  FOOTERS,
   MAX_BODY,
   MAX_TITLE,
   LIVE_SESSION_STATUSES,
-  withFooter,
   type AgentAsk,
   type ApprovalCard,
   type Attachment,
@@ -536,11 +534,11 @@ export class Approvals {
     const c = card.card;
     const d = card.decision!;
     if (c.kind === "issue" && d.kind === "issue") {
-      const issue = await this.opts.github.issueCreate(c.repo, { title: d.title, body: withFooter(d.body, FOOTERS.issue, d.footer !== false), labels: d.labels });
+      const issue = await this.opts.github.issueCreate(c.repo, { title: d.title, body: d.body.trimEnd(), labels: d.labels });
       return { result: { text: `Created issue #${issue.number} (${issue.url}).` }, receipt: { ok: true, text: `Created issue #${issue.number}`, meta: "as you", url: issue.url, link: "View on GitHub" } };
     }
     if (c.kind === "comment" && d.kind === "comment") {
-      const url = await this.opts.github.comment(c.repo, c.target.type, c.target.number, withFooter(d.body, FOOTERS.comment, d.footer !== false));
+      const url = await this.opts.github.comment(c.repo, c.target.type, c.target.number, d.body.trimEnd());
       return { result: { text: `Posted a comment on #${c.target.number}${url ? ` (${url})` : ""}.` }, receipt: { ok: true, text: `Commented on #${c.target.number}`, meta: "as you", ...(url ? { url, link: "View on GitHub" } : {}) } };
     }
     if (c.kind !== "deliver" || d.kind !== "deliver") throw new Error("That decision isn't for this card.");
@@ -550,7 +548,7 @@ export class Approvals {
       await this.opts.mirrors.fetch(c.repo, { force: true });
       const now = await this.opts.mirrors.branchHead(c.repo, c.branch);
       if (now !== c.head) throw new BranchMoved(now ?? "", 0);
-      const pr = await this.opts.github.prCreate(c.repo, { base: c.base, head: c.branch, title, body: withFooter(d.body ?? c.body, FOOTERS.pr, d.footer !== false) });
+      const pr = await this.opts.github.prCreate(c.repo, { base: c.base, head: c.branch, title, body: (d.body ?? c.body).trimEnd() });
       return {
         result: { text: `Opened PR #${pr.number} (${pr.url}). Nothing is on ${c.base} yet; when the user wants it landed, call deliver on ${c.branch} again.` },
         receipt: { ok: true, text: `Opened PR #${pr.number}`, meta: "as you", url: pr.url, link: "View on GitHub" },
