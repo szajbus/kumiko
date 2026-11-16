@@ -20,9 +20,9 @@ An extra mount that is a git clone on your Mac is different: it's shared like an
 agent writes into its config.
 
 The sandbox has no GitHub credentials. Git in the VM reaches GitHub only through a socket Kumiko forwards in, which
-serves the [mirrors](/guide/repos/#sandboxes) of that sandbox's repos and nothing else. Kumiko decides each push there
-and pushes what it allows on to GitHub itself, with your `gh` login: the agent's own branches, never the default
-branch, tags, or anyone else's branches. The default branch changes only when you approve a card to
+serves the [mirrors](/guide/repos/#sandboxes) of that sandbox's repos and nothing else. The agent's pushes stop
+there: nothing reaches GitHub until you approve it on a card, and then Kumiko sends it itself, with your `gh` login,
+signed. The default branch changes only when you approve a card to
 [merge a branch into it](/guide/repos/#merging-into-the-default-branch), and Kumiko signs that on your Mac. Which
 repositories a sandbox reaches is its list of repos, kept by Kumiko, so the agent can't point it elsewhere. Your `gh`
 login can bypass branch protections, so this check is the one that holds.

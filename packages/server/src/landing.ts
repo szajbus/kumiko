@@ -29,13 +29,13 @@ export function isBranchName(branch: string): boolean {
 }
 
 /** What the card shows of a branch, all from the mirror, which is fetched first: commits, files, flags, the merge check. */
-export async function deliverFacts(dir: string, branch: string, identityEmail: string | undefined): Promise<Omit<DeliverCard, "kind" | "repo" | "pr" | "title" | "body" | "route" | "method" | "signs" | "toSign">> {
+export async function deliverFacts(dir: string, branch: string, identityEmail: string | undefined): Promise<Omit<DeliverCard, "kind" | "repo" | "pr" | "title" | "body" | "route" | "method" | "signs" | "toSign" | "github" | "ahead" | "lost">> {
   if (!isBranchName(branch)) throw new NotDeliverable(`"${branch}" isn't a branch name Kumiko delivers.`);
   const base = await headBranch(dir);
   if (!base) throw new NotDeliverable("The repository's mirror has no default branch yet.");
   if (branch === base) throw new NotDeliverable(`${base} is the branch work is delivered to. Deliver a branch made for the work.`);
   const head = await rev(dir, `refs/heads/${branch}`);
-  if (!head) throw new NotDeliverable(`${branch} isn't on GitHub. Push it first (git push -u origin ${branch}), then call deliver again.`);
+  if (!head) throw new NotDeliverable(`${branch} isn't pushed. Push it first (git push -u origin ${branch}), then call deliver again.`);
   const baseSha = (await rev(dir, `refs/heads/${base}`))!;
   const log = await mirrorGit(dir, ["log", "--reverse", "--no-color", "--format=%H%x00%s%x00%an%x00%ae%x00%(trailers:unfold,separator=%x01)%x1e", `${baseSha}..${head}`]);
   const commits: CardCommit[] = log.out
@@ -155,9 +155,9 @@ export function usableKey(colons: string): string | undefined {
 /** Whether Kumiko will sign what it lands. */
 export const signs = async (dir: string) => (await signingKey(dir)) !== undefined;
 
-/** The branch's commits that aren't on the default branch, oldest first, parents before children. */
-function branchCommits(dir: string, base: string, head: string): Promise<string[]> {
-  return mirrorGit(dir, ["rev-list", "--reverse", "--topo-order", head, `^${base}`]).then((r) => r.out.split("\n").filter(Boolean));
+/** The commits `head` has that aren't on GitHub, in any branch of it, oldest first, parents before children. */
+function unpublished(dir: string, head: string): Promise<string[]> {
+  return mirrorGit(dir, ["rev-list", "--reverse", "--topo-order", head, "--not", "--glob=refs/github/heads/*"]).then((r) => r.out.split("\n").filter(Boolean));
 }
 
 /** A commit as git stores it: its headers, in order, and its message exactly. */
@@ -177,10 +177,10 @@ async function readCommit(dir: string, sha: string): Promise<{ headers: [string,
   return { headers, message: split < 0 ? "" : raw.slice(split + 2) };
 }
 
-/** How many of the branch's own commits carry no signature. */
-export async function unsignedCount(dir: string, base: string, head: string): Promise<number> {
+/** How many of the commits `head` has that aren't on GitHub carry no signature: what publishing it would sign. */
+export async function unsignedCount(dir: string, head: string): Promise<number> {
   let n = 0;
-  for (const sha of await branchCommits(dir, base, head)) if (!(await readCommit(dir, sha)).headers.some(([k]) => k === "gpgsig" || k === "gpgsig-sha256")) n++;
+  for (const sha of await unpublished(dir, head)) if (!(await readCommit(dir, sha)).headers.some(([k]) => k === "gpgsig" || k === "gpgsig-sha256")) n++;
   return n;
 }
 
@@ -192,15 +192,15 @@ function identity(line: string, who: "AUTHOR" | "COMMITTER"): NodeJS.ProcessEnv 
 }
 
 /**
- * Signs the branch's commits that aren't on the default branch with the user's key, in the mirror, changing nothing
- * else: each keeps its tree, author, committer, dates and message, so only the shas change. A commit already signed is
- * kept as it is unless a parent of it changed. Resolves with the new tip and how many commits were written, without
- * moving any branch: the caller pushes it.
+ * Signs the commits `head` has that aren't on GitHub with the user's key, in the mirror, changing nothing else: each
+ * keeps its tree, author, committer, dates and message, so only the shas change. Commits already on GitHub are left
+ * alone, whoever made them, and a commit already signed is kept as it is unless a parent of it changed. Resolves with
+ * the new tip and how many commits were written, without moving any branch.
  */
-export async function resign(dir: string, base: string, head: string, sign: { key?: string }): Promise<{ tip: string; signed: number }> {
+export async function resign(dir: string, head: string, sign: { key?: string }): Promise<{ tip: string; signed: number }> {
   const mapped = new Map<string, string>();
   let signed = 0;
-  for (const sha of await branchCommits(dir, base, head)) {
+  for (const sha of await unpublished(dir, head)) {
     const { headers, message } = await readCommit(dir, sha);
     const get = (k: string) => headers.filter(([h]) => h === k).map(([, v]) => v);
     const parents = get("parent");
@@ -231,6 +231,55 @@ export async function gitHasIdentity(dir: string): Promise<boolean> {
   return (await ok("GIT_AUTHOR_IDENT")) && (await ok("GIT_COMMITTER_IDENT"));
 }
 
+/** The commits on GitHub's copy of a branch that the mirror's no longer has, as a card lists them. */
+export interface LostCommit {
+  sha: string;
+  subject: string;
+  /** Dropped: nothing in the branch makes its change. Changed: a commit with its subject does something else. */
+  how: "dropped" | "changed";
+}
+
+/** Each commit's patch id, by sha: a fingerprint of the change it makes, the same after a rebase or a new signature. */
+async function patchIds(dir: string, range: string[]): Promise<Map<string, string>> {
+  const log = await mirrorGit(dir, ["log", "--no-merges", "-p", "--format=commit %H", ...range]);
+  const ids = await mirrorGit(dir, ["patch-id", "--stable"], { input: log.out });
+  const map = new Map<string, string>();
+  for (const line of ids.out.split("\n").filter(Boolean)) {
+    const [id, sha] = line.split(" ");
+    map.set(sha, id);
+  }
+  return map;
+}
+
+/**
+ * What publishing `local` over GitHub's copy of the branch, `github`, would lose: the commits there whose change the
+ * new branch no longer makes. Compared by what commits change, not by sha, so a rebase or Kumiko's signing loses
+ * nothing; and if the branch as a whole still makes every change GitHub's does (squashed, reordered), nothing either.
+ */
+export async function lostCommits(dir: string, github: string | undefined, local: string, base: string): Promise<LostCommit[]> {
+  if (!github || github === local) return [];
+  if ((await mirrorGit(dir, ["merge-base", "--is-ancestor", github, local], { ok: [1] })).code === 0) return [];
+  // GitHub's changes all in the branch already: merging them in changes nothing.
+  const merged = await mirrorGit(dir, ["merge-tree", "--write-tree", "--no-messages", local, github], { ok: [1] });
+  const localTree = (await mirrorGit(dir, ["rev-parse", `${local}^{tree}`])).out.trim();
+  if (merged.code === 0 && merged.out.split("\n")[0] === localTree) return [];
+  const theirs = await patchIds(dir, [github, `^${local}`, `^${base}`]);
+  const ours = await patchIds(dir, [local, `^${base}`]);
+  const kept = new Set(ours.values());
+  const subjects = async (range: string[]) => {
+    const out = await mirrorGit(dir, ["log", "--no-merges", "--format=%H%x00%s", ...range]);
+    return new Map(out.out.split("\n").filter(Boolean).map((l) => l.split("\0") as [string, string]));
+  };
+  const theirSubjects = await subjects([github, `^${local}`, `^${base}`]);
+  const ourSubjects = new Set((await subjects([local, `^${base}`])).values());
+  const lost: LostCommit[] = [];
+  for (const [sha, subject] of [...theirSubjects].reverse()) {
+    if (kept.has(theirs.get(sha) ?? "")) continue;
+    lost.push({ sha, subject, how: ourSubjects.has(subject) ? "changed" : "dropped" });
+  }
+  return lost;
+}
+
 /** The card's branch moved after it was shown. */
 export class BranchMoved extends Error {
   constructor(readonly to: string, readonly commits: number) {
@@ -253,15 +302,26 @@ export interface Landed {
 export async function land(
   dir: string,
   url: string,
-  opts: { branch: string; head: string; method: DeliverMethod; message: string; sign: { key?: string } | undefined; as?: { name: string; email: string }; fetch(): Promise<void> },
+  opts: {
+    branch: string;
+    /** What lands: the branch's commit the card showed, or the same commits signed on the way. */
+    head: string;
+    /** Where the branch must still be, if not at `head`: the commit the card showed, before Kumiko signed it. */
+    check?: string;
+    method: DeliverMethod;
+    message: string;
+    sign: { key?: string } | undefined;
+    as?: { name: string; email: string };
+    fetch(): Promise<void>;
+  },
 ): Promise<Landed> {
   for (let attempt = 0; ; attempt++) {
     await opts.fetch();
     const base = await headBranch(dir);
     if (!base) throw new Error("The repository's mirror has no default branch.");
     const now = await rev(dir, `refs/heads/${opts.branch}`);
-    if (now !== opts.head) {
-      const count = now ? Number((await mirrorGit(dir, ["rev-list", "--count", `${opts.head}..${now}`], { ok: [128] })).out.trim()) || 0 : 0;
+    if (now !== opts.head && now !== opts.check) {
+      const count = now ? Number((await mirrorGit(dir, ["rev-list", "--count", `${opts.check ?? opts.head}..${now}`], { ok: [128] })).out.trim()) || 0 : 0;
       throw new BranchMoved(now ?? "", count);
     }
     const baseSha = (await rev(dir, `refs/heads/${base}`))!;

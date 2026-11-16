@@ -68,11 +68,14 @@ export interface DeliverCard {
   method: DeliverMethod;
   /** Whether Kumiko signs what it writes to the default branch: the user's git config has a signing key. */
   signs: boolean;
-  /**
-   * The branch's commits Kumiko signs when it opens a PR for it: its unsigned ones, when it is Claude's branch. A branch
-   * someone else made is left as they pushed it.
-   */
+  /** The unsigned commits that aren't on GitHub yet: Kumiko signs them on the way out. */
   toSign: number;
+  /** Where the branch is on GitHub, if it is there at all: the mirror's may be ahead of it, or rewritten. */
+  github?: string;
+  /** The branch's commits that GitHub's copy of it doesn't have, or all of them when it isn't on GitHub. */
+  ahead: number;
+  /** Commits on GitHub's copy that publishing this branch would drop or change. */
+  lost: { sha: string; subject: string; how: "dropped" | "changed" }[];
 }
 
 export interface IssueCard {
@@ -93,26 +96,7 @@ export interface CommentCard {
   body: string;
 }
 
-/**
- * A push to one of the agent's own branches that changes what CI runs: GitHub runs a branch's own workflows on push,
- * with the repository's secrets, so it waits in the mirror's hook for the user.
- */
-export interface PushCard {
-  kind: "push";
-  repo: string;
-  branch: string;
-  /** Where the branch was on GitHub; undefined for a new branch. */
-  old?: string;
-  new: string;
-  fastForward: boolean;
-  /** Commits the push adds. */
-  commits: number;
-  /** The changes under .github/, compared with the default branch. */
-  files: CardFile[];
-  base: string;
-}
-
-export type ApprovalCardBody = DeliverCard | IssueCard | CommentCard | PushCard;
+export type ApprovalCardBody = DeliverCard | IssueCard | CommentCard;
 
 /**
  * What the user decided on a card, with what they changed: for Deliver the route and method, for the text that goes
@@ -121,8 +105,7 @@ export type ApprovalCardBody = DeliverCard | IssueCard | CommentCard | PushCard;
 export type CardDecision =
   | { kind: "deliver"; route: DeliverRoute; method: DeliverMethod; title?: string; body?: string }
   | { kind: "issue"; title: string; body: string; labels: string[] }
-  | { kind: "comment"; body: string }
-  | { kind: "push" };
+  | { kind: "comment"; body: string };
 
 /** What happened, as the card's one-line receipt shows it. */
 export interface CardReceipt {
@@ -184,8 +167,6 @@ export function parseCardDecision(value: unknown): CardDecision | undefined {
       const body = text(v.body, MAX_BODY);
       return body?.trim() ? { kind: "comment", body } : undefined;
     }
-    case "push":
-      return { kind: "push" };
     default:
       return undefined;
   }

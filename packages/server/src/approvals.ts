@@ -10,7 +10,6 @@ import {
   type ApprovalCard,
   type Attachment,
   type AskAnswer,
-  type PushCard,
   type CardDecision,
   type DeliverCard,
   type DeliverMethod,
@@ -20,9 +19,8 @@ import {
 } from "@kumiko/shared";
 import { replaceFile } from "./files.js";
 import type { GitHub, GitHubItem } from "./github.js";
-import { BranchMoved, deleteBranch, deliverFacts, gitHasIdentity, land, mergeMessage, mirrorGit, NotDeliverable, resign, signingKey, signs, squashMessage, unsignedCount } from "./landing.js";
+import { BranchMoved, deleteBranch, deliverFacts, gitHasIdentity, land, lostCommits, mergeMessage, mirrorGit, NotDeliverable, resign, signingKey, signs, squashMessage, unsignedCount } from "./landing.js";
 import type { Mirrors } from "./mirrors.js";
-import type { PushAnswer } from "./pushes.js";
 
 /** A call or decision that can't be taken as it is; the message says why, for the agent or the user. */
 export class ApprovalError extends Error {}
@@ -37,8 +35,6 @@ export interface ApprovalSessions {
   prompt(id: string, text: string, attachments: Attachment[], files: AgentFile[]): void;
   /** The open sessions, for where to ask about a push. */
   list(): SessionInfo[];
-  hostAsk(id: string, ask: Extract<AgentAsk, { kind: "approval" }>, onAnswer: (answer: AskAnswer | undefined) => void): void;
-  closeHostAsk(id: string, askId: string): void;
 }
 
 export interface ApprovalOptions {
@@ -58,7 +54,7 @@ const REPO_PROPERTY = { type: "string", description: "The repository, as owner/n
 const DELIVER: ToolSpec = {
   name: "deliver",
   description:
-    "Deliver a pushed branch to the GitHub repository's default branch, or open a pull request for it. Kumiko shows the user a card with the branch's commits and changes, the user chooses to merge it, squash it, or open a pull request, and you wait for their answer. Say in your message before the call why, and what you'd pick: the user reads it just above the card. Kumiko lands it on the user's computer, signed by them, and tells you what happened. Push the branch first. If it doesn't merge cleanly, you're told to merge the default branch into it first, and no card is shown. A branch with a PR open is landed by delivering it again. Opening a PR signs your branch's commits, changing their shas: then deliver tells you to run git pull --rebase on the branch.",
+    "Send a pushed branch on to GitHub: merge it into the default branch, open a pull request for it, or add it to the PR it has open. Your pushes go only to Kumiko's mirror on the user's computer; this is how work reaches GitHub. Kumiko shows the user a card with the branch's commits and changes, the user chooses, and you wait for their answer. Say in your message before the call why, and what you'd pick: the user reads it just above the card. Kumiko does it on the user's computer, signing your commits with their key on the way, which changes their shas: when it says so, run git pull --rebase on the branch. Push the branch first. If it doesn't merge cleanly, you're told to merge the default branch into it first, and no card is shown. A branch with a PR open is landed by delivering it again.",
   inputSchema: {
     type: "object",
     properties: {
@@ -275,9 +271,24 @@ export class Approvals {
     const pr = await this.opts.github.prForBranch(repo, branch);
     const last = (await this.choices())[info.sandbox];
     const route: DeliverRoute = pr ? "main" : (last?.route ?? "main");
-    const own = this.opts.mirrors.createdBy(repo, branch) === info.sandbox;
-    const toSign = own ? await unsignedCount(dir, `refs/heads/${facts.base}`, facts.head) : 0;
-    return { kind: "deliver", repo, ...facts, toSign, ...(pr ? { pr } : {}), title, body, route, method: last?.method ?? "merge", signs: await signs(dir) };
+    const github = await this.opts.mirrors.githubHead(repo, branch);
+    const ahead = github ? await this.opts.mirrors.countBetween(repo, github, facts.head) : facts.commits.length;
+    const lost = await lostCommits(dir, github, facts.head, `refs/heads/${facts.base}`);
+    return {
+      kind: "deliver",
+      repo,
+      ...facts,
+      toSign: await unsignedCount(dir, facts.head),
+      ...(github ? { github } : {}),
+      ahead,
+      lost,
+      ...(pr ? { pr } : {}),
+      title,
+      body,
+      route,
+      method: last?.method ?? "merge",
+      signs: await signs(dir),
+    };
   }
 
   /**
@@ -287,7 +298,7 @@ export class Approvals {
   message(info: SessionInfo, m: AgentMessage): void {
     // A turn that ended without the call won't make it later: approvals don't outlive their turn.
     if (m.type === "result") {
-      for (const card of cardsOf(this.sessions.events(info.id)).values()) if (card.state === "approved" && card.card.kind !== "push") this.notDone(info.id, card);
+      for (const card of cardsOf(this.sessions.events(info.id)).values()) if (card.state === "approved") this.notDone(info.id, card);
       return;
     }
     if (m.type !== "user") return;
@@ -316,55 +327,11 @@ export class Approvals {
 
   /** Claude is gone: what the user approved that it hadn't called for yet won't be done. */
   exited(info: SessionInfo): void {
-    for (const card of cardsOf(this.sessions.events(info.id)).values()) if (card.state === "approved" && card.card.kind !== "push") this.notDone(info.id, card);
+    for (const card of cardsOf(this.sessions.events(info.id)).values()) if (card.state === "approved") this.notDone(info.id, card);
   }
 
   private notDone(session: string, card: ApprovalCard) {
     this.sessions.putCard(session, { ...card, state: "failed", receipt: { ok: false, text: `Not done: ${what(card)}`, meta: "Claude stopped before doing it" } });
-  }
-
-  /**
-   * Asks the user about a push that changes CI, in the session it came from if the VM named one of this sandbox's, or
-   * else the sandbox's most recent open one, while git in the VM waits. The answer is the user's decision on the card,
-   * or a refusal when the push stops waiting (`closed`) or there's nowhere to ask.
-   */
-  askPush(pusher: { sandbox: string; session?: string }, card: PushCard): { answer: Promise<PushAnswer>; done(ok: boolean, text: string): void; closed(): void } {
-    const open = this.sessions.list().filter((s) => s.sandbox === pusher.sandbox && LIVE_SESSION_STATUSES.includes(s.status));
-    const session = open.find((s) => s.id === pusher.session) ?? open.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))[0];
-    if (!session) {
-      return {
-        answer: Promise.resolve({ allowed: false, message: "Kumiko has to ask the user about this, but no session is open in this sandbox. Open one, and push from it." }),
-        done: () => {},
-        closed: () => {},
-      };
-    }
-    const id = randomUUID();
-    let card0: ApprovalCard = { id, at: new Date().toISOString(), state: "open", card };
-    let settle!: (a: PushAnswer) => void;
-    const answer = new Promise<PushAnswer>((r) => (settle = r));
-    let settled = false;
-    const finish = (a: PushAnswer) => {
-      if (settled) return;
-      settled = true;
-      settle(a);
-    };
-    this.sessions.hostAsk(session.id, { kind: "approval", id, tool: "push", input: { branch: card.branch, new: card.new } }, (a) => {
-      if (a?.kind === "allow") return finish({ allowed: true });
-      finish({ allowed: false, message: a?.kind === "deny" ? a.message : "The user didn't allow it: they sent a message instead." });
-    });
-    this.sessions.putCard(session.id, card0);
-    return {
-      answer,
-      done: (ok, text) => {
-        card0 = this.card(session.id, id);
-        this.sessions.putCard(session.id, { ...card0, state: ok ? "done" : "failed", receipt: { ok, text, meta: `${card.branch} · ${card.new.slice(0, 7)}` } });
-      },
-      closed: () => {
-        if (settled) return;
-        finish({ allowed: false, message: "The push stopped waiting." });
-        this.sessions.closeHostAsk(session.id, id);
-      },
-    };
   }
 
   private card(session: string, askId: string): ApprovalCard {
@@ -432,7 +399,7 @@ export class Approvals {
     const decision = action.decision;
     if (decision.kind !== card.card.kind) throw new ApprovalError("That decision isn't for this card.");
     if (card.card.kind === "deliver" && decision.kind === "deliver") {
-      if (card.card.pr && decision.route === "pr") throw new ApprovalError(`${card.card.branch} has PR #${card.card.pr.number} open already.`);
+      if (card.card.pr && decision.route === "pr" && card.card.github === card.card.head) throw new ApprovalError(`PR #${card.card.pr.number} has all of ${card.card.branch} already.`);
       // Bound to the commit the card shows: if the branch moved, nothing is approved.
       await this.opts.mirrors.fetch(card.card.repo, { force: true }).catch(() => {});
       const now = await this.opts.mirrors.branchHead(card.card.repo, card.card.branch);
@@ -546,25 +513,37 @@ export class Approvals {
     if (c.kind !== "deliver" || d.kind !== "deliver") throw new Error("That decision isn't for this card.");
     const dir = this.opts.mirrors.path(c.repo);
     const url = this.opts.mirrors.url(c.repo);
+    // Everything is from the commit the user saw.
+    await this.opts.mirrors.fetch(c.repo, { force: true });
+    const now = await this.opts.mirrors.branchHead(c.repo, c.branch);
+    if (now !== c.head) throw new BranchMoved(now ?? "", 0);
     if (d.route === "pr") {
-      const title = d.title ?? c.title;
-      // Opened from the branch by name, so it must still be the commit the user saw.
-      await this.opts.mirrors.fetch(c.repo, { force: true });
-      const now = await this.opts.mirrors.branchHead(c.repo, c.branch);
-      if (now !== c.head) throw new BranchMoved(now ?? "", 0);
-      const signed = await this.signBranch(info, c, dir, url);
-      const pr = await this.opts.github.prCreate(c.repo, { base: c.base, head: c.branch, title, body: (d.body ?? c.body).trimEnd() });
-      const refresh = signed
-        ? ` Kumiko signed ${signed === 1 ? "the branch's commit" : `the branch's ${signed} commits`} with the user's key before opening it, which changed ${signed === 1 ? "its sha" : "their shas"} but not ${signed === 1 ? "its" : "their"} contents: on ${c.branch}, run git pull --rebase before you go on, so your branch is the signed one.`
-        : "";
+      const published = await this.publish(c, dir, url);
+      const refresh = this.refreshNote(c.branch, published.signed);
+      if (c.pr) {
+        return {
+          result: { text: `Updated PR #${c.pr.number} (${c.pr.url}) with ${c.branch} as it is in the mirror.${refresh} Nothing is on ${c.base} yet; when the user wants it landed, call deliver on ${c.branch} again.` },
+          receipt: { ok: true, text: `Updated PR #${c.pr.number}`, meta: published.signed ? `${published.signed === 1 ? "1 commit" : `${published.signed} commits`} signed` : "as you", url: c.pr.url, link: "View on GitHub" },
+        };
+      }
+      const pr = await this.opts.github.prCreate(c.repo, { base: c.base, head: c.branch, title: d.title ?? c.title, body: (d.body ?? c.body).trimEnd() });
       return {
         result: { text: `Opened PR #${pr.number} (${pr.url}).${refresh} Nothing is on ${c.base} yet; when the user wants it landed, call deliver on ${c.branch} again.` },
-        receipt: { ok: true, text: `Opened PR #${pr.number}`, meta: signed ? `as you · ${signed === 1 ? "1 commit" : `${signed} commits`} signed` : "as you", url: pr.url, link: "View on GitHub" },
+        receipt: { ok: true, text: `Opened PR #${pr.number}`, meta: published.signed ? `as you · ${published.signed === 1 ? "1 commit" : `${published.signed} commits`} signed` : "as you", url: pr.url, link: "View on GitHub" },
       };
+    }
+    // A PR shows what lands: it gets the branch first, so GitHub marks it merged. Otherwise the branch stays off
+    // GitHub, and a merge commit brings its commits along, signed like everything Kumiko sends.
+    let head = c.head;
+    let signed = 0;
+    if (c.pr) ({ tip: head, signed } = await this.publish(c, dir, url));
+    else if (d.method === "merge") {
+      const key = await signingKey(dir);
+      if (key) ({ tip: head, signed } = await resign(dir, c.head, key));
     }
     const message = d.method === "merge" ? mergeMessage(c.repo, c.branch, c.pr) : squashMessage(d.title ?? c.title, c.squashBody, c.trailers);
     const as = await this.commitIdentity(dir);
-    const landed = await land(dir, url, { branch: c.branch, head: c.head, method: d.method, message, sign: await signingKey(dir), ...(as ? { as } : {}), fetch: () => this.opts.mirrors.fetch(c.repo, { force: true }) });
+    const landed = await land(dir, url, { branch: c.branch, head, check: c.head, method: d.method, message, sign: await signingKey(dir), ...(as ? { as } : {}), fetch: () => this.opts.mirrors.fetch(c.repo, { force: true }) });
     const short = landed.sha.slice(0, 7);
     const notes: string[] = [];
     if (as) notes.push(`The user's git config has no name or email, so the commit is by their GitHub account, ${as.name} <${as.email}>.`);
@@ -574,17 +553,25 @@ export class Approvals {
         (err) => notes.push(`PR #${c.pr!.number} couldn't be closed: ${err instanceof Error ? err.message : String(err)}`),
       );
     }
-    // Only a branch Claude created from this sandbox goes; one the user made stays.
-    if (this.opts.mirrors.createdBy(c.repo, c.branch) === info.sandbox && (await deleteBranch(dir, url, c.branch, c.head).catch(() => false))) {
-      await this.opts.mirrors.noteBranches(c.repo, info.sandbox, [{ branch: c.branch, deleted: true }]);
+    // A branch Claude made goes from GitHub, if it got there; one the user made stays. In the mirror it's landed
+    // either way, so it goes back to GitHub's copy, or goes.
+    const github = await this.opts.mirrors.githubHead(c.repo, c.branch);
+    if (github && this.opts.mirrors.createdBy(c.repo, c.branch) === info.sandbox && (await deleteBranch(dir, url, c.branch, github).catch(() => false))) {
       notes.push(`${c.branch} was deleted on GitHub.`);
     }
-    await this.opts.mirrors.fetch(c.repo, { force: true }).catch(() => {});
+    await this.opts.mirrors.landed(c.repo, c.branch, info.sandbox);
+    if (signed) notes.push(signed === 1 ? "Kumiko signed its commit on the way, so its sha changed." : `Kumiko signed its ${signed} commits on the way, so their shas changed.`);
     const how = `${d.method === "merge" ? "merge commit" : "squashed"}, ${landed.signed ? "signed" : "unsigned"}`;
     return {
       result: { text: `Delivered ${c.branch} to ${landed.base} as ${short} (${how}). ${notes.join(" ")}${notes.length ? " " : ""}Update with git fetch --prune, and git pull --ff-only on ${landed.base}.` },
       receipt: { ok: true, text: `${d.method === "merge" ? "Merged" : "Squashed"} ${c.branch} into ${landed.base} as ${short}`, meta: how.replace(", ", " · "), url: `https://github.com/${c.repo}/commit/${landed.sha}`, link: "View on GitHub" },
     };
+  }
+
+  /** What Claude is told when Kumiko signed its commits on the way out, so its branch can catch up. */
+  private refreshNote(branch: string, signed: number): string {
+    if (!signed) return "";
+    return ` Kumiko signed ${signed === 1 ? "the branch's commit" : `the branch's ${signed} commits`} with the user's key on the way, which changed ${signed === 1 ? "its sha" : "their shas"} but not ${signed === 1 ? "its" : "their"} contents: on ${branch}, run git pull --rebase before you go on, so your branch is the signed one.`;
   }
 
   /**
@@ -601,23 +588,19 @@ export class Approvals {
   }
 
   /**
-   * Signs Claude's branch before its PR opens, so the PR and the history it leaves have only signed commits: the
-   * branch's unsigned commits are written again with the user's signature in the mirror, and the branch is moved to
-   * them on GitHub, leased to where the card had it. Resolves with how many were signed; none when the branch isn't
-   * Claude's, has nothing unsigned, or there's no key.
+   * Sends the branch to GitHub as the mirror has it, after the user approved that on a card: its commits that aren't
+   * on GitHub are signed first, the push is leased to GitHub's copy as the card saw it (or to there being none), and
+   * the mirror's branch moves to the signed commits, unless Claude pushed meanwhile. Resolves with what GitHub has now.
    */
-  private async signBranch(info: SessionInfo, c: DeliverCard, dir: string, url: string): Promise<number> {
-    if (!c.toSign || this.opts.mirrors.createdBy(c.repo, c.branch) !== info.sandbox) return 0;
+  private async publish(c: DeliverCard, dir: string, url: string): Promise<{ tip: string; signed: number }> {
     const key = await signingKey(dir);
-    if (!key) return 0;
-    const { tip, signed } = await resign(dir, `refs/heads/${c.base}`, c.head, key);
-    if (!signed) return 0;
-    const push = await mirrorGit(dir, ["push", "--porcelain", `--force-with-lease=refs/heads/${c.branch}:${c.head}`, url, `${tip}:refs/heads/${c.branch}`], { ok: [1], timeoutMs: 5 * 60_000 });
-    if (push.code !== 0) throw new Error(`GitHub refused the signed ${c.branch}: ${(push.err + push.out).trim().split("\n").filter((l) => l.trim()).slice(-2).join(" ")}`);
-    // The branch is still Claude's, now at the signed commit: its next push starts from there.
-    await this.opts.mirrors.noteBranches(c.repo, info.sandbox, [{ branch: c.branch, deleted: false, sha: tip }]);
+    const { tip, signed } = key ? await resign(dir, c.head, key) : { tip: c.head, signed: 0 };
+    if (tip === c.github) return { tip, signed };
+    const push = await mirrorGit(dir, ["push", "--porcelain", `--force-with-lease=refs/heads/${c.branch}:${c.github ?? ""}`, url, `${tip}:refs/heads/${c.branch}`], { ok: [1], timeoutMs: 5 * 60_000 });
+    if (push.code !== 0) throw new Error(`GitHub refused ${c.branch}: ${(push.err + push.out).trim().split("\n").filter((l) => l.trim()).slice(-2).join(" ")}`);
+    if (tip !== c.head) await mirrorGit(dir, ["update-ref", `refs/heads/${c.branch}`, tip, c.head], { ok: [1, 128] });
     await this.opts.mirrors.fetch(c.repo, { force: true }).catch(() => {});
-    return signed;
+    return { tip, signed };
   }
 
   private async choices(): Promise<Record<string, { route?: DeliverRoute; method?: DeliverMethod }>> {
@@ -659,7 +642,5 @@ function what(card: ApprovalCard): string {
       return "creating the issue";
     case "comment":
       return `commenting on #${card.card.target.number}`;
-    case "push":
-      return `pushing ${card.card.branch}`;
   }
 }

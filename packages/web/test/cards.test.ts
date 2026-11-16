@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ApprovalCard, DeliverCard, SessionEvent } from "@kumiko/shared";
-import { approveLabel, cardAction, cardClosed, cardVerb, deliverChoices, deliverDecision, initialChoice, unsignedWarning } from "../src/cards.ts";
+import { approveLabel, cardAction, cardClosed, cardVerb, deliverChoices, deliverDecision, initialChoice, lostHeading, unsignedWarning, whereLabel } from "../src/cards.ts";
 import { applyEvent, emptyChat, type ChatItem } from "../src/chat.ts";
 
 const deliver: DeliverCard = {
@@ -23,6 +23,8 @@ const deliver: DeliverCard = {
   method: "merge",
   signs: true,
   toSign: 3,
+  ahead: 3,
+  lost: [],
 };
 
 describe("approval cards' wording", () => {
@@ -40,7 +42,8 @@ describe("approval cards' wording", () => {
   });
 
   it("offers no PR for a branch that has one, and says what happens to it", () => {
-    const pr = { ...deliver, route: "pr" as const, pr: { number: 128, title: "Fix", url: "u" } };
+    // A PR has its branch on GitHub, here as the mirror has it.
+    const pr = { ...deliver, route: "pr" as const, pr: { number: 128, title: "Fix", url: "u" }, github: deliver.head, ahead: 0 };
     assert.deepEqual(deliverChoices(pr).map((c) => c.choice), ["merge", "squash"]);
     assert.match(deliverChoices(pr)[0].description, /, and #128 will show as merged\.$/);
     assert.match(deliverChoices(pr)[1].description, /, and #128 will be closed\.$/);
@@ -54,6 +57,24 @@ describe("approval cards' wording", () => {
     assert.deepEqual(deliverDecision("squash", { ...text, original: "Fix x" }), { kind: "deliver", route: "main", method: "squash" }, "Claude's, unchanged");
     assert.deepEqual(deliverDecision("pr", text), { kind: "deliver", route: "pr", method: "merge", title: "Fix x", body: "b" });
     assert.equal(deliverDecision("pr", { ...text, title: "  " }), undefined, "no PR without a title");
+  });
+
+  it("offers updating a PR that lacks what the mirror has, first, and says where the branch stands", () => {
+    const pr = { ...deliver, pr: { number: 128, title: "Fix", url: "u" }, github: "e".repeat(40), ahead: 2 };
+    assert.deepEqual(deliverChoices(pr).map((c) => c.choice), ["update", "merge", "squash"]);
+    assert.equal(deliverChoices(pr)[0].description, "The 2 new commits will be added to #128.");
+    assert.equal(initialChoice(pr), "update");
+    assert.deepEqual(deliverDecision("update", { title: "", body: "" }), { kind: "deliver", route: "pr", method: "merge" });
+    assert.equal(cardVerb(pr, "update"), "Update");
+    const inStep = { ...pr, github: deliver.head, ahead: 0 };
+    assert.deepEqual(deliverChoices(inStep).map((c) => c.choice), ["merge", "squash"], "nothing to update");
+    assert.equal(whereLabel(deliver), "only on your Mac");
+    assert.equal(whereLabel(pr), "2 not on GitHub");
+    assert.equal(whereLabel(inStep), undefined);
+    const lost = { ...pr, lost: [{ sha: "f".repeat(40), subject: "A", how: "dropped" as const }, { sha: "9".repeat(40), subject: "B", how: "changed" as const }] };
+    assert.equal(lostHeading(lost), "Drops 1 commit, and changes 1 commit that are on #128:");
+    assert.match(deliverChoices(lost)[0].description, /#128's branch will be replaced with this one, as shown above/);
+    assert.equal(lostHeading(pr), undefined);
   });
 
   it("warns only when a commit Kumiko lands won't be signed", () => {

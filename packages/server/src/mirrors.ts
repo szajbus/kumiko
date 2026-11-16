@@ -32,6 +32,8 @@ interface RepoRecord {
    * pushed: that sandbox's agent may update, force-push and delete them. Dropped when the branch leaves GitHub.
    */
   created?: Record<string, { sandbox: string; at: string; ci?: string; sha?: string }>;
+  /** 2 once GitHub's branches are fetched into refs/github/heads/, apart from the ones the VMs see. */
+  layout?: number;
 }
 
 interface Entry {
@@ -102,8 +104,10 @@ fi
 `;
 
 /**
- * The whole of a mirror's config, rewritten on every start. Only GitHub's branches and tags, pruned, so the mirror
- * holds nothing that isn't on GitHub and can always be deleted and made again. gc is Kumiko's to run, never git's on
+ * The whole of a mirror's config, rewritten on every start. GitHub's branches are fetched into refs/github/heads/,
+ * pruned, and its tags as they are. The branches the VMs see, refs/heads/, follow GitHub's, except where an agent
+ * pushed something GitHub doesn't have (see \`syncBranches\`): those are the only thing in a mirror that isn't on
+ * GitHub, and go there only through a card. The VMs never see refs/github/. gc is Kumiko's to run, never git's on
  * its own; pushes are checked object by object; and the hooks are the mirror's own, whatever the user's
  * core.hooksPath says. With a credential helper, the empty one before it drops the user's helpers, so only it is asked.
  */
@@ -117,13 +121,16 @@ function mirrorConfig(dir: string, url: string, credentialHelper?: string): stri
 \thooksPath = ${quote(join(dir, "hooks"))}
 [remote "origin"]
 \turl = ${quote(url)}
-\tfetch = +refs/heads/*:refs/heads/*
+\tfetch = +refs/heads/*:refs/github/heads/*
 \tfetch = +refs/tags/*:refs/tags/*
 \tprune = true
 [gc]
 \tauto = 0
 [receive]
 \tfsckObjects = true
+\thideRefs = refs/github
+[uploadpack]
+\thideRefs = refs/github
 ${credentialHelper ? `[credential]\n\thelper =\n\thelper = ${quote(credentialHelper)}\n` : ""}`;
 }
 
@@ -316,7 +323,24 @@ export class Mirrors {
     return e.record.url;
   }
 
-  /** Where `branch` is in the mirror, as GitHub had it at the last fetch; undefined if it isn't there. */
+  /**
+   * A branch was landed on the default branch: in the mirror it goes back to GitHub's copy, or goes if GitHub has
+   * none, and it is nobody's any more. Fetches first, so a copy just deleted on GitHub counts as gone.
+   */
+  async landed(repo: string, branch: string, sandbox: string): Promise<void> {
+    await this.fetch(repo, { force: true }).catch(() => {});
+    const dir = this.path(repo);
+    const github = await this.githubHead(repo, branch);
+    await runGit(dir, github ? ["update-ref", `refs/heads/${branch}`, github] : ["update-ref", "-d", `refs/heads/${branch}`], { env: gitEnv() }).catch(() => {});
+    await this.noteBranches(repo, sandbox, [{ branch, deleted: true }]);
+  }
+
+  /** Where `branch` is on GitHub, as of the last fetch; undefined if it isn't there. */
+  async githubHead(repo: string, branch: string): Promise<string | undefined> {
+    return runGit(this.path(repo), ["rev-parse", "--verify", "--quiet", `refs/github/heads/${branch}^{commit}`], { env: gitEnv() }).then((o) => o.trim() || undefined, () => undefined);
+  }
+
+  /** Where `branch` is in the mirror, as the VMs see it: Claude's latest push, or GitHub's. */
   async branchHead(repo: string, branch: string): Promise<string | undefined> {
     return runGit(this.path(repo), ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`], { env: gitEnv() }).then((o) => o.trim() || undefined, () => undefined);
   }
@@ -455,19 +479,25 @@ export class Mirrors {
         await runGit(this.root, ["init", "--bare", "--quiet", "--template=", dir], { env, signal });
       }
       await this.writeOwn(dir, e.record.url);
+      const before = await refMap(git, "refs/github/heads/");
+      const local = await refMap(git, "refs/heads/");
+      // A mirror from before refs/github/: its branches were GitHub's, so they start out in step.
+      const was = e.record.layout === 2 ? before : new Map([...before, ...local]);
       await git(["fetch", "--quiet", "--prune", "--no-write-fetch-head", "origin"], timeoutMs);
+      const after = await refMap(git, "refs/github/heads/");
       // From here on the fetch has worked, and is kept even if what follows is stopped or fails.
       update.fetchedAt = new Date().toISOString();
       update.error = undefined;
       const gcDue = !first && (!e.record.gcAt || Date.now() - Date.parse(e.record.gcAt) > (this.opts.gcEveryMs ?? 7 * 24 * 60 * 60_000));
       // Asking GitHub where HEAD points costs another connection, so only when it matters: a new mirror, a HEAD
       // whose branch is gone, and with the weekly gc, for a default branch renamed on GitHub.
-      if (first || gcDue || !(await git(["rev-parse", "--verify", "--quiet", "HEAD"]).then(() => true, () => false))) await this.followHead(git);
-      const refs = await git(["for-each-ref", "--format=%(refname)", "refs/heads", "refs/tags"]);
-      const names = refs.split("\n").filter(Boolean);
-      update.branches = names.filter((n) => n.startsWith("refs/heads/")).length;
-      update.tags = names.length - update.branches;
-      branchesSeen = new Set(names.filter((n) => n.startsWith("refs/heads/")).map((n) => n.slice("refs/heads/".length)));
+      if (first || gcDue || !(await headOnGitHub(git))) await this.followHead(git);
+      await syncBranches(git, was, after, local, await headName(git));
+      update.layout = 2;
+      const tags = (await git(["for-each-ref", "--format=%(refname)", "refs/tags"])).split("\n").filter(Boolean);
+      update.branches = after.size;
+      update.tags = tags.length;
+      branchesSeen = new Set([...after.keys(), ...(await refMap(git, "refs/heads/")).keys()]);
       if (first) update.gcAt = update.fetchedAt;
       else if (gcDue) {
         await git(["gc", "--quiet"], timeoutMs);
@@ -499,8 +529,9 @@ export class Mirrors {
     const out = await git(["ls-remote", "--symref", "origin", "HEAD"]).catch(() => "");
     let ref = /^ref: (refs\/heads\/\S+)\tHEAD$/m.exec(out)?.[1];
     if (!ref) {
-      if (await git(["rev-parse", "--verify", "--quiet", "HEAD"]).then(() => true, () => false)) return;
-      const branches = (await git(["for-each-ref", "--format=%(refname)", "refs/heads"])).split("\n").filter(Boolean);
+      if (await headOnGitHub(git)) return;
+      // GitHub's branches, not the mirror's: those follow them only once HEAD is known.
+      const branches = (await git(["for-each-ref", "--format=%(refname)", "refs/github/heads"])).split("\n").filter(Boolean).map((r) => r.replace(/^refs\/github\//, "refs/"));
       ref = ["refs/heads/main", "refs/heads/master"].find((b) => branches.includes(b)) ?? branches[0];
     }
     if (ref) await git(["symbolic-ref", "HEAD", ref]);
@@ -558,6 +589,44 @@ export class Mirrors {
 
   private changed(): void {
     this.opts.onChange?.();
+  }
+}
+
+/** The refs under `prefix`, by name without it, to their commits. */
+async function refMap(git: (args: string[]) => Promise<string>, prefix: string): Promise<Map<string, string>> {
+  const out = await git(["for-each-ref", "--format=%(objectname) %(refname)", prefix]);
+  const map = new Map<string, string>();
+  for (const line of out.split("\n").filter(Boolean)) {
+    const sp = line.indexOf(" ");
+    map.set(line.slice(sp + 1).slice(prefix.length), line.slice(0, sp));
+  }
+  return map;
+}
+
+/** Whether the mirror's HEAD names a branch GitHub has. */
+const headOnGitHub = async (git: (args: string[]) => Promise<string>) => {
+  const name = await headName(git);
+  return name !== undefined && (await git(["rev-parse", "--verify", "--quiet", `refs/github/heads/${name}`]).then(() => true, () => false));
+};
+
+/** The default branch's name, from the mirror's HEAD. */
+const headName = (git: (args: string[]) => Promise<string>) =>
+  git(["symbolic-ref", "--quiet", "HEAD"]).then((r) => r.trim().replace(/^refs\/heads\//, "") || undefined, () => undefined);
+
+/**
+ * Brings the branches the VMs see up to date with GitHub's after a fetch: one that was in step with GitHub (as it was
+ * before the fetch) follows it, moving or going with it; one an agent pushed something to that GitHub doesn't have
+ * stays as the agent left it; a branch new on GitHub appears. The default branch always follows GitHub, which only
+ * Kumiko changes. Each update is leased to what the branch was, so a push landing meanwhile wins.
+ */
+export async function syncBranches(git: (args: string[]) => Promise<string>, was: Map<string, string>, now: Map<string, string>, local: Map<string, string>, defaultBranch?: string): Promise<void> {
+  for (const name of new Set([...was.keys(), ...now.keys(), ...local.keys()])) {
+    const [l, o, n] = [local.get(name), was.get(name), now.get(name)];
+    const follows = name === defaultBranch || (l !== undefined && l === o) || (l === undefined && o === undefined);
+    if (!follows || l === n) continue;
+    const ref = `refs/heads/${name}`;
+    const step = n ? ["update-ref", ref, n, l ?? "0".repeat(40)] : ["update-ref", "-d", ref, l!];
+    await git(step).catch(() => {});
   }
 }
 

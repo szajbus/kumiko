@@ -57,25 +57,20 @@ any repo still missing once it's back.
 
 ### Pushing
 
-`git push` from the sandbox goes to the mirror too, where Kumiko checks each branch it changes before anything reaches
-GitHub. What's allowed, Kumiko pushes on to GitHub with `gh`'s token, from the mirror, and `git push` in the sandbox
-shows GitHub's answer. Only if GitHub accepts does the mirror change, so it always matches GitHub.
+`git push` from the sandbox goes to the mirror on your Mac, and no further. Nothing the agent pushes reaches GitHub
+until you approve it on a card: opening or updating a pull request, merging into the default branch, an issue or a
+comment.
 
-- **Branches the agent creates** from the sandbox are pushed, and it can force-push and delete them. Kumiko records
-  which sandbox created each one.
-- **Changes to CI wait for you.** GitHub runs a branch's own workflows when it's pushed, with the repository's secrets,
-  so a push whose `.github/` differs from the default branch's waits in the mirror while Kumiko shows a card: the
-  branch, the commits, and the files under `.github/` it changes. It's shown in the session the push came from (Kumiko
-  starts Claude with `KUMIKO_SESSION`, which the VM's git proxy passes on), or else in the sandbox's most recent one.
-  Allowing it pushes it; later pushes to that branch with the same `.github/` go through by themselves. If the push
-  gives up waiting, the card says so.
-- **Everything else is refused**, with a message saying why: the default branch, tags, and branches someone else
-  created, on GitHub or from another sandbox. A branch of the agent's that someone replaced on GitHub with one of the
-  same name counts as theirs from then on, and so does a name that differs from another branch only in case, which
-  your Mac's file system takes for the same. A push with one refused branch is refused whole.
-
-Pushes use your `gh` login, so GitHub's branch protections and rulesets don't stop them if you can bypass them:
-Kumiko's check is the gate.
+- **In the mirror, the agent works freely.** It can push, force-push and delete any branch there but the default one,
+  without asking, including branches someone else made. Its branches show to it as `origin`'s, as usual.
+- **The mirror keeps GitHub's branches apart,** in `refs/github/`, which the sandbox never sees. A branch the agent
+  hasn't changed follows GitHub's; one it pushed to stays as it left it until a card sends it on. The default branch
+  always follows GitHub. Removing a repository's mirror loses what's only in it.
+- **Refused**, with a message saying why: the default branch, tags, other refs, and a name that differs from another
+  branch's only in case, which your Mac's file system takes for the same.
+- **Signed on the way out.** When a card sends commits to GitHub (a PR's, or a merge's), Kumiko signs the ones that
+  aren't on GitHub yet with your key, changing nothing else in them, and tells the agent to run `git pull --rebase`, as
+  their shas change. Commits already on GitHub are left as they are, whoever made them.
 
 ### Merging into the default branch
 
@@ -92,12 +87,15 @@ that message, headed `main ← branch`, with the repository in the corner:
   - **Squash and push:** one commit with all the branch's changes. Its subject is Claude's title, its message lists
     the branch's commits, and Claude's co-author trailer follows. Anyone else the commits name as a co-author isn't
     carried over, as they'd show on GitHub as co-authors of a commit you signed.
-  - **Push and open pull request:** a PR opens as you, with Claude's title and description, which you can edit. If
-    the branch is Claude's, Kumiko first signs its unsigned commits with your key, changing nothing else in them, and
-    moves the branch on GitHub to the signed ones, so the PR and the history it leaves have only signed commits. Their
-    shas change, so Claude is told to run `git pull --rebase` on the branch before going on. A branch someone else
-    made is left as they pushed it. To land it later, Claude delivers the branch again: then there are only the first two, a merge commit says "Merge pull request #… from …" so GitHub shows the
+  - **Push and open pull request:** the branch goes to GitHub, signed, and a PR opens as you, with Claude's title and
+    description, which you can edit. To land it later, Claude delivers the branch again: then there are only the first two, a merge commit says "Merge pull request #… from …" so GitHub shows the
     PR merged, and a squash closes the PR with a comment saying where it landed.
+
+For a branch whose PR is open but lacks what the mirror has, the card's first choice is **Update pull request**: the
+new commits go to the PR. Merging such a branch updates the PR first, so the PR shows what landed and GitHub marks it
+merged. The card marks a branch "only on your Mac", or how many of its commits aren't on GitHub. If sending it would
+drop or change commits already on GitHub (the branch was rewritten since), the card lists them, before you decide.
+Kumiko matches commits by the change they make, not by sha, so a rebase, a squash or its own signing lists nothing.
 
 The button starts at what you picked last time in the sandbox. **Decline…** lets you tell Claude why. Nothing is shown
 when there's nothing to decide yet: a branch that isn't pushed, or that doesn't merge cleanly, gets Claude told what to

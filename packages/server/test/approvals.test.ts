@@ -128,10 +128,15 @@ describe("delivering", () => {
       git(work, ["add", file]);
       git(work, ["commit", "--quiet", "-m", `Change ${file}${opts.trailer === false ? "" : "\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"}`], opts.who);
     }
-    git(work, ["push", "--quiet", "--force", "origin", name]);
-    await mirrors.fetch("acme/widget");
+    await toMirror(name);
     await mirrors.noteBranches("acme/widget", "web", [{ branch: name, deleted: false }]);
     return git(work, ["rev-parse", "HEAD"]).trim();
+  };
+
+  /** Puts the work clone's `name` into the mirror only, as Claude's push through the relay does: not on GitHub. */
+  const toMirror = async (name: string) => {
+    await mirrors.fetch("acme/widget", { force: true });
+    git(mirrors.path("acme/widget"), ["fetch", "--quiet", work, `+refs/heads/${name}:refs/heads/${name}`]);
   };
 
   /** Claude asks to deliver: resolves with its card, or the answer it got instead. */
@@ -151,13 +156,19 @@ describe("delivering", () => {
       return undefined;
     }
   };
+  const inMirror = (ref: string) => {
+    try {
+      return git(mirrors.path("acme/widget"), ["rev-parse", "--verify", "--quiet", ref]).trim();
+    } catch {
+      return undefined;
+    }
+  };
 
   it("shows a card for exactly the pushed commit, with what Kumiko found", async () => {
     fresh();
     const head = await branch("fix-x", { "a.ts": "a\n", ".github/workflows/ci.yml": "on: push\n" });
     git(work, ["commit", "--quiet", "--allow-empty", "-m", "Someone else's"], { name: "Mallory", email: "m@example.com" });
-    git(work, ["push", "--quiet", "origin", "fix-x"]);
-    await mirrors.fetch("acme/widget");
+    await toMirror("fix-x");
     const last = git(work, ["rev-parse", "HEAD"]).trim();
     assert.notEqual(last, head);
     const { card, answer } = await ask({ branch: "fix-x", title: "Fix x", body: "It fixes x." });
@@ -177,7 +188,7 @@ describe("delivering", () => {
   it("says what to fix instead of showing a card", async () => {
     fresh();
     const cases: [Record<string, unknown>, RegExp][] = [
-      [{ branch: "nope", title: "t", body: "b" }, /nope isn't on GitHub\. Push it first \(git push -u origin nope\)/],
+      [{ branch: "nope", title: "t", body: "b" }, /nope isn't pushed\. Push it first \(git push -u origin nope\)/],
       [{ branch: "main", title: "t", body: "b" }, /main is the branch work is delivered to/],
       [{ branch: "--upload-pack=x", title: "t", body: "b" }, /isn't a branch name/],
       [{ branch: "fix-x", title: "", body: "b" }, /title must be a non-empty string/],
@@ -222,22 +233,31 @@ describe("delivering", () => {
     assert.equal(onGitHub("refs/heads/main"), main, "nothing landed");
   });
 
-  it("lands an approved branch as a merge commit signed on the host, deletes it, and only once", async () => {
+  it("lands a branch from the mirror as a signed merge commit, with Claude's commits signed too, and only once", async () => {
     fresh();
     const head = await branch("ship", { s: "s\n" });
+    assert.equal(onGitHub("refs/heads/ship"), undefined, "Claude's branch is only in the mirror");
     const r = await ask({ branch: "ship", title: "Ship", body: "b" });
+    const card0 = r.card!.card as DeliverCard;
+    assert.equal(card0.github, undefined);
+    assert.equal(card0.ahead, 1);
+    assert.equal(card0.toSign, 1);
     const decided = await approvals.decide("s1", r.id, { action: "approve", decision: { kind: "deliver", route: "main", method: "merge" } });
     assert.equal(decided.state, "approved");
     assert.deepEqual(sessions.answer(r.id), { kind: "allow" });
     const res = await approvals.call(sessions.info, "deliver", r.input, r.toolUseId);
     assert.equal(res.isError, undefined, res.text);
-    assert.match(res.text, /^Delivered ship to main as [0-9a-f]{7} \(merge commit, signed\)\. ship was deleted on GitHub\./);
+    assert.match(res.text, /^Delivered ship to main as [0-9a-f]{7} \(merge commit, signed\)\. Kumiko signed its commit on the way, so its sha changed\./);
     const main = onGitHub("refs/heads/main")!;
-    assert.equal(git(bare, ["rev-parse", `${main}^2`]).trim(), head);
+    const brought = git(bare, ["rev-parse", `${main}^2`]).trim();
+    assert.notEqual(brought, head, "Claude's commit, signed");
+    assert.match(git(bare, ["cat-file", "commit", brought]), /^gpgsig -----BEGIN SSH SIGNATURE-----/m);
+    assert.equal(git(bare, ["rev-parse", `${brought}^{tree}`]).trim(), git(work, ["rev-parse", `${head}^{tree}`]).trim());
     const commit = git(bare, ["cat-file", "commit", main]);
     assert.match(commit, /^gpgsig -----BEGIN SSH SIGNATURE-----/m);
     assert.match(commit, /\n\nMerge branch 'ship'\n$/);
-    assert.equal(onGitHub("refs/heads/ship"), undefined);
+    assert.equal(onGitHub("refs/heads/ship"), undefined, "the branch itself never went to GitHub");
+    assert.equal(inMirror("refs/heads/ship"), undefined, "landed, it's gone from the mirror");
     assert.equal(mirrors.createdBy("acme/widget", "ship"), undefined);
     const card = sessions.card(r.id)!;
     assert.equal(card.state, "done");
@@ -253,8 +273,7 @@ describe("delivering", () => {
     await branch("squashy", { q1: "1\n", q2: "2\n" });
     // A commit naming someone else as co-author: they mustn't become one of the user's signed commit.
     git(work, ["commit", "--quiet", "--allow-empty", "-m", "Tidy\n\nCo-authored-by: Mallory <m@example.com>\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"]);
-    git(work, ["push", "--quiet", "origin", "squashy"]);
-    await mirrors.fetch("acme/widget");
+    await toMirror("squashy");
     const r = await ask({ branch: "squashy", title: "Squash it", body: "b" });
     await approvals.decide("s1", r.id, { action: "approve", decision: { kind: "deliver", route: "main", method: "squash" } });
     const res = await approvals.call(sessions.info, "deliver", r.input, r.toolUseId);
@@ -316,7 +335,7 @@ describe("delivering", () => {
     fresh();
     await branch("moving", { m1: "1\n" });
     const r = await ask({ branch: "moving", title: "Moving", body: "b" });
-    const now = await branch("moving", { m2: "2\n" }, { from: "origin/moving" });
+    const now = await branch("moving", { m2: "2\n" }, { from: "moving" });
     const stale = await approvals.decide("s1", r.id, { action: "approve", decision: { kind: "deliver", route: "main", method: "merge" } });
     assert.equal(stale.state, "stale");
     assert.deepEqual(stale.moved, { to: now, commits: 1 });
@@ -404,7 +423,7 @@ describe("delivering", () => {
     const r = await ask({ branch: "pr-me", title: "PR me", body: "Does p." });
     await approvals.decide("s1", r.id, { action: "approve", decision: { kind: "deliver", route: "pr", method: "merge", title: "PR me, edited", body: "Does p, edited." } });
     const res = await approvals.call(sessions.info, "deliver", r.input, r.toolUseId);
-    assert.match(res.text, /^Opened PR #(\d+) \(https:\/\/github\.com\/acme\/widget\/pull\/\d+\)\. Kumiko signed the branch's commit with the user's key before opening it, which changed its sha but not its contents: on pr-me, run git pull --rebase before you go on, so your branch is the signed one\. Nothing is on main yet/);
+    assert.match(res.text, /^Opened PR #(\d+) \(https:\/\/github\.com\/acme\/widget\/pull\/\d+\)\. Kumiko signed the branch's commit with the user's key on the way, which changed its sha but not its contents: on pr-me, run git pull --rebase before you go on, so your branch is the signed one\. Nothing is on main yet/);
     const signedTip = onGitHub("refs/heads/pr-me")!;
     assert.notEqual(signedTip, head);
     const db = JSON.parse(await readFile(join(root, "gh", "github.json"), "utf8"));
@@ -417,7 +436,7 @@ describe("delivering", () => {
     const again = await ask({ branch: "pr-me", title: "ignored", body: "ignored" });
     const c = again.card!.card as DeliverCard;
     assert.deepEqual(c.pr, { number: pr.number, title: "PR me, edited", url: `https://github.com/acme/widget/pull/${pr.number}` });
-    await assert.rejects(approvals.decide("s1", again.id, { action: "approve", decision: { kind: "deliver", route: "pr", method: "merge" } }), /has PR #\d+ open already/);
+    await assert.rejects(approvals.decide("s1", again.id, { action: "approve", decision: { kind: "deliver", route: "pr", method: "merge" } }), /PR #\d+ has all of pr-me already/);
     await approvals.decide("s1", again.id, { action: "approve", decision: { kind: "deliver", route: "main", method: "merge" } });
     const landed = await approvals.call(sessions.info, "deliver", again.input, again.toolUseId);
     assert.equal(landed.isError, undefined, landed.text);
@@ -432,8 +451,7 @@ describe("delivering", () => {
     await branch("signme", { s1: "1\n", s2: "2\n" });
     git(work, ["fetch", "--quiet", "origin"]);
     git(work, ["merge", "--quiet", "--no-edit", "origin/main"]);
-    git(work, ["push", "--quiet", "origin", "signme"]);
-    await mirrors.fetch("acme/widget");
+    await toMirror("signme");
     await mirrors.noteBranches("acme/widget", "web", [{ branch: "signme", deleted: false, sha: git(work, ["rev-parse", "HEAD"]).trim() }]);
     const old = git(work, ["rev-parse", "HEAD"]).trim();
     const oldCommits = git(work, ["rev-list", "--reverse", "origin/main..HEAD"]).trim().split("\n");
@@ -451,7 +469,7 @@ describe("delivering", () => {
       assert.match(git(bare, ["cat-file", "commit", sha]), /^gpgsig -----BEGIN SSH SIGNATURE-----/m, `commit ${i} is signed`);
       assert.equal(fields(sha), git(work, ["log", "-1", "--format=%T%n%an <%ae> %ad%n%cn <%ce> %cd%n%B", "--date=raw", oldCommits[i]]), `commit ${i} is otherwise the same`);
     });
-    assert.equal(mirrors.lastPushed("acme/widget", "signme"), tip, "Claude's next push starts from the signed commit");
+    assert.equal(inMirror("refs/heads/signme"), tip, "Claude's next push starts from the signed commit");
     assert.equal(mirrors.createdBy("acme/widget", "signme"), "web");
 
     // Claude's own copy, as the tool tells it, catches up, keeping a commit it made meanwhile.
@@ -463,17 +481,99 @@ describe("delivering", () => {
     assert.equal(git(work, ["log", "-1", "--format=%s"]).trim(), "Later");
   });
 
-  it("leaves a branch it didn't see Claude create as it was pushed when it opens a PR for it", async () => {
+  it("leaves commits that are on GitHub already as they are, whoever made them, when it opens a PR", async () => {
     fresh();
-    const head = await branch("theirs-pr", { t: "t\n" });
-    await mirrors.noteBranches("acme/widget", "web", [{ branch: "theirs-pr", deleted: true }]);
+    // A teammate's branch, on GitHub; the mirror has it as GitHub does.
+    git(work, ["fetch", "--quiet", "origin"]);
+    git(work, ["checkout", "--quiet", "-B", "theirs-pr", "origin/main"]);
+    git(work, ["commit", "--quiet", "--allow-empty", "-m", "Theirs"], { name: "Mate", email: "mate@example.com" });
+    git(work, ["push", "--quiet", "origin", "theirs-pr"]);
+    await mirrors.fetch("acme/widget", { force: true });
+    const head = git(work, ["rev-parse", "HEAD"]).trim();
     const r = await ask({ branch: "theirs-pr", title: "Theirs", body: "b" });
-    assert.equal((r.card!.card as DeliverCard).toSign, 0);
+    const c = r.card!.card as DeliverCard;
+    assert.deepEqual([c.toSign, c.ahead, c.github], [0, 0, head]);
     await approvals.decide("s1", r.id, { action: "approve", decision: { kind: "deliver", route: "pr", method: "merge", title: "Theirs", body: "b" } });
     const res = await approvals.call(sessions.info, "deliver", r.input, r.toolUseId);
     assert.doesNotMatch(res.text, /signed/);
     assert.equal(onGitHub("refs/heads/theirs-pr"), head);
     assert.equal(sessions.card(r.id)!.receipt!.meta, "as you");
+  });
+
+  it("updates an open PR with what the mirror has, signed, and first of all when the PR is landed", async () => {
+    fresh();
+    await branch("grow", { g1: "1\n" });
+    const r = await ask({ branch: "grow", title: "Grow", body: "b" });
+    await approvals.decide("s1", r.id, { action: "approve", decision: { kind: "deliver", route: "pr", method: "merge", title: "Grow", body: "b" } });
+    await approvals.call(sessions.info, "deliver", r.input, r.toolUseId);
+    const published = onGitHub("refs/heads/grow")!;
+    // Claude catches up and adds a commit: in the mirror only, the PR doesn't have it.
+    git(work, ["fetch", "--quiet", "origin"]);
+    git(work, ["checkout", "--quiet", "-B", "grow", "origin/grow"]);
+    await writeFile(join(work, "g2"), "2\n");
+    git(work, ["add", "g2"]);
+    git(work, ["commit", "--quiet", "-m", "Change g2"]);
+    await toMirror("grow");
+    assert.equal(onGitHub("refs/heads/grow"), published);
+    const again = await ask({ branch: "grow", title: "Grow", body: "b" });
+    const c = again.card!.card as DeliverCard;
+    assert.equal(c.github, published);
+    assert.equal(c.ahead, 1);
+    assert.deepEqual(c.lost, []);
+    assert.ok(c.pr);
+    await approvals.decide("s1", again.id, { action: "approve", decision: { kind: "deliver", route: "pr", method: "merge" } });
+    const updated = await approvals.call(sessions.info, "deliver", again.input, again.toolUseId);
+    assert.match(updated.text, new RegExp(`^Updated PR #${c.pr!.number} `));
+    const tip = onGitHub("refs/heads/grow")!;
+    assert.equal(git(bare, ["rev-parse", `${tip}^`]).trim(), published, "added on top");
+    assert.match(git(bare, ["cat-file", "commit", tip]), /^gpgsig /m);
+    assert.equal(sessions.card(again.id)!.receipt!.text, `Updated PR #${c.pr!.number}`);
+
+    // Another commit, then landing: the PR gets it first, so what lands is what the PR shows.
+    git(work, ["fetch", "--quiet", "origin"]);
+    git(work, ["checkout", "--quiet", "-B", "grow", "origin/grow"]);
+    git(work, ["commit", "--quiet", "--allow-empty", "-m", "Last"]);
+    await toMirror("grow");
+    const land = await ask({ branch: "grow", title: "Grow", body: "b" });
+    await approvals.decide("s1", land.id, { action: "approve", decision: { kind: "deliver", route: "main", method: "merge" } });
+    const landed = await approvals.call(sessions.info, "deliver", land.input, land.toolUseId);
+    assert.equal(landed.isError, undefined, landed.text);
+    const main = onGitHub("refs/heads/main")!;
+    const db = JSON.parse(await readFile(join(root, "gh", "github.json"), "utf8"));
+    const prTip = git(bare, ["rev-parse", `${main}^2`]).trim();
+    assert.equal(git(bare, ["log", "-1", "--format=%s", prTip]).trim(), "Last");
+    assert.match(git(bare, ["log", "-1", "--format=%B", main]), new RegExp(`^Merge pull request #${c.pr!.number} from acme/grow`));
+    assert.ok(db.items.some((i: { head?: string }) => i.head === "grow"));
+  });
+
+  it("lists what publishing would drop or change on GitHub, and nothing for a rebase or a squash", async () => {
+    fresh();
+    await branch("rewrite", { r1: "1\n", r2: "2\n", r3: "3\n" });
+    const r = await ask({ branch: "rewrite", title: "Rewrite", body: "b" });
+    await approvals.decide("s1", r.id, { action: "approve", decision: { kind: "deliver", route: "pr", method: "merge", title: "Rewrite", body: "b" } });
+    await approvals.call(sessions.info, "deliver", r.input, r.toolUseId);
+    const published = onGitHub("refs/heads/rewrite")!;
+    const card = async () => {
+      await toMirror("rewrite");
+      const a = await ask({ branch: "rewrite", title: "Rewrite", body: "b" });
+      return a.card!.card as DeliverCard;
+    };
+    // Squashed into one commit: everything is still there.
+    git(work, ["fetch", "--quiet", "origin"]);
+    git(work, ["checkout", "--quiet", "-B", "rewrite", "origin/rewrite"]);
+    git(work, ["reset", "--quiet", "--soft", "origin/main"]);
+    git(work, ["commit", "--quiet", "-m", "All three"]);
+    assert.deepEqual((await card()).lost, []);
+    // Dropping one and changing another is listed.
+    git(work, ["checkout", "--quiet", "-B", "rewrite", published]);
+    git(work, ["reset", "--quiet", "--hard", "origin/main"]);
+    for (const [f, text, subject] of [["r1", "1\n", "Change r1"], ["r2", "two\n", "Change r2"]]) {
+      await writeFile(join(work, f), text);
+      git(work, ["add", f]);
+      git(work, ["commit", "--quiet", "-m", subject]);
+    }
+    const c = await card();
+    assert.deepEqual(c.lost.map((l) => [l.subject, l.how]), [["Change r2", "changed"], ["Change r3", "dropped"]]);
   });
 
   describe("issues and comments", () => {
