@@ -383,7 +383,7 @@ export function MoveToBackground({ session, toolUseId }: { session: string; tool
 function BackgroundLine({ fold, mark, name, what, action }: { fold?: { open: boolean; toggle(): void }; mark?: ReactNode; name?: string; what: ReactNode; action?: ReactNode }) {
   const body = (
     <>
-      <span className="bg-line-fold" aria-hidden="true">{fold ? (fold.open ? "▾" : "▸") : ""}</span>
+      <span className="bg-line-fold" aria-hidden="true">{fold && <span className={`tri${fold.open ? "" : " is-right"}`} />}</span>
       <span className="bg-line-mark">{mark}</span>
       {name && <span className="bg-line-name">{name}</span>}
       <span className="bg-line-what">{what}</span>
