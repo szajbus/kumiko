@@ -505,6 +505,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       events: (id) => sessions.events(id),
       putCard: (id, card) => sessions.putCard(id, card),
       answerAsk: (id, ask, answer) => sessions.answerAsk(id, ask, answer),
+      prompt: (id, text, atts, files) => sessions.prompt(id, text, atts, files),
       list: () => sessions.list(),
       hostAsk: (id, ask, onAnswer) => sessions.hostAsk(id, ask, onAnswer),
       closeHostAsk: (id, ask) => sessions.closeHostAsk(id, ask),
@@ -1364,11 +1365,11 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   });
 
   /**
-   * Decides on an approval card: `{ action: "approve", decision }`, `{ action: "decline", reason? }`, or
+   * Decides on an approval card: `{ action: "approve", decision }`, `{ action: "decline", reason?, attachments? }`, or
    * `{ action: "refresh" }` to work a stale card out again. Answers with the card as it is now.
    */
   app.post("/api/sessions/:id/cards/:ask", async (c) => {
-    const req = await body<{ action?: unknown; decision?: unknown; reason?: unknown }>(c, "Send { action: approve | decline | refresh }.");
+    const req = await body<{ action?: unknown; decision?: unknown; reason?: unknown; attachments?: unknown }>(c, "Send { action: approve | decline | refresh }.");
     const id = sessionOf(c).id;
     const ask = c.req.param("ask");
     let action: Parameters<Approvals["decide"]>[2];
@@ -1376,7 +1377,10 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       const decision = parseCardDecision(req.decision);
       if (!decision) throw new HttpError(400, "Send the decision: the route and method, or the text as you left it.");
       action = { action: "approve", decision };
-    } else if (req.action === "decline") action = { action: "decline", ...(typeof req.reason === "string" ? { reason: req.reason } : {}) };
+    } else if (req.action === "decline") {
+      const sent = await attachments.take(req.attachments);
+      action = { action: "decline", ...(typeof req.reason === "string" ? { reason: req.reason } : {}), ...(sent.attachments.length ? sent : {}) };
+    }
     else if (req.action === "refresh") action = { action: "refresh" };
     else throw new HttpError(400, "action must be approve, decline or refresh.");
     try {

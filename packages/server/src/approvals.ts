@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { AgentMessage, ToolResult, ToolSpec } from "@kumiko/agent";
+import type { AgentFile, AgentMessage, ToolResult, ToolSpec } from "@kumiko/agent";
 import {
   FOOTERS,
   MAX_BODY,
@@ -10,6 +10,7 @@ import {
   withFooter,
   type AgentAsk,
   type ApprovalCard,
+  type Attachment,
   type AskAnswer,
   type PushCard,
   type CardDecision,
@@ -34,6 +35,8 @@ export interface ApprovalSessions {
   events(id: string): readonly SessionEvent[];
   putCard(id: string, card: ApprovalCard): void;
   answerAsk(id: string, askId: string, answer: { kind: "allow" } | { kind: "deny"; message: string }): void;
+  /** Sends Claude a message from the user, as the composer would. */
+  prompt(id: string, text: string, attachments: Attachment[], files: AgentFile[]): void;
   /** The open sessions, for where to ask about a push. */
   list(): SessionInfo[];
   hostAsk(id: string, ask: Extract<AgentAsk, { kind: "approval" }>, onAnswer: (answer: AskAnswer | undefined) => void): void;
@@ -178,7 +181,7 @@ export function cardsOf(events: readonly SessionEvent[]): Map<string, ApprovalCa
  * card from the mirror and GitHub and shows it, or tells Claude what to fix first. The user's decision is kept in the
  * card; the call itself runs only if the card says the user approved this very call, whatever Claude's settings say.
  */
-type DecideAction = { action: "approve"; decision: CardDecision } | { action: "decline"; reason?: string } | { action: "refresh" };
+type DecideAction = { action: "approve"; decision: CardDecision } | { action: "decline"; reason?: string; attachments?: Attachment[]; files?: AgentFile[] } | { action: "refresh" };
 
 export class Approvals {
   /** Cards being decided on, by ask id. */
@@ -393,6 +396,15 @@ export class Approvals {
     if (card.state !== "open" && card.state !== "stale") throw new ApprovalError("This has been decided already.");
     if (action.action === "decline") {
       const reason = action.reason?.trim().slice(0, 4000);
+      const { attachments = [], files = [] } = action;
+      if (attachments.length) {
+        // A denial carries only text: the reason goes with the files, as the user's next message, and the chat shows it there.
+        const next: ApprovalCard = { ...card, state: "declined" };
+        this.sessions.putCard(session, next);
+        this.sessions.answerAsk(session, askId, { kind: "deny", message: `The user declined ${what(card)}. Why, with files, comes in their next message.` });
+        this.sessions.prompt(session, reason || attachments.map((a) => a.name).join(", "), attachments, files);
+        return next;
+      }
       const next: ApprovalCard = { ...card, state: "declined", ...(reason ? { reason } : {}) };
       this.sessions.putCard(session, next);
       this.sessions.answerAsk(session, askId, { kind: "deny", message: `The user declined ${what(card)}${reason ? `: “${reason}”` : "."}` });
@@ -525,11 +537,11 @@ export class Approvals {
     const d = card.decision!;
     if (c.kind === "issue" && d.kind === "issue") {
       const issue = await this.opts.github.issueCreate(c.repo, { title: d.title, body: withFooter(d.body, FOOTERS.issue, d.footer !== false), labels: d.labels });
-      return { result: { text: `Created issue #${issue.number} (${issue.url}).` }, receipt: { ok: true, text: `Created issue #${issue.number}`, meta: "as you", url: issue.url, link: "Open issue" } };
+      return { result: { text: `Created issue #${issue.number} (${issue.url}).` }, receipt: { ok: true, text: `Created issue #${issue.number}`, meta: "as you", url: issue.url, link: "View on GitHub" } };
     }
     if (c.kind === "comment" && d.kind === "comment") {
       const url = await this.opts.github.comment(c.repo, c.target.type, c.target.number, withFooter(d.body, FOOTERS.comment, d.footer !== false));
-      return { result: { text: `Posted a comment on #${c.target.number}${url ? ` (${url})` : ""}.` }, receipt: { ok: true, text: `Commented on #${c.target.number}`, meta: "as you", ...(url ? { url, link: "Open comment" } : {}) } };
+      return { result: { text: `Posted a comment on #${c.target.number}${url ? ` (${url})` : ""}.` }, receipt: { ok: true, text: `Commented on #${c.target.number}`, meta: "as you", ...(url ? { url, link: "View on GitHub" } : {}) } };
     }
     if (c.kind !== "deliver" || d.kind !== "deliver") throw new Error("That decision isn't for this card.");
     if (d.route === "pr") {
@@ -541,7 +553,7 @@ export class Approvals {
       const pr = await this.opts.github.prCreate(c.repo, { base: c.base, head: c.branch, title, body: withFooter(d.body ?? c.body, FOOTERS.pr, d.footer !== false) });
       return {
         result: { text: `Opened PR #${pr.number} (${pr.url}). Nothing is on ${c.base} yet; when the user wants it landed, call deliver on ${c.branch} again.` },
-        receipt: { ok: true, text: `Opened PR #${pr.number}`, meta: "as you", url: pr.url, link: "Open PR" },
+        receipt: { ok: true, text: `Opened PR #${pr.number}`, meta: "as you", url: pr.url, link: "View on GitHub" },
       };
     }
     const dir = this.opts.mirrors.path(c.repo);
