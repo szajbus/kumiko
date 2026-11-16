@@ -30,8 +30,11 @@ export interface SandboxProvider {
    * forward can't be set up (the guest path is taken, say), with why on stderr.
    */
   forward(name: string, guestPath: string, hostPath: string): ChildProcess;
-  /** Checks a spec before `create`: errors block it, warnings (unset variables) don't. */
-  validate(spec: SandboxSpec): Promise<Validation>;
+  /**
+   * Checks a spec before `create`: errors block it, warnings (unset variables) don't. With `newSandbox`, nothing of an
+   * earlier sandbox of the same name may be left, such as its workspace disk.
+   */
+  validate(spec: SandboxSpec, opts?: { newSandbox?: boolean }): Promise<Validation>;
   /** Templates the create form can offer, plus the one to preselect. */
   templates(): Promise<{ templates: string[]; preferred: string }>;
 }

@@ -147,11 +147,21 @@ export function vmSetupScript(config: string): string {
     `cat > "$d/git-proxy.new" <<'KUMIKO_PROXY'\n${GIT_PROXY}KUMIKO_PROXY`,
     `sed "s|@SOCK@|$sock|g" "$d/git-proxy.new" > "$d/git-proxy" && rm -f "$d/git-proxy.new"`,
     `chmod 755 "$d/git-proxy"`,
-    `cat > "$d/git.config.new" <<'KUMIKO_GIT'\n${config}KUMIKO_GIT`,
-    `sed "s|@DIR@|$d|g" "$d/git.config.new" > "$d/git.config" && rm -f "$d/git.config.new"`,
-    `git config --global --get-all include.path 2>/dev/null | grep -qxF "$d/git.config" || git config --global --add include.path "$d/git.config"`,
+    ...configLines(config),
     `printf 'socket %s\\n' "$sock"`,
   ].join("\n");
+}
+
+/** Writes the git config Kumiko keeps in the VM, and includes it from ~/.gitconfig; `$d` is its folder. */
+const configLines = (config: string) => [
+  `cat > "$d/git.config.new" <<'KUMIKO_GIT'\n${config}KUMIKO_GIT`,
+  `sed "s|@DIR@|$d|g" "$d/git.config.new" > "$d/git.config" && rm -f "$d/git.config.new"`,
+  `git config --global --get-all include.path 2>/dev/null | grep -qxF "$d/git.config" || git config --global --add include.path "$d/git.config"`,
+];
+
+/** The script that rewrites only the VM's git config, for a relay that is up: the socket and the proxy stay as they are. */
+export function vmConfigScript(config: string): string {
+  return ["set -e", `d="$HOME/.config/kumiko"; mkdir -p "$d"`, ...configLines(config)].join("\n");
 }
 
 /** Who a connection is: the sandbox whose VM it came from, the repository asked for, and the session the proxy named, if any. */
@@ -195,14 +205,15 @@ export class Relays {
 
   /**
    * Starts a relay for each sandbox in `want` (by name, to its repositories) that has none, and stops the others. A
-   * sandbox whose repositories changed gets a new relay, which sets git in its VM up for them.
+   * sandbox whose repositories changed keeps its relay, connections and all, which serves the new list from then on.
    */
   sync(want: Map<string, string[]>): void {
     if (this.closed) return;
     const key = (repos: string[]) => [...repos].map((r) => r.toLowerCase()).sort().join("\n");
     for (const [id, relay] of this.relays) {
       const repos = want.get(id);
-      if (repos && key(repos) === key(relay.repos)) continue;
+      if (repos && key(repos) !== key(relay.repos)) relay.update(repos);
+      if (repos) continue;
       this.relays.delete(id);
       void relay.stop();
     }
@@ -247,7 +258,7 @@ class Relay {
 
   constructor(
     readonly id: string,
-    readonly repos: string[],
+    public repos: string[],
     private readonly opts: RelayOptions,
     private readonly connections: Map<string, RelayConnection>,
   ) {
@@ -284,6 +295,35 @@ class Relay {
     if (state === "connected") this.opts.onConnected?.(this.id);
   }
 
+  /** The update of the VM's git config under way, if any; updates run one at a time. */
+  private updating: Promise<void> = Promise.resolve();
+
+  /**
+   * Serves `repos` from now on: connections already open carry on, and new ones may ask for any of them. Git in the
+   * VM is set up for them at once if the relay is up, and then told it can reach them (`onConnected`), so new repos are
+   * cloned; a relay still setting up picks the list up when it is done (see `setUpVm`).
+   */
+  update(repos: string[]): void {
+    this.repos = repos;
+    this.updating = this.updating.then(async () => {
+      await Promise.allSettled(repos.map((repo) => this.opts.mirrors.ensure(repo)));
+      if (this.stopped || this.state !== "connected" || this.repos !== repos) return;
+      await this.writeConfig(repos).catch((err) => this.set("down", message(err)));
+      if (!this.stopped && this.state === "connected") this.opts.onConnected?.(this.id);
+    });
+  }
+
+  /** Rewrites the VM's git config for `repos`, leaving the socket and the proxy as they are. */
+  private async writeConfig(repos: string[]): Promise<void> {
+    const identity = (await this.opts.identity?.().catch(() => ({}))) ?? {};
+    const child = this.vmCommand(`bash -c ${shellQuote(vmConfigScript(vmGitConfig(repos, identity)))}`, 60_000);
+    child.stdout!.resume();
+    const err: string[] = [];
+    eachLine(child.stderr!, (l) => err.push(l));
+    const code = await exitCode(child);
+    if (code !== 0) throw new Error(`Setting up git in the VM failed (exit ${code})${err.length ? `: ${err.slice(-3).join(" ")}` : "."}`);
+  }
+
   /** Keeps the relay up until it is stopped: the socket, the mirror, the VM's setup and the forward, again after each failure. */
   private async run(): Promise<void> {
     let delay = this.opts.retryMs ?? 2000;
@@ -303,7 +343,10 @@ class Relay {
     while (!this.stopped) {
       const upAt = Date.now();
       try {
-        for (const repo of this.repos) await this.opts.mirrors.ensure(repo);
+        // One mirror that can't be had doesn't keep git in the VM from the others; a fetch of that one fails on its own.
+        const ensured = await Promise.allSettled(this.repos.map((repo) => this.opts.mirrors.ensure(repo)));
+        const failed = ensured.find((r): r is PromiseRejectedResult => r.status === "rejected");
+        if (failed && ensured.every((r) => r.status === "rejected")) throw failed.reason;
         if (this.stopped) break;
         const guest = await this.setUpVm();
         if (this.stopped) break;
@@ -324,10 +367,14 @@ class Relay {
     await rm(this.socket, { force: true }).catch(() => {});
   }
 
-  /** Runs the VM's setup and resolves with the path the forward listens on in the VM. */
+  /**
+   * Runs the VM's setup and resolves with the path the forward listens on in the VM. Repos that came meanwhile (see
+   * `update`) are written into the config before it resolves.
+   */
   private async setUpVm(): Promise<string> {
     const identity = (await this.opts.identity?.().catch(() => ({}))) ?? {};
-    const script = vmSetupScript(vmGitConfig(this.repos, identity));
+    const repos = this.repos;
+    const script = vmSetupScript(vmGitConfig(repos, identity));
     // Long enough for apt to install socat on a new VM.
     const child = this.vmCommand(`bash -c ${shellQuote(script)}`, 10 * 60_000);
     const out: string[] = [];
@@ -337,6 +384,7 @@ class Relay {
     const code = await exitCode(child);
     const path = out.map((l) => /^socket (\/.+)$/.exec(l)?.[1]).find(Boolean);
     if (code !== 0 || !path) throw new Error(`Setting up git in the VM failed (exit ${code})${err.length ? `: ${err.slice(-3).join(" ")}` : "."}`);
+    if (this.repos !== repos) await this.writeConfig(this.repos);
     return path;
   }
 

@@ -465,6 +465,11 @@ describe("server", () => {
     const removing = await api("/api/sandboxes/gh", { method: "PATCH", body: JSON.stringify({ repos: ["acme/other"] }) });
     assert.match((await json(removing)).details.join(), /can't be taken out of a sandbox yet: acme\/widget/);
 
+    // A repo the sandbox has stays editable after its mirror is removed: only a newcomer needs a mirror.
+    assert.equal((await api("/api/mirrors/acme/other", { method: "DELETE" })).status, 200);
+    const keeping = await api("/api/sandboxes/gh", { method: "PATCH", body: JSON.stringify({ repos: ["acme/widget", "acme/other"] }) });
+    assert.equal(keeping.status, 200, JSON.stringify(await keeping.clone().json()));
+
     // Stopped, nothing is known of its clones until it runs again.
     const at = events.length;
     assert.equal((await api("/api/sandboxes/gh/stop", { method: "POST" })).status, 202);

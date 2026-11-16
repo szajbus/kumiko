@@ -511,6 +511,18 @@ describe("LimaProvider against a fake limactl", () => {
       assert.ok(!(await callsOf(limaDir)).some((c) => c[0] === "create"));
     });
 
+    it("refuses a new sandbox whose disk an earlier one of the same name left behind", async () => {
+      const { limaDir, provider } = await fakeLima();
+      assert.deepEqual((await provider.validate(spec({ workspaceGiB: 5 }), { newSandbox: true })).errors, []);
+      execFileSync(FAKE_LIMACTL, ["disk", "create", "kumiko-web-workspace", "--size=5GiB"], { env: { ...process.env, FAKE_LIMA_DIR: limaDir } });
+      assert.match(
+        (await provider.validate(spec({ workspaceGiB: 5 }), { newSandbox: true })).errors.join(),
+        /The workspace disk kumiko-web-workspace is left from an earlier sandbox called web\. Delete it with `limactl disk delete kumiko-web-workspace` first/,
+      );
+      // A rebuild attaches it, as it should.
+      assert.deepEqual((await provider.validate(spec({ workspaceGiB: 5 }))).errors, []);
+    });
+
     it("refuses a disk another VM uses", async () => {
       const { limaDir, provider, log } = await fakeLima();
       const env = { ...process.env, FAKE_LIMA_DIR: limaDir };

@@ -263,7 +263,11 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     for (const s of sessions.list()) if (isWaiting(s)) waiting.set(s.sandbox, (waiting.get(s.sandbox) ?? 0) + 1);
     return sandboxList.map((sandbox) => {
       const vm = vms.find((v) => v.name === sandbox.name)!;
-      return { ...vm, sandbox, repos: clones.view(sandbox.name, sandbox.repos), waiting: waiting.get(sandbox.name) ?? 0 };
+      // While git in the VM can't reach the mirrors, the repos waiting for it say why.
+      const relay = relays.view(sandbox.name);
+      const down = relay?.state === "down" ? `Git in the sandbox can't reach the mirrors on this Mac yet: ${relay.error ?? "the link is down"}` : undefined;
+      const repos = clones.view(sandbox.name, sandbox.repos).map((r) => (down && r.state === "pending" ? { ...r, error: down } : r));
+      return { ...vm, sandbox, repos, waiting: waiting.get(sandbox.name) ?? 0 };
     });
   };
 
@@ -674,7 +678,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     if (errors.length) throw new HttpError(400, "Can't create this sandbox.", errors);
 
     const { sandbox, rollback } = await sandboxes.create(name, checked.repos);
-    const v = await provider.validate(sandboxes.spec(name, base));
+    const v = await provider.validate(sandboxes.spec(name, base), { newSandbox: true });
     if (v.errors.length) {
       await rollback();
       throw new HttpError(400, "Can't create this sandbox.", v.errors);
@@ -827,7 +831,8 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     const { sandbox, info } = await known(name);
     const raw = await body<SandboxEdit>(c, "Body must be a JSON object of fields to change.");
     const { workdir: _workdir, repos: rawRepos, ...edit } = (raw ?? {}) as SandboxEdit & { workdir?: unknown };
-    const picked = checkRepos(rawRepos, mirrored());
+    // The sandbox's own repos stay valid even if their mirror was removed since: only a newcomer needs a mirror now.
+    const picked = checkRepos(rawRepos, [...mirrored(), ...sandbox.repos.map((r) => r.repo)]);
     if (picked.errors.length) throw new HttpError(400, "Can't apply these changes.", picked.errors);
     const added = rawRepos === undefined ? [] : picked.repos.filter((r) => !sandbox.repos.some((x) => x.repo.toLowerCase() === r.toLowerCase()));
     const removed = rawRepos === undefined ? [] : sandbox.repos.filter((x) => !picked.repos.some((r) => r.toLowerCase() === x.repo.toLowerCase()));

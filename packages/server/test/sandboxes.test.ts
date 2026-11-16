@@ -127,6 +127,29 @@ describe("SandboxStore", () => {
     }
   });
 
+  it("undoes a create without deleting a Claude home or Kumiko folder that was there before it", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kumiko-sandboxes-test-"));
+    try {
+      const store = new SandboxStore(root);
+      // As a project of the same name left them, from before sandboxes.
+      await mkdir(store.claudeHome("web"), { recursive: true });
+      await writeFile(join(store.claudeHome("web"), ".claude.json"), "{\"login\":true}");
+      await mkdir(store.kumikoHome("web"), { recursive: true });
+      await writeFile(join(store.kumikoHome("web"), "keep.sh"), "keep");
+      const { rollback } = await store.create("web", []);
+      await rollback();
+      assert.equal(await store.get("web"), undefined, "the record goes");
+      assert.equal(await readFile(join(store.claudeHome("web"), ".claude.json"), "utf8"), "{\"login\":true}");
+      assert.equal(await readFile(join(store.kumikoHome("web"), "keep.sh"), "utf8"), "keep");
+
+      const fresh = await store.create("api", []);
+      await fresh.rollback();
+      assert.deepEqual((await readdir(store.claudeRoot)).sort(), ["web"], "what a create made, it takes back");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("refuses repos without a mirror, twice over, or that aren't repositories", async () => {
     const mirrors = ["acme/Web"];
     assert.deepEqual(checkRepos(["ACME/web"], mirrors), { errors: [], repos: ["acme/Web"] }, "spelled as the mirror is");
@@ -160,6 +183,13 @@ describe("repo folders", () => {
   it("never change once given: only a newcomer whose name is taken gets the prefix, or a number", () => {
     const kept = [{ repo: "szajbus/api", folder: "api" }, { repo: "acme/acme-api", folder: "acme-api" }];
     assert.deepEqual(repoFolders(["szajbus/api", "acme/acme-api", "acme/api"], kept).map((r) => r.folder), ["api", "acme-api", "acme-api-2"]);
+  });
+
+  it("never land on another repo's worktrees folder, nor put theirs on another repo's folder", () => {
+    const kept = [{ repo: "acme/web", folder: "web" }];
+    assert.deepEqual(repoFolders(["acme/web", "acme/web__worktrees"], kept).map((r) => r.folder), ["web", "acme-web__worktrees"]);
+    const keptWorktreesNamed = [{ repo: "acme/web__worktrees", folder: "web__worktrees" }];
+    assert.deepEqual(repoFolders(["acme/web__worktrees", "other/web"], keptWorktreesNamed).map((r) => r.folder), ["web__worktrees", "other-web"]);
   });
 });
 

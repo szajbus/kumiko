@@ -257,11 +257,12 @@ function ReposCard({ p, onAdd }: { p: SandboxView; onAdd(): void }) {
                 <span className="mono dim item-sub">
                   {WORKSPACE_DIR}/{r.folder}
                 </span>
-                {r.state === "failed" && r.error && <span className="item-sub item-error" title={r.error}>{r.error}</span>}
+                {/* Why it failed, or why it can't be looked at yet: git in the VM can't reach the mirrors. */}
+                {r.error && <span className="item-sub item-error" title={r.error}>{r.error}</span>}
               </div>
               <span className="item-badges">
                 {r.state === "pending" ? (
-                  <span className="dim item-quiet">{p.status === "running" ? "Not cloned yet" : "Cloned when the sandbox starts"}</span>
+                  <span className="dim item-quiet">{p.status === "running" ? "Not cloned yet" : "Checked when the sandbox starts"}</span>
                 ) : r.state === "cloning" ? (
                   <span className="row-status item-state" style={{ color: COLORS.warn }}>
                     <span className="spinner" aria-hidden="true" />

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -185,6 +185,22 @@ describe("git relay", () => {
       assert.notEqual(r.code, 0, url);
       assert.match(r.err, /can only reach acme\/widget/, url);
     }
+  });
+
+  it("serves a repo added to the sandbox through the relay it has, without setting the link up again", async () => {
+    await until("the relay to connect", () => relays.view("web")?.state === "connected");
+    const sock = join(vmHome, ".config", "kumiko", "git.sock");
+    const before = (await stat(sock)).ino;
+    relays.sync(new Map([["web", ["acme/widget", "acme/other"]]]));
+    await until("the VM's config to name acme/other", async () => (await readFile(join(vmHome, ".config", "kumiko", "git.config"), "utf8")).includes("acme/other"));
+    const ls = await vmGit(vmHome, vmHome, "ls-remote", "git@github.com:acme/other.git", "refs/heads/main");
+    assert.equal(ls.code, 0, ls.err);
+    assert.equal(relays.view("web")?.state, "connected");
+    assert.equal((await stat(sock)).ino, before, "the forward and its socket in the VM are the ones from before");
+
+    relays.sync(new Map([["web", ["acme/widget"]]]));
+    await until("acme/other to be gone from the VM's config", async () => !(await readFile(join(vmHome, ".config", "kumiko", "git.config"), "utf8")).includes("acme/other"));
+    assert.match((await vmGit(vmHome, vmHome, "ls-remote", "git://kumiko/acme/other.git")).err, /can only reach acme\/widget/);
   });
 
   /** Commits a change in the VM's clone, on `branch` (made from what's checked out if it doesn't exist). */

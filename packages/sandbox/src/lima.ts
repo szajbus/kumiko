@@ -119,7 +119,6 @@ function toStatus(s: string): SandboxStatus {
 }
 
 const gib = (bytes?: number) => (bytes ? Math.round((bytes / GiB) * 10) / 10 : undefined);
-const gib_ = (bytes: number) => Math.round((bytes / GiB) * 10) / 10;
 
 /** Single-quotes a value for bash. */
 export function shellQuote(value: string): string {
@@ -261,10 +260,10 @@ export class LimaProvider implements SandboxProvider {
   }
 
   /**
-   * Makes sure the sandbox's workspace disk is there, at least `gib` big: one kept from the VM before is used as it is,
+   * Makes sure the sandbox's workspace disk is there, at least `sizeGiB` big: one kept from the VM before is used as it is,
    * grown if it is smaller. Fails if another VM uses it.
    */
-  private async ensureWorkspace(name: string, gib: number, log: Log): Promise<void> {
+  private async ensureWorkspace(name: string, sizeGiB: number, log: Log): Promise<void> {
     const version = await this.limaVersion();
     if (!version || !atLeast(version, DISK_MOUNT_POINT_SINCE)) {
       throw new ProviderError(`A workspace disk needs Lima ${DISK_MOUNT_POINT_SINCE.join(".")} or later; ${version ? `this is Lima ${version.join(".")}` : "Kumiko couldn't tell which Lima this is"}. Upgrade Lima first (brew upgrade lima).`);
@@ -273,13 +272,13 @@ export class LimaProvider implements SandboxProvider {
     const have = await this.disk(name);
     if (have?.instance && have.instance !== vmName(name)) throw new ProviderError(`The workspace disk ${disk} is in use by ${have.instance}.`);
     if (!have) {
-      const args = ["disk", "create", disk, `--size=${gib}GiB`, "--format=raw"];
+      const args = ["disk", "create", disk, `--size=${sizeGiB}GiB`, "--format=raw"];
       log(`$ ${commandLine("limactl", args)}`, "cmd");
       await this.limactlRun(args, { log });
       return;
     }
-    log(`Using the workspace disk ${disk}, kept from before (${gib_(have.size)} GiB).`, "note");
-    if (have.size < gib * GiB) await this.resizeWorkspace(name, gib, log);
+    log(`Using the workspace disk ${disk}, kept from before (${gib(have.size)} GiB).`, "note");
+    if (have.size < sizeGiB * GiB) await this.resizeWorkspace(name, sizeGiB, log);
   }
 
   private async resizeWorkspace(name: string, gib: number, log: Log): Promise<void> {
@@ -349,12 +348,19 @@ export class LimaProvider implements SandboxProvider {
     return { templates, preferred };
   }
 
-  /** Validates a spec, including that the VM name is free. */
-  async validate(input: SandboxSpec): Promise<Validation> {
+  /**
+   * Validates a spec, including that the VM name is free. For a new sandbox (`newSandbox`), its workspace disk mustn't
+   * be there yet either: one left from an earlier sandbox of the same name would be attached with what is on it.
+   */
+  async validate(input: SandboxSpec, opts: { newSandbox?: boolean } = {}): Promise<Validation> {
     const v = await validateSpec(input, this.env());
     if (v.errors.length === 0) {
       const taken = (await this.instances()).some((i) => i.name === vmName(v.spec.name));
       if (taken) v.errors.push(`${vmName(v.spec.name)} already exists.`);
+      else if (opts.newSandbox && v.spec.workspaceGiB !== undefined && (await this.disk(v.spec.name))) {
+        const disk = workspaceDiskName(v.spec.name);
+        v.errors.push(`The workspace disk ${disk} is left from an earlier sandbox called ${v.spec.name}. Delete it with \`limactl disk delete ${disk}\` first, or pick another name.`);
+      }
     }
     return v;
   }

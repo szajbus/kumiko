@@ -122,14 +122,11 @@ const gib = (bytes: number) => {
   return `${n < 10 ? n.toFixed(1) : Math.round(n)} GiB`;
 };
 
-/** A reading, with the workspace disk's use once the server measures it. */
-type Reading = SandboxStats;
-
 /**
  * The CPU, memory and disk bars of a sandbox's reading, and the workspace disk's when the reading has it. Disks are
  * full as `df` counts it: of the space not reserved.
  */
-export function meters(s: Reading): Meter[] {
+export function meters(s: SandboxStats): Meter[] {
   const meter = (label: Meter["label"], percent: number | undefined, text: string): Meter => ({
     label,
     percent,
@@ -140,13 +137,14 @@ export function meters(s: Reading): Meter[] {
   const cpu = s.cpuPercent === undefined ? undefined : Math.round(s.cpuPercent);
   const mem = Math.round(pct(s.memUsedBytes, s.memTotalBytes));
   const disk = Math.round(pct(s.diskUsedBytes, s.diskUsedBytes + s.diskFreeBytes));
+  const wsUsed = s.workspaceUsedBytes;
+  const wsFree = s.workspaceFreeBytes;
+  const workspace = wsUsed === undefined || wsFree === undefined ? undefined : Math.round(pct(wsUsed, wsUsed + wsFree));
   return [
     meter("CPU", cpu, `${cpu === undefined ? "—" : `${cpu}% busy`} · load ${s.load.toFixed(1)}`),
     meter("Memory", mem, `${gib(s.memUsedBytes)} used · ${mem}%`),
     meter("Disk", disk, `${gib(s.diskUsedBytes)} used · ${disk}%`),
-    ...(s.workspaceUsedBytes !== undefined && s.workspaceFreeBytes !== undefined
-      ? [meter("Workspace", Math.round(pct(s.workspaceUsedBytes, s.workspaceUsedBytes + s.workspaceFreeBytes)), `${gib(s.workspaceUsedBytes)} used · ${Math.round(pct(s.workspaceUsedBytes, s.workspaceUsedBytes + s.workspaceFreeBytes))}%`)]
-      : []),
+    ...(workspace === undefined ? [] : [meter("Workspace", workspace, `${gib(wsUsed!)} used · ${workspace}%`)]),
   ];
 }
 

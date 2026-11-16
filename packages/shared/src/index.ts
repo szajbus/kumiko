@@ -298,11 +298,13 @@ export interface Sandbox {
 export function repoFolder(repo: string, taken: Iterable<string>): string {
   const p = parseRepo(repo);
   if (!p) throw new Error(`Not a repository: ${repo}`);
-  const used = new Set([...taken].map((t) => t.toLowerCase()));
-  for (const f of [p.name, `${p.owner}-${p.name}`]) if (!used.has(f.toLowerCase()) && !used.has(`${f}${WORKTREES_SUFFIX}`.toLowerCase())) return f;
+  // Each folder comes with its worktrees folder beside it: a newcomer can't be either, nor have its own be either.
+  const used = new Set([...taken].flatMap((t) => [t.toLowerCase(), `${t}${WORKTREES_SUFFIX}`.toLowerCase()]));
+  const free = (f: string) => !used.has(f.toLowerCase()) && !used.has(`${f}${WORKTREES_SUFFIX}`.toLowerCase());
+  for (const f of [p.name, `${p.owner}-${p.name}`]) if (free(f)) return f;
   for (let n = 2; ; n++) {
     const f = `${p.owner}-${p.name}-${n}`;
-    if (!used.has(f.toLowerCase())) return f;
+    if (free(f)) return f;
   }
 }
 
@@ -339,7 +341,7 @@ export function sandboxMountRole(m: Mount, homes?: { claude: string; kumiko: str
 export interface RepoState extends SandboxRepo {
   /** `pending` until Kumiko has looked: while the VM is stopped, or git can't reach the mirrors yet. */
   state: "pending" | "cloning" | "cloned" | "failed";
-  /** Why the clone failed. */
+  /** Why the clone failed, or, while it is pending, why git in the VM can't reach the mirrors. */
   error?: string;
 }
 

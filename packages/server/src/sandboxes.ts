@@ -274,10 +274,13 @@ export class SandboxStore {
   async create(name: string, repos: SandboxRepo[]): Promise<CreatedSandbox> {
     const sandbox: Sandbox = { name, createdAt: new Date().toISOString(), repos };
     await this.claim(sandbox);
+    // A Claude home or Kumiko folder there before, such as a project's from before sandboxes, isn't this create's to undo.
+    const there = (dir: string) => lstat(dir).then(() => true, () => false);
+    const [hadClaude, hadKumiko] = await Promise.all([there(this.claudeHome(name)), there(this.kumikoHome(name))]);
     const rollback = async () => {
       await rm(this.file(name), { force: true });
-      await rm(this.claudeHome(name), { recursive: true, force: true });
-      await rm(this.kumikoHome(name), { recursive: true, force: true });
+      if (!hadClaude) await rm(this.claudeHome(name), { recursive: true, force: true });
+      if (!hadKumiko) await rm(this.kumikoHome(name), { recursive: true, force: true });
     };
     try {
       await this.seedClaudeHome(sandbox);
