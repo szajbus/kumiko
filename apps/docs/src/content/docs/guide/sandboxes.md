@@ -110,14 +110,21 @@ and the log of the last operation.
 
 Each repo shows its GitHub name, its folder, and how its clone is: **Cloned**, **Cloning…**, or **Clone failed** with
 git's message. Before the sandbox has run, or while git in it can't reach the mirrors yet, a repo shows **Not cloned
-yet**, or **Cloned when the sandbox starts** while it is stopped. Kumiko looks again each time the sandbox starts. A
+yet**, with why when git can't reach them, or **Checked when the sandbox starts** while it is stopped. Kumiko looks again each time the sandbox starts. A
 folder in the way that isn't a git clone is left alone, and the repo shows why it couldn't be cloned.
 
 **Add repo** opens the form to pick more. A new repo is cloned at once if the sandbox runs, or when it next starts.
 
+### Removing a repo
+
+Untick it in **Edit** and save. Its mirror stops being served to the sandbox, and Kumiko deletes its folder and its
+worktrees folder from `/workspace`: at once if the sandbox runs, or when it next starts. Before that, the dialog lists
+what in that repo isn't pushed: branches with commits that aren't on GitHub, worktrees with uncommitted changes, and
+stashes. Branches on GitHub stay, and adding the repo again clones it again.
+
 ## Editing a sandbox
 
-**Edit** changes the sandbox's settings and adds repos. The name and template are fixed, and so are the default
+**Edit** changes the sandbox's settings, and adds and removes repos. The name and template are fixed, and so are the default
 mounts. Two ways to save:
 
 - **Save and rebuild sandbox** (the default) deletes the VM and creates it again from the changed settings,
@@ -136,8 +143,16 @@ mounts. Two ways to save:
   [agent's setup scripts](#the-agents-setup-scripts). The workspace disk is attached to the new VM as it is: clones,
   worktrees, stashes, uncommitted work and dependencies are all still there. The agent home, the saved sessions and
   the login stay too.
+- **Rebuild from scratch** is Rebuild with the workspace disk wiped too. Kumiko then clones each repo again from its
+  mirror, so only what's pushed comes back. The agent home and the login stay.
 - **Delete sandbox** removes the sandbox: its VM, its workspace disk and everything on it, its agent home and its saved
-  sessions, after asking. Branches the agent pushed stay on GitHub.
+  sessions. Branches the agent pushed stay on GitHub.
+
+Rebuild from scratch and Delete first list what the sandbox has that isn't pushed, repo by repo: branches with commits
+that aren't on GitHub, worktrees with uncommitted changes, and stashes. Anything else on the disk goes too, such as
+ignored files like `node_modules` and `.env`. If something would be lost, you tick that you understand before going
+on. A stopped sandbox can't be looked into: **Start it and check** starts it and lists what it finds, or you can go on
+without checking.
 
 ## Getting a shell
 

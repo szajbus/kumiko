@@ -11,7 +11,7 @@ belong to the sandbox provider: with Lima, the VM `kumiko-<name>` and the disk `
 
 | Where | What |
 | --- | --- |
-| `workspaces/<name>.json` | The sandbox: its repos, each with its folder in `/workspace`. |
+| `workspaces/<name>.json` | The sandbox: its repos, each with its folder in `/workspace`, and the folders of repos taken out while it was stopped, deleted from `/workspace` when it next starts. |
 | `sandboxes/<name>.json` | The sandbox's VM settings (variable names, never values) and setup state, with the agent's setup scripts it was created with and how each went. |
 | `claude/<name>/` | The sandbox's agent home: login, settings, history. |
 | `sandbox/<name>/` | The sandbox's Kumiko folder, `~/.kumiko/shared` in the sandbox: what Kumiko and the agent keep for Kumiko, apart from the agent home. |

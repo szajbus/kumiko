@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 import WebSocket from "ws";
-import type { SandboxView, ServerEvent } from "@kumiko/shared";
+import type { SandboxView, ServerEvent, UnpushedResponse } from "@kumiko/shared";
 import { LimaProvider, MetadataStore } from "@kumiko/sandbox";
 import { startServer, type RunningServer } from "../src/index.js";
 import { sh } from "./repo.js";
@@ -238,6 +238,17 @@ describe("server", () => {
     await remove("bad");
   });
 
+  it("rebuilds from scratch: the workspace disk goes, and a new one is made", async () => {
+    await create("fresh");
+    const since = events.length;
+    assert.equal((await api("/api/sandboxes/fresh/recreate?wipe=1", { method: "POST" })).status, 202);
+    assert.equal((await finished("fresh", "recreating", since)).type, "done");
+    const disks = (await calls()).filter((c) => c[0] === "disk" && c[2] === "kumiko-fresh-workspace").map((c) => c[1]);
+    assert.deepEqual(disks, ["create", "delete", "create"]);
+    assert.equal((await sandbox("fresh"))?.status, "running");
+    await remove("fresh");
+  });
+
   it("recreates a VM with the agent's setup scripts from its Kumiko folder", async () => {
     await create("agent");
     const dir = join(dataDir, "sandbox", "agent", "provision.d");
@@ -461,20 +472,44 @@ describe("server", () => {
     await waitAsync(async () => (await sandbox("gh"))?.repos.every((r) => r.state === "cloned") || undefined, 30_000);
     assert.ok(await exists(join(workspace, "other", "README")));
 
-    // Taking one out comes later.
-    const removing = await api("/api/sandboxes/gh", { method: "PATCH", body: JSON.stringify({ repos: ["acme/other"] }) });
-    assert.match((await json(removing)).details.join(), /can't be taken out of a sandbox yet: acme\/widget/);
+    // What isn't pushed is found in the VM: a branch on no remote, and a change in a worktree.
+    sh(join(workspace, "other"), "checkout", "--quiet", "-b", "spike");
+    await writeFile(join(workspace, "other", "new.txt"), "x");
+    const unpushed = (await json(await api("/api/sandboxes/gh/unpushed"))) as UnpushedResponse;
+    const other = unpushed.repos.find((r) => r.repo === "acme/other")!;
+    assert.deepEqual(other.dirty.map((d) => d.files), [1]);
+    assert.deepEqual(unpushed.repos.find((r) => r.repo === "acme/widget")!.dirty, []);
 
     // A repo the sandbox has stays editable after its mirror is removed: only a newcomer needs a mirror.
     assert.equal((await api("/api/mirrors/acme/other", { method: "DELETE" })).status, 200);
     const keeping = await api("/api/sandboxes/gh", { method: "PATCH", body: JSON.stringify({ repos: ["acme/widget", "acme/other"] }) });
     assert.equal(keeping.status, 200, JSON.stringify(await keeping.clone().json()));
 
-    // Stopped, nothing is known of its clones until it runs again.
-    const at = events.length;
+    // Taking one out while it runs deletes its folders at once, and its mirror isn't served any more.
+    const removing = await api("/api/sandboxes/gh", { method: "PATCH", body: JSON.stringify({ repos: ["acme/widget"] }) });
+    assert.equal(removing.status, 200, JSON.stringify(await removing.clone().json()));
+    assert.equal(await exists(join(workspace, "other")), false);
+    assert.equal(await exists(join(workspace, "other__worktrees")), false);
+    assert.deepEqual((await sandbox("gh"))!.sandbox.repos, [{ repo: "acme/widget", folder: "widget" }]);
+    assert.equal((await sandbox("gh"))!.sandbox.dropped, undefined);
+    assert.doesNotMatch(await readFile(join(dataDir, "claude", "gh", "kumiko.md"), "utf8"), /acme\/other/);
+
+    // Stopped, nothing is known of its clones until it runs again, and the VM can't be asked what isn't pushed.
+    let at = events.length;
     assert.equal((await api("/api/sandboxes/gh/stop", { method: "POST" })).status, 202);
     await finished("gh", "stopping", at);
     await waitAsync(async () => (await sandbox("gh"))?.repos.every((r) => r.state === "pending") || undefined);
+    assert.match((await json(await api("/api/sandboxes/gh/unpushed"))).error, /not running, so Kumiko can't see what isn't pushed/);
+
+    // Taken out while stopped, a repo's folder goes when the sandbox next starts, and no new repo gets its name meanwhile.
+    assert.equal((await api("/api/sandboxes/gh", { method: "PATCH", body: JSON.stringify({ repos: [] }) })).status, 200);
+    assert.deepEqual((await sandbox("gh"))!.sandbox.dropped, ["widget"]);
+    assert.ok(await exists(join(workspace, "widget")));
+    at = events.length;
+    assert.equal((await api("/api/sandboxes/gh/start", { method: "POST" })).status, 202);
+    assert.equal((await finished("gh", "starting", at)).type, "done");
+    assert.equal(await exists(join(workspace, "widget")), false);
+    assert.equal((await sandbox("gh"))!.sandbox.dropped, undefined);
     await remove("gh");
     await rm(workspace, { recursive: true, force: true });
   });

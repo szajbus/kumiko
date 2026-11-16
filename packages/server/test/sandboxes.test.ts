@@ -150,6 +150,26 @@ describe("SandboxStore", () => {
     }
   });
 
+  it("keeps a removed repo's folder as dropped until it is deleted, and gives its name to no other repo meanwhile", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kumiko-sandboxes-test-"));
+    try {
+      const store = new SandboxStore(root);
+      await store.create("web", [{ repo: "acme/api", folder: "api" }]);
+      let s = await store.removeRepos("web", ["ACME/api"]);
+      assert.deepEqual([s.repos, s.dropped], [[], ["api"]]);
+      s = await store.addRepos("web", ["other/api"]);
+      assert.deepEqual(s.repos, [{ repo: "other/api", folder: "other-api" }], "api is still on the disk");
+      s = (await store.dropped("web", ["api"]))!;
+      assert.equal(s.dropped, undefined);
+      assert.deepEqual(await store.get("web"), s);
+      // Deleted at once, a folder isn't dropped at all.
+      s = await store.removeRepos("web", ["other/api"], { deleted: true });
+      assert.deepEqual([s.repos, s.dropped], [[], undefined]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("refuses repos without a mirror, twice over, or that aren't repositories", async () => {
     const mirrors = ["acme/Web"];
     assert.deepEqual(checkRepos(["ACME/web"], mirrors), { errors: [], repos: ["acme/Web"] }, "spelled as the mirror is");

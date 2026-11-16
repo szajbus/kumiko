@@ -289,6 +289,11 @@ export interface Sandbox {
   name: string;
   createdAt: string;
   repos: SandboxRepo[];
+  /**
+   * Folders of repos taken out of the sandbox while its VM was stopped, deleted from /workspace when it next starts.
+   * Their names aren't given to another repo meanwhile.
+   */
+  dropped?: string[];
 }
 
 /**
@@ -310,9 +315,10 @@ export function repoFolder(repo: string, taken: Iterable<string>): string {
 
 /**
  * The folders for repos picked together: each its name, but every repo whose name another of them shares gets its
- * owner in front, so neither depends on the order they were picked in. `kept` are folders given before.
+ * owner in front, so neither depends on the order they were picked in. `kept` are folders given before, and
+ * `reserved` folders no repo may have, such as those still to be deleted.
  */
-export function repoFolders(repos: string[], kept: SandboxRepo[] = []): SandboxRepo[] {
+export function repoFolders(repos: string[], kept: SandboxRepo[] = [], reserved: string[] = []): SandboxRepo[] {
   const names = repos.map((r) => parseRepo(r)?.name.toLowerCase());
   const out = [...kept];
   for (const [i, repo] of repos.entries()) {
@@ -320,7 +326,7 @@ export function repoFolders(repos: string[], kept: SandboxRepo[] = []): SandboxR
     const shared = names.filter((n) => n === names[i]).length > 1;
     const p = parseRepo(repo);
     if (!p) throw new Error(`Not a repository: ${repo}`);
-    const taken = [...out.map((o) => o.folder), ...(shared ? [p.name] : [])];
+    const taken = [...reserved, ...out.map((o) => o.folder), ...(shared ? [p.name] : [])];
     out.push({ repo, folder: repoFolder(repo, taken) });
   }
   return out;
@@ -353,6 +359,25 @@ export interface SandboxView extends VmView {
   /** Sessions in this sandbox that are waiting on the user. */
   waiting: number;
 }
+
+/** Work in one repo of a sandbox that only its VM has: lost if its folder goes, or the workspace disk. */
+export interface RepoUnpushed extends SandboxRepo {
+  /** Local branches with commits that aren't on their upstream, or on no remote at all when they have none. */
+  branches: { name: string; ahead: number; upstream?: string }[];
+  /** Worktrees, the clone included, with uncommitted changes (untracked files count), as paths in the VM. */
+  dirty: { worktree: string; files: number }[];
+  stashes: number;
+  /** Why the repo couldn't be looked at: its folder is gone, or git failed there. */
+  error?: string;
+}
+
+/** `GET /api/sandboxes/:name/unpushed`: what a running sandbox's VM has that isn't pushed, repo by repo. */
+export interface UnpushedResponse {
+  repos: RepoUnpushed[];
+}
+
+/** Whether there is anything in `u` that would be lost. */
+export const hasUnpushed = (u: RepoUnpushed) => u.branches.length > 0 || u.dirty.length > 0 || u.stashes > 0;
 
 /** Creates a sandbox. Everything but `name` and `repos` is the VM's spec; the workspace disk is always there. */
 export type CreateSandboxRequest = Omit<SandboxSpec, "workdir" | "workspaceGiB"> & {

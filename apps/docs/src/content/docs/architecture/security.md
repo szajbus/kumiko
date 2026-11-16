@@ -40,7 +40,9 @@ Rebuilding a sandbox doesn't undo everything the agent did. The workspace disk, 
 survive, and with them what the agent can run again in the new VM: whatever it left in `/workspace`, its settings,
 hooks and [setup scripts](/guide/sandboxes/#the-agents-setup-scripts). All of these run only inside the VM. Kumiko
 reads the scripts on your Mac as text, and only plain files in their folder, not links. **Delete scripts** on the
-sandbox page clears them.
+sandbox page clears them, and **Rebuild from scratch** deletes the workspace disk too, so only what is pushed comes
+back. Before it, Kumiko lists what would be lost: branches that aren't pushed, worktrees with uncommitted changes and
+stashes, found with git in the VM, with nothing the repos' config names run.
 
 ## The local server
 

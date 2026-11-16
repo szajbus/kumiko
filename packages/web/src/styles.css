@@ -1298,3 +1298,18 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
 .repo-picker-check input:disabled { cursor: default; }
 .repo-picker-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .repo-picker-to { flex: none; font-size: 12px; }
+
+/* What would be lost: the unpushed work a dialog lists before something deletes it. */
+.loss { margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-2); }
+.loss-plain { flex-direction: row; align-items: center; gap: 8px; }
+.loss-ok { border-color: #2b5c45; }
+.loss-warn { border-color: #5c4a2b; align-items: flex-start; }
+.loss-head { font-weight: 600; color: var(--text); }
+.loss-group { display: flex; flex-direction: column; gap: 4px; }
+.loss-repo { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.loss-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.loss-what { min-width: 0; overflow-wrap: anywhere; color: var(--text); }
+.loss-row .badge { flex: none; }
+.loss-error { color: var(--danger); font-size: 12px; }
+.loss-foot { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.loss-confirm { margin-top: 6px; }

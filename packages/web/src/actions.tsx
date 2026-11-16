@@ -5,17 +5,20 @@ import { api, errorMessage } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Dots, Play, Redo, Restart, Square, Trash } from "./icons";
 import { plural } from "./status";
+import { LossList, useLossCheck } from "./Unpushed";
+import { mustConfirm, stillChecking } from "./loss";
 
-type Pending = { kind: "delete" | "recreate" | "restart" | "stop"; sandbox: SandboxView };
+type Pending = { kind: "delete" | "recreate" | "wipe" | "restart" | "stop"; sandbox: SandboxView };
 
 /** What each dialog asks about: deleting takes the whole sandbox, the others only its VM. */
 const TITLES = {
   delete: (p: SandboxView) => `Delete sandbox ${p.name}?`,
   recreate: (p: SandboxView) => `Rebuild ${p.vm}?`,
+  wipe: (p: SandboxView) => `Rebuild ${p.vm} from scratch?`,
   restart: (p: SandboxView) => `Restart ${p.vm}?`,
   stop: (p: SandboxView) => `Stop ${p.vm}?`,
 } as const;
-const LABELS = { delete: "Delete sandbox", recreate: "Rebuild sandbox", restart: "Restart sandbox", stop: "Stop sandbox" } as const;
+const LABELS = { delete: "Delete sandbox", recreate: "Rebuild sandbox", wipe: "Wipe and rebuild", restart: "Restart sandbox", stop: "Stop sandbox" } as const;
 
 /** The line a confirm dialog adds when the sandbox has live agent sessions. */
 export function sessionsNote(sb: SandboxView) {
@@ -29,6 +32,8 @@ export interface Actions {
   /** Restarts at once, or asks first when the sandbox has live sessions. */
   restart(sb: SandboxView): void;
   askRecreate(sb: SandboxView): void;
+  /** Rebuild from scratch: the workspace disk goes too, so the dialog lists what isn't pushed first. */
+  askWipe(sb: SandboxView): void;
   askDelete(sb: SandboxView): void;
   /** The confirm dialog and the error toast; render once per page. */
   overlay: React.ReactNode;
@@ -52,30 +57,32 @@ export function useActions({ onDeleted }: { onDeleted?(name: string): void } = {
 
   const overlay = (
     <>
-      {confirm && (
+      {confirm && (confirm.kind === "delete" || confirm.kind === "wipe") && (
+        <LossConfirm
+          kind={confirm.kind}
+          sandbox={confirm.sandbox}
+          onCancel={() => setConfirm(undefined)}
+          onConfirm={() => {
+            const { kind, sandbox } = confirm;
+            setConfirm(undefined);
+            if (kind === "wipe") void run(sandbox.name, api.wipe);
+            else void run(sandbox.name, api.remove).then((ok) => ok && onDeleted?.(sandbox.name));
+          }}
+        />
+      )}
+      {confirm && confirm.kind !== "delete" && confirm.kind !== "wipe" && (
         <ConfirmDialog
           title={TITLES[confirm.kind](confirm.sandbox)}
           confirmLabel={LABELS[confirm.kind]}
-          danger={confirm.kind === "delete"}
           onCancel={() => setConfirm(undefined)}
           onConfirm={() => {
             const { kind, sandbox } = confirm;
             setConfirm(undefined);
             if (kind === "recreate") void run(sandbox.name, api.recreate);
             else if (kind === "stop") void run(sandbox.name, api.stop);
-            else if (kind === "restart") void run(sandbox.name, api.restart);
-            else void run(sandbox.name, api.remove).then((ok) => ok && onDeleted?.(sandbox.name));
+            else void run(sandbox.name, api.restart);
           }}
         >
-          {confirm.kind === "delete" && (
-            <>
-              <p>
-                This deletes the sandbox's VM and its workspace disk, with everything in <span className="mono">/workspace</span>: clones, worktrees
-                and work that isn't pushed. Its Claude home (its login and Claude's history) and its saved sessions go too. You can't undo this.
-              </p>
-              <p>Branches on GitHub and folders mounted from this Mac stay as they are.</p>
-            </>
-          )}
           {confirm.kind === "recreate" && (
             <>
               <p>The VM is deleted and created again from its settings: Claude Code, your provisioning script, then Claude's setup scripts.</p>
@@ -109,12 +116,57 @@ export function useActions({ onDeleted }: { onDeleted?(name: string): void } = {
     stop: (sandbox) => (sandbox.sessions > 0 ? setConfirm({ kind: "stop", sandbox }) : void run(sandbox.name, api.stop)),
     restart: (sandbox) => (sandbox.sessions > 0 ? setConfirm({ kind: "restart", sandbox }) : void run(sandbox.name, api.restart)),
     askRecreate: (sandbox) => setConfirm({ kind: "recreate", sandbox }),
+    askWipe: (sandbox) => setConfirm({ kind: "wipe", sandbox }),
     askDelete: (sandbox) => setConfirm({ kind: "delete", sandbox }),
     overlay,
   };
 }
 
-/** Start or Stop the VM, plus a menu with Restart, Rebuild and Delete. `labeled` shows text on the main button. */
+/**
+ * The dialogs for what deletes the workspace disk, Rebuild from scratch and Delete: they list what the VM has that
+ * isn't pushed first, and when something would be lost, go on only once the user has ticked that they understand.
+ */
+function LossConfirm({ kind, sandbox, onCancel, onConfirm }: { kind: "delete" | "wipe"; sandbox: SandboxView; onCancel(): void; onConfirm(): void }) {
+  const { check, startAndCheck } = useLossCheck(sandbox.name);
+  const [understood, setUnderstood] = useState(false);
+  const blind = check.kind === "stopped" && !check.starting;
+  const label = blind ? (kind === "wipe" ? "Wipe without checking" : "Delete without checking") : LABELS[kind];
+  return (
+    <ConfirmDialog
+      title={TITLES[kind](sandbox)}
+      confirmLabel={label}
+      danger
+      confirmDisabled={stillChecking(check) || (mustConfirm(check) && !understood)}
+      onCancel={onCancel}
+      onConfirm={onConfirm}
+    >
+      {kind === "wipe" ? (
+        <p>
+          Like Rebuild, but the workspace disk is wiped too. Kumiko then clones each repo again from its mirror, so only what's pushed comes back. Claude's
+          home, with its login and history, and the Kumiko folder stay.
+        </p>
+      ) : (
+        <>
+          <p>
+            This deletes the sandbox's VM and its workspace disk, with everything in <span className="mono">/workspace</span>. Its Claude home (its login
+            and Claude's history) and its saved sessions go too. You can't undo this.
+          </p>
+          <p>Branches on GitHub and folders mounted from this Mac stay as they are.</p>
+        </>
+      )}
+      <LossList check={check} onStart={startAndCheck} wholeDisk />
+      {mustConfirm(check) && (
+        <label className="check loss-confirm">
+          <input type="checkbox" checked={understood} onChange={(e) => setUnderstood(e.target.checked)} />
+          I understand the work above will be lost
+        </label>
+      )}
+      {sessionsNote(sandbox)}
+    </ConfirmDialog>
+  );
+}
+
+/** Start or Stop the VM, plus a menu with Restart, Rebuild, Rebuild from scratch and Delete. `labeled` shows text on the main button. */
 export function SandboxActions({ sb, actions, labeled }: { sb: SandboxView; actions: Actions; labeled?: boolean }) {
   const running = sb.status === "running";
   const main = running
@@ -148,6 +200,10 @@ export function SandboxActions({ sb, actions, labeled }: { sb: SandboxView; acti
               Rebuild sandbox…
             </Menu.Item>
             <Menu.Separator className="menu-separator" />
+            <Menu.Item className="menu-item danger" disabled={Boolean(sb.metaError)} onSelect={() => actions.askWipe(sb)}>
+              <Redo />
+              Rebuild from scratch…
+            </Menu.Item>
             <Menu.Item className="menu-item danger" onSelect={() => actions.askDelete(sb)}>
               <Trash />
               Delete sandbox…

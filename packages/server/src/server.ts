@@ -52,7 +52,9 @@ import {
   type OpKind,
   type Sandbox,
   type SandboxEdit,
+  type SandboxRepo,
   type SandboxView,
+  type UnpushedResponse,
   type RewindResponse,
   type SandboxInfo,
   type SandboxSpec,
@@ -87,6 +89,7 @@ import { BusyError, Operations } from "./operations.js";
 import { homeId, lockHome } from "./home.js";
 import { checkRepos, defaultKumikoHome, SandboxExists, SandboxRecordError, SandboxStore } from "./sandboxes.js";
 import { Clones } from "./clones.js";
+import { dropScript, findUnpushed } from "./unpushed.js";
 import { AskRefused, RewindRefused, SessionEnded, SessionNotFound, SessionNotResumable, Sessions, ShellRefused } from "./sessions.js";
 import { RUN_ID } from "./userShells.js";
 import { docPaneTarget, Widgets, type PaneAnswer } from "./widgets.js";
@@ -711,9 +714,27 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     return c.json({ name, op }, 202);
   };
 
+  /**
+   * Deletes repos' folders from /workspace in the sandbox's running VM, noting it in the log; whether that worked.
+   * A failure is only noted: the folders stay dropped, to be deleted on the next start.
+   */
+  const dropFolders = async (name: string, folders: string[], log?: Log): Promise<boolean> => {
+    if (!folders.length) return true;
+    try {
+      await execOutput(provider.exec.bind(provider), name, `bash -c ${shellQuote(dropScript(folders))}`, 60_000);
+      log?.(`Deleted ${folders.map((f) => `${WORKSPACE_DIR}/${f}`).join(", ")}, of repos taken out of the sandbox.`, "note");
+      return true;
+    } catch (err) {
+      log?.(`warning: couldn't delete ${folders.join(", ")} from ${WORKSPACE_DIR}: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
+  };
+
   const startVm: Work = async (s, i, log) => {
     await sandboxes.writeManaged(s, i.meta?.spec);
     await provider.start(s.name, log);
+    // Repos taken out while it was stopped leave their folders now.
+    if (s.dropped?.length && (await dropFolders(s.name, s.dropped, log))) await sandboxes.dropped(s.name, s.dropped);
     // Runs left from before the VM stopped have nothing running in them any more.
     await sweepRuns(s.name, await runs.list(s.name).catch(() => new Map()));
   };
@@ -774,10 +795,17 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   /**
    * Deletes the VM and creates it again from `spec`, its sessions asleep meanwhile. They can continue: Claude's
    * history is in the sandbox's Claude home, on the host, and the workspace disk is kept and attached to the new VM.
+   * With `wipe` (Rebuild from scratch), the disk goes too, and a new one gets the repos cloned again from the mirrors.
    */
-  const recreate = async (sandbox: Sandbox, spec: SandboxSpec, log: Log) => {
+  const recreate = async (sandbox: Sandbox, spec: SandboxSpec, log: Log, { wipe = false }: { wipe?: boolean } = {}) => {
     await endSessions(sandbox.name, log, { sleep: true });
-    await provider.delete(sandbox.name, log, { keepWorkspace: true });
+    await provider.delete(sandbox.name, log, { keepWorkspace: !wipe });
+    if (wipe) {
+      clones.forget(sandbox.name);
+      // Nothing is left to delete on the new disk.
+      if (sandbox.dropped?.length) sandbox = (await sandboxes.dropped(sandbox.name, sandbox.dropped)) ?? sandbox;
+      log("The workspace disk is deleted; the repos are cloned again from the mirrors once the sandbox runs.", "note");
+    }
     await sandboxes.writeManaged(sandbox, spec);
     await provider.create(spec, log, await agentSetup(sandbox));
   };
@@ -809,11 +837,17 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   });
 
   /**
-   * Adds the repos in `repos` that the sandbox doesn't have, each with a folder of its own, and rewrites kumiko.md. A
-   * running VM's relay is set up again for them, and they are cloned once it reaches the mirrors.
+   * Takes `removed` out of the sandbox and adds `added`, each new one with a folder of its own, and rewrites kumiko.md.
+   * A removed repo's mirror stops being served, and its folders are deleted from /workspace: now if the VM runs, else
+   * when it next starts. The relay of a running VM serves the new ones at once, and they are cloned.
    */
-  const addRepos = async (sandbox: Sandbox, repos: string[], spec: SandboxSpec | undefined): Promise<Sandbox> => {
-    const updated = await sandboxes.addRepos(sandbox.name, repos);
+  const changeRepos = async (sandbox: Sandbox, added: string[], removed: SandboxRepo[], spec: SandboxSpec | undefined, running: boolean): Promise<Sandbox> => {
+    let updated = sandbox;
+    if (removed.length) {
+      const deleted = running && (await dropFolders(sandbox.name, removed.map((r) => r.folder)));
+      updated = await sandboxes.removeRepos(sandbox.name, removed.map((r) => r.repo), { deleted });
+    }
+    if (added.length) updated = await sandboxes.addRepos(sandbox.name, added);
     await sandboxes.writeManaged(updated, spec);
     await refresh();
     return updated;
@@ -836,26 +870,25 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     if (picked.errors.length) throw new HttpError(400, "Can't apply these changes.", picked.errors);
     const added = rawRepos === undefined ? [] : picked.repos.filter((r) => !sandbox.repos.some((x) => x.repo.toLowerCase() === r.toLowerCase()));
     const removed = rawRepos === undefined ? [] : sandbox.repos.filter((x) => !picked.repos.some((r) => r.toLowerCase() === x.repo.toLowerCase()));
-    if (removed.length) throw new HttpError(400, "Can't apply these changes.", [`Repos can't be taken out of a sandbox yet: ${removed.map((r) => r.repo).join(", ")}.`]);
     const patch: EditSpec = Array.isArray(edit.mounts) ? { ...edit, mounts: sandboxes.mounts(name, edit.mounts) } : edit;
     const again = c.req.query("recreate") === "1";
     const restarting = !again && c.req.query("restart") === "1";
     // Only repos: nothing for the VM to do.
     if (!again && !restarting && Object.keys(patch).length === 0) {
-      if (added.length) await addRepos(sandbox, added, info.meta?.spec);
+      if (added.length || removed.length) await changeRepos(sandbox, added, removed, info.meta?.spec, info.status === "running");
       return c.json({ name, warnings: [] });
     }
     if (again && info.status === "absent") {
       // Nothing to edit in place: build the VM from the stored spec with the changes.
       const v = await validateSpec({ ...vmSpec(sandbox, info), ...patch, name, workdir: WORKSPACE_DIR }, env());
       if (v.errors.length) throw new HttpError(400, "Can't apply these changes.", v.errors);
-      const updated = added.length ? await addRepos(sandbox, added, v.spec) : sandbox;
+      const updated = added.length || removed.length ? await changeRepos(sandbox, added, removed, v.spec, false) : sandbox;
       ops.start(name, "recreating", (log) => recreate(updated, v.spec, log));
       return c.json({ name, op: "recreating", warnings: v.warnings }, 202);
     }
     const v = await provider.validateEdit(name, patch, { recreate: again, restart: restarting });
     if (v.errors.length) throw new HttpError(400, "Can't apply these changes.", v.errors);
-    const updated = added.length ? await addRepos(sandbox, added, v.spec) : sandbox;
+    const updated = added.length || removed.length ? await changeRepos(sandbox, added, removed, v.spec, info.status === "running") : sandbox;
     const op: OpKind = again ? "recreating" : restarting ? "restarting" : "editing";
     ops.start(name, op, (log) =>
       again
@@ -868,17 +901,30 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     return c.json({ name, op, warnings: v.warnings }, 202);
   });
 
-  /** Delete the VM, keeping its workspace disk, then create it again from the stored spec (or the defaults, if there is none). */
-  app.post(
-    "/api/sandboxes/:name/recreate",
+  /**
+   * Delete the VM, keeping its workspace disk, then create it again from the stored spec (or the defaults, if there is
+   * none). With `?wipe=1` (Rebuild from scratch), the workspace disk is deleted and made again too.
+   */
+  app.post("/api/sandboxes/:name/recreate", (c) =>
     action(
       "recreating",
-      (s, i, log) => recreate(s, vmSpec(s, i), log),
+      (s, i, log) => recreate(s, vmSpec(s, i), log, { wipe: c.req.query("wipe") === "1" }),
       async (_s, i) => {
         if (i.metaError) throw new HttpError(400, i.metaError);
       },
-    ),
+    )(c),
   );
+
+  /**
+   * What the sandbox's VM has in its repos that isn't pushed: branches ahead of their upstream, worktrees with
+   * uncommitted changes, stashes. Found through an exec in the VM, so it must be running.
+   */
+  app.get("/api/sandboxes/:name/unpushed", async (c) => {
+    const name = c.req.param("name");
+    const { sandbox, info } = await known(name);
+    if (info.status !== "running") throw new HttpError(409, `${vmName(name)} is not running, so Kumiko can't see what isn't pushed.`);
+    return c.json({ repos: await findUnpushed(provider.exec.bind(provider), name, sandbox.repos) } satisfies UnpushedResponse);
+  });
 
   // ---- agent sessions --------------------------------------------------------------------
 

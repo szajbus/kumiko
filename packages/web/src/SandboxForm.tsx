@@ -16,6 +16,8 @@ import {
   type GitHubRepo,
   type Mount,
   type MirrorView,
+  WORKTREES_SUFFIX,
+  type SandboxRepo,
   type SandboxView,
   type TemplatesResponse,
 } from "@kumiko/shared";
@@ -29,6 +31,8 @@ import { guestPathProblem, type MountRow } from "./mounts";
 import { AddRepoDialog } from "./ReposPage";
 import { Select, type SelectGroup } from "./Select";
 import { COLORS } from "./status";
+import { LossList, useLossCheck } from "./Unpushed";
+import { mustConfirm, stillChecking } from "./loss";
 
 interface Props {
   /** Edit this sandbox instead of creating one. Its name and template are fixed; saving in place needs the VM stopped for resources and mounts. */
@@ -56,6 +60,10 @@ export function SandboxForm({ editing, mirrors, onCancel, onCreated }: Props) {
   // The repos the sandbox has, which keep their folders, and the ones ticked to add.
   const kept = editing?.sandbox.repos ?? [];
   const [picked, setPicked] = useState<string[]>([]);
+  /** The sandbox's repos unticked, to take out of it on save. */
+  const [dropped, setDropped] = useState<string[]>([]);
+  /** Saving waits on the user confirming the repos that go, and how it saves then. */
+  const [confirmRemove, setConfirmRemove] = useState<{ how?: "restart" | "recreate" } | undefined>();
   const [repoFilter, setRepoFilter] = useState("");
   const [adding, setAdding] = useState<{ login?: string } | undefined>();
   const [templates, setTemplates] = useState<TemplatesResponse | undefined>();
@@ -114,7 +122,11 @@ export function SandboxForm({ editing, mirrors, onCancel, onCreated }: Props) {
   // In the mirrors' order, so the folders shown don't move about as repos are ticked.
   const adds = mirrors.map((m) => m.repo).filter((r) => picked.includes(r) && !isKept(r));
   const folders = useMemo(() => new Map(repoFolders(adds, kept).map((r) => [r.repo, r.folder])), [adds.join(), kept]);
-  const toggleRepo = (repo: string, on: boolean) => setPicked((all) => (on ? [...all.filter((r) => r !== repo), repo] : all.filter((r) => r !== repo)));
+  const toggleRepo = (repo: string, on: boolean) => {
+    if (isKept(repo)) return setDropped((all) => (on ? all.filter((r) => r !== repo) : [...all, repo]));
+    setPicked((all) => (on ? [...all.filter((r) => r !== repo), repo] : all.filter((r) => r !== repo)));
+  };
+  const isDropped = (repo: string) => dropped.some((d) => d.toLowerCase() === repo.toLowerCase());
   const shownMirrors = mirrors.filter((m) => m.repo.toLowerCase().includes(repoFilter.trim().toLowerCase()));
   const openAdd = () => {
     setAdding({});
@@ -149,7 +161,7 @@ export function SandboxForm({ editing, mirrors, onCancel, onCreated }: Props) {
 
   const request = (): CreateSandboxRequest => ({
     name: name.trim(),
-    repos: [...kept.map((k) => k.repo), ...adds],
+    repos: [...kept.map((k) => k.repo).filter((r) => !isDropped(r)), ...adds],
     template: template || undefined,
     cpus: Number(cpus),
     memoryGiB: Number(memory),
@@ -200,7 +212,13 @@ export function SandboxForm({ editing, mirrors, onCancel, onCreated }: Props) {
     else void save();
   };
 
-  const save = async (how?: "restart" | "recreate") => {
+  /** Saves, once the user has confirmed the repos it takes out of the sandbox, if any. */
+  const save = (how?: "restart" | "recreate") => {
+    if (editing && dropped.length) setConfirmRemove({ how });
+    else void send(how);
+  };
+
+  const send = async (how?: "restart" | "recreate") => {
     setSubmitting(true);
     setErrors([]);
     try {
@@ -311,7 +329,7 @@ export function SandboxForm({ editing, mirrors, onCancel, onCreated }: Props) {
           description={
             <>
               From your mirrors. Each is cloned into <code className="mono">{WORKSPACE_DIR}</code>, its worktrees beside it.
-              {editing && " A repo added now is cloned when you save, or on the sandbox's next start."}
+              {editing && " A repo added now is cloned when you save, or on the sandbox's next start; one unticked is deleted from it."}
             </>
           }
         >
@@ -332,7 +350,7 @@ export function SandboxForm({ editing, mirrors, onCancel, onCreated }: Props) {
               <ul className="repo-picker-list" aria-label="Mirrors">
                 {shownMirrors.map((m) => {
                   const has = kept.find((k) => k.repo.toLowerCase() === m.repo.toLowerCase());
-                  const on = Boolean(has) || picked.includes(m.repo);
+                  const on = has ? !isDropped(m.repo) : picked.includes(m.repo);
                   const folder = has?.folder ?? folders.get(m.repo);
                   const slash = m.repo.indexOf("/");
                   return (
@@ -341,8 +359,7 @@ export function SandboxForm({ editing, mirrors, onCancel, onCreated }: Props) {
                         <input
                           type="checkbox"
                           checked={on}
-                          disabled={Boolean(has)}
-                          title={has ? "Removing a repo from a sandbox comes later." : undefined}
+                          title={has && !on ? `Taken out of the sandbox on save: ${WORKSPACE_DIR}/${has.folder} and its worktrees are deleted.` : undefined}
                           onChange={(e) => toggleRepo(m.repo, e.target.checked)}
                         />
                         <span className="repo-picker-name">
@@ -681,6 +698,18 @@ export function SandboxForm({ editing, mirrors, onCancel, onCreated }: Props) {
             {sessionsNote(editing)}
           </ConfirmDialog>
         )}
+        {confirmRemove && editing && (
+          <RemoveReposDialog
+            sandbox={editing}
+            repos={kept.filter((k) => isDropped(k.repo))}
+            onCancel={() => setConfirmRemove(undefined)}
+            onConfirm={() => {
+              const { how } = confirmRemove;
+              setConfirmRemove(undefined);
+              void send(how);
+            }}
+          />
+        )}
         {confirmRestart && editing && (
           <ConfirmDialog
             title={`Restart ${editing.vm}?`}
@@ -787,5 +816,54 @@ function EnvRowView({ row, set, onChange, onRemove }: { row: EnvRow; set?: boole
         <Cross />
       </button>
     </div>
+  );
+}
+
+/**
+ * Confirms taking repos out of a sandbox, whose folders are deleted from /workspace: with what isn't pushed in them,
+ * while the VM runs; a stopped one has its folders deleted when it next starts, and nothing can be looked at before.
+ */
+function RemoveReposDialog({ sandbox, repos, onCancel, onConfirm }: { sandbox: SandboxView; repos: SandboxRepo[]; onCancel(): void; onConfirm(): void }) {
+  const title = repos.length === 1 ? `Remove ${repos[0].repo} from ${sandbox.name}?` : `Remove ${repos.length} repos from ${sandbox.name}?`;
+  const folders = repos.flatMap((r) => [`${WORKSPACE_DIR}/${r.folder}`, `${WORKSPACE_DIR}/${r.folder}${WORKTREES_SUFFIX}`]);
+  const what = (
+    <p>
+      {repos.length === 1 ? "Its mirror stops" : "Their mirrors stop"} being served to this sandbox, and Kumiko deletes{" "}
+      {folders.map((f, i) => (
+        <span key={f}>
+          {i > 0 && (i === folders.length - 1 ? " and " : ", ")}
+          <code className="mono">{f}</code>
+        </span>
+      ))}
+      {sandbox.status === "running" ? "." : " when the sandbox next starts."}
+    </p>
+  );
+  if (sandbox.status !== "running") {
+    return (
+      <ConfirmDialog title={title} confirmLabel="Remove" danger onCancel={onCancel} onConfirm={onConfirm}>
+        {what}
+        <p className="dialog-note">Branches on GitHub stay. Adding a repo again clones it again.</p>
+      </ConfirmDialog>
+    );
+  }
+  return <RemoveReposChecked title={title} sandbox={sandbox} repos={repos} what={what} onCancel={onCancel} onConfirm={onConfirm} />;
+}
+
+function RemoveReposChecked(props: { title: string; sandbox: SandboxView; repos: SandboxRepo[]; what: React.ReactNode; onCancel(): void; onConfirm(): void }) {
+  const { check, startAndCheck } = useLossCheck(props.sandbox.name, props.repos.map((r) => r.repo));
+  const clean = check.kind === "done" && !mustConfirm(check);
+  return (
+    <ConfirmDialog
+      title={props.title}
+      confirmLabel={clean ? "Remove" : "Remove and delete the folders"}
+      danger
+      confirmDisabled={stillChecking(check)}
+      onCancel={props.onCancel}
+      onConfirm={props.onConfirm}
+    >
+      {props.what}
+      <LossList check={check} onStart={startAndCheck} />
+      <p className="dialog-note">Branches on GitHub stay. Adding a repo again clones it again.</p>
+    </ConfirmDialog>
   );
 }

@@ -35,6 +35,7 @@ import type {
   SessionInfo,
   StartSessionRequest,
   TemplatesResponse,
+  UnpushedResponse,
   WindowState,
 } from "@kumiko/shared";
 
@@ -92,6 +93,10 @@ export const api = {
   start: (name: string) => request("POST", `/api/sandboxes/${name}/start`),
   stop: (name: string) => request("POST", `/api/sandboxes/${name}/stop`),
   recreate: (name: string) => request("POST", `/api/sandboxes/${name}/recreate`),
+  /** Rebuild from scratch: the VM and the workspace disk are deleted and made again, and the repos cloned again. */
+  wipe: (name: string) => request("POST", `/api/sandboxes/${name}/recreate?wipe=1`),
+  /** What the running VM has that isn't pushed, repo by repo; 409 while it isn't running. */
+  unpushed: (name: string) => request<UnpushedResponse>("GET", `/api/sandboxes/${name}/unpushed`),
   restart: (name: string) => request("POST", `/api/sandboxes/${name}/restart`),
   remove: (name: string) => request("DELETE", `/api/sandboxes/${name}`),
   /**

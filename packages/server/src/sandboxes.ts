@@ -215,6 +215,7 @@ export class SandboxStore {
     }
     if (s?.name !== name) throw new SandboxRecordError(file, `its name isn't ${name}`);
     if (!isRepoList(s.repos)) throw new SandboxRecordError(file, "its repos aren't a list of repositories and folders");
+    if (s.dropped !== undefined && !(Array.isArray(s.dropped) && s.dropped.every((f) => typeof f === "string" && parseRepo(`x/${f}`)))) throw new SandboxRecordError(file, "its dropped folders aren't folder names");
     return s as Sandbox;
   }
 
@@ -298,9 +299,39 @@ export class SandboxStore {
   async addRepos(name: string, repos: string[]): Promise<Sandbox> {
     const current = await this.get(name);
     if (!current) throw new Error(`There is no sandbox ${name}.`);
-    const updated: Sandbox = { ...current, repos: repoFolders([...current.repos.map((r) => r.repo), ...repos], current.repos) };
-    await replaceFile(this.dir, `${name}.json`, JSON.stringify(updated, null, 2) + "\n");
+    const updated: Sandbox = { ...current, repos: repoFolders([...current.repos.map((r) => r.repo), ...repos], current.repos, current.dropped) };
+    await this.save(updated);
     return updated;
+  }
+
+  /**
+   * Takes repos out of a sandbox's record. Their folders join `dropped`, to be deleted from /workspace, unless
+   * `deleted` says they are gone already. Returns the record as it is now.
+   */
+  async removeRepos(name: string, repos: string[], { deleted = false }: { deleted?: boolean } = {}): Promise<Sandbox> {
+    const current = await this.get(name);
+    if (!current) throw new Error(`There is no sandbox ${name}.`);
+    const out = current.repos.filter((r) => repos.some((x) => x.toLowerCase() === r.repo.toLowerCase()));
+    const dropped = [...new Set([...(current.dropped ?? []), ...(deleted ? [] : out.map((r) => r.folder))])];
+    const { dropped: _, ...rest } = current;
+    const updated: Sandbox = { ...rest, repos: current.repos.filter((r) => !out.includes(r)), ...(dropped.length ? { dropped } : {}) };
+    await this.save(updated);
+    return updated;
+  }
+
+  /** Forgets dropped folders that have been deleted from /workspace. */
+  async dropped(name: string, deleted: string[]): Promise<Sandbox | undefined> {
+    const current = await this.get(name);
+    if (!current?.dropped) return current;
+    const left = current.dropped.filter((f) => !deleted.includes(f));
+    const { dropped: _, ...rest } = current;
+    const updated: Sandbox = { ...rest, ...(left.length ? { dropped: left } : {}) };
+    await this.save(updated);
+    return updated;
+  }
+
+  private async save(s: Sandbox): Promise<void> {
+    await replaceFile(this.dir, `${s.name}.json`, JSON.stringify(s, null, 2) + "\n");
   }
 
   /** Makes the app-level template the first time it is needed, so the user can find and change it. */
