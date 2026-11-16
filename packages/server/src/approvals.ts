@@ -525,11 +525,11 @@ export class Approvals {
     const d = card.decision!;
     if (c.kind === "issue" && d.kind === "issue") {
       const issue = await this.opts.github.issueCreate(c.repo, { title: d.title, body: withFooter(d.body, FOOTERS.issue, d.footer !== false), labels: d.labels });
-      return { result: { text: `Created issue #${issue.number} (${issue.url}).` }, receipt: { ok: true, text: `Created issue #${issue.number}`, meta: "as you", url: issue.url, link: "Open issue" } };
+      return { result: { text: `Created issue #${issue.number} (${issue.url}).` }, receipt: { ok: true, text: `Created issue #${issue.number}`, meta: "as you", url: issue.url, link: "View on GitHub" } };
     }
     if (c.kind === "comment" && d.kind === "comment") {
       const url = await this.opts.github.comment(c.repo, c.target.type, c.target.number, withFooter(d.body, FOOTERS.comment, d.footer !== false));
-      return { result: { text: `Posted a comment on #${c.target.number}${url ? ` (${url})` : ""}.` }, receipt: { ok: true, text: `Commented on #${c.target.number}`, meta: "as you", ...(url ? { url, link: "Open comment" } : {}) } };
+      return { result: { text: `Posted a comment on #${c.target.number}${url ? ` (${url})` : ""}.` }, receipt: { ok: true, text: `Commented on #${c.target.number}`, meta: "as you", ...(url ? { url, link: "View on GitHub" } : {}) } };
     }
     if (c.kind !== "deliver" || d.kind !== "deliver") throw new Error("That decision isn't for this card.");
     if (d.route === "pr") {
@@ -541,7 +541,7 @@ export class Approvals {
       const pr = await this.opts.github.prCreate(c.repo, { base: c.base, head: c.branch, title, body: withFooter(d.body ?? c.body, FOOTERS.pr, d.footer !== false) });
       return {
         result: { text: `Opened PR #${pr.number} (${pr.url}). Nothing is on ${c.base} yet; when the user wants it landed, call deliver on ${c.branch} again.` },
-        receipt: { ok: true, text: `Opened PR #${pr.number}`, meta: "as you", url: pr.url, link: "Open PR" },
+        receipt: { ok: true, text: `Opened PR #${pr.number}`, meta: "as you", url: pr.url, link: "View on GitHub" },
       };
     }
     const dir = this.opts.mirrors.path(c.repo);
