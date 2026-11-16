@@ -84,7 +84,7 @@ import { MirrorFetchFailed, MirrorNotFound, MirrorRecordError, Mirrors } from ".
 import { hostIdentity } from "./git.js";
 import { Pushes } from "./pushes.js";
 import { ApprovalError, Approvals, cardsOf } from "./approvals.js";
-import { commitOf, isObjectName, mergeBase, parentOf, readBlob, ReviewRefused, reviewDiff } from "./review.js";
+import { branchPaths, commitOf, isObjectName, mergeBase, parentOf, readBlob, ReviewRefused, reviewDiff } from "./review.js";
 import { Relays } from "./relay.js";
 import { hasToken, isLocalRequest, isToken, tokenCookie } from "./guard.js";
 import { LoginFailed, Logins } from "./logins.js";
@@ -1374,8 +1374,14 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     return c.json(
       await reviewing(async () => {
         if (!(await commitOf(dir, card.head))) throw new HttpError(410, `The mirror doesn't have ${card.branch} at ${card.head.slice(0, 7)} any more.`);
+        // Once the branch has landed, it meets the default branch at its own head: its first commit's parent then.
+        const branchBase = async () => {
+          const base = await mergeBase(dir, `refs/heads/${card.base}`, card.head).catch(() => undefined);
+          return base && base !== card.head ? base : await parentOf(dir, card.commits[0].sha);
+        };
         let from: string;
         let to = card.head;
+        let only = paths;
         if (commit !== undefined) {
           if (!card.commits.some((x) => x.sha === commit)) throw new HttpError(400, "commit must be one of the card's.");
           to = commit;
@@ -1383,12 +1389,14 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
         } else if (since !== undefined) {
           if (!isObjectName(since) || !(await commitOf(dir, since))) throw new HttpError(400, "since must be a commit in the mirror.");
           from = since;
-        } else {
-          // Once the branch has landed, it meets the default branch at its own head: its first commit's parent then.
-          const base = await mergeBase(dir, `refs/heads/${card.base}`, card.head).catch(() => undefined);
-          from = base && base !== card.head ? base : await parentOf(dir, card.commits[0].sha);
-        }
-        return reviewDiff(dir, from, to, { ignoreWhitespace: c.req.query("w") === "1", ...(paths.length ? { paths } : {}) });
+          // Only the files the branch changes: a merge or rebase onto the default branch since brought in others'.
+          if (!paths.length) {
+            const own = await branchPaths(dir, await branchBase(), card.head);
+            if (own && !own.length) return { from, to, files: [] };
+            if (own) only = own;
+          }
+        } else from = await branchBase();
+        return reviewDiff(dir, from, to, { ignoreWhitespace: c.req.query("w") === "1", ...(only.length ? { paths: only } : {}), ...(paths.length ? { whole: true } : {}) });
       }),
     );
   });

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ReviewFile } from "@kumiko/shared";
-import { byFolder, changesReason, restamp, reviewRows, splitRows, viewedCount, viewedState, type Review, type ReviewNote } from "../src/review.ts";
+import { byFolder, changesReason, restamp, reviewRows, splitRows, viewedCount, viewedMarks, viewedState, type Review, type ReviewNote } from "../src/review.ts";
 
 const file = (hunks: ReviewFile["hunks"], status: ReviewFile["status"] = "modified") => ({ hunks, status });
 const short = (rows: ReturnType<typeof reviewRows>) => rows.map((r) => (r.kind === "gap" ? `gap ${r.skipped ?? "?"}` : `${r.kind[0]} ${r.old ?? "-"} ${r.new ?? "-"} ${r.text}`));
@@ -59,14 +59,24 @@ describe("a review's marks and notes", () => {
     assert.equal(restamp(next, "h2", [a]), next, "nothing to change gives the same review back");
   });
 
+  it("marks a renamed file's old path with it, as the card lists both", () => {
+    const f = { path: "new.ts", oldPath: "old.ts", status: "renamed" as const, newBlob: "n", oldBlob: "o" };
+    assert.deepEqual(viewedMarks(f, "h"), { "new.ts": { blob: "n", head: "h" }, "old.ts": { blob: "o", head: "h" } });
+    const r: Review = { viewed: viewedMarks(f, "h"), notes: [], seen: [] };
+    assert.equal(viewedCount(r, { head: "h", files: [{ path: "old.ts" }, { path: "new.ts" }] }), 2);
+    assert.equal(restamp(r, "h2", [{ ...f, hunks: [] }]).viewed["old.ts"].head, "h2");
+  });
+
   it("tells Claude the user's words, then each note with its line, in file order", () => {
     const notes: ReviewNote[] = [
-      { id: "2", path: "z.ts", side: "new", line: 9, quote: "  return x;", text: "Return y." },
-      { id: "1", path: "a.ts", side: "old", line: 3, quote: "old()", text: "Keep this." },
+      { id: "2", path: "z.ts", side: "new", line: 9, quote: "  return x;", text: "Return y.", head: "abcdef123" },
+      { id: "3", path: "b.ts", side: "new", line: 1, quote: "b", text: "Earlier.", head: "0123456789" },
+      { id: "1", path: "a.ts", side: "old", line: 3, quote: "old()", text: "Keep this.", head: "abcdef123" },
     ];
     assert.equal(
       changesReason({ branch: "fix", head: "abcdef123" }, notes, " Close, but: "),
-      "Close, but:\n\nNotes on fix at abcdef1:\n\na.ts, line 3 before the change\n> old()\nKeep this.\n\nz.ts:9\n> return x;\nReturn y.",
+      "Close, but:\n\nNotes on fix at abcdef1:\n\na.ts, line 3 before the change\n> old()\nKeep this.\n\nz.ts:9\n> return x;\nReturn y." +
+        "\n\nNotes on fix at 0123456, an earlier commit of the branch:\n\nb.ts:1\n> b\nEarlier.",
     );
     assert.equal(changesReason({ branch: "fix", head: "abc" }, [], "  "), "");
   });

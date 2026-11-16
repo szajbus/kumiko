@@ -92,6 +92,8 @@ export interface ReviewNote {
   /** The line's text when the note was left, to quote to Claude. */
   quote: string;
   text: string;
+  /** The card's commit the note was left at: `line` is a line of that version. */
+  head: string;
 }
 
 /** Where a note sits: a file's line on one side. */
@@ -126,6 +128,14 @@ export function viewedState(review: Review, f: Pick<ReviewFile, "path" | "newBlo
 export const viewedCount = (review: Review, card: Pick<DeliverCard, "files" | "head">) => card.files.filter((f) => review.viewed[f.path]?.head === card.head).length;
 
 /**
+ * The marks that say a file was viewed as it is at `head`. The card lists a renamed file as its old path deleted and
+ * its new one added, so the old path is marked too, with the content it had.
+ */
+export function viewedMarks(f: Pick<ReviewFile, "path" | "oldPath" | "status" | "newBlob" | "oldBlob">, head: string): Record<string, Viewed> {
+  return { [f.path]: { blob: fileBlob(f), head }, ...(f.oldPath && f.status === "renamed" ? { [f.oldPath]: { blob: f.oldBlob ?? "", head } } : {}) };
+}
+
+/**
  * Viewed marks brought up to the card's commit: a file whose content is the same as when it was viewed is viewed now
  * too; one that changed keeps its old mark, so it shows as changed since.
  */
@@ -135,7 +145,7 @@ export function restamp(review: Review, head: string, files: ReviewFile[]): Revi
   for (const f of files) {
     const v = viewed[f.path];
     if (v && v.head !== head && v.blob === fileBlob(f)) {
-      viewed[f.path] = { ...v, head };
+      Object.assign(viewed, viewedMarks(f, head));
       changed = true;
     }
   }
@@ -144,13 +154,17 @@ export function restamp(review: Review, head: string, files: ReviewFile[]): Revi
 
 const short = (sha: string) => sha.slice(0, 7);
 
-/** What a request for changes tells Claude: the user's own words, then each note with the line it is on. */
+/**
+ * What a request for changes tells Claude: the user's own words, then each note with the line it is on, under the
+ * commit it was left at.
+ */
 export function changesReason(card: Pick<DeliverCard, "branch" | "head">, notes: ReviewNote[], text: string): string {
   const parts = [text.trim()].filter(Boolean);
-  if (notes.length) {
-    const sorted = [...notes].sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line);
+  const heads = [...new Set(notes.map((n) => n.head))].sort((a, b) => Number(a !== card.head) - Number(b !== card.head));
+  for (const head of heads) {
+    const sorted = notes.filter((n) => n.head === head).sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line);
     parts.push(
-      `Notes on ${card.branch} at ${short(card.head)}:\n\n` +
+      `Notes on ${card.branch} at ${short(head)}${head === card.head ? "" : ", an earlier commit of the branch"}:\n\n` +
         sorted
           .map((n) => {
             const where = n.side === "new" ? `${n.path}:${n.line}` : `${n.path}, line ${n.line} before the change`;
@@ -162,24 +176,30 @@ export function changesReason(card: Pick<DeliverCard, "branch" | "head">, notes:
   return parts.join("\n\n");
 }
 
-// ---- kept per card, in the browser --------------------------------------------------------------
+// ---- kept per branch, in the browser ------------------------------------------------------------
 
-const KEY = (session: string, ask: string) => `kumiko.review.${session}.${ask}`;
+/**
+ * Which review a card's is: its branch's, in its session. Delivering the branch again after a request for changes
+ * makes a new card, which goes on with the same review.
+ */
+export const reviewOf = (card: Pick<DeliverCard, "repo" | "branch">) => `${card.repo}#${card.branch}`;
+
+const KEY = (session: string, review: string) => `kumiko.review.${session}.${review}`;
 const cache = new Map<string, Review>();
 const listeners = new Set<() => void>();
 
 function parse(raw: string | null): Review {
   try {
     const v = raw ? (JSON.parse(raw) as Partial<Review>) : {};
-    return { viewed: v.viewed && typeof v.viewed === "object" ? v.viewed : {}, notes: Array.isArray(v.notes) ? v.notes : [], seen: Array.isArray(v.seen) ? v.seen : [] };
+    return { viewed: v.viewed && typeof v.viewed === "object" ? v.viewed : {}, notes: Array.isArray(v.notes) ? v.notes.filter((n) => n && typeof n.head === "string") : [], seen: Array.isArray(v.seen) ? v.seen : [] };
   } catch {
     return EMPTY;
   }
 }
 
-/** The review of card `ask`: what the user viewed and the notes they left. */
-export function getReview(session: string, ask: string): Review {
-  const key = KEY(session, ask);
+/** Review `review` (see `reviewOf`): what the user viewed and the notes they left. */
+export function getReview(session: string, review: string): Review {
+  const key = KEY(session, review);
   let r = cache.get(key);
   if (!r) {
     r = parse(typeof localStorage === "undefined" ? null : localStorage.getItem(key));
@@ -188,9 +208,9 @@ export function getReview(session: string, ask: string): Review {
   return r;
 }
 
-export function setReview(session: string, ask: string, change: (r: Review) => Review): void {
-  const key = KEY(session, ask);
-  const before = getReview(session, ask);
+export function setReview(session: string, review: string, change: (r: Review) => Review): void {
+  const key = KEY(session, review);
+  const before = getReview(session, review);
   const next = change(before);
   if (next === before) return;
   cache.set(key, next);
@@ -273,3 +293,12 @@ export function byFolder<T extends { path: string }>(files: T[]): [string, T[]][
   }
   return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
 }
+
+/** What the pane shows of the branch: all it changes, one commit, or what changed since the head reviewed before. */
+export type Scope = { kind: "all" } | { kind: "commit"; sha: string } | { kind: "since"; sha: string };
+
+/** The diff request for `scope`. */
+export const scopeQuery = (scope: Scope, whitespace: boolean) => ({
+  ...(scope.kind === "commit" ? { commit: scope.sha } : scope.kind === "since" ? { since: scope.sha } : {}),
+  ...(whitespace ? { w: true } : {}),
+});

@@ -1,11 +1,11 @@
 import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
-import { REVIEW, type ApprovalCard as Card, type DeliverCard, type ReviewState, type AttachmentInput, type CardDecision, type CardFlag, type CardFile } from "@kumiko/shared";
+import { MAX_REASON, REVIEW, type ApprovalCard as Card, type DeliverCard, type ReviewState, type AttachmentInput, type CardDecision, type CardFlag, type CardFile } from "@kumiko/shared";
 import { approveLabel, barShares, cardAction, cardClosed, cardVerb, commitsLabel, deliverChoices, deliverDecision, filesLabel, initialChoice, lostHeading, unsignedWarning, whereLabel, type DeliverChoice } from "./cards";
 import { hasFiles, readFiles, toInput, type ComposerFile } from "./attachments";
 import type { ChatItem } from "./chat";
 import { FileChips } from "./Composer";
 import { Markdown } from "./Markdown";
-import { changesReason, getReview, onRequestChanges, setReview, subscribeReviews, viewedCount, type Review } from "./review";
+import { changesReason, getReview, onRequestChanges, reviewOf, setReview, subscribeReviews, viewedCount, type Review } from "./review";
 import { WindowContext } from "./windowContext";
 
 type AskItem = Extract<ChatItem, { type: "ask" }>;
@@ -83,7 +83,7 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
     return ok;
   };
   const win = useContext(WindowContext);
-  const review = useSyncExternalStore(subscribeReviews, () => (win && c.kind === "deliver" ? getReview(win.session, card.id) : NO_REVIEW));
+  const review = useSyncExternalStore(subscribeReviews, () => (win && c.kind === "deliver" ? getReview(win.session, reviewOf(c)) : NO_REVIEW));
   const notes = review.notes;
   const box = useRef<HTMLDivElement>(null);
   // The review pane's Request changes: this card opens its box for a message to go with the notes.
@@ -114,9 +114,14 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
   const declineNow = () => {
     if (!decide || busy) return;
     const text = c.kind === "deliver" && notes.length ? changesReason(c, notes, reason) : reason.trim();
+    // Cut, the notes at the end would be lost without a word: the user shortens them instead.
+    if (text.length > MAX_REASON) {
+      setRefused(`That's ${text.length.toLocaleString()} characters with the notes, more than the ${MAX_REASON.toLocaleString()} Claude is sent. Shorten or delete some notes.`);
+      return;
+    }
     void send({ action: "decline", ...(text ? { reason: text } : {}), ...(files.length ? { attachments: files.map(toInput) } : {}) }).then((ok) => {
       // The notes went to Claude with it.
-      if (ok && win && notes.length) setReview(win.session, card.id, (r) => ({ ...r, notes: [] }));
+      if (ok && win && notes.length && c.kind === "deliver") setReview(win.session, reviewOf(c), (r) => ({ ...r, notes: [] }));
     });
   };
   const attach = async (picked: File[]) => {

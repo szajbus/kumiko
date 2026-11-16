@@ -2,7 +2,7 @@
 // whole content to show more of it around a change.
 
 import { REVIEW_FILE_MAX_LINES, REVIEW_MAX_BLOB_BYTES, REVIEW_MAX_LINES, type ReviewDiff, type ReviewFile, type ReviewHunk, type ReviewStatus } from "@kumiko/shared";
-import { mirrorGit } from "./landing.js";
+import { isCi, mirrorGit } from "./landing.js";
 
 /** Something the user asked of the review that doesn't fit; the message says what. */
 export class ReviewRefused extends Error {}
@@ -120,8 +120,9 @@ function sectionPath(lines: string[]): string {
   for (const l of lines) {
     if (l.startsWith("@@")) break;
     if (l.startsWith("rename to ") || l.startsWith("copy to ")) return unquote(l.slice(l.indexOf(" to ") + 4));
-    if (l.startsWith("+++ ")) plus = unquote(l.slice(4));
-    if (l.startsWith("--- ")) minus = unquote(l.slice(4));
+    // An unquoted name with a space in it ends with a tab, as in diff(1).
+    if (l.startsWith("+++ ")) plus = unquote(l.slice(4).replace(/\t$/, ""));
+    if (l.startsWith("--- ")) minus = unquote(l.slice(4).replace(/\t$/, ""));
   }
   if (plus && plus !== "/dev/null") return strip(plus, "b/");
   if (minus && minus !== "/dev/null") return strip(minus, "a/");
@@ -174,9 +175,10 @@ const excluded = (path: string) => `:(exclude,literal)${path}`;
 
 /**
  * What changed from `from` to `to`, file by file. Files whose patches are long come without them, marked `tooLarge`,
- * as do all files once the diff holds REVIEW_MAX_LINES; `paths` asks for those files alone, whole.
+ * as do all files once the diff holds REVIEW_MAX_LINES. `paths` keeps it to those files; `whole` lets their patches be
+ * longer, for a file asked for on its own.
  */
-export async function reviewDiff(dir: string, from: string, to: string, opts: { ignoreWhitespace?: boolean; paths?: string[] } = {}): Promise<ReviewDiff> {
+export async function reviewDiff(dir: string, from: string, to: string, opts: { ignoreWhitespace?: boolean; paths?: string[]; whole?: boolean } = {}): Promise<ReviewDiff> {
   const only = opts.paths?.length ? ["--", ...opts.paths.map(literal)] : [];
   const [raw, numstat] = await Promise.all([mirrorGit(dir, [...DIFF, "--raw", "-z", "--no-abbrev", from, to, ...only]), mirrorGit(dir, [...DIFF, "--numstat", "-z", from, to, ...only])]);
   const entries = parseRaw(raw.out);
@@ -187,12 +189,12 @@ export async function reviewDiff(dir: string, from: string, to: string, opts: { 
   });
 
   // Long patches are left out of the one git writes: lines are counted from --numstat first.
-  const fileMax = opts.paths?.length ? REVIEW_MAX_LINES * 2 : REVIEW_FILE_MAX_LINES;
+  const fileMax = opts.whole ? REVIEW_MAX_LINES * 2 : REVIEW_FILE_MAX_LINES;
   const tooLarge = new Set<string>();
   let total = 0;
   for (const e of entries) {
     const n = (e.added ?? 0) + (e.deleted ?? 0);
-    if (n > fileMax || total + n > REVIEW_MAX_LINES * (opts.paths?.length ? 2 : 1)) tooLarge.add(e.path);
+    if (n > fileMax || total + n > REVIEW_MAX_LINES * (opts.whole ? 2 : 1)) tooLarge.add(e.path);
     else total += n;
   }
   const shown = entries.filter((e) => !tooLarge.has(e.path));
@@ -230,7 +232,7 @@ export async function reviewDiff(dir: string, from: string, to: string, opts: { 
       hunks: p?.hunks ?? [],
       ...(tooLarge.has(e.path) ? { tooLarge: true } : {}),
       ...(opts.ignoreWhitespace && !tooLarge.has(e.path) && !binary && !p?.hunks.length && (e.added ?? 0) + (e.deleted ?? 0) > 0 ? { whitespaceOnly: true } : {}),
-      ...(e.path === ".github" || e.path.startsWith(".github/") ? { flagged: true } : {}),
+      ...(isCi(e.path) ? { flagged: true } : {}),
     };
   });
   return { from, to, files };
@@ -241,6 +243,20 @@ const entryOld = (entries: Entry[], path: string) => {
   const old = entries.find((e) => e.path === path)?.oldPath;
   return old ? [excluded(old)] : [];
 };
+
+/** At most this many paths are passed to git to keep a diff to a branch's own files; past it, it isn't kept to them. */
+const MAX_PATHSPECS = 1000;
+
+/**
+ * The paths a branch changes, from where it left `base` to `head`, both sides of a rename: what a diff between two of
+ * its heads is kept to, so that what came in from the default branch (a merge, a rebase) isn't shown as the branch's.
+ * Undefined when there are too many to pass to git.
+ */
+export async function branchPaths(dir: string, base: string, head: string): Promise<string[] | undefined> {
+  const out = await mirrorGit(dir, ["diff", "--name-only", "-z", "--no-renames", base, head]);
+  const paths = out.out.split("\0").filter(Boolean);
+  return paths.length <= MAX_PATHSPECS ? paths : undefined;
+}
 
 /** A blob's text, for showing more of a file around a change; undefined for a binary one. */
 export async function readBlob(dir: string, blob: string): Promise<{ text?: string; binary?: boolean }> {

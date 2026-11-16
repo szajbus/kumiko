@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { REVIEW_FILE_MAX_LINES } from "@kumiko/shared";
-import { commitOf, isObjectName, mergeBase, parentOf, parsePatch, parseNumstat, parseRaw, readBlob, ReviewRefused, reviewDiff, unquote } from "../src/review.js";
+import { branchPaths, commitOf, isObjectName, mergeBase, parentOf, parsePatch, parseNumstat, parseRaw, readBlob, ReviewRefused, reviewDiff, unquote } from "../src/review.js";
 import { sh } from "./repo.js";
 
 describe("parsing git's output", () => {
@@ -93,6 +93,7 @@ describe("a branch's changes, from a repository", () => {
     first = sh(repo, "rev-parse", "HEAD").trim();
     await writeFile(join(repo, "ws.txt"), "x  \ny\n");
     await writeFile(join(repo, 'odd "name".txt'), "new\n");
+    await writeFile(join(repo, "with space.txt"), "spaced\n");
     await writeFile(join(repo, "bin.dat"), Buffer.from([0, 1, 2, 3]));
     await writeFile(join(repo, "big.txt"), Array.from({ length: REVIEW_FILE_MAX_LINES + 1 }, (_, i) => `${i}`).join("\n") + "\n");
     await chmod(join(repo, "moved.txt"), 0o644);
@@ -116,7 +117,7 @@ describe("a branch's changes, from a repository", () => {
   it("lists every file with its status, counts, blobs and hunks", async () => {
     const d = await reviewDiff(dir, base, head);
     const by = new Map(d.files.map((f) => [f.path, f]));
-    assert.deepEqual([...by.keys()].sort(), ["a.txt", "big.txt", "bin.dat", "gone.txt", 'odd "name".txt', "renamed.txt", "ws.txt"]);
+    assert.deepEqual([...by.keys()].sort(), ["a.txt", "big.txt", "bin.dat", "gone.txt", 'odd "name".txt', "renamed.txt", "with space.txt", "ws.txt"]);
     const a = by.get("a.txt")!;
     assert.equal(a.status, "modified");
     assert.deepEqual([a.added, a.deleted], [1, 1]);
@@ -127,13 +128,15 @@ describe("a branch's changes, from a repository", () => {
     assert.equal(by.get("gone.txt")!.status, "deleted");
     assert.equal(by.get("gone.txt")!.newBlob, undefined);
     assert.equal(by.get('odd "name".txt')!.hunks[0].lines[0], "+new");
+    // git ends a name with a space in it with a tab, on its --- and +++ lines.
+    assert.equal(by.get("with space.txt")!.hunks[0].lines[0], "+spaced");
     assert.equal(by.get("bin.dat")!.binary, true);
     assert.equal(by.get("big.txt")!.tooLarge, true, "a long patch comes without its lines");
     assert.deepEqual(by.get("big.txt")!.hunks, []);
   });
 
   it("gives a long file whole when asked for it alone", async () => {
-    const d = await reviewDiff(dir, base, head, { paths: ["big.txt"] });
+    const d = await reviewDiff(dir, base, head, { paths: ["big.txt"], whole: true });
     assert.equal(d.files.length, 1);
     assert.equal(d.files[0].tooLarge, undefined);
     assert.equal(d.files[0].hunks[0].lines.length, REVIEW_FILE_MAX_LINES + 1);
@@ -145,6 +148,21 @@ describe("a branch's changes, from a repository", () => {
     assert.equal(ws.whitespaceOnly, true);
     assert.deepEqual(ws.hunks, []);
     assert.equal(d.files.find((f) => f.path === "a.txt")!.hunks.length, 1, "the other files keep their patches");
+  });
+
+  it("keeps a diff to the files a branch changes, leaving out what came in from main", async () => {
+    sh(repo, "checkout", "--quiet", "main");
+    await writeFile(join(repo, "upstream.txt"), "theirs\n");
+    sh(repo, "add", "upstream.txt");
+    sh(repo, "commit", "--quiet", "-m", "upstream");
+    sh(repo, "checkout", "--quiet", "work");
+    sh(repo, "merge", "--quiet", "--no-edit", "main");
+    const merged = sh(repo, "rev-parse", "HEAD").trim();
+    const all = await reviewDiff(dir, head, merged);
+    assert.deepEqual(all.files.map((f) => f.path), ["upstream.txt"], "head to head, main's file shows");
+    const own = await branchPaths(dir, await mergeBase(dir, "refs/heads/main", merged), merged);
+    assert.ok(own && !own.includes("upstream.txt") && own.includes("a.txt") && own.includes("moved.txt"), "both sides of a rename");
+    assert.deepEqual((await reviewDiff(dir, head, merged, { paths: own })).files, []);
   });
 
   it("reads a blob's text, and refuses what isn't one", async () => {

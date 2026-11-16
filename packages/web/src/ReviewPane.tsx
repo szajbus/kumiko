@@ -6,24 +6,24 @@ import { splitLines } from "./diff";
 import { PaneGrip } from "./PaneGrip";
 import {
   byFolder,
-  fileBlob,
   getReview,
   noteKey,
   requestChanges,
   restamp,
+  reviewOf,
   reviewPrefs,
   reviewRows,
   setReview,
   splitRows,
+  scopeQuery,
   subscribeReviews,
+  viewedMarks,
   viewedState,
+  type Scope,
   type ReviewNote,
   type ReviewRow,
 } from "./review";
 import { WindowContext } from "./windowContext";
-
-/** What the pane shows of the branch: all it changes, one commit, or what changed since the head reviewed before. */
-type Scope = { kind: "all" } | { kind: "commit"; sha: string } | { kind: "since"; sha: string };
 
 const short = (sha: string) => sha.slice(0, 7);
 const STATUS_LETTER: Record<ReviewFile["status"], string> = { added: "A", modified: "M", deleted: "D", renamed: "R", copied: "C", type: "T" };
@@ -83,7 +83,8 @@ function Head({ pane, c, children }: { pane: string; c?: DeliverCard; children?:
 
 function ReviewBody({ session, pane, card, c }: { session: string; pane: string; card: ApprovalCard; c: DeliverCard }) {
   const ctx = useContext(WindowContext);
-  const review = useSyncExternalStore(subscribeReviews, () => getReview(session, card.id));
+  const rkey = reviewOf(c);
+  const review = useSyncExternalStore(subscribeReviews, () => getReview(session, rkey));
   const prefs = useSyncExternalStore(reviewPrefs.subscribe, reviewPrefs.get);
   const [scope, setScope] = useState<Scope>({ kind: "all" });
   const [diff, setDiff] = useState<ReviewDiff>();
@@ -97,30 +98,47 @@ function ReviewBody({ session, pane, card, c }: { session: string; pane: string;
 
   // The heads the user reviewed at, for "since": this one goes last.
   useEffect(() => {
-    setReview(session, card.id, (r) => (r.seen.at(-1) === c.head ? r : { ...r, seen: [...r.seen.filter((h) => h !== c.head), c.head].slice(-10) }));
-  }, [session, card.id, c.head]);
+    setReview(session, rkey, (r) => (r.seen.at(-1) === c.head ? r : { ...r, seen: [...r.seen.filter((h) => h !== c.head), c.head].slice(-10) }));
+  }, [session, rkey, c.head]);
   const before = review.seen.at(-1) === c.head ? review.seen.at(-2) : review.seen.at(-1);
 
   useEffect(() => {
     let gone = false;
     setError(undefined);
-    const q = { ...(scope.kind === "commit" ? { commit: scope.sha } : scope.kind === "since" ? { since: scope.sha } : {}), ...(prefs.whitespace ? { w: true } : {}) };
     api
-      .reviewDiff(session, card.id, q)
+      .reviewDiff(session, card.id, scopeQuery(scope, prefs.whitespace))
       .then((d) => {
         if (gone) return;
         setDiff(d);
         // Files viewed at an earlier head that haven't changed since are viewed at this one too.
-        if (scope.kind === "all") setReview(session, card.id, (r) => restamp(r, c.head, d.files));
+        if (scope.kind === "all") setReview(session, rkey, (r) => restamp(r, c.head, d.files));
       })
       .catch((err) => !gone && setError(errorMessage(err)));
     return () => {
       gone = true;
     };
-  }, [session, card.id, c.head, scope, prefs.whitespace]);
+  }, [session, card.id, rkey, c.head, scope, prefs.whitespace]);
 
   const files = useMemo(() => (diff ? byFolder(diff.files).flatMap(([, fs]) => fs) : []), [diff]);
   const notes = review.notes;
+  const notesByPath = useMemo(() => {
+    const m = new Map<string, ReviewNote[]>();
+    for (const n of notes) m.set(n.path, [...(m.get(n.path) ?? []), n]);
+    return m;
+  }, [notes]);
+  // One ref callback per file, kept, so the files' sections aren't drawn again for a new one each time.
+  const refs = useRef(new Map<string, (el: HTMLElement | null) => void>());
+  const refFor = (path: string) => {
+    let r = refs.current.get(path);
+    if (!r) {
+      r = (el) => {
+        if (el) sections.current.set(path, el);
+        else sections.current.delete(path);
+      };
+      refs.current.set(path, r);
+    }
+    return r;
+  };
   const viewed = all ? files.filter((f) => viewedState(review, f) === "yes").length : 0;
 
   const go = useCallback((path: string) => {
@@ -129,33 +147,36 @@ function ReviewBody({ session, pane, card, c }: { session: string; pane: string;
   }, []);
   const setViewed = useCallback(
     (f: ReviewFile, on: boolean) =>
-      setReview(session, card.id, (r) => {
+      setReview(session, rkey, (r) => {
         const v = { ...r.viewed };
-        if (on) v[f.path] = { blob: fileBlob(f), head: c.head };
-        else delete v[f.path];
+        if (on) Object.assign(v, viewedMarks(f, c.head));
+        else for (const p of Object.keys(viewedMarks(f, c.head))) delete v[p];
         return { ...r, viewed: v };
       }),
-    [session, card.id, c.head],
+    [session, rkey, c.head],
   );
 
+  const shownFiles = filter.trim() ? files.filter((f) => f.path.toLowerCase().includes(filter.trim().toLowerCase())) : files;
+  // The keys go through the files the list shows.
   const onKey = (e: KeyboardEvent) => {
     if (e.metaKey || e.ctrlKey || e.altKey || (e.target as HTMLElement).closest("input, textarea, select, [contenteditable]")) return;
-    if (!files.length) return;
-    const i = Math.max(0, files.findIndex((f) => f.path === current));
+    const i = shownFiles.findIndex((f) => f.path === current);
     if (e.key === "j" || e.key === "k") {
+      if (!shownFiles.length) return;
       e.preventDefault();
-      go(files[Math.min(files.length - 1, Math.max(0, current === undefined ? 0 : i + (e.key === "j" ? 1 : -1)))].path);
-    } else if (e.key === "v" && all && current !== undefined) {
+      go(shownFiles[i < 0 ? 0 : Math.min(shownFiles.length - 1, Math.max(0, i + (e.key === "j" ? 1 : -1)))].path);
+    } else if (e.key === "v" && all && i >= 0) {
       e.preventDefault();
-      setViewed(files[i], viewedState(review, files[i]) !== "yes");
+      setViewed(shownFiles[i], viewedState(review, shownFiles[i]) !== "yes");
     }
   };
 
   const scopeLabel = scope.kind === "all" ? `All ${c.commits.length} commit${c.commits.length === 1 ? "" : "s"}` : scope.kind === "since" ? `Since ${short(scope.sha)}` : `${short(scope.sha)} · ${c.commits.find((x) => x.sha === scope.sha)?.subject ?? ""}`;
-  const shownFiles = filter.trim() ? files.filter((f) => f.path.toLowerCase().includes(filter.trim().toLowerCase())) : files;
+  const scopeId = scope.kind === "all" ? "all" : `${scope.kind}:${scope.sha}`;
 
   return (
-    <div className="rv" onKeyDown={onKey}>
+    // Focusable, so a click anywhere in it lets the keys reach it.
+    <div className="rv" tabIndex={-1} onKeyDown={onKey}>
       <Head pane={pane} c={c}>
         <span className="rv-at" title={c.head}>
           at <code>{short(c.head)}</code>
@@ -250,17 +271,17 @@ function ReviewBody({ session, pane, card, c }: { session: string; pane: string;
           ) : (
             files.map((f) => (
               <FileSection
-                key={f.path}
-                ref={(el) => {
-                  if (el) sections.current.set(f.path, el);
-                  else sections.current.delete(f.path);
-                }}
+                // Another scope or whitespace is another diff of the file: its content and open gaps were for this one.
+                key={`${scopeId}|${prefs.whitespace}|${f.path}`}
+                ref={refFor(f.path)}
                 session={session}
                 ask={card.id}
+                review={rkey}
+                head={c.head}
                 scope={scope}
                 file={f}
                 viewed={all ? viewedState(review, f) : undefined}
-                notes={all ? notes : undefined}
+                notes={all ? (notesByPath.get(f.path) ?? NO_NOTES) : undefined}
                 canNote={all && decidable}
                 split={prefs.split}
                 whitespace={prefs.whitespace}
@@ -316,14 +337,20 @@ const Counts = ({ f }: { f: Pick<ReviewFile, "added" | "deleted"> }) => (
   </>
 );
 
+const NO_NOTES: ReviewNote[] = [];
+
 interface FileProps {
   session: string;
   ask: string;
+  /** The review it is part of, by `reviewOf`. */
+  review: string;
+  /** The card's commit: where new notes are left. */
+  head: string;
   scope: Scope;
   file: ReviewFile;
   /** Whether it is viewed, where marks count: in the review of all changes. */
   viewed?: "yes" | "changed" | "no";
-  /** Every note of the review, where notes show: in the review of all changes. */
+  /** The file's notes, where notes show: in the review of all changes. */
   notes?: ReviewNote[];
   canNote: boolean;
   split: boolean;
@@ -341,7 +368,7 @@ interface Draft {
   id?: string;
 }
 
-const FileSection = memo(function FileSection({ ref, session, ask, scope, file: given, viewed, notes, canNote, split, whitespace, onViewed, onFocus }: FileProps & { ref?: (el: HTMLElement | null) => void }) {
+const FileSection = memo(function FileSection({ ref, session, ask, review, head, scope, file: given, viewed, notes, canNote, split, whitespace, onViewed, onFocus }: FileProps & { ref?: (el: HTMLElement | null) => void }) {
   const [file, setFile] = useState(given);
   const [folded, setFolded] = useState(viewed === "yes");
   const [lines, setLines] = useState<string[]>();
@@ -350,17 +377,23 @@ const FileSection = memo(function FileSection({ ref, session, ask, scope, file: 
   const [error, setError] = useState<string>();
   const [draft, setDraft] = useState<Draft>();
   useEffect(() => setFile(given), [given]);
+  // Marked viewed, here or with the keyboard, it folds; unmarked, it opens.
+  const was = useRef(viewed);
+  useEffect(() => {
+    if (was.current !== viewed && (viewed === "yes" || was.current === "yes")) setFolded(viewed === "yes");
+    was.current = viewed;
+  }, [viewed]);
 
   const rows = useMemo(() => reviewRows(file, lines, openGaps), [file, lines, openGaps]);
-  const mine = useMemo(() => (notes ?? []).filter((n) => n.path === file.path), [notes, file.path]);
+  // Notes at this commit go on their lines; ones left at an earlier commit, or on lines not shown, above the diff.
+  const mine = useMemo(() => (notes ?? []).filter((n) => n.head === head), [notes, head]);
   const byKey = useMemo(() => {
     const m = new Map<string, ReviewNote[]>();
     for (const n of mine) m.set(noteKey(n.path, n.side, n.line), [...(m.get(noteKey(n.path, n.side, n.line)) ?? []), n]);
     return m;
   }, [mine]);
-  // Notes on lines the diff doesn't show now: listed above it.
   const shownKeys = useMemo(() => new Set(rows.filter((r) => r.kind !== "gap").map((r) => target(file.path, r))), [rows, file.path]);
-  const elsewhere = mine.filter((n) => !shownKeys.has(noteKey(n.path, n.side, n.line)));
+  const elsewhere = (notes ?? []).filter((n) => n.head !== head || !shownKeys.has(noteKey(n.path, n.side, n.line)));
 
   const expand = async (index: number) => {
     if (!lines) {
@@ -383,8 +416,7 @@ const FileSection = memo(function FileSection({ ref, session, ask, scope, file: 
     setLoading("file");
     setError(undefined);
     try {
-      const q = { ...(scope.kind === "commit" ? { commit: scope.sha } : scope.kind === "since" ? { since: scope.sha } : {}), ...(whitespace ? { w: true } : {}), path: [file.path, ...(file.oldPath ? [file.oldPath] : [])] };
-      const d = await api.reviewDiff(session, ask, q);
+      const d = await api.reviewDiff(session, ask, { ...scopeQuery(scope, whitespace), path: [file.path, ...(file.oldPath ? [file.oldPath] : [])] });
       const f = d.files.find((x) => x.path === file.path);
       if (f?.tooLarge) setError("It's too long to show here.");
       else if (f) setFile(f);
@@ -398,15 +430,15 @@ const FileSection = memo(function FileSection({ ref, session, ask, scope, file: 
   const save = (text: string) => {
     if (!draft) return;
     const t = text.trim();
-    setReview(session, ask, (r) => {
+    setReview(session, review, (r) => {
       const rest = r.notes.filter((n) => n.id !== draft.id);
       if (!t) return { ...r, notes: rest };
-      const note: ReviewNote = { id: draft.id ?? crypto.randomUUID(), path: file.path, side: draft.side, line: draft.line, quote: draft.quote, text: t };
+      const note: ReviewNote = { id: draft.id ?? crypto.randomUUID(), path: file.path, side: draft.side, line: draft.line, quote: draft.quote, text: t, head };
       return { ...r, notes: [...rest, note] };
     });
     setDraft(undefined);
   };
-  const remove = (id: string) => setReview(session, ask, (r) => ({ ...r, notes: r.notes.filter((n) => n.id !== id) }));
+  const remove = (id: string) => setReview(session, review, (r) => ({ ...r, notes: r.notes.filter((n) => n.id !== id) }));
 
   const startNote = (side: "old" | "new", line: number, quote: string) => {
     if (canNote) setDraft({ side, line, quote });
@@ -561,10 +593,7 @@ const FileSection = memo(function FileSection({ ref, session, ask, scope, file: 
             <input
               type="checkbox"
               checked={viewed === "yes"}
-              onChange={(e) => {
-                onViewed(file, e.target.checked);
-                setFolded(e.target.checked);
-              }}
+              onChange={(e) => onViewed(file, e.target.checked)}
             />{" "}
             Viewed
           </label>
@@ -581,7 +610,7 @@ const FileSection = memo(function FileSection({ ref, session, ask, scope, file: 
           {elsewhere.length > 0 && (
             <div className="rv-elsewhere">
               {elsewhere.map((n) => (
-                <NoteView key={n.id} n={n} canEdit={false} onDelete={canNote ? () => remove(n.id) : undefined} where />
+                <NoteView key={n.id} n={n} canEdit={false} onDelete={canNote ? () => remove(n.id) : undefined} where={n.head === head ? "hidden" : "earlier"} />
               ))}
             </div>
           )}
@@ -607,11 +636,13 @@ function Code({ r }: { r: ReviewRow }) {
   );
 }
 
-function NoteView({ n, canEdit, onEdit, onDelete, where }: { n: ReviewNote; canEdit: boolean; onEdit?(): void; onDelete?(): void; where?: boolean }) {
+/** A note; `where` says why it isn't on its line: left at an earlier commit, or on a line the diff doesn't show. */
+function NoteView({ n, canEdit, onEdit, onDelete, where }: { n: ReviewNote; canEdit: boolean; onEdit?(): void; onDelete?(): void; where?: "earlier" | "hidden" }) {
+  const line = `${n.side === "old" ? "removed " : ""}line ${n.line}`;
   return (
     <div className="rv-note">
       <div className="rv-note-h">
-        <b>You</b> on {where ? `${n.side === "old" ? "old " : ""}line ${n.line}, not in the diff now` : `line ${n.line}`}
+        <b>You</b> on {where === "earlier" ? `${line} at ${short(n.head)}, an earlier commit` : where === "hidden" ? `${line}, not in the diff now` : line}
         <span className="rv-spacer" />
         {canEdit && onEdit && (
           <button type="button" className="link-btn" onClick={onEdit}>

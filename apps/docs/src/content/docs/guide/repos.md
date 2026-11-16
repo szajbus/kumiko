@@ -109,16 +109,18 @@ renamed) and its counts; flagged files are amber. On the right, each file's diff
 **Hide whitespace**. The unchanged lines between changes open on a click. A file too long to show at once opens on
 request; a binary file only says so.
 
-- **Viewed** folds a file and counts it: the card shows how many of its files you've viewed. If the branch moves and
-  you review again, the files that didn't change stay viewed; one that did is marked "changed since viewed", and
-  **Since you last looked**, in the menu at the top left, shows only what changed. The menu also shows one commit at a
-  time.
+- **Viewed** folds a file and counts it: the card shows how many of its files you've viewed. When Claude delivers the
+  branch again (after you request changes, say), or the branch moves and you review again, the files that didn't
+  change stay viewed; one that did is marked "changed since viewed", and **Since you last looked**, in the menu at the
+  top left, shows only what changed, in the branch's own files: what a merge or rebase brought in from the default
+  branch stays out. The menu also shows one commit at a time.
 - **Notes for Claude:** click a line number to leave a note on that line. With notes, the card's **Decline…** becomes
-  **Request changes**: Claude gets each note with its file, line and the line it quotes, after anything you add. The
-  pane's own **Request changes** opens the card's box for that.
+  **Request changes**: Claude gets each note with its file, line and the line it quotes, after anything you add. A
+  note left at an earlier commit of the branch says so. The pane's own **Request changes** opens the card's box for
+  that.
 - <kbd>j</kbd> and <kbd>k</kbd> go to the next and previous file, <kbd>v</kbd> marks it viewed.
 
-What you viewed and your notes are kept in the app, for that card, not on GitHub. Approving doesn't need a review:
+What you viewed and your notes are kept in the app, for the branch in that session, not on GitHub. Approving doesn't need a review:
 the card's button works whatever the pane says.
 
 Kumiko lands it in the mirror on your Mac: it merges, makes the commit with `git commit-tree`, signed with your key
