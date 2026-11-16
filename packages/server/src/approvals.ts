@@ -20,7 +20,7 @@ import {
 } from "@kumiko/shared";
 import { replaceFile } from "./files.js";
 import type { GitHub, GitHubItem } from "./github.js";
-import { BranchMoved, deleteBranch, deliverFacts, land, mergeMessage, NotDeliverable, signingKey, signs, squashMessage } from "./landing.js";
+import { BranchMoved, deleteBranch, deliverFacts, land, mergeMessage, mirrorGit, NotDeliverable, resign, signingKey, signs, squashMessage, unsignedCount } from "./landing.js";
 import type { Mirrors } from "./mirrors.js";
 import type { PushAnswer } from "./pushes.js";
 
@@ -58,7 +58,7 @@ const REPO_PROPERTY = { type: "string", description: "The repository, as owner/n
 const DELIVER: ToolSpec = {
   name: "deliver",
   description:
-    "Deliver a pushed branch to the GitHub repository's default branch, or open a pull request for it. Kumiko shows the user a card with the branch's commits and changes, the user chooses to merge it, squash it, or open a pull request, and you wait for their answer. Say in your message before the call why, and what you'd pick: the user reads it just above the card. Kumiko lands it on the user's computer, signed by them, and tells you what happened. Push the branch first. If it doesn't merge cleanly, you're told to merge the default branch into it first, and no card is shown. A branch with a PR open is landed by delivering it again.",
+    "Deliver a pushed branch to the GitHub repository's default branch, or open a pull request for it. Kumiko shows the user a card with the branch's commits and changes, the user chooses to merge it, squash it, or open a pull request, and you wait for their answer. Say in your message before the call why, and what you'd pick: the user reads it just above the card. Kumiko lands it on the user's computer, signed by them, and tells you what happened. Push the branch first. If it doesn't merge cleanly, you're told to merge the default branch into it first, and no card is shown. A branch with a PR open is landed by delivering it again. Opening a PR signs your branch's commits, changing their shas: then deliver tells you to run git pull --rebase on the branch.",
   inputSchema: {
     type: "object",
     properties: {
@@ -275,7 +275,9 @@ export class Approvals {
     const pr = await this.opts.github.prForBranch(repo, branch);
     const last = (await this.choices())[info.sandbox];
     const route: DeliverRoute = pr ? "main" : (last?.route ?? "main");
-    return { kind: "deliver", repo, ...facts, ...(pr ? { pr } : {}), title, body, route, method: last?.method ?? "merge", signs: await signs(dir) };
+    const own = this.opts.mirrors.createdBy(repo, branch) === info.sandbox;
+    const toSign = own ? await unsignedCount(dir, `refs/heads/${facts.base}`, facts.head) : 0;
+    return { kind: "deliver", repo, ...facts, toSign, ...(pr ? { pr } : {}), title, body, route, method: last?.method ?? "merge", signs: await signs(dir) };
   }
 
   /**
@@ -542,20 +544,24 @@ export class Approvals {
       return { result: { text: `Posted a comment on #${c.target.number}${url ? ` (${url})` : ""}.` }, receipt: { ok: true, text: `Commented on #${c.target.number}`, meta: "as you", ...(url ? { url, link: "View on GitHub" } : {}) } };
     }
     if (c.kind !== "deliver" || d.kind !== "deliver") throw new Error("That decision isn't for this card.");
+    const dir = this.opts.mirrors.path(c.repo);
+    const url = this.opts.mirrors.url(c.repo);
     if (d.route === "pr") {
       const title = d.title ?? c.title;
       // Opened from the branch by name, so it must still be the commit the user saw.
       await this.opts.mirrors.fetch(c.repo, { force: true });
       const now = await this.opts.mirrors.branchHead(c.repo, c.branch);
       if (now !== c.head) throw new BranchMoved(now ?? "", 0);
+      const signed = await this.signBranch(info, c, dir, url);
       const pr = await this.opts.github.prCreate(c.repo, { base: c.base, head: c.branch, title, body: (d.body ?? c.body).trimEnd() });
+      const refresh = signed
+        ? ` Kumiko signed ${signed === 1 ? "the branch's commit" : `the branch's ${signed} commits`} with the user's key before opening it, which changed ${signed === 1 ? "its sha" : "their shas"} but not ${signed === 1 ? "its" : "their"} contents: on ${c.branch}, run git pull --rebase before you go on, so your branch is the signed one.`
+        : "";
       return {
-        result: { text: `Opened PR #${pr.number} (${pr.url}). Nothing is on ${c.base} yet; when the user wants it landed, call deliver on ${c.branch} again.` },
-        receipt: { ok: true, text: `Opened PR #${pr.number}`, meta: "as you", url: pr.url, link: "View on GitHub" },
+        result: { text: `Opened PR #${pr.number} (${pr.url}).${refresh} Nothing is on ${c.base} yet; when the user wants it landed, call deliver on ${c.branch} again.` },
+        receipt: { ok: true, text: `Opened PR #${pr.number}`, meta: signed ? `as you · ${signed === 1 ? "1 commit" : `${signed} commits`} signed` : "as you", url: pr.url, link: "View on GitHub" },
       };
     }
-    const dir = this.opts.mirrors.path(c.repo);
-    const url = this.opts.mirrors.url(c.repo);
     const message = d.method === "merge" ? mergeMessage(c.repo, c.branch, c.pr) : squashMessage(d.title ?? c.title, c.squashBody, c.trailers);
     const landed = await land(dir, url, { branch: c.branch, head: c.head, method: d.method, message, sign: await signingKey(dir), fetch: () => this.opts.mirrors.fetch(c.repo, { force: true }) });
     const short = landed.sha.slice(0, 7);
@@ -577,6 +583,26 @@ export class Approvals {
       result: { text: `Delivered ${c.branch} to ${landed.base} as ${short} (${how}). ${notes.join(" ")}${notes.length ? " " : ""}Update with git fetch --prune, and git pull --ff-only on ${landed.base}.` },
       receipt: { ok: true, text: `${d.method === "merge" ? "Merged" : "Squashed"} ${c.branch} into ${landed.base} as ${short}`, meta: how.replace(", ", " · "), url: `https://github.com/${c.repo}/commit/${landed.sha}`, link: "View on GitHub" },
     };
+  }
+
+  /**
+   * Signs Claude's branch before its PR opens, so the PR and the history it leaves have only signed commits: the
+   * branch's unsigned commits are written again with the user's signature in the mirror, and the branch is moved to
+   * them on GitHub, leased to where the card had it. Resolves with how many were signed; none when the branch isn't
+   * Claude's, has nothing unsigned, or there's no key.
+   */
+  private async signBranch(info: SessionInfo, c: DeliverCard, dir: string, url: string): Promise<number> {
+    if (!c.toSign || this.opts.mirrors.createdBy(c.repo, c.branch) !== info.sandbox) return 0;
+    const key = await signingKey(dir);
+    if (!key) return 0;
+    const { tip, signed } = await resign(dir, `refs/heads/${c.base}`, c.head, key);
+    if (!signed) return 0;
+    const push = await mirrorGit(dir, ["push", "--porcelain", `--force-with-lease=refs/heads/${c.branch}:${c.head}`, url, `${tip}:refs/heads/${c.branch}`], { ok: [1], timeoutMs: 5 * 60_000 });
+    if (push.code !== 0) throw new Error(`GitHub refused the signed ${c.branch}: ${(push.err + push.out).trim().split("\n").filter((l) => l.trim()).slice(-2).join(" ")}`);
+    // The branch is still Claude's, now at the signed commit: its next push starts from there.
+    await this.opts.mirrors.noteBranches(c.repo, info.sandbox, [{ branch: c.branch, deleted: false, sha: tip }]);
+    await this.opts.mirrors.fetch(c.repo, { force: true }).catch(() => {});
+    return signed;
   }
 
   private async choices(): Promise<Record<string, { route?: DeliverRoute; method?: DeliverMethod }>> {
