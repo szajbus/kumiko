@@ -878,7 +878,8 @@ export interface MirrorsResponse {
 
 /** The GitHub account of the `gh` CLI on the host, which lists the repos to pick from. */
 export type GitHubAccount =
-  | { status: "signed-in"; login: string; name?: string; avatarUrl?: string }
+  /** `id`: the account's number, which its noreply email address starts with. */
+  | { status: "signed-in"; login: string; id?: number; name?: string; avatarUrl?: string }
   /** gh isn't installed, or isn't on Kumiko's PATH. */
   | { status: "missing" }
   /** `detail`: what `gh auth status` said. */

@@ -20,7 +20,7 @@ import {
 } from "@kumiko/shared";
 import { replaceFile } from "./files.js";
 import type { GitHub, GitHubItem } from "./github.js";
-import { BranchMoved, deleteBranch, deliverFacts, land, mergeMessage, mirrorGit, NotDeliverable, resign, signingKey, signs, squashMessage, unsignedCount } from "./landing.js";
+import { BranchMoved, deleteBranch, deliverFacts, gitHasIdentity, land, mergeMessage, mirrorGit, NotDeliverable, resign, signingKey, signs, squashMessage, unsignedCount } from "./landing.js";
 import type { Mirrors } from "./mirrors.js";
 import type { PushAnswer } from "./pushes.js";
 
@@ -563,9 +563,11 @@ export class Approvals {
       };
     }
     const message = d.method === "merge" ? mergeMessage(c.repo, c.branch, c.pr) : squashMessage(d.title ?? c.title, c.squashBody, c.trailers);
-    const landed = await land(dir, url, { branch: c.branch, head: c.head, method: d.method, message, sign: await signingKey(dir), fetch: () => this.opts.mirrors.fetch(c.repo, { force: true }) });
+    const as = await this.commitIdentity(dir);
+    const landed = await land(dir, url, { branch: c.branch, head: c.head, method: d.method, message, sign: await signingKey(dir), ...(as ? { as } : {}), fetch: () => this.opts.mirrors.fetch(c.repo, { force: true }) });
     const short = landed.sha.slice(0, 7);
     const notes: string[] = [];
+    if (as) notes.push(`The user's git config has no name or email, so the commit is by their GitHub account, ${as.name} <${as.email}>.`);
     if (c.pr && d.method === "squash") {
       await this.opts.github.prClose(c.repo, c.pr.number, `Landed as ${landed.sha} on ${landed.base}.`).then(
         () => notes.push(`PR #${c.pr!.number} was closed with a comment saying so.`),
@@ -583,6 +585,19 @@ export class Approvals {
       result: { text: `Delivered ${c.branch} to ${landed.base} as ${short} (${how}). ${notes.join(" ")}${notes.length ? " " : ""}Update with git fetch --prune, and git pull --ff-only on ${landed.base}.` },
       receipt: { ok: true, text: `${d.method === "merge" ? "Merged" : "Squashed"} ${c.branch} into ${landed.base} as ${short}`, meta: how.replace(", ", " · "), url: `https://github.com/${c.repo}/commit/${landed.sha}`, link: "View on GitHub" },
     };
+  }
+
+  /**
+   * Who a commit Kumiko writes on the default branch is by, when git's config doesn't say: the user's GitHub account,
+   * with the noreply address GitHub gives it, as GitHub's own merge button would. Undefined when git's config says.
+   */
+  private async commitIdentity(dir: string): Promise<{ name: string; email: string } | undefined> {
+    if (await gitHasIdentity(dir)) return undefined;
+    const account = await this.opts.github.account();
+    if (account.status !== "signed-in" || account.id === undefined) {
+      throw new Error("Git on the user's computer has no name and email to write the commit as, and Kumiko couldn't ask GitHub who they are. The user can set them with git config --global user.name and user.email, and deliver again.");
+    }
+    return { name: account.name ?? account.login, email: `${account.id}+${account.login}@users.noreply.github.com` };
   }
 
   /**

@@ -47,7 +47,7 @@ describe("delivering from a session", () => {
     await mkdir(join(root, "gnupg"), { recursive: true, mode: 0o700 });
     process.env.KUMIKO_GH = fakeGh;
     await mkdir(join(root, "gh"), { recursive: true });
-    await writeFile(join(root, "gh", "user.json"), JSON.stringify({ login: "acme" }));
+    await writeFile(join(root, "gh", "user.json"), JSON.stringify({ id: 42, login: "acme" }));
     const bin = join(vmHome, ".local", "bin");
     await mkdir(bin, { recursive: true });
     await writeFile(join(bin, "claude"), `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(fakeClaude)} "$@"\n`);
@@ -101,13 +101,29 @@ describe("delivering from a session", () => {
 
     const bad = await api(`/api/sessions/${id}/cards/${card.id}`, { method: "POST", body: JSON.stringify({ action: "approve", decision: { kind: "deliver", route: "sideways", method: "merge" } }) });
     assert.equal(bad.status, 400);
-    const ok = await api(`/api/sessions/${id}/cards/${card.id}`, { method: "POST", body: JSON.stringify({ action: "approve", decision: { kind: "deliver", route: "main", method: "merge" } }) });
-    assert.equal(ok.status, 200, await ok.clone().text());
-    assert.equal(((await ok.json()) as ApprovalCard).state, "approved");
-
-    const result = await waitFor(() => results()[1]);
-    assert.match(String(result.kind === "claude" && result.payload.result), /^Delivered fix-x to main as [0-9a-f]{7} \(merge commit, unsigned\)\./);
+    // As on a machine whose git has no name or email, CI's say: the merge commit is by the user's GitHub account.
+    // Only while it lands: the fake VM runs in this process's environment, with its own git config.
+    const gitConfig = join(root, "no-identity.gitconfig");
+    await writeFile(gitConfig, "[user]\n\tuseConfigOnly = true\n");
+    const identityEnv = ["GIT_CONFIG_GLOBAL", "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "EMAIL"] as const;
+    const before = Object.fromEntries(identityEnv.map((k) => [k, process.env[k]]));
+    for (const k of identityEnv) delete process.env[k];
+    process.env.GIT_CONFIG_GLOBAL = gitConfig;
+    let result: SessionEvent;
+    try {
+      const ok = await api(`/api/sessions/${id}/cards/${card.id}`, { method: "POST", body: JSON.stringify({ action: "approve", decision: { kind: "deliver", route: "main", method: "merge" } }) });
+      assert.equal(ok.status, 200, await ok.clone().text());
+      assert.equal(((await ok.json()) as ApprovalCard).state, "approved");
+      result = await waitFor(() => results()[1]);
+    } finally {
+      for (const k of identityEnv) if (before[k] === undefined) delete process.env[k];
+      else process.env[k] = before[k];
+    }
+    const text = String(result.kind === "claude" && result.payload.result);
+    assert.match(text, /^Delivered fix-x to main as [0-9a-f]{7} \(merge commit, unsigned\)\./);
+    assert.match(text, /no name or email, so the commit is by their GitHub account, acme <42\+acme@users\.noreply\.github\.com>\./);
     assert.equal(sh(bare, "rev-parse", "main^2").trim(), head);
+    assert.equal(sh(bare, "log", "-1", "--format=%an <%ae> / %cn <%ce>", "main").trim(), "acme <42+acme@users.noreply.github.com> / acme <42+acme@users.noreply.github.com>");
     const done = got.findLast((e): e is Extract<SessionEvent, { kind: "card" }> => e.kind === "card")!.payload;
     assert.equal(done.state, "done");
     const again = await api(`/api/sessions/${id}/cards/${card.id}`, { method: "POST", body: JSON.stringify({ action: "decline" }) });
