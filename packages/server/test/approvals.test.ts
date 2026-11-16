@@ -404,12 +404,15 @@ describe("delivering", () => {
     const r = await ask({ branch: "pr-me", title: "PR me", body: "Does p." });
     await approvals.decide("s1", r.id, { action: "approve", decision: { kind: "deliver", route: "pr", method: "merge", title: "PR me, edited", body: "Does p, edited." } });
     const res = await approvals.call(sessions.info, "deliver", r.input, r.toolUseId);
-    assert.match(res.text, /^Opened PR #(\d+) \(https:\/\/github\.com\/acme\/widget\/pull\/\d+\)\. Nothing is on main yet/);
+    assert.match(res.text, /^Opened PR #(\d+) \(https:\/\/github\.com\/acme\/widget\/pull\/\d+\)\. Kumiko signed the branch's commit with the user's key before opening it, which changed its sha but not its contents: on pr-me, run git pull --rebase before you go on, so your branch is the signed one\. Nothing is on main yet/);
+    const signedTip = onGitHub("refs/heads/pr-me")!;
+    assert.notEqual(signedTip, head);
     const db = JSON.parse(await readFile(join(root, "gh", "github.json"), "utf8"));
     const pr = db.items.find((i: { head: string }) => i.head === "pr-me");
     assert.equal(pr.title, "PR me, edited");
     assert.equal(pr.body, "Does p, edited.");
     assert.equal(sessions.card(r.id)!.receipt!.text, `Opened PR #${pr.number}`);
+    assert.equal(sessions.card(r.id)!.receipt!.meta, "as you · 1 commit signed");
 
     const again = await ask({ branch: "pr-me", title: "ignored", body: "ignored" });
     const c = again.card!.card as DeliverCard;
@@ -419,8 +422,58 @@ describe("delivering", () => {
     const landed = await approvals.call(sessions.info, "deliver", again.input, again.toolUseId);
     assert.equal(landed.isError, undefined, landed.text);
     const main = onGitHub("refs/heads/main")!;
-    assert.equal(git(bare, ["rev-parse", `${main}^2`]).trim(), head);
+    assert.equal(git(bare, ["rev-parse", `${main}^2`]).trim(), signedTip, "the PR's signed commits are what lands");
     assert.equal(git(bare, ["log", "-1", "--format=%B", main]), `Merge pull request #${pr.number} from acme/pr-me\n\nPR me, edited\n\n`);
+  });
+
+  it("signs Claude's commits when it opens a PR, changing nothing else, and Claude's branch catches up with git pull --rebase", async () => {
+    fresh();
+    // Three commits, one of them a merge of main into the branch, as Claude makes when it catches up.
+    await branch("signme", { s1: "1\n", s2: "2\n" });
+    git(work, ["fetch", "--quiet", "origin"]);
+    git(work, ["merge", "--quiet", "--no-edit", "origin/main"]);
+    git(work, ["push", "--quiet", "origin", "signme"]);
+    await mirrors.fetch("acme/widget");
+    await mirrors.noteBranches("acme/widget", "web", [{ branch: "signme", deleted: false, sha: git(work, ["rev-parse", "HEAD"]).trim() }]);
+    const old = git(work, ["rev-parse", "HEAD"]).trim();
+    const oldCommits = git(work, ["rev-list", "--reverse", "origin/main..HEAD"]).trim().split("\n");
+    const r = await ask({ branch: "signme", title: "Sign me", body: "b" });
+    assert.equal((r.card!.card as DeliverCard).toSign, oldCommits.length);
+    await approvals.decide("s1", r.id, { action: "approve", decision: { kind: "deliver", route: "pr", method: "merge", title: "Sign me", body: "b" } });
+    const res = await approvals.call(sessions.info, "deliver", r.input, r.toolUseId);
+    assert.match(res.text, new RegExp(`Kumiko signed the branch's ${oldCommits.length} commits`));
+    const tip = onGitHub("refs/heads/signme")!;
+    assert.notEqual(tip, old);
+    const fields = (sha: string) => git(bare, ["log", "-1", "--format=%T%n%an <%ae> %ad%n%cn <%ce> %cd%n%B", "--date=raw", sha]);
+    const newCommits = git(bare, ["rev-list", "--reverse", `main..${tip}`]).trim().split("\n");
+    assert.equal(newCommits.length, oldCommits.length);
+    newCommits.forEach((sha, i) => {
+      assert.match(git(bare, ["cat-file", "commit", sha]), /^gpgsig -----BEGIN SSH SIGNATURE-----/m, `commit ${i} is signed`);
+      assert.equal(fields(sha), git(work, ["log", "-1", "--format=%T%n%an <%ae> %ad%n%cn <%ce> %cd%n%B", "--date=raw", oldCommits[i]]), `commit ${i} is otherwise the same`);
+    });
+    assert.equal(mirrors.lastPushed("acme/widget", "signme"), tip, "Claude's next push starts from the signed commit");
+    assert.equal(mirrors.createdBy("acme/widget", "signme"), "web");
+
+    // Claude's own copy, as the tool tells it, catches up, keeping a commit it made meanwhile.
+    await writeFile(join(work, "later"), "later\n");
+    git(work, ["add", "later"]);
+    git(work, ["commit", "--quiet", "-m", "Later"]);
+    git(work, ["pull", "--quiet", "--rebase", "origin", "signme"]);
+    assert.equal(git(work, ["rev-parse", "HEAD^"]).trim(), tip);
+    assert.equal(git(work, ["log", "-1", "--format=%s"]).trim(), "Later");
+  });
+
+  it("leaves a branch it didn't see Claude create as it was pushed when it opens a PR for it", async () => {
+    fresh();
+    const head = await branch("theirs-pr", { t: "t\n" });
+    await mirrors.noteBranches("acme/widget", "web", [{ branch: "theirs-pr", deleted: true }]);
+    const r = await ask({ branch: "theirs-pr", title: "Theirs", body: "b" });
+    assert.equal((r.card!.card as DeliverCard).toSign, 0);
+    await approvals.decide("s1", r.id, { action: "approve", decision: { kind: "deliver", route: "pr", method: "merge", title: "Theirs", body: "b" } });
+    const res = await approvals.call(sessions.info, "deliver", r.input, r.toolUseId);
+    assert.doesNotMatch(res.text, /signed/);
+    assert.equal(onGitHub("refs/heads/theirs-pr"), head);
+    assert.equal(sessions.card(r.id)!.receipt!.meta, "as you");
   });
 
   describe("issues and comments", () => {

@@ -22,6 +22,7 @@ const deliver: DeliverCard = {
   route: "main",
   method: "merge",
   signs: true,
+  toSign: 3,
 };
 
 describe("approval cards' wording", () => {
@@ -59,7 +60,8 @@ describe("approval cards' wording", () => {
     assert.equal(unsignedWarning(deliver, "merge"), undefined);
     assert.equal(unsignedWarning({ ...deliver, signs: false }, "merge"), "Won't be signed: there's no signing key in your git config.");
     assert.equal(unsignedWarning({ ...deliver, signs: false }, "squash"), "Won't be signed: there's no signing key in your git config.");
-    assert.equal(unsignedWarning({ ...deliver, signs: false }, "pr"), undefined, "a PR lands nothing yet");
+    assert.equal(unsignedWarning({ ...deliver, signs: false }, "pr"), "Won't be signed: there's no signing key in your git config.", "a PR signs Claude's commits");
+    assert.equal(unsignedWarning({ ...deliver, signs: false, toSign: 0 }, "pr"), undefined, "nothing to sign");
   });
 
   it("names the card and its button after what happens", () => {

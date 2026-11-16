@@ -7,9 +7,9 @@ import { headBranch } from "./pushes.js";
 export class NotDeliverable extends Error {}
 
 /** git in a mirror, with the user's environment and global config: their identity and signing key. */
-export function mirrorGit(dir: string, args: string[], opts: { input?: string; timeoutMs?: number; ok?: number[] } = {}): Promise<{ code: number; out: string; err: string }> {
+export function mirrorGit(dir: string, args: string[], opts: { input?: string; timeoutMs?: number; ok?: number[]; env?: NodeJS.ProcessEnv } = {}): Promise<{ code: number; out: string; err: string }> {
   return new Promise((resolve, reject) => {
-    const child = execFile("git", args, { cwd: dir, env: { ...gitEnv(), GIT_DIR: dir }, timeout: opts.timeoutMs ?? 60_000, maxBuffer: 64 * 1024 * 1024 }, (err, out, errOut) => {
+    const child = execFile("git", args, { cwd: dir, env: { ...gitEnv(), GIT_DIR: dir, ...opts.env }, timeout: opts.timeoutMs ?? 60_000, maxBuffer: 64 * 1024 * 1024 }, (err, out, errOut) => {
       const code = err ? (typeof (err as { code?: unknown }).code === "number" ? ((err as { code: number }).code) : -1) : 0;
       if (code === 0 || opts.ok?.includes(code)) resolve({ code, out: String(out), err: String(errOut) });
       else reject(new Error(String(errOut).trim() || (err as Error).message));
@@ -29,7 +29,7 @@ export function isBranchName(branch: string): boolean {
 }
 
 /** What the card shows of a branch, all from the mirror, which is fetched first: commits, files, flags, the merge check. */
-export async function deliverFacts(dir: string, branch: string, identityEmail: string | undefined): Promise<Omit<DeliverCard, "kind" | "repo" | "pr" | "title" | "body" | "route" | "method" | "signs">> {
+export async function deliverFacts(dir: string, branch: string, identityEmail: string | undefined): Promise<Omit<DeliverCard, "kind" | "repo" | "pr" | "title" | "body" | "route" | "method" | "signs" | "toSign">> {
   if (!isBranchName(branch)) throw new NotDeliverable(`"${branch}" isn't a branch name Kumiko delivers.`);
   const base = await headBranch(dir);
   if (!base) throw new NotDeliverable("The repository's mirror has no default branch yet.");
@@ -154,6 +154,76 @@ export function usableKey(colons: string): string | undefined {
 
 /** Whether Kumiko will sign what it lands. */
 export const signs = async (dir: string) => (await signingKey(dir)) !== undefined;
+
+/** The branch's commits that aren't on the default branch, oldest first, parents before children. */
+function branchCommits(dir: string, base: string, head: string): Promise<string[]> {
+  return mirrorGit(dir, ["rev-list", "--reverse", "--topo-order", head, `^${base}`]).then((r) => r.out.split("\n").filter(Boolean));
+}
+
+/** A commit as git stores it: its headers, in order, and its message exactly. */
+async function readCommit(dir: string, sha: string): Promise<{ headers: [string, string][]; message: string }> {
+  const raw = (await mirrorGit(dir, ["cat-file", "commit", sha])).out;
+  const split = raw.indexOf("\n\n");
+  const head = split < 0 ? raw : raw.slice(0, split);
+  const headers: [string, string][] = [];
+  for (const line of head.split("\n")) {
+    // A continuation line belongs to the header before it (a signature spans many).
+    if (line.startsWith(" ") && headers.length) headers[headers.length - 1][1] += `\n${line.slice(1)}`;
+    else {
+      const sp = line.indexOf(" ");
+      headers.push([line.slice(0, sp), line.slice(sp + 1)]);
+    }
+  }
+  return { headers, message: split < 0 ? "" : raw.slice(split + 2) };
+}
+
+/** How many of the branch's own commits carry no signature. */
+export async function unsignedCount(dir: string, base: string, head: string): Promise<number> {
+  let n = 0;
+  for (const sha of await branchCommits(dir, base, head)) if (!(await readCommit(dir, sha)).headers.some(([k]) => k === "gpgsig" || k === "gpgsig-sha256")) n++;
+  return n;
+}
+
+/** An identity line's parts, "Name <email> 1700000000 +0100", as git's environment takes them. */
+function identity(line: string, who: "AUTHOR" | "COMMITTER"): NodeJS.ProcessEnv {
+  const m = /^(.*) <(.*)> (\d+) ([+-]\d{4})$/.exec(line);
+  if (!m) throw new Error(`A commit's ${who.toLowerCase()} can't be read: ${line.slice(0, 200)}`);
+  return { [`GIT_${who}_NAME`]: m[1], [`GIT_${who}_EMAIL`]: m[2], [`GIT_${who}_DATE`]: `@${m[3]} ${m[4]}` };
+}
+
+/**
+ * Signs the branch's commits that aren't on the default branch with the user's key, in the mirror, changing nothing
+ * else: each keeps its tree, author, committer, dates and message, so only the shas change. A commit already signed is
+ * kept as it is unless a parent of it changed. Resolves with the new tip and how many commits were written, without
+ * moving any branch: the caller pushes it.
+ */
+export async function resign(dir: string, base: string, head: string, sign: { key?: string }): Promise<{ tip: string; signed: number }> {
+  const mapped = new Map<string, string>();
+  let signed = 0;
+  for (const sha of await branchCommits(dir, base, head)) {
+    const { headers, message } = await readCommit(dir, sha);
+    const get = (k: string) => headers.filter(([h]) => h === k).map(([, v]) => v);
+    const parents = get("parent");
+    const newParents = parents.map((p) => mapped.get(p) ?? p);
+    const isSigned = get("gpgsig").length > 0 || get("gpgsig-sha256").length > 0;
+    if (isSigned && newParents.every((p, i) => p === parents[i])) {
+      mapped.set(sha, sha);
+      continue;
+    }
+    const extra = headers.filter(([h]) => !["tree", "parent", "author", "committer", "gpgsig", "gpgsig-sha256"].includes(h));
+    // commit-tree can't write other headers (an encoding, a merged tag): such a commit stays as it was.
+    if (extra.length) {
+      if (newParents.some((p, i) => p !== parents[i])) throw new Error(`Commit ${sha.slice(0, 7)} has headers Kumiko can't write again (${extra.map(([h]) => h).join(", ")}), so its branch can't be signed.`);
+      mapped.set(sha, sha);
+      continue;
+    }
+    const env = { ...identity(get("author")[0] ?? "", "AUTHOR"), ...identity(get("committer")[0] ?? "", "COMMITTER") };
+    const out = await mirrorGit(dir, ["commit-tree", sign.key ? `-S${sign.key}` : "-S", get("tree")[0], ...newParents.flatMap((p) => ["-p", p]), "-F", "-"], { input: message, env, timeoutMs: 5 * 60_000 });
+    mapped.set(sha, out.out.trim());
+    signed++;
+  }
+  return { tip: mapped.get(head) ?? head, signed };
+}
 
 /** The card's branch moved after it was shown. */
 export class BranchMoved extends Error {

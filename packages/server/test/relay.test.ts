@@ -23,7 +23,9 @@ function vmGit(home: string, cwd: string, ...args: string[]): Promise<{ code: nu
 }
 
 function vmGitIn(home: string, cwd: string, extra: NodeJS.ProcessEnv, ...args: string[]): Promise<{ code: number; out: string; err: string }> {
-  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, GIT_TERMINAL_PROMPT: "0", ...extra };
+  // Not the session these tests may run in: a Kumiko session's commands carry its KUMIKO_SESSION.
+  const env: NodeJS.ProcessEnv = { ...process.env, KUMIKO_SESSION: undefined, HOME: home, GIT_TERMINAL_PROMPT: "0", ...extra };
+  if (env.KUMIKO_SESSION === undefined) delete env.KUMIKO_SESSION;
   delete env.GIT_CONFIG_GLOBAL;
   delete env.GIT_CONFIG_NOSYSTEM;
   env.GIT_CONFIG_NOSYSTEM = "1";
@@ -385,6 +387,7 @@ describe("git relay", () => {
     const clone = join(vmHome, "widget");
     const env: NodeJS.ProcessEnv = { ...process.env, HOME: vmHome, GIT_TERMINAL_PROMPT: "0" };
     delete env.GIT_CONFIG_GLOBAL;
+    delete env.KUMIKO_SESSION;
     const git = spawn("git", ["-C", clone, "push", "origin", "ci"], { env, stdio: "ignore" });
     await until("the third ask", () => asks.length === 3);
     const before = closed.length;

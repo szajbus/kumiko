@@ -92,8 +92,11 @@ that message, headed `main ← branch`, with the repository in the corner:
   - **Squash and push:** one commit with all the branch's changes. Its subject is Claude's title, its message lists
     the branch's commits, and Claude's co-author trailer follows. Anyone else the commits name as a co-author isn't
     carried over, as they'd show on GitHub as co-authors of a commit you signed.
-  - **Push and open pull request:** a PR opens as you, with Claude's title and description, which you can edit. To
-    land it later, Claude delivers the branch again: then there are only the first two, a merge commit says "Merge pull request #… from …" so GitHub shows the
+  - **Push and open pull request:** a PR opens as you, with Claude's title and description, which you can edit. If
+    the branch is Claude's, Kumiko first signs its unsigned commits with your key, changing nothing else in them, and
+    moves the branch on GitHub to the signed ones, so the PR and the history it leaves have only signed commits. Their
+    shas change, so Claude is told to run `git pull --rebase` on the branch before going on. A branch someone else
+    made is left as they pushed it. To land it later, Claude delivers the branch again: then there are only the first two, a merge commit says "Merge pull request #… from …" so GitHub shows the
     PR merged, and a squash closes the PR with a comment saying where it landed.
 
 The button starts at what you picked last time in the sandbox. **Decline…** lets you tell Claude why. Nothing is shown

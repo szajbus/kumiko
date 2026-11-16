@@ -46,7 +46,9 @@ export function deliverDecision(choice: DeliverChoice, pr: { title: string; body
  * config gives it no key. Signing otherwise goes unmentioned; the receipt says which it was.
  */
 export function unsignedWarning(c: DeliverCard, choice: DeliverChoice): string | undefined {
-  return choice !== "pr" && !c.signs ? "Won't be signed: there's no signing key in your git config." : undefined;
+  // A PR signs the branch's own unsigned commits, when it's Claude's; merging or squashing signs the commit it writes.
+  const signsSomething = choice !== "pr" || c.toSign > 0;
+  return signsSomething && !c.signs ? "Won't be signed: there's no signing key in your git config." : undefined;
 }
 
 /** The card's verb: what approving does. */

@@ -68,6 +68,11 @@ export interface DeliverCard {
   method: DeliverMethod;
   /** Whether Kumiko signs what it writes to the default branch: the user's git config has a signing key. */
   signs: boolean;
+  /**
+   * The branch's commits Kumiko signs when it opens a PR for it: its unsigned ones, when it is Claude's branch. A branch
+   * someone else made is left as they pushed it.
+   */
+  toSign: number;
 }
 
 export interface IssueCard {
