@@ -65,12 +65,12 @@ export class GitHub {
     }
     // Older gh prints its status on stderr, newer on stdout.
     if (status.code !== 0) return { status: "signed-out", detail: firstLines(status.stderr || status.stdout) };
-    const user = await this.run(["api", "user", "--jq", "{login, name, avatar_url} | @json"]).catch((err: Error) => ({ code: -1, stdout: "", stderr: err.message }));
+    const user = await this.run(["api", "user", "--jq", "{id, login, name, avatar_url} | @json"]).catch((err: Error) => ({ code: -1, stdout: "", stderr: err.message }));
     if (user.code !== 0) return { status: "error", detail: firstLines(user.stderr) || `gh api user exited with ${user.code}.` };
     try {
-      const u = JSON.parse(user.stdout.trim()) as { login?: unknown; name?: unknown; avatar_url?: unknown };
+      const u = JSON.parse(user.stdout.trim()) as { id?: unknown; login?: unknown; name?: unknown; avatar_url?: unknown };
       if (typeof u.login !== "string" || !u.login) throw new Error("no login");
-      return { status: "signed-in", login: u.login, ...(typeof u.name === "string" && u.name ? { name: u.name } : {}), ...avatar(u.avatar_url) };
+      return { status: "signed-in", login: u.login, ...(typeof u.id === "number" ? { id: u.id } : {}), ...(typeof u.name === "string" && u.name ? { name: u.name } : {}), ...avatar(u.avatar_url) };
     } catch {
       return { status: "error", detail: "gh api user answered with something Kumiko can't read." };
     }

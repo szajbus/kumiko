@@ -225,6 +225,12 @@ export async function resign(dir: string, base: string, head: string, sign: { ke
   return { tip: mapped.get(head) ?? head, signed };
 }
 
+/** Whether git in the mirror has an author and committer to write a commit as: the user's config, or git's environment. */
+export async function gitHasIdentity(dir: string): Promise<boolean> {
+  const ok = (v: string) => mirrorGit(dir, ["var", v]).then(() => true, () => false);
+  return (await ok("GIT_AUTHOR_IDENT")) && (await ok("GIT_COMMITTER_IDENT"));
+}
+
 /** The card's branch moved after it was shown. */
 export class BranchMoved extends Error {
   constructor(readonly to: string, readonly commits: number) {
@@ -241,12 +247,13 @@ export interface Landed {
 /**
  * Lands the card's branch on the default branch in the mirror and pushes it to GitHub: a merge commit or a squash,
  * signed with the user's key when their config has one. The branch must still be where the card had it. If the default
- * branch moves on GitHub meanwhile, the lease fails, and it is merged again once.
+ * branch moves on GitHub meanwhile, the lease fails, and it is merged again once. `as` is who the commit is by, when
+ * git's config doesn't say.
  */
 export async function land(
   dir: string,
   url: string,
-  opts: { branch: string; head: string; method: DeliverMethod; message: string; sign: { key?: string } | undefined; fetch(): Promise<void> },
+  opts: { branch: string; head: string; method: DeliverMethod; message: string; sign: { key?: string } | undefined; as?: { name: string; email: string }; fetch(): Promise<void> },
 ): Promise<Landed> {
   for (let attempt = 0; ; attempt++) {
     await opts.fetch();
@@ -262,7 +269,8 @@ export async function land(
     const parents = opts.method === "merge" ? ["-p", baseSha, "-p", opts.head] : ["-p", baseSha];
     // Not signing means not signing: commit.gpgsign would otherwise have git try the lookup that just found nothing.
     const sign = opts.sign ? [opts.sign.key ? `-S${opts.sign.key}` : "-S"] : ["--no-gpg-sign"];
-    const commit = await mirrorGit(dir, ["commit-tree", ...sign, tree, ...parents, "-F", "-"], { input: opts.message, timeoutMs: 5 * 60_000 });
+    const as = opts.as ? { GIT_AUTHOR_NAME: opts.as.name, GIT_AUTHOR_EMAIL: opts.as.email, GIT_COMMITTER_NAME: opts.as.name, GIT_COMMITTER_EMAIL: opts.as.email } : {};
+    const commit = await mirrorGit(dir, ["commit-tree", ...sign, tree, ...parents, "-F", "-"], { input: opts.message, env: as, timeoutMs: 5 * 60_000 });
     const sha = commit.out.trim();
     const push = await mirrorGit(dir, ["push", "--porcelain", `--force-with-lease=refs/heads/${base}:${baseSha}`, url, `${sha}:refs/heads/${base}`], { ok: [1], timeoutMs: 5 * 60_000 });
     if (push.code === 0) return { sha, base, signed: opts.sign !== undefined };

@@ -652,7 +652,8 @@ describe("widgets", () => {
     await symlink(victim, join(dir, "x.md"));
     const prompt = s.events().flatMap((e) => (e.kind === "user_prompt" && e.payload.text.includes("# Y2") ? [e.payload.id!] : []))[0];
     assert.equal((await api(`/api/sessions/${id}/rewind`, { method: "POST", body: JSON.stringify({ prompt }) })).status, 200);
-    await waitFor(async () => (await readFile(join(dir, "y.md"), "utf8")) === "# Y1\n" || undefined);
+    // Put back with ln -f, which unlinks before it links: for a moment there is no y.md.
+    await waitFor(async () => (await readFile(join(dir, "y.md"), "utf8").catch(() => undefined)) === "# Y1\n" || undefined);
     await new Promise((r) => setTimeout(r, 100));
     assert.equal(await readFile(victim, "utf8"), "untouched");
     s.close();

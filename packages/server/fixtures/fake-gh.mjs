@@ -29,13 +29,13 @@ if (is("auth", "status", "--hostname", "github.com")) {
   if (!user) signedOut();
   // Newer gh prints this on stdout.
   console.log(`github.com\n  ✓ Logged in to github.com account ${user.login} (keyring)`);
-} else if (is("api", "user", "--jq", "{login, name, avatar_url} | @json")) {
+} else if (is("api", "user", "--jq", "{id, login, name, avatar_url} | @json")) {
   if (!user) {
     console.error("gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable.");
     process.exit(4);
   }
   // A string result of --jq is printed raw.
-  console.log(JSON.stringify({ login: user.login, name: user.name ?? null, avatar_url: user.avatar_url ?? null }));
+  console.log(JSON.stringify({ id: user.id ?? null, login: user.login, name: user.name ?? null, avatar_url: user.avatar_url ?? null }));
 } else if (is("api", "--paginate", "/user/repos?per_page=100&sort=pushed", "--jq", ".[] | {full_name, private, fork, archived, description, pushed_at} | @json")) {
   if (!user) signedOut();
   for (const r of read("repos.json") ?? []) {
