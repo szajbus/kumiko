@@ -9,15 +9,17 @@ type CpuTimes = number[];
 
 /**
  * Prints a reading every `seconds`: the CPU counters, MemTotal and MemAvailable (kB), the root filesystem's used and
- * available space (kB), and the load average, separated by `|`. It ends when the line can't be written, as when
+ * available space (kB), the load average, and the workspace disk's used and available space (kB, or nothing when
+ * nothing is mounted at /workspace), separated by `|`. It ends when the line can't be written, as when
  * Kumiko stops listening.
  */
 export const statsScript = (seconds: number): string =>
   [
     "while :; do",
-    `printf '%s|%s|%s|%s\\n' "$(awk 'NR==1{print $2,$3,$4,$5,$6,$7,$8,$9; exit}' /proc/stat)"` +
+    `printf '%s|%s|%s|%s|%s\\n' "$(awk 'NR==1{print $2,$3,$4,$5,$6,$7,$8,$9; exit}' /proc/stat)"` +
       ` "$(awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} END{print t,a}' /proc/meminfo)"` +
-      ` "$(df -kP / | awk 'NR==2{print $3,$4}')" "$(cut -d' ' -f1 /proc/loadavg)" || exit`,
+      ` "$(df -kP / | awk 'NR==2{print $3,$4}')" "$(cut -d' ' -f1 /proc/loadavg)"` +
+      ` "$(mountpoint -q /workspace 2>/dev/null && df -kP /workspace | awk 'NR==2{print $3,$4}')" || exit`,
     `sleep ${seconds}`,
     "done",
   ].join("\n");
@@ -25,8 +27,9 @@ export const statsScript = (seconds: number): string =>
 /** Reads one of `statsScript`'s lines, with the CPU counters of the line before to tell how busy the CPUs were since. */
 export function parseStats(line: string, before?: CpuTimes): { stats: SandboxStats; cpu: CpuTimes } | undefined {
   const parts = line.split("|").map((p) => p.trim().split(/\s+/).map(Number));
-  if (parts.length !== 4) return undefined;
-  const [cpu, [memTotal, memAvailable], [diskUsed, diskFree], [load]] = parts;
+  // Readings from before the workspace disk have four parts.
+  if (parts.length !== 4 && parts.length !== 5) return undefined;
+  const [cpu, [memTotal, memAvailable], [diskUsed, diskFree], [load], workspace = []] = parts;
   if (cpu.length !== 8 || [...cpu, memTotal, memAvailable, diskUsed, diskFree, load].some((n) => !Number.isFinite(n))) return undefined;
   const stats: SandboxStats = {
     load,
@@ -35,6 +38,8 @@ export function parseStats(line: string, before?: CpuTimes): { stats: SandboxSta
     diskUsedBytes: diskUsed * 1024,
     diskFreeBytes: diskFree * 1024,
   };
+  const [wsUsed, wsFree] = workspace;
+  if (workspace.length === 2 && Number.isFinite(wsUsed) && Number.isFinite(wsFree)) Object.assign(stats, { workspaceUsedBytes: wsUsed * 1024, workspaceFreeBytes: wsFree * 1024 });
   if (before) {
     const sum = (t: CpuTimes) => t.reduce((a, b) => a + b, 0);
     const idle = (t: CpuTimes) => t[3] + t[4];

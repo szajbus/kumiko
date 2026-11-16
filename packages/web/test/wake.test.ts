@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ResumableSession, SandboxView, SessionInfo } from "@kumiko/shared";
-import { projectSessions, wakeProgress } from "../src/wake.ts";
+import { sandboxSessions, wakeProgress } from "../src/wake.ts";
 
 const sandbox = (over: Partial<SandboxView>): SandboxView =>
   ({ name: "web", vm: "kumiko-web", provider: "lima", status: "stopped", busy: false, sessions: 0, ...over }) as SandboxView;
@@ -37,9 +37,9 @@ describe("wakeProgress", () => {
   });
 });
 
-describe("projectSessions", () => {
-  it("lists the project's saved sessions without a tab as closed, most recent first", () => {
-    const { open, closed } = projectSessions(
+describe("sandboxSessions", () => {
+  it("lists the sandbox's saved sessions without a tab as closed, most recent first", () => {
+    const { open, closed } = sandboxSessions(
       "web",
       [session("a1")],
       [saved("b2", "2026-10-30T09:00:00.000Z"), saved("c3", "2026-10-30T12:00:00.000Z"), saved("d4", "2026-10-30T13:00:00.000Z", { sandbox: "api" })],
@@ -50,13 +50,13 @@ describe("projectSessions", () => {
 
   it("doesn't list a session Claude finishes after its tab closed as closed, nor as open", () => {
     const finishing = session("a1", { closing: { until: "2026-10-30T14:00:00.000Z", delete: false } });
-    const { open, closed } = projectSessions("web", [finishing], [saved("a1", "2026-10-30T13:00:00.000Z")]);
+    const { open, closed } = sandboxSessions("web", [finishing], [saved("a1", "2026-10-30T13:00:00.000Z")]);
     assert.deepEqual(open, []);
     assert.deepEqual(closed, []);
   });
 
   it("puts the open sessions waiting on the user first", () => {
-    const { open } = projectSessions("web", [session("a1"), session("b2", { unread: true })], []);
+    const { open } = sandboxSessions("web", [session("a1"), session("b2", { unread: true })], []);
     assert.deepEqual(open.map((s) => s.id), ["b2", "a1"]);
   });
 });

@@ -3,12 +3,12 @@ import { isBusy, type SessionInfo } from "@kumiko/shared";
 import { api, RequestError, useLiveState } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { HeaderCorner } from "./Corner";
-import { ProjectForm } from "./ProjectForm";
+import { SandboxForm } from "./SandboxForm";
 import { sessionName, sessionTitle } from "./format";
 import { Header, type NewSessionTab, type TabId } from "./Header";
 import { NewSession } from "./NewSession";
-import { ProjectList } from "./ProjectList";
-import { ProjectPage } from "./ProjectPage";
+import { SandboxList } from "./SandboxList";
+import { SandboxPage } from "./SandboxPage";
 import { ReposPage } from "./ReposPage";
 import { Window } from "./Window";
 
@@ -21,12 +21,12 @@ import { loadTabs, saveTabs } from "./tabs";
 type Route =
   | { view: "list" }
   | { view: "new" }
-  /** The repository mirrors, beside Projects under the home button. */
+  /** The repository mirrors, beside Sandboxes under the home button. */
   | { view: "repos" }
-  | { view: "project"; name: string }
+  | { view: "sandbox"; name: string }
   | { view: "edit"; name: string }
-  /** Opens another New session tab. `project`: opened from a project's page, which it starts in. */
-  | { view: "new-session"; project?: string }
+  /** Opens another New session tab. `sandbox`: opened from a sandbox's page, which it starts in. */
+  | { view: "new-session"; sandbox?: string }
   /** An open New session tab. */
   | { view: "draft"; key: string }
   | { view: "session"; id: string };
@@ -37,12 +37,12 @@ function parseHash(): Route {
   const d = /^#\/session\/draft\/([0-9]+)$/.exec(location.hash);
   if (d) return { view: "draft", key: d[1] };
   const n = /^#\/session\/new(?:\/([a-z0-9-]+))?$/.exec(location.hash);
-  if (n) return { view: "new-session", project: n[1] };
+  if (n) return { view: "new-session", sandbox: n[1] };
   const s = /^#\/session\/([0-9a-f]{1,64})$/.exec(location.hash);
   if (s) return { view: "session", id: s[1] };
-  const m = /^#\/project\/([a-z0-9-]+)(\/edit)?$/.exec(location.hash);
+  const m = /^#\/sandbox\/([a-z0-9-]+)(\/edit)?$/.exec(location.hash);
   if (!m) return { view: "list" };
-  return m[2] ? { view: "edit", name: m[1] } : { view: "project", name: m[1] };
+  return m[2] ? { view: "edit", name: m[1] } : { view: "sandbox", name: m[1] };
 }
 
 const go = (hash: string) => {
@@ -54,7 +54,7 @@ function Redirect({ to }: { to: string }) {
   return null;
 }
 
-const tabOf = (r: Route): TabId => (r.view === "draft" ? `new-session:${r.key}` : r.view === "session" ? `session:${r.id}` : "projects");
+const tabOf = (r: Route): TabId => (r.view === "draft" ? `new-session:${r.key}` : r.view === "session" ? `session:${r.id}` : "sandboxes");
 
 let lastKey = 0;
 /** A key for another New session tab. */
@@ -73,7 +73,7 @@ export function App() {
   // New session tabs are the window's own; each opens on demand and stays until started or closed.
   const [newSessions, setNewSessions] = useState<NewSessionTab[]>(() => {
     const r = parseHash();
-    return r.view === "new-session" ? [{ key: nextKey(), project: r.project }] : [];
+    return r.view === "new-session" ? [{ key: nextKey(), sandbox: r.sandbox }] : [];
   });
   const [route, setRoute] = useState<Route>(() => {
     const r = parseHash();
@@ -97,7 +97,7 @@ export function App() {
   const kept = sessions.filter((s) => keep.has(s.id));
   // The order the tabs were dragged into. Tabs it doesn't name yet follow, sessions then New session tabs.
   const [order, setOrder] = useState<TabId[]>([]);
-  // The projects whose tabs are hidden behind their label.
+  // The sandboxes whose tabs are hidden behind their label.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   // The session whose Cmd+Shift+W is waiting for confirmation.
   const [deleting, setDeleting] = useState<SessionInfo | undefined>();
@@ -105,12 +105,12 @@ export function App() {
   const [stopping, setStopping] = useState<SessionInfo | undefined>();
   // The title bar's corner, where the open session shows its usage.
   const [corner, setCorner] = useState<HTMLDivElement | null>(null);
-  // The project whose page or session tab was last active, which a New session tab opened from elsewhere starts in.
-  const recentProject = useRef<string | undefined>(undefined);
+  // The sandbox whose page or session tab was last active, which a New session tab opened from elsewhere starts in.
+  const recentSandbox = useRef<string | undefined>(undefined);
   useEffect(() => {
-    const project =
-      route.view === "project" || route.view === "edit" ? route.name : route.view === "session" ? sessions.find((s) => s.id === route.id)?.sandbox : undefined;
-    if (project) recentProject.current = project;
+    const sandbox =
+      route.view === "sandbox" || route.view === "edit" ? route.name : route.view === "session" ? sessions.find((s) => s.id === route.id)?.sandbox : undefined;
+    if (sandbox) recentSandbox.current = sandbox;
   }, [route, sessions]);
   // Sessions this window just started: their tab opens before the session list may have caught up.
   const started = useRef(new Set<string>());
@@ -142,8 +142,8 @@ export function App() {
   // Claude is finishing in them first: until it has, they can still come back.
   const closed = useRef<string[]>([]);
   const reopening = useRef(false);
-  // The Projects tab remembers where it was, so switching back returns to the same page.
-  const projectsHash = useRef(tabOf(route) === "projects" ? location.hash || "#/" : "#/");
+  // The Sandboxes tab remembers where it was, so switching back returns to the same page.
+  const sandboxesHash = useRef(tabOf(route) === "sandboxes" ? location.hash || "#/" : "#/");
 
   // The previous run's tabs come back once the server's session list has arrived; saving waits until they have.
   const restoring = useRef(false);
@@ -170,7 +170,7 @@ export function App() {
         }
       }
       // Keys are this window's own, so the saved active one is found by its place.
-      const drafts = saved.newSessions.map((p) => ({ key: nextKey(), project: p || undefined }));
+      const drafts = saved.newSessions.map((p) => ({ key: nextKey(), sandbox: p || undefined }));
       setNewSessions((open) => [...drafts, ...open]);
       const draftAt = (tab: string) => drafts[Number(/^new-session:([0-9]+)$/.exec(tab)?.[1] ?? NaN)];
       const savedOrder = saved.order.flatMap((t): TabId[] =>
@@ -197,11 +197,11 @@ export function App() {
       tab.startsWith("new-session:") ? `new-session:${newSessions.findIndex((n) => `new-session:${n.key}` === tab)}` : tab;
     saveTabs({
       sessions: sessions.map((s) => s.id),
-      newSessions: newSessions.map((n) => n.project ?? ""),
+      newSessions: newSessions.map((n) => n.sandbox ?? ""),
       active: byPlace(tabOf(route)),
       order: open.map(byPlace),
-      // Only projects with tabs: one whose last tab closed opens expanded next time.
-      collapsed: [...collapsed].filter((name) => open.some((t) => projectOf(t) === name)),
+      // Only sandboxes with tabs: one whose last tab closed opens expanded next time.
+      collapsed: [...collapsed].filter((name) => open.some((t) => sandboxOf(t) === name)),
     });
   }, [restored, live.connected, resumed, sessions, newSessions, order, collapsed, route]);
 
@@ -209,58 +209,58 @@ export function App() {
     const onHash = () => {
       let r = parseHash();
       if (r.view === "new-session") {
-        const opened = { key: nextKey(), project: r.project ?? recentProject.current };
+        const opened = { key: nextKey(), sandbox: r.sandbox ?? recentSandbox.current };
         setNewSessions((open) => [...open, opened]);
         r = showDraft(opened.key);
       }
       setRoute(r);
-      if (tabOf(r) === "projects") projectsHash.current = location.hash || "#/";
+      if (tabOf(r) === "sandboxes") sandboxesHash.current = location.hash || "#/";
       scrollTo(0, 0);
     };
     addEventListener("hashchange", onHash);
     return () => removeEventListener("hashchange", onHash);
   }, []);
 
-  /** The project a tab is in: its session's, or the one picked in a New session tab, if any. */
-  const projectOf = (tab: TabId): string | undefined =>
+  /** The sandbox a tab is in: its session's, or the one picked in a New session tab, if any. */
+  const sandboxOf = (tab: TabId): string | undefined =>
     tab.startsWith("session:")
       ? sessions.find((s) => `session:${s.id}` === tab)?.sandbox
-      : newSessions.find((n) => `new-session:${n.key}` === tab)?.project;
-  // The tabs in the order the header shows them: Projects, then the rest, each project's together.
+      : newSessions.find((n) => `new-session:${n.key}` === tab)?.sandbox;
+  // The tabs in the order the header shows them: Sandboxes, then the rest, each sandbox's together.
   const open = group(
     arrange(order, [...sessions.map((s): TabId => `session:${s.id}`), ...newSessions.map((n): TabId => `new-session:${n.key}`)]),
-    projectOf,
+    sandboxOf,
   );
-  const tabs: TabId[] = ["projects", ...open];
-  // The tabs not hidden in a collapsed project, the active one always among them.
-  const visible = unfolded(open, projectOf, collapsed, tabOf(route));
+  const tabs: TabId[] = ["sandboxes", ...open];
+  // The tabs not hidden in a collapsed sandbox, the active one always among them.
+  const visible = unfolded(open, sandboxOf, collapsed, tabOf(route));
 
-  // A tab that comes to the front, by a link, a shortcut or a new session, brings its collapsed project's tabs back;
+  // A tab that comes to the front, by a link, a shortcut or a new session, brings its collapsed sandbox's tabs back;
   // so does one open at launch, once the saved tabs have come back collapsed. Only then: not when its session drops
   // out of the list for a moment, as when the server restarts, and comes back.
-  const activeProject = projectOf(tabOf(route));
+  const activeSandbox = sandboxOf(tabOf(route));
   const [expandActive] = useState(() =>
-    expandInFront<string>((project) => setCollapsed((c) => (c.has(project) ? new Set([...c].filter((n) => n !== project)) : c))),
+    expandInFront<string>((sandbox) => setCollapsed((c) => (c.has(sandbox) ? new Set([...c].filter((n) => n !== sandbox)) : c))),
   );
-  useEffect(() => expandActive(`${restored}:${tabOf(route)}`, activeProject), [tabOf(route), activeProject, restored]);
+  useEffect(() => expandActive(`${restored}:${tabOf(route)}`, activeSandbox), [tabOf(route), activeSandbox, restored]);
 
   const select = (tab: TabId) => {
-    if (tab === "projects") go(projectsHash.current);
+    if (tab === "sandboxes") go(sandboxesHash.current);
     else if (tab.startsWith("new-session:")) go(`#/session/draft/${tab.slice("new-session:".length)}`);
     else go(`#/session/${tab.slice("session:".length)}`);
   };
 
   const dropNewSession = (key: string) => setNewSessions((open) => open.filter((n) => n.key !== key));
 
-  /** Names a New session tab after the project picked in it. */
+  /** Names a New session tab after the sandbox picked in it. */
   const pickedIn = (key: string, name: string) =>
     setNewSessions((open) => {
-      const project = name || undefined;
-      if (!open.some((n) => n.key === key && n.project !== project)) return open;
-      return open.map((n) => (n.key === key ? { ...n, project } : n));
+      const sandbox = name || undefined;
+      if (!open.some((n) => n.key === key && n.sandbox !== sandbox)) return open;
+      return open.map((n) => (n.key === key ? { ...n, sandbox } : n));
     });
 
-  /** After closing the active tab, move to the tab to its left, else the left-most one left, else the Projects tab. */
+  /** After closing the active tab, move to the tab to its left, else the left-most one left, else the Sandboxes tab. */
   const leave = (tab: TabId) => {
     if (tabOf(route) === tab) select(landingAfterClose(tabs, tab));
   };
@@ -334,15 +334,15 @@ export function App() {
     }
     if (action === "new") return go("#/session/new");
     if (action === "reopen") return void reopen();
-    // Cmd+1..9 jump to the nth tab after Projects.
+    // Cmd+1..9 jump to the nth tab after Sandboxes.
     if (typeof action === "number") {
       const target = visible[action - 1];
       return target ? select(target) : undefined;
     }
     const current = tabOf(route);
-    if (action === "close") return current === "projects" ? undefined : close(current);
-    // Through the tabs on show, skipping those of collapsed projects.
-    const cycle: TabId[] = ["projects", ...visible];
+    if (action === "close") return current === "sandboxes" ? undefined : close(current);
+    // Through the tabs on show, skipping those of collapsed sandboxes.
+    const cycle: TabId[] = ["sandboxes", ...visible];
     const i = cycle.indexOf(current);
     const step = action === "next" ? 1 : -1;
     select(cycle[(Math.max(i, 0) + step + cycle.length) % cycle.length]);
@@ -394,18 +394,18 @@ export function App() {
         active={tabOf(route)}
         onSelect={select}
         onClose={close}
-        onMove={(tab, target, after) => setOrder(group(moveTab(open, tab, target, after), projectOf))}
-        onMoveGroup={(moving, target, after) => setOrder(moveGroup(open, projectOf, moving, target, after))}
+        onMove={(tab, target, after) => setOrder(group(moveTab(open, tab, target, after), sandboxOf))}
+        onMoveGroup={(moving, target, after) => setOrder(moveGroup(open, sandboxOf, moving, target, after))}
         collapsed={collapsed}
         onToggleGroup={(name) => setCollapsed((c) => (c.has(name) ? new Set([...c].filter((n) => n !== name)) : new Set([...c, name])))}
-        onOpenProject={(name) => go(`#/project/${name}`)}
+        onOpenSandbox={(name) => go(`#/sandbox/${name}`)}
         onNewSession={() => go("#/session/new")}
         cornerRef={setCorner}
       />
       {/* Kept mounted while their tabs are open, so a half-typed prompt survives switching tabs. */}
       {newSessions.map((n) => (
         <div key={n.key} hidden={!(route.view === "draft" && route.key === n.key)}>
-          <NewSession live={live} project={n.project} onProject={(name) => pickedIn(n.key, name)} onStarted={(id) => onSessionStarted(id, n.key)} />
+          <NewSession live={live} sandbox={n.sandbox} onSandbox={(name) => pickedIn(n.key, name)} onStarted={(id) => onSessionStarted(id, n.key)} />
         </div>
       ))}
       {stopping && (
@@ -475,7 +475,7 @@ export function App() {
               active={s.id === onSession}
               onForked={(id) => onSessionStarted(id)}
               sessionNames={sessionNames}
-              wake={s.asleep ? { sandbox: live.projects.find((p) => p.name === s.sandbox), log: live.logs[s.sandbox] ?? [] } : undefined}
+              wake={s.asleep ? { sandbox: live.sandboxes.find((p) => p.name === s.sandbox), log: live.logs[s.sandbox] ?? [] } : undefined}
             />
           </div>
         ))}
@@ -496,26 +496,26 @@ function Body({ route, live, started, onSessionStarted }: BodyProps) {
     case "repos":
       return <ReposPage live={live} />;
     case "new":
-      return <ProjectForm onCancel={() => go("#/")} onCreated={(name) => go(`#/project/${name}`)} />;
-    case "project":
+      return <SandboxForm mirrors={live.mirrors?.mirrors ?? []} onCancel={() => go("#/")} onCreated={(name) => go(`#/sandbox/${name}`)} />;
+    case "sandbox":
       return (
-        <ProjectPage
+        <SandboxPage
           key={route.name}
           id={route.name}
           live={live}
           onBack={() => go("#/")}
-          onEdit={() => go(`#/project/${route.name}/edit`)}
+          onEdit={() => go(`#/sandbox/${route.name}/edit`)}
           onNewSession={() => go(`#/session/new/${route.name}`)}
           onSessionStarted={onSessionStarted}
         />
       );
     case "edit": {
-      const p = live.projects.find((s) => s.name === route.name);
-      const back = () => go(`#/project/${route.name}`);
-      // Wait for the list before deciding; a project whose VM record can't be read can't be edited.
+      const p = live.sandboxes.find((s) => s.name === route.name);
+      const back = () => go(`#/sandbox/${route.name}`);
+      // Wait for the list before deciding; a sandbox whose VM record can't be read can't be edited.
       if (!live.loaded) return null;
-      if (!p || p.metaError) return <Redirect to={`#/project/${route.name}`} />;
-      return <ProjectForm key={`edit-${route.name}`} editing={p} onCancel={back} onCreated={back} />;
+      if (!p || p.metaError) return <Redirect to={`#/sandbox/${route.name}`} />;
+      return <SandboxForm key={`edit-${route.name}`} editing={p} mirrors={live.mirrors?.mirrors ?? []} onCancel={back} onCreated={back} />;
     }
     case "new-session":
     case "draft":
@@ -528,6 +528,6 @@ function Body({ route, live, started, onSessionStarted }: BodyProps) {
       return null; // rendered by App, which keeps the session tabs looked at last mounted
     }
     default:
-      return <ProjectList live={live} onOpen={(name) => go(`#/project/${name}`)} onNew={() => go("#/new")} onSessionStarted={onSessionStarted} />;
+      return <SandboxList live={live} onOpen={(name) => go(`#/sandbox/${name}`)} onNew={() => go("#/new")} onSessionStarted={onSessionStarted} />;
   }
 }

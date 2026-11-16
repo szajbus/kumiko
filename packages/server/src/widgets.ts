@@ -40,14 +40,12 @@ import { dirBytes } from "./disk.js";
 import { openIn, removeIn, writeIn } from "./files.js";
 import type { SessionWidgets, Sessions } from "./sessions.js";
 
-/** Where a project's files are, for mapping the paths Claude names in its VM to the host. */
+/** Where a sandbox's files are, for mapping the paths Claude names in its VM to the host. */
 export interface WidgetHome {
-  /** The project's Claude home on the host, which is `~/.claude` in the VM. */
+  /** The sandbox's Claude home on the host, which is `~/.claude` in the VM. */
   claudeHome: string;
-  /** The project's Kumiko folder on the host, which is `~/.kumiko` in the VM. */
+  /** The sandbox's Kumiko folder on the host, which is `~/.kumiko` in the VM. */
   kumikoHome: string;
-  /** Folders mounted at the same path in the VM and on the host: the clone and its worktrees. */
-  roots: string[];
 }
 
 /** A window's answer about a pane: the picture asked for, and a note when its page didn't load. */
@@ -59,7 +57,7 @@ export interface PaneAnswer {
 export interface WidgetsOptions {
   /** Where what windows show of their artifacts' files is kept. */
   content: ArtifactContent;
-  /** The project's folders, or undefined for a project that isn't known. */
+  /** The sandbox's folders, or undefined for a sandbox that isn't known. */
   home(sandbox: string): WidgetHome | undefined;
   /** The VM user's home, absolute, as `~` is in the VM. */
   vmHome(sandbox: string): Promise<string>;
@@ -117,7 +115,7 @@ async function realWithin(path: string, realDir: string): Promise<{ dir: string;
 /** Stands for a session's artifacts' folder in `given`. */
 const FOLDER = "<folder>";
 
-/** The longest name Claude can give a session: the tab has room for about that much beside the project's name. */
+/** The longest name Claude can give a session: the tab has room for about that much beside the sandbox's name. */
 const MAX_SESSION_TITLE = 32;
 
 /** The longest description Claude can give a session: two lines in the list of saved sessions. */
@@ -352,7 +350,7 @@ export class Widgets implements SessionWidgets {
           return { text: await this.list(info) };
         case "artifact_share": {
           const to = this.sessions.get(str(args.session, "session"));
-          if (!to || to.sandbox !== info.sandbox) throw new ToolError(`There is no session ${args.session} in this project. session_list names them.`);
+          if (!to || to.sandbox !== info.sandbox) throw new ToolError(`There is no session ${args.session} in this sandbox. session_list names them.`);
           if (to.id === id) throw new ToolError("That is this session.");
           if (!LIVE_SESSION_STATUSES.includes(to.status)) throw new ToolError(`Session ${to.id} isn't open, so it can't be given anything; the user can resume it first.`);
           const artifacts = await this.shareable(info, args.artifacts);
@@ -391,7 +389,7 @@ export class Widgets implements SessionWidgets {
     return found;
   }
 
-  /** The project's sessions, for Claude: open ones first, then saved ones, most recent first. */
+  /** The sandbox's sessions, for Claude: open ones first, then saved ones, most recent first. */
   private async list(info: SessionInfo): Promise<string> {
     const open = this.sessions.list().filter((s) => s.sandbox === info.sandbox);
     const saved = (await this.sessions.resumable()).filter((s) => s.sandbox === info.sandbox);
@@ -404,7 +402,7 @@ export class Widgets implements SessionWidgets {
       ...saved.slice(0, MAX_LISTED_SAVED).map((s) => line(s, "closed; the user can resume it")),
     ];
     const more = saved.length > MAX_LISTED_SAVED ? `\n(and ${saved.length - MAX_LISTED_SAVED} older saved sessions)` : "";
-    return `Sessions in this project (${info.sandbox}), as the user's tabs name them:\n${lines.join("\n")}${more}`;
+    return `Sessions in this sandbox (${info.sandbox}), as the user's tabs name them:\n${lines.join("\n")}${more}`;
   }
 
   /**
@@ -653,8 +651,7 @@ export class Widgets implements SessionWidgets {
     if (!p.startsWith("/")) p = posix.resolve(info.workdir, p);
     p = posix.normalize(p);
     if (this.hostPath(info, p)) return p;
-    const roots = this.opts.home(info.sandbox)?.roots ?? [];
-    throw new ToolError(`Kumiko can't show ${p}: it can only show files in ${[this.vmDocs(info), ...roots].join(", ")} (or anywhere under ${KUMIKO_HOME_IN_VM} or ${CLAUDE_HOME_IN_VM}).`);
+    throw new ToolError(`Kumiko can't show ${p}: it can only show files in ${this.vmDocs(info)} (or anywhere under ${KUMIKO_HOME_IN_VM} or ${CLAUDE_HOME_IN_VM}).`);
   }
 
   /** Where a file in the VM is on the host, if it is in a folder mounted from there. */
@@ -667,8 +664,7 @@ export class Widgets implements SessionWidgets {
         if (within(vmPath, `${vmHome}/${dir}`)) return { path: join(root, relative(`${vmHome}/${dir}`, vmPath)), root };
       }
     }
-    const root = home.roots.find((r) => within(vmPath, r));
-    return root ? { path: vmPath, root } : undefined;
+    return undefined;
   }
 
   /**
@@ -1052,7 +1048,7 @@ const toolsFor = (folder: string): ToolSpec[] => [
   },
   {
     name: "session_start",
-    description: `Asks the user to start a new session in this project, beside this one, on an opening prompt you write: for separate work that came up, such as a bug found along the way or a follow-up, that shouldn't hold up or crowd this session. The chat shows the user the prompt, and the session starts, in a tab of its own, only once they accept it; you won't hear whether they do. It starts in the project's clone with nothing of this conversation, so the prompt has to say everything it needs: what to do, why, and where to look.`,
+    description: `Asks the user to start a new session in this sandbox, beside this one, on an opening prompt you write: for separate work that came up, such as a bug found along the way or a follow-up, that shouldn't hold up or crowd this session. The chat shows the user the prompt, and the session starts, in a tab of its own, only once they accept it; you won't hear whether they do. It starts in /workspace with nothing of this conversation, so the prompt has to say everything it needs: what to do, why, and where to look.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -1074,12 +1070,12 @@ const toolsFor = (folder: string): ToolSpec[] => [
   {
     name: "session_list",
     description:
-      "Lists the sessions in this project, as the user's tabs name them, with what each is about: the open ones (working, idle, or waiting for the user) and the saved ones the user can resume. Use it to find work already under way elsewhere before starting more, or the session to share an artifact with.",
+      "Lists the sessions in this sandbox, as the user's tabs name them, with what each is about: the open ones (working, idle, or waiting for the user) and the saved ones the user can resume. Use it to find work already under way elsewhere before starting more, or the session to share an artifact with.",
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "artifact_share",
-    description: `Copies artifacts of this session into another open session of this project (as session_list names it): their files go in its artifacts folder, and its window has them for the user to show. They are copies, as they are now: changing yours later doesn't change them, so share again to send a newer one, which replaces the copy. The other session's Claude is told with the user's next message there, not before.`,
+    description: `Copies artifacts of this session into another open session of this sandbox (as session_list names it): their files go in its artifacts folder, and its window has them for the user to show. They are copies, as they are now: changing yours later doesn't change them, so share again to send a newer one, which replaces the copy. The other session's Claude is told with the user's next message there, not before.`,
     inputSchema: {
       type: "object",
       properties: {

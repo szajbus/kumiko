@@ -6,12 +6,11 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 import WebSocket from "ws";
-import { isBusy, isWaiting, TASK_FILE_BYTES, type ProjectView, type ServerEvent, type SessionEvent, type SessionInfo, type SessionStreamMessage } from "@kumiko/shared";
+import { isBusy, isWaiting, TASK_FILE_BYTES, type SandboxView, type ServerEvent, type SessionEvent, type SessionInfo, type SessionStreamMessage } from "@kumiko/shared";
 import { RUNS_DIR, userMessage } from "@kumiko/agent";
 import { LimaProvider, MetadataStore, shellQuote } from "@kumiko/sandbox";
 import { startServer, type RunningServer, type ServerOptions } from "../src/index.js";
 import type { StoredSession } from "../src/store.js";
-import { makeClone } from "./repo.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtures = resolve(here, "../../../sandbox/fixtures");
@@ -21,8 +20,8 @@ describe("sessions", () => {
   let server: RunningServer;
   let root: string;
   let limaDir: string;
-  /** The clone of project "one", where its sessions start. */
-  let workdir: string;
+  /** Where sessions start in sandbox "one". */
+  const workdir = "/workspace";
   let sessionsDir: string;
   const events: ServerEvent[] = [];
   let ws: WebSocket;
@@ -61,7 +60,7 @@ describe("sessions", () => {
   /** What a session's events are, Claude's by their type; without how full its context is, which Kumiko asks after each turn. */
   const chatKinds = (got: SessionEvent[]) => got.filter((e) => e.kind !== "context").map((e) => (e.kind === "claude" ? e.payload.type : e.kind));
   const session = async (id: string): Promise<SessionInfo | undefined> => ((await json(await api("/api/sessions"))) as SessionInfo[]).find((s) => s.id === id);
-  const sandbox = async (name: string): Promise<ProjectView> => ((await json(await api("/api/projects"))) as ProjectView[]).find((s) => s.name === name)!;
+  const sandbox = async (name: string): Promise<SandboxView> => ((await json(await api("/api/sandboxes"))) as SandboxView[]).find((s) => s.name === name)!;
 
   /** A socket on a session's events, collecting them; `caughtUp` is how many had come when the replay was done. */
   const listen = async (id: string, afterSeq = 0, inBuffer?: string) => {
@@ -82,14 +81,12 @@ describe("sessions", () => {
     return { got, sock, closed, results, caughtUp: () => caughtUp, buffer: () => buffer };
   };
 
-  /** Creates a project from a fresh clone; returns the clone. */
+  /** Creates a sandbox without repos. */
   const create = async (name: string, spec: object = {}) => {
-    const clonePath = await makeClone(root, name);
     const since = events.length;
-    const res = await api("/api/projects", { method: "POST", body: JSON.stringify({ name, clonePath, cpus: 1, memoryGiB: 1, diskGiB: 10, mounts: [], env: ["TOKEN"], ...spec }) });
+    const res = await api("/api/sandboxes", { method: "POST", body: JSON.stringify({ name, repos: [], cpus: 1, memoryGiB: 1, diskGiB: 10, workspaceGiB: 1, mounts: [], env: ["TOKEN"], ...spec }) });
     assert.equal(res.status, 202);
     assert.equal((await finished(name, "creating", since)).type, "done");
-    return clonePath;
   };
 
   const startSession = async (sandboxName: string, prompt: string): Promise<string> => {
@@ -119,7 +116,7 @@ describe("sessions", () => {
     sessionsDir = join(root, "sessions");
     serverOpts = { provider, port: 0, refreshMs: 200, env, home: root, dataDir: join(root, "data"), sessionsDir };
     await boot();
-    workdir = await create("one");
+    await create("one");
   });
 
   after(async () => {
@@ -133,15 +130,15 @@ describe("sessions", () => {
     assert.equal((await post({ sandbox: "one", prompt: "  " })).status, 400);
     assert.equal((await post({ sandbox: "nope", prompt: "hi" })).status, 404);
     assert.equal((await post({ sandbox: "Bad!", prompt: "hi" })).status, 400);
-    // A VM that isn't a project's can't host a session.
-    await writeFile(join(limaDir, "km-stray.json"), JSON.stringify({ name: "km-stray", status: "Running" }));
+    // A VM that isn't a sandbox's can't host a session.
+    await writeFile(join(limaDir, "kumiko-stray.json"), JSON.stringify({ name: "kumiko-stray", status: "Running" }));
     assert.equal((await post({ sandbox: "stray", prompt: "hi" })).status, 404);
     assert.equal((await api("/api/sessions/abc123/prompt", { method: "POST", body: '{"text":"x"}' })).status, 404);
   });
 
   it("starts a stopped sandbox for a session asked for in it", async () => {
     await create("cold");
-    await writeFile(join(limaDir, "km-cold.json"), JSON.stringify({ name: "km-cold", status: "Stopped" }));
+    await writeFile(join(limaDir, "kumiko-cold.json"), JSON.stringify({ name: "kumiko-cold", status: "Stopped" }));
     await waitFor(async () => (await sandbox("cold")).status === "stopped");
     const since = events.length;
     // Two at once: the second waits on the start the first began.
@@ -158,7 +155,7 @@ describe("sessions", () => {
     await idle(id);
     const stop = async () => {
       const since = events.length;
-      assert.equal((await api("/api/projects/dozy/stop", { method: "POST" })).status, 202);
+      assert.equal((await api("/api/sandboxes/dozy/stop", { method: "POST" })).status, 202);
       assert.equal((await finished("dozy", "stopping", since)).type, "done");
     };
     /** Closes its tab, then opens it again as a tab coming back does. */
@@ -191,7 +188,7 @@ describe("sessions", () => {
     // Started some other way, the sandbox wakes it all the same.
     await stop();
     assert.equal((await reopen())?.asleep, true);
-    assert.equal((await api("/api/projects/dozy/start", { method: "POST" })).status, 202);
+    assert.equal((await api("/api/sandboxes/dozy/start", { method: "POST" })).status, 202);
     await idle(id);
     assert.equal((await session(id))?.asleep, undefined);
 
@@ -220,7 +217,7 @@ describe("sessions", () => {
     assert.deepEqual(s.got[0], { seq: 1, kind: "user_prompt", payload: { text: "hello there", id: (s.got[0] as { payload: { id?: string } }).payload.id } });
     assert.match((s.got[0] as { payload: { id?: string } }).payload.id ?? "", /^[0-9a-f-]{36}$/, "the prompt is tagged with an id");
     const init = s.got.find((e) => e.kind === "claude" && e.payload.subtype === "init");
-    assert.equal(init?.kind === "claude" && init.payload.cwd, workdir, "Claude starts in the project's clone");
+    assert.equal(init?.kind === "claude" && init.payload.cwd, join(limaDir, "workspace"), "Claude starts in /workspace, which is this folder in the fake VM");
     assert.ok(s.got.some((e) => e.kind === "claude" && e.payload.type === "stream_event"), "deltas stream live");
 
     const info = await waitFor(async () => {
@@ -248,7 +245,7 @@ describe("sessions", () => {
     await waitFor(() => s.results().length === 2);
     assert.ok(s.got.some((e) => e.kind === "claude" && e.payload.type === "user" && JSON.stringify(e.payload).includes("forwarded-value")));
 
-    // Claude's config is the project's Claude home, mounted at ~/.claude in the VM.
+    // Claude's config is the sandbox's Claude home, mounted at ~/.claude in the VM.
     await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: "env CLAUDE_CONFIG_DIR" }) });
     await waitFor(() => s.results().length === 3);
     assert.ok(s.got.some((e) => e.kind === "claude" && e.payload.type === "user" && JSON.stringify(e.payload).includes(join(limaDir, "vm-home", ".claude"))));
@@ -327,7 +324,7 @@ describe("sessions", () => {
     assert.equal((await sandbox("two")).sessions, 2);
 
     const since = events.length;
-    assert.equal((await api("/api/projects/two/stop", { method: "POST" })).status, 202);
+    assert.equal((await api("/api/sandboxes/two/stop", { method: "POST" })).status, 202);
     assert.equal((await finished("two", "stopping", since)).type, "done");
     const logs = events.slice(since).filter((e) => e.type === "log").map((e) => (e as { data: { text: string } }).data.text);
     assert.ok(logs.includes("Pausing 2 agent sessions…"));
@@ -336,8 +333,8 @@ describe("sessions", () => {
     assert.deepEqual(sb.got.at(-1)?.kind === "ended" && sb.got.at(-1)?.payload, { reason: "sandbox", code: 0, asleep: true });
     assert.equal((await sandbox("two")).sessions, 0);
 
-    // Started from the project, not from their tabs, the sandbox wakes them, and Claude carries on.
-    assert.equal((await api("/api/projects/two/start", { method: "POST" })).status, 202);
+    // Started from the sandbox page, not from their tabs, the sandbox wakes them, and Claude carries on.
+    assert.equal((await api("/api/sandboxes/two/start", { method: "POST" })).status, 202);
     for (const id of [b, c]) await waitFor(async () => { const i = await session(id); return (i?.status === "idle" && !i.asleep) || undefined; });
     await api(`/api/sessions/${b}/prompt`, { method: "POST", body: JSON.stringify({ text: "back?" }) });
     await waitFor(() => sb.got.some((e) => e.kind === "claude" && e.payload.type === "result" && e.payload.result === "You said: back?") || undefined);
@@ -348,9 +345,9 @@ describe("sessions", () => {
     await waitFor(async () => { const sb = await sandbox("two"); return (sb.status === "running" && !sb.busy) || undefined; });
     const id = await startSession("two", "hello");
     await waitFor(async () => (await session(id))?.status === "idle" || undefined);
-    await writeFile(join(limaDir, "km-two.json"), JSON.stringify({ name: "km-two", status: "Stopped" }));
+    await writeFile(join(limaDir, "kumiko-two.json"), JSON.stringify({ name: "kumiko-two", status: "Stopped" }));
     await waitFor(async () => { const i = await session(id); return (i?.status === "ended" && i.asleep) || undefined; });
-    await writeFile(join(limaDir, "km-two.json"), JSON.stringify({ name: "km-two", status: "Running" }));
+    await writeFile(join(limaDir, "kumiko-two.json"), JSON.stringify({ name: "kumiko-two", status: "Running" }));
     await waitFor(async () => { const i = await session(id); return (i?.status === "idle" && !i.asleep) || undefined; });
     await api(`/api/sessions/${id}`, { method: "DELETE" });
   });
@@ -545,7 +542,8 @@ describe("sessions", () => {
   });
 
   it("keeps an edit's patch in the chat it saves, for a resume and a fork, without the whole file", async () => {
-    await writeFile(join(workdir, "greet.txt"), "alpha\nbeta\ngamma\n");
+    // The fake VM's /workspace.
+    await writeFile(join(limaDir, "workspace", "greet.txt"), "alpha\nbeta\ngamma\n");
     const id = await startSession("one", `edit ${JSON.stringify({ file_path: "greet.txt", old_string: "beta", new_string: "BETA" })}`);
     await waitFor(async () => ((await session(id))?.status === "idle" && (await session(id))?.claudeSessionId ? true : undefined));
     assert.equal((await api(`/api/sessions/${id}`, { method: "DELETE" })).status, 200);
@@ -724,27 +722,27 @@ describe("sessions", () => {
     const kept = await startSession("one", "stays");
     await idle(kept);
     await api(`/api/sessions/${kept}`, { method: "DELETE" });
-    // Recreating keeps them: Claude's history is in the project's Claude home, on the host.
+    // Recreating keeps them: Claude's history is in the sandbox's Claude home, on the host.
     let since = events.length;
-    await api("/api/projects/doomed/recreate", { method: "POST" });
+    await api("/api/sandboxes/doomed/recreate", { method: "POST" });
     assert.equal((await finished("doomed", "recreating", since)).type, "done");
     // Asleep while it is recreated, it continues in the new VM.
     await idle(doomed);
     assert.equal((await session(doomed))?.asleep, undefined);
     await api(`/api/sessions/${doomed}`, { method: "DELETE" });
-    assert.ok((await saved()).includes(doomed), "a recreated project keeps its saved sessions");
+    assert.ok((await saved()).includes(doomed), "a rebuilt sandbox keeps its saved sessions");
     const last = await startSession("doomed", "the end");
     await idle(last);
     since = events.length;
-    await api("/api/projects/doomed", { method: "DELETE" });
+    await api("/api/sandboxes/doomed", { method: "DELETE" });
     assert.equal((await finished("doomed", "deleting", since)).type, "done");
     const gone = await session(last);
-    assert.equal(gone?.status, "ended", "a deleted project's sessions end");
+    assert.equal(gone?.status, "ended", "a deleted sandbox's sessions end");
     assert.equal(gone?.asleep, undefined, "with no sandbox to wait for");
     await api(`/api/sessions/${last}`, { method: "DELETE" });
     const left = await saved();
-    assert.ok(!left.includes(doomed), "a deleted project takes its saved sessions with it");
-    assert.ok(left.includes(kept), "other projects keep theirs");
+    assert.ok(!left.includes(doomed), "a deleted sandbox takes its saved sessions with it");
+    assert.ok(left.includes(kept), "other sandboxes keep theirs");
     await api(`/api/sessions/saved/${kept}`, { method: "DELETE" });
   });
 
@@ -916,7 +914,7 @@ describe("sessions", () => {
       const ok = await post(`/api/sessions/${id}/login/code`, { code: "good-code" });
       assert.equal(ok.status, 200);
       assert.deepEqual(await json(ok), { email: "you@example.com", plan: "max" });
-      // Logged in now, for every session of the project.
+      // Logged in now, for every session of the sandbox.
       assert.deepEqual(await json(await api(`/api/sessions/${id}/login`)), { loggedIn: { email: "you@example.com", plan: "max" } });
       assert.deepEqual(await json(await post(`/api/sessions/${id}/login`)), { loggedIn: { email: "you@example.com", plan: "max" } });
 
@@ -1144,10 +1142,10 @@ describe("sessions", () => {
       await waitFor(async () => (await session(id))?.status === "idle" || undefined);
       await assert.rejects(startServer({ ...serverOpts, lockWaitMs: 100 }), /Another Kumiko server .* is using/);
 
-      // Another home with the same project, on the same VM: its startup sweep leaves this home's Claude alone.
+      // Another home with the same sandbox, on the same VM: its startup sweep leaves this home's Claude alone.
       const other = join(root, "other");
-      await mkdir(join(other, "projects"), { recursive: true });
-      await writeFile(join(other, "projects", "one.json"), await readFile(join(root, "data", "projects", "one.json")));
+      await mkdir(join(other, "workspaces"), { recursive: true });
+      await writeFile(join(other, "workspaces", "one.json"), await readFile(join(root, "data", "workspaces", "one.json")));
       const second = await startServer({ ...serverOpts, dataDir: other, sessionsDir: join(other, "sessions") });
       try {
         assert.ok(await alive(id), "the other server didn't stop it");

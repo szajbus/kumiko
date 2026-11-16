@@ -37,9 +37,9 @@ interface Pending {
 const OUTPUT_LINES = 40;
 
 /**
- * Logs Claude in, in a project's sandbox, with `claude auth login`: it prints a sign-in URL, then waits on stdin for
- * the code the sign-in page shows. The login lands in the project's Claude home (CLAUDE_CONFIG_DIR), so it is the
- * project's, not a session's. One login per project at a time; a second request joins the first.
+ * Logs Claude in, in a sandbox, with `claude auth login`: it prints a sign-in URL, then waits on stdin for
+ * the code the sign-in page shows. The login lands in the sandbox's Claude home (CLAUDE_CONFIG_DIR), so it is the
+ * sandbox's, not a session's. One login per sandbox at a time; a second request joins the first.
  */
 export class Logins {
   private pending = new Map<string, Pending>();
@@ -51,9 +51,9 @@ export class Logins {
     private readonly opts: { waitForCodeMs?: number; startMs?: number; finishMs?: number; statusMs?: number } = {},
   ) {}
 
-  /** Who Claude in the project's sandbox is logged in as, or undefined when it isn't (or doesn't answer in time). */
-  async account(project: string): Promise<LoginAccount | undefined> {
-    const child = this.exec(project, "claude auth status --json", []);
+  /** Who Claude in the sandbox is logged in as, or undefined when it isn't (or doesn't answer in time). */
+  async account(sandbox: string): Promise<LoginAccount | undefined> {
+    const child = this.exec(sandbox, "claude auth status --json", []);
     child.stdin!.end();
     const out: string[] = [];
     eachLine(child.stdout!, (l) => out.push(l));
@@ -73,21 +73,21 @@ export class Logins {
   }
 
   /** Starts a login, or joins the one running; resolves with the sign-in URL. Says who it is if already logged in. */
-  start(project: string, cwd: string): Promise<LoginStartResponse> {
-    const running = this.pending.get(project);
+  start(sandbox: string, cwd: string): Promise<LoginStartResponse> {
+    const running = this.pending.get(sandbox);
     if (running) return Promise.resolve({ url: running.url });
-    const under = this.starting.get(project);
+    const under = this.starting.get(sandbox);
     if (under) return under;
-    const begun = this.begin(project, cwd).finally(() => this.starting.delete(project));
-    this.starting.set(project, begun);
+    const begun = this.begin(sandbox, cwd).finally(() => this.starting.delete(sandbox));
+    this.starting.set(sandbox, begun);
     return begun;
   }
 
-  private async begin(project: string, cwd: string): Promise<LoginStartResponse> {
-    const account = await this.account(project);
+  private async begin(sandbox: string, cwd: string): Promise<LoginStartResponse> {
+    const account = await this.account(sandbox);
     if (account) return { loggedIn: account };
 
-    const child = this.exec(project, "claude auth login", [], { cwd });
+    const child = this.exec(sandbox, "claude auth login", [], { cwd });
     const output: string[] = [];
     const keep = (l: string) => {
       output.push(l);
@@ -118,12 +118,12 @@ export class Logins {
     });
 
     // Nobody pastes a code after this long; the login gives up rather than waiting forever.
-    const timer = setTimeout(() => this.cancel(project), this.opts.waitForCodeMs ?? 10 * 60_000);
+    const timer = setTimeout(() => this.cancel(sandbox), this.opts.waitForCodeMs ?? 10 * 60_000);
     const entry: Pending = { child, url, output, exited, timer };
-    this.pending.set(project, entry);
+    this.pending.set(sandbox, entry);
     void exited.then(() => {
       clearTimeout(timer);
-      if (this.pending.get(project) === entry) this.pending.delete(project);
+      if (this.pending.get(sandbox) === entry) this.pending.delete(sandbox);
     });
     return { url };
   }
@@ -133,32 +133,32 @@ export class Logins {
    * The code goes only to `claude auth login`'s stdin: never log it or keep it. Anthropic's terms don't let apps
    * collect or intermediate Claude sign-in credentials (https://code.claude.com/docs/en/legal-and-compliance).
    */
-  async finish(project: string, code: string): Promise<LoginAccount> {
-    const p = this.pending.get(project);
+  async finish(sandbox: string, code: string): Promise<LoginAccount> {
+    const p = this.pending.get(sandbox);
     if (!p) throw new LoginFailed("No login is waiting for a code. Start again.");
     const trimmed = code.trim();
     if (!trimmed || /\s/.test(trimmed) || trimmed.length > 4096) throw new LoginFailed("That doesn't look like a code from the sign-in page.");
-    this.pending.delete(project);
+    this.pending.delete(sandbox);
     clearTimeout(p.timer);
     p.child.stdin!.end(`${trimmed}\n`);
     const kill = setTimeout(() => p.child.kill("SIGTERM"), this.opts.finishMs ?? 60_000);
     const exit = await p.exited.finally(() => clearTimeout(kill));
     if (exit !== 0) throw new LoginFailed("Claude didn't accept the code.", p.output);
-    const account = await this.account(project);
+    const account = await this.account(sandbox);
     if (!account) throw new LoginFailed("The login finished, but Claude still isn't logged in.", p.output);
     return account;
   }
 
   /** Gives up on a waiting login, if there is one. */
-  cancel(project: string): void {
-    const p = this.pending.get(project);
+  cancel(sandbox: string): void {
+    const p = this.pending.get(sandbox);
     if (!p) return;
-    this.pending.delete(project);
+    this.pending.delete(sandbox);
     clearTimeout(p.timer);
     p.child.kill("SIGTERM");
   }
 
   cancelAll(): void {
-    for (const project of [...this.pending.keys()]) this.cancel(project);
+    for (const sandbox of [...this.pending.keys()]) this.cancel(sandbox);
   }
 }

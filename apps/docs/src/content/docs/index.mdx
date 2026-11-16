@@ -19,17 +19,17 @@ hero:
 import { Card, CardGrid } from "@astrojs/starlight/components";
 
 <CardGrid>
-  <Card title="A sandbox per project" icon="seti:lock">
-    The agent owns its sandbox, so it works without permission prompts. Your machine stays out of reach.
+  <Card title="A sandbox the agent owns" icon="seti:lock">
+    The agent works in a VM of its own, without permission prompts. Your machine stays out of reach.
   </Card>
-  <Card title="Everything durable on the host" icon="laptop">
-    Your work and the agent's history live on the host. Throw a sandbox away and recreate it anytime.
+  <Card title="Work that outlives the VM" icon="laptop">
+    The repos sit on the sandbox's own disk, and the agent's history on your Mac. Rebuild the VM anytime.
   </Card>
   <Card title="Sessions in tabs" icon="comment">
     Talk to the agent in tabs that survive reloads and restarts. Resume, fork or rewind any conversation.
   </Card>
-  <Card title="Many tasks, one project" icon="seti:git">
-    Agents work on several tasks in parallel, each in its own worktree. See at a glance where each one stands.
+  <Card title="Many tasks, many repos" icon="seti:git">
+    Agents work on several tasks in parallel, each in its own worktree, across the repos a sandbox has.
   </Card>
 </CardGrid>
 

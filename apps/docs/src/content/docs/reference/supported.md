@@ -5,7 +5,7 @@ sidebar:
   order: 0
 ---
 
-Kumiko is a desktop app built around two seams: a **sandbox provider**, which gives each project an isolated
+Kumiko is a desktop app built around two seams: a **sandbox provider**, which gives each sandbox an isolated
 environment, and an **agent**, which works inside it. Today there is one of each. Which host platforms it runs on
 follows mostly from the sandbox provider.
 
@@ -21,18 +21,21 @@ follows mostly from the sandbox provider.
 
 | Provider | Status | Isolation | Checked against | Hosts |
 | --- | --- | --- | --- | --- |
-| [Lima](https://lima-vm.io) | Supported, the default | A virtual machine per project | Lima 2.2.1 | macOS, Linux |
+| [Lima](https://lima-vm.io) | Supported, the default | A virtual machine per sandbox | Lima 2.3.0 | macOS, Linux |
 
 **Lima notes:**
 
-- Sandboxes are Lima instances named `km-<project>`, kept in `~/.lima` (or `LIMA_HOME`). Kumiko never touches other
-  instances.
+- Sandboxes are Lima instances named `kumiko-<name>`, kept in `~/.lima` (or `LIMA_HOME`), each with a Lima disk
+  `kumiko-<name>-workspace` mounted at `/workspace`. Kumiko never touches other instances or disks.
+- Kumiko needs Lima 2.3 or later, which can mount a disk where Kumiko asks (`additionalDisks[].mountPoint`). With an
+  older Lima, creating a sandbox says to upgrade. Lima formats the disk on the first boot only, so a rebuilt VM gets it
+  as it was. It grows only while the VM is stopped, as Lima won't resize a disk in use.
 - Any Lima template can be chosen; Debian 12 is preselected. Installing the agent uses `curl`, and installs it with
   `apt-get` if it's missing, so a template without `curl` must be Debian- or Ubuntu-based.
 - Kumiko drives it with `limactl` and with `ssh` using the instance's generated config.
 - Lima 2.3 or later, with `vz` VMs, can keep a sandbox off your Mac's loopback (`networkOpts.hostLoopback`), which
-  Kumiko asks for unless a project allows it. With an older Lima, or another VM type, the sandbox can reach it, and
-  the project page says so. Kumiko notices an upgraded Lima within a few minutes; a running sandbox needs a restart.
+  Kumiko asks for unless a sandbox allows it. With another VM type, the sandbox can reach it, and the sandbox page
+  says so. Kumiko notices an upgraded Lima within a few minutes; a running sandbox needs a restart.
 - Agents outlive the SSH connection that started them because systemd-logind leaves a user's processes running when
   their session ends (`KillUserProcesses=no`, Debian's default). A template that turns it on stops the agent whenever
   Kumiko's server goes away.
@@ -46,8 +49,8 @@ follows mostly from the sandbox provider.
 **Claude Code notes:**
 
 - Kumiko installs it in every sandbox with its native installer; you don't need it on the host.
-- Each project has its own agent home, Claude Code's `~/.claude`, kept on the host in `~/.kumiko/claude/<project>/`.
-  Kumiko keeps its own files apart from it, in `~/.kumiko/shared` in the sandbox (`~/.kumiko/sandbox/<project>/` on the host).
+- Each sandbox has its own agent home, Claude Code's `~/.claude`, kept on the host in `~/.kumiko/claude/<name>/`.
+  Kumiko keeps its own files apart from it, in `~/.kumiko/shared` in the sandbox (`~/.kumiko/sandbox/<name>/` on the host).
 - Every session feature is available with it:
 
 | Feature | Uses |
@@ -78,13 +81,13 @@ Kumiko runs commands through `exec`.
 
 It also has to honour what the rest of Kumiko assumes:
 
-- the clone and its worktrees folder are mounted at the **same absolute paths** inside,
+- a disk of the sandbox's own, which outlives the VM, is mounted at `/workspace`,
 - the agent home is mounted where the agent looks for it,
 - forwarded variables reach commands run with `exec`, without being written to disk,
 - a process started through `exec` with `setsid` (or `perl`'s) outlives the connection, and `bash`, `mkfifo` and
   `tail -F` are there: agents run detached in runs in the sandbox (`packages/agent/src/runs.ts`).
 
-Today the provider is chosen in code (`LimaProvider`), not per project, and its `id` type only allows `"lima"`.
+Today the provider is chosen in code (`LimaProvider`), not per sandbox, and its `id` type only allows `"lima"`.
 
 ### An agent
 

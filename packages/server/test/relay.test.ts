@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -74,12 +74,16 @@ describe("git relay pieces", () => {
   });
 
   it("writes the VM's config with the user's identity quoted, and every URL form to the mirror", () => {
-    const config = vmGitConfig("acme/widget", { name: 'A "quoted" \\ name', email: "a@example.com" });
+    const config = vmGitConfig(["acme/widget"], { name: 'A "quoted" \\ name', email: "a@example.com" });
     assert.match(config, /\tname = "A \\"quoted\\" \\\\ name"/);
     assert.match(config, /gitProxy = "@DIR@\/git-proxy for kumiko"/);
     assert.match(config, /\[url "git:\/\/kumiko\/acme\/widget.git"\]/);
     for (const u of remoteForms("acme/widget")) assert.ok(config.includes(`insteadOf = "${u}"`), u);
-    assert.doesNotMatch(vmGitConfig("acme/widget", {}), /\[user\]/);
+    assert.doesNotMatch(vmGitConfig(["acme/widget"], {}), /\[user\]/);
+    // Every repo of the sandbox goes to its own mirror.
+    const two = vmGitConfig(["acme/widget", "acme/other"], {});
+    assert.match(two, /\[url "git:\/\/kumiko\/acme\/other.git"\]\n\tinsteadOf = "git@github.com:acme\/other.git"/);
+    assert.match(two, /\[url "git:\/\/kumiko\/acme\/widget.git"\]/);
   });
 });
 
@@ -93,7 +97,7 @@ describe("git relay", () => {
   let pushes: Pushes;
   let work: string;
   /** What the push hook asked the user, and how the test answers: by default, it's never answered. */
-  const asks: { pusher: { project: string; session?: string }; card: PushCard; answer(a: PushAnswer): void; done: { ok: boolean; text: string }[] }[] = [];
+  const asks: { pusher: { sandbox: string; session?: string }; card: PushCard; answer(a: PushAnswer): void; done: { ok: boolean; text: string }[] }[] = [];
   const closed: string[] = [];
   let bare: string;
   let changes = 0;
@@ -143,7 +147,7 @@ describe("git relay", () => {
   });
 
   it("clones and pulls in the VM from the mirror, which fetches from GitHub first, with no credentials in the VM", async () => {
-    relays.sync(new Map([["web", "acme/widget"]]));
+    relays.sync(new Map([["web", ["acme/widget"]]]));
     assert.equal(relays.view("web")?.state, "connecting");
     await until("the relay to connect", () => relays.view("web")?.state === "connected");
     assert.ok(changes > 0, "the page hears of it");
@@ -174,13 +178,29 @@ describe("git relay", () => {
     assert.equal(ls.out.split("\t")[0], sh(work, "rev-parse", "HEAD").trim());
   });
 
-  it("serves only the project's own repository", async () => {
+  it("serves only the sandbox's own repositories", async () => {
     await until("the relay to connect", () => relays.view("web")?.state === "connected");
     for (const url of ["git://kumiko/acme/other.git", "git://kumiko/acme/widget.git/../other.git", "git://kumiko//etc/passwd"]) {
       const r = await vmGit(vmHome, vmHome, "ls-remote", url);
       assert.notEqual(r.code, 0, url);
       assert.match(r.err, /can only reach acme\/widget/, url);
     }
+  });
+
+  it("serves a repo added to the sandbox through the relay it has, without setting the link up again", async () => {
+    await until("the relay to connect", () => relays.view("web")?.state === "connected");
+    const sock = join(vmHome, ".config", "kumiko", "git.sock");
+    const before = (await stat(sock)).ino;
+    relays.sync(new Map([["web", ["acme/widget", "acme/other"]]]));
+    await until("the VM's config to name acme/other", async () => (await readFile(join(vmHome, ".config", "kumiko", "git.config"), "utf8")).includes("acme/other"));
+    const ls = await vmGit(vmHome, vmHome, "ls-remote", "git@github.com:acme/other.git", "refs/heads/main");
+    assert.equal(ls.code, 0, ls.err);
+    assert.equal(relays.view("web")?.state, "connected");
+    assert.equal((await stat(sock)).ino, before, "the forward and its socket in the VM are the ones from before");
+
+    relays.sync(new Map([["web", ["acme/widget"]]]));
+    await until("acme/other to be gone from the VM's config", async () => !(await readFile(join(vmHome, ".config", "kumiko", "git.config"), "utf8")).includes("acme/other"));
+    assert.match((await vmGit(vmHome, vmHome, "ls-remote", "git://kumiko/acme/other.git")).err, /can only reach acme\/widget/);
   });
 
   /** Commits a change in the VM's clone, on `branch` (made from what's checked out if it doesn't exist). */
@@ -209,7 +229,7 @@ describe("git relay", () => {
     }
   };
 
-  it("pushes a new branch on to GitHub, and records it as the project's", async () => {
+  it("pushes a new branch on to GitHub, and records it as the sandbox's", async () => {
     const sha = await commit("fix-x", "a");
     const r = await push("-u", "origin", "fix-x");
     assert.equal(r.code, 0, r.err);
@@ -220,7 +240,7 @@ describe("git relay", () => {
     assert.deepEqual(mirrors.branchesOf("acme/widget", "web").map((b) => b.name), ["fix-x"]);
   });
 
-  it("force-pushes and deletes the project's own branches", async () => {
+  it("force-pushes and deletes the sandbox's own branches", async () => {
     const clone = join(vmHome, "widget");
     await vmGit(vmHome, clone, "commit", "--quiet", "--amend", "-m", "a, amended");
     const amended = (await vmGit(vmHome, clone, "rev-parse", "HEAD")).out.trim();
@@ -269,7 +289,7 @@ describe("git relay", () => {
     assert.ok(onGitHub("refs/heads/yours"));
   });
 
-  it("refuses the project's branch once someone replaced it on GitHub", async () => {
+  it("refuses the sandbox's branch once someone replaced it on GitHub", async () => {
     await commit("swapped", "s1");
     assert.equal((await push("origin", "swapped")).code, 0);
     // Someone deletes it and pushes their own by the same name, before the mirror fetches again.
@@ -324,7 +344,7 @@ describe("git relay", () => {
     const pushing = vmGitIn(vmHome, clone, { KUMIKO_SESSION: session }, "push", "-u", "origin", "ci");
     await until("the push to ask", () => asks.length === 1);
     const [a] = asks;
-    assert.deepEqual(a.pusher, { project: "web", repo: "acme/widget", session });
+    assert.deepEqual(a.pusher, { sandbox: "web", repo: "acme/widget", session });
     assert.equal(a.card.branch, "ci");
     assert.equal(a.card.old, undefined, "a new branch");
     assert.deepEqual(a.card.files.map((f) => [f.path, f.added]), [[".github/workflows/ci.yml", 1]]);
@@ -406,7 +426,7 @@ describe("git relay", () => {
         },
       },
     });
-    failing.sync(new Map([["down", "acme/widget"]]));
+    failing.sync(new Map([["down", ["acme/widget"]]]));
     await until("the relay to give up", () => failing.view("down")?.state === "down");
     assert.match(failing.view("down")!.error!, /remote port forwarding failed/);
     await until("another try", () => forwards >= 2);
@@ -420,9 +440,9 @@ describe("the push policy", () => {
   const b = "b".repeat(40);
   const created: Record<string, string> = { mine: "web", theirs: "api" };
   const ctx = { defaultBranch: "main", createdBy: (br: string) => created[br] };
-  const pusher = { project: "web", repo: "acme/widget" };
+  const pusher = { sandbox: "web", repo: "acme/widget" };
 
-  it("allows new branches and the project's own, and nothing else", () => {
+  it("allows new branches and the sandbox's own, and nothing else", () => {
     const ok = decide([{ old: z, new: a, ref: "refs/heads/new" }, { old: a, new: b, ref: "refs/heads/mine" }, { old: a, new: z, ref: "refs/heads/mine" }], pusher, ctx);
     assert.ok(ok.allowed);
     assert.deepEqual(ok.branches.map((x) => [x.branch, x.created, x.deleted]), [["new", true, false], ["mine", false, false], ["mine", false, true]]);
@@ -431,7 +451,7 @@ describe("the push policy", () => {
       [{ old: z, new: a, ref: "refs/heads/main" }, /default branch/],
       [{ old: z, new: a, ref: "refs/tags/v1" }, /doesn't push tags/],
       [{ old: z, new: a, ref: "refs/notes/x" }, /refs other than branches/],
-      [{ old: a, new: b, ref: "refs/heads/theirs" }, /another project's sandbox/],
+      [{ old: a, new: b, ref: "refs/heads/theirs" }, /created from another sandbox/],
       [{ old: a, new: z, ref: "refs/heads/someone" }, /wasn't created from this sandbox/],
     ] as const) {
       const d = decide([u], pusher, ctx);
@@ -481,7 +501,7 @@ describe("git relays, closed", () => {
       provider: { exec: () => { throw new Error("no VM"); }, forward: () => { forwards++; throw new Error("no VM"); } },
     });
     await relays.close();
-    relays.sync(new Map([["late", "acme/widget"]]));
+    relays.sync(new Map([["late", ["acme/widget"]]]));
     assert.equal(relays.view("late"), undefined);
     assert.equal(forwards, 0);
   });

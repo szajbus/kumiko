@@ -182,6 +182,7 @@ code, .mono { font-family: var(--mono); }
 .badge.badge-sessions { border-color: #3a4a78; color: var(--accent); }
 .row-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .row-sub .mono { font-size: 12px; }
+.repo-chip { padding: 0 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-2); font-family: var(--mono); font-size: 11.5px; color: var(--text-2); }
 .badge { padding: 1px 6px; border: 1px solid var(--border-strong); border-radius: 4px; font-size: 11px; font-weight: 500; color: var(--text-2); letter-spacing: 0.02em; }
 .badge.badge-warn { border-color: #5c4a2b; color: #f0cf96; }
 .badge.badge-ok { border-color: #2b5c45; color: #7fd3a6; }
@@ -291,7 +292,7 @@ code, .mono { font-family: var(--mono); }
 .detail-env .env-state { width: auto; }
 .details-empty { margin: 0 0 16px; }
 
-/* Project page: sessions and worktrees */
+/* Sandbox page: sessions and worktrees */
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 28px; }
 .card-head h2 { margin: 0; }
 .item-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
@@ -312,7 +313,7 @@ a.item-main:hover .item-title { color: var(--accent-hover); }
 .item-group { margin: 4px 0 -6px; font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
 .section .link-btn { align-self: flex-start; }
 
-/* Project form: the clone picker */
+/* Sandbox form: the clone picker */
 .clone-pick { display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 0 0 12px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); }
 .clone-path { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .clone-pick .btn-small { border-width: 0 0 0 1px; border-radius: 0 8px 8px 0; min-height: 40px; }
@@ -334,7 +335,7 @@ a.item-main:hover .item-title { color: var(--accent-hover); }
 .form-main { flex: 1; width: 100%; max-width: 880px; margin: 0 auto; padding: 32px 24px 40px; display: flex; flex-direction: column; gap: 20px; }
 .form-intro { display: flex; flex-direction: column; gap: 4px; }
 .form-intro p { margin: 0; }
-/* Splits a form into parts: the project, then its sandbox. */
+/* Splits a form into parts: the sandbox, then its sandbox. */
 .form-group-head { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; padding-top: 20px; border-top: 1px solid var(--border); }
 .form-group-head h2 { margin: 0; font-size: 18px; font-weight: 600; }
 .form-group-head p { margin: 0; }
@@ -440,7 +441,7 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 
 /* Tabs, in the title bar: pills centred in it */
 .tabbar { flex: 1; min-width: 0; height: 100%; display: flex; align-items: center; }
-/* Projects: always first, never closes or moves, tinted with the accent to set it apart from the session tabs. */
+/* Sandboxes: always first, never closes or moves, tinted with the accent to set it apart from the session tabs. */
 .home-button {
   flex: none; height: 28px; display: flex; align-items: center; gap: 7px; margin-right: 1px; padding: 0 10px;
   border: 1px solid transparent; border-radius: 7px; background: rgba(143, 166, 240, 0.08); color: var(--accent);
@@ -475,7 +476,7 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
 /* Still an animation, so the closed tab is still taken away when it ends. */
 @media (prefers-reduced-motion: reduce) { .tab.is-closing { animation-duration: 1ms; } }
 /*
- * A project's tabs, behind its label and underlined in its hue. The group lays out no box of its own, so its label and
+ * A sandbox's tabs, behind its label and underlined in its hue. The group lays out no box of its own, so its label and
  * tabs shrink in the strip as loose tabs do; each carries its piece of the line, across the gap to the next.
  */
 .tab-group { display: contents; }
@@ -492,7 +493,7 @@ input:disabled, .input-prefixed:has(input:disabled) { cursor: not-allowed; }
   position: relative; flex: none; max-width: 140px; height: 22px; display: flex; align-items: center;
   border-radius: 6px; background: hsl(var(--hue) 55% 62% / 0.14); color: hsl(var(--hue) 65% 78%);
 }
-/* The name opens the project; the chevron on its right hides the tabs, or brings them back. */
+/* The name opens the sandbox; the chevron on its right hides the tabs, or brings them back. */
 .tab-group-open {
   min-width: 0; height: 100%; display: flex; align-items: center; padding: 0 2px 0 8px;
   border: 0; border-radius: 6px 0 0 6px; background: none; color: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
@@ -1017,23 +1018,23 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
 .composer-icon:disabled { opacity: 0.35; cursor: default; }
 /* Attach and send sit side by side: their padded boxes already space the icons apart. */
 .composer-icon + .composer-icon { margin-left: -8px; }
-/* New session: the projects to pick from, then the same composer as a session's. */
-.project-picks { display: flex; flex-direction: column; gap: 8px; }
-.project-pick {
+/* New session: the sandboxes to pick from, then the same composer as a session's. */
+.sandbox-picks { display: flex; flex-direction: column; gap: 8px; }
+.sandbox-pick {
   display: flex; align-items: center; gap: 12px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px;
   background: var(--surface); cursor: pointer;
 }
-.project-pick:hover { border-color: var(--border-strong); }
-.project-pick.is-picked { border-color: #4a5a8a; background: #1a1f2c; }
-.project-pick.is-disabled { cursor: default; opacity: 0.55; }
-.project-pick.is-disabled:hover { border-color: var(--border); }
-.project-pick input { flex: none; margin: 0; accent-color: var(--accent); }
-.project-pick-what { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.project-pick-name { font-weight: 500; }
-.project-pick-path { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.project-pick-state { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 12.5px; }
-.project-pick-status { display: flex; align-items: center; gap: 6px; }
-.project-pick-status .spinner { width: 10px; height: 10px; }
+.sandbox-pick:hover { border-color: var(--border-strong); }
+.sandbox-pick.is-picked { border-color: #4a5a8a; background: #1a1f2c; }
+.sandbox-pick.is-disabled { cursor: default; opacity: 0.55; }
+.sandbox-pick.is-disabled:hover { border-color: var(--border); }
+.sandbox-pick input { flex: none; margin: 0; accent-color: var(--accent); }
+.sandbox-pick-what { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sandbox-pick-name { font-weight: 500; }
+.sandbox-pick-path { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sandbox-pick-state { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 12.5px; }
+.sandbox-pick-status { display: flex; align-items: center; gap: 6px; }
+.sandbox-pick-status .spinner { width: 10px; height: 10px; }
 .new-session-foot { display: flex; flex-direction: column; gap: 8px; margin: 16px 0; }
 .resume-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .resume-item { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 0; border-top: 1px solid var(--border); }
@@ -1043,7 +1044,7 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
 .resume-item-live { cursor: pointer; }
 .resume-item-live:hover .resume-title { color: var(--accent-hover); }
 .resume-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
-.resume-project { font-weight: 500; }
+.resume-sandbox { font-weight: 500; }
 .resume-about { font-size: 13px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
 .resume-when { font-size: 12px; }
 
@@ -1133,7 +1134,7 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
   border: 1px solid #2b5c45; border-radius: 999px; color: #a9e3c4; font-size: 11px; font-variant-numeric: tabular-nums;
 }
 
-/* Projects and Repos: the switch between Kumiko's own pages, above their titles */
+/* Sandboxes and Repos: the switch between Kumiko's own pages, above their titles */
 .home-nav { display: flex; gap: 4px; margin-bottom: -6px; }
 .home-nav-link {
   display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border: 1px solid transparent; border-radius: 7px;
@@ -1285,3 +1286,30 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
 .ac-label { font-size: 12px; border-radius: 999px; padding: 0 4px 0 8px; border: 1px solid var(--border-strong); color: var(--text-2); display: inline-flex; align-items: center; gap: 2px; }
 .ac-label button { background: none; border: 0; color: inherit; opacity: 0.6; cursor: pointer; font: inherit; padding: 0 2px; }
 .ac-label-add { font: inherit; font-size: 12px; color: var(--muted); background: transparent; border: 1px dashed var(--border-strong); border-radius: 999px; padding: 0 8px; }
+
+/* The sandbox form's repo picker: the mirrors, each ticked to be cloned into /workspace, with the folder it gets. */
+.repo-picker { display: flex; flex-direction: column; gap: 8px; }
+.repo-picker-list { list-style: none; margin: 0; padding: 0; max-height: 340px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+.repo-picker-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 12px; border-bottom: 1px solid var(--border-soft); font-size: 13.5px; }
+.repo-picker-item:last-child { border-bottom: 0; }
+.repo-picker-item.is-on { background: #181d27; }
+.repo-picker-item.muted { min-height: 44px; }
+.repo-picker-check { flex: 1; min-width: 0; }
+.repo-picker-check input:disabled { cursor: default; }
+.repo-picker-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repo-picker-to { flex: none; font-size: 12px; }
+
+/* What would be lost: the unpushed work a dialog lists before something deletes it. */
+.loss { margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-2); }
+.loss-plain { flex-direction: row; align-items: center; gap: 8px; }
+.loss-ok { border-color: #2b5c45; }
+.loss-warn { border-color: #5c4a2b; align-items: flex-start; }
+.loss-head { font-weight: 600; color: var(--text); }
+.loss-group { display: flex; flex-direction: column; gap: 4px; }
+.loss-repo { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.loss-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.loss-what { min-width: 0; overflow-wrap: anywhere; color: var(--text); }
+.loss-row .badge { flex: none; }
+.loss-error { color: var(--danger); font-size: 12px; }
+.loss-foot { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.loss-confirm { margin-top: 6px; }

@@ -1,4 +1,4 @@
-import { isBusy, isWaiting, type LogLine, type OpKind, type SandboxInfo, type SandboxStats, type SandboxView, type SessionInfo, type SessionStatus } from "@kumiko/shared";
+import { isBusy, isWaiting, type LogLine, type OpKind, type SandboxInfo, type SandboxStats, type VmView, type SessionInfo, type SessionStatus } from "@kumiko/shared";
 
 export const COLORS = {
   running: "#4CC38A",
@@ -15,7 +15,7 @@ const OP_LABEL: Record<OpKind, string> = {
   starting: "Starting",
   stopping: "Stopping",
   deleting: "Deleting",
-  recreating: "Recreating",
+  recreating: "Rebuilding",
   restarting: "Restarting",
   editing: "Saving changes",
 };
@@ -25,7 +25,7 @@ const OP_DONE: Record<OpKind, string> = {
   starting: "Started",
   stopping: "Stopped",
   deleting: "Deleted",
-  recreating: "Recreated",
+  recreating: "Rebuilt",
   restarting: "Restarted",
   editing: "Saved",
 };
@@ -35,7 +35,7 @@ const OP_FAILED: Record<OpKind, string> = {
   starting: "Start failed",
   stopping: "Stop failed",
   deleting: "Delete failed",
-  recreating: "Recreate failed",
+  recreating: "Rebuild failed",
   restarting: "Restart failed",
   editing: "Save failed",
 };
@@ -46,7 +46,7 @@ export function failedAgentScripts(sb: SandboxInfo): string[] {
 }
 
 /** The status cell: what the sandbox is doing or how it is. */
-export function statusOf(sb: SandboxView, log: LogLine[] = []): { text: string; color: string } {
+export function statusOf(sb: VmView, log: LogLine[] = []): { text: string; color: string } {
   if (sb.busy && sb.operation) {
     // Once a create or start reaches installing Claude Code or the provisioning script, say so.
     const step = log.findLast((l) => l.kind === "note" && l.text.startsWith("— "))?.text;
@@ -81,7 +81,7 @@ export function statusOf(sb: SandboxView, log: LogLine[] = []): { text: string; 
 }
 
 /** The pill in the log drawer: the running operation, or how the last one ended. */
-export function opPill(sb: SandboxView | undefined, op = sb?.operation): { text: string; color: string } | undefined {
+export function opPill(sb: VmView | undefined, op = sb?.operation): { text: string; color: string } | undefined {
   if (!op) return undefined;
   if (!op.endedAt) return { text: OP_LABEL[op.op], color: COLORS.busy };
   if (op.result === "error") {
@@ -91,22 +91,23 @@ export function opPill(sb: SandboxView | undefined, op = sb?.operation): { text:
   return { text: OP_DONE[op.op], color: COLORS.stopped };
 }
 
-/** When the sandbox was created: its own record's time, which a recreate renews, not the project's. */
-export function sandboxCreatedAt(sb: SandboxView): string | undefined {
+/** When the sandbox's VM was created: its own record's time, which a rebuild renews. */
+export function sandboxCreatedAt(sb: VmView): string | undefined {
   return sb.meta?.createdAt;
 }
 
-export function resources(sb: SandboxView): [string, string, string] | undefined {
-  if (sb.cpus === undefined && sb.memoryGiB === undefined) {
-    const s = sb.meta?.spec;
-    return s && [`${s.cpus}`, `${s.memoryGiB} GiB`, `${s.diskGiB} GiB`];
-  }
-  return [`${sb.cpus ?? "?"}`, `${sb.memoryGiB ?? "?"} GiB`, `${sb.diskGiB ?? "?"} GiB`];
+/** The sandbox's size for the list: CPUs, memory and its workspace disk, as Lima has them, else as its record says. */
+export function resources(sb: VmView): [string, string, string] | undefined {
+  const s = sb.meta?.spec;
+  const workspace = sb.workspaceGiB ?? s?.workspaceGiB;
+  const ws = workspace === undefined ? "—" : `${workspace} GiB`;
+  if (sb.cpus === undefined && sb.memoryGiB === undefined) return s && [`${s.cpus}`, `${s.memoryGiB} GiB`, ws];
+  return [`${sb.cpus ?? "?"}`, `${sb.memoryGiB ?? "?"} GiB`, ws];
 }
 
 /** One of a running sandbox's readings, as a bar: how full it is, and in words. */
 export interface Meter {
-  label: "CPU" | "Memory" | "Disk";
+  label: "CPU" | "Memory" | "Disk" | "Workspace";
   /** Missing until there is a reading to show, as for CPU on the first one. */
   percent?: number;
   text: string;
@@ -121,7 +122,10 @@ const gib = (bytes: number) => {
   return `${n < 10 ? n.toFixed(1) : Math.round(n)} GiB`;
 };
 
-/** The CPU, memory and disk bars of a sandbox's reading. Disk is full as `df` counts it: of the space not reserved. */
+/**
+ * The CPU, memory and disk bars of a sandbox's reading, and the workspace disk's when the reading has it. Disks are
+ * full as `df` counts it: of the space not reserved.
+ */
 export function meters(s: SandboxStats): Meter[] {
   const meter = (label: Meter["label"], percent: number | undefined, text: string): Meter => ({
     label,
@@ -133,10 +137,14 @@ export function meters(s: SandboxStats): Meter[] {
   const cpu = s.cpuPercent === undefined ? undefined : Math.round(s.cpuPercent);
   const mem = Math.round(pct(s.memUsedBytes, s.memTotalBytes));
   const disk = Math.round(pct(s.diskUsedBytes, s.diskUsedBytes + s.diskFreeBytes));
+  const wsUsed = s.workspaceUsedBytes;
+  const wsFree = s.workspaceFreeBytes;
+  const workspace = wsUsed === undefined || wsFree === undefined ? undefined : Math.round(pct(wsUsed, wsUsed + wsFree));
   return [
     meter("CPU", cpu, `${cpu === undefined ? "—" : `${cpu}% busy`} · load ${s.load.toFixed(1)}`),
     meter("Memory", mem, `${gib(s.memUsedBytes)} used · ${mem}%`),
     meter("Disk", disk, `${gib(s.diskUsedBytes)} used · ${disk}%`),
+    ...(workspace === undefined ? [] : [meter("Workspace", workspace, `${gib(wsUsed!)} used · ${workspace}%`)]),
   ];
 }
 

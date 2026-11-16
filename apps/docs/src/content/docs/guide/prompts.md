@@ -24,7 +24,7 @@ files are encoded. Kumiko tells the kind from the file's bytes, not its name. An
 out with a reason. With Claude Code, every file goes to the API again with each later turn, so a session that has sent
 large files can still go past the API's limit later on.
 
-For anything bigger, or a kind the agent can't read directly, put it in the clone or an extra mount and point the agent
+For anything bigger, or a kind the agent can't read directly, put it in an extra mount and point the agent
 at it.
 
 ## Pasting long text
@@ -71,7 +71,7 @@ an empty box turns it into shell mode: the `!` becomes the box's marker, the box
 under it says where the command runs. <kbd>Backspace</kbd> at the start of the box takes the `!` away again, keeping
 what you typed. To start a message with a real `!`, type `!`, then <kbd>Backspace</kbd>, then `!` again.
 
-The command runs at once, in the session's working directory (the clone, or its worktree), as the same user and with the
+The command runs at once, in the session's working directory, `/workspace`, as the same user and with the
 same forwarded variables as the agent. It always starts there: a `cd` lasts for that one command, and doesn't follow
 where the agent has gone. Its output shows in the chat as it comes, with **Stop** to interrupt it. Stop sends an
 interrupt, as <kbd>Ctrl</kbd>+<kbd>C</kbd> would, then ends it if it's still running a few seconds later. Once the

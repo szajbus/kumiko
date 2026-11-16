@@ -18,7 +18,7 @@ export default defineConfig({
     }),
     starlight({
       title: "Kumiko",
-      description: "A desktop app for running Claude Code on your git projects, each in a Lima sandbox of its own.",
+      description: "A desktop app for running Claude Code on your GitHub repositories, in Lima sandboxes of their own.",
       logo: { light: "./src/assets/logo-light.svg", dark: "./src/assets/logo-dark.svg" },
       favicon: "/favicon.svg",
       customCss: ["@fontsource/ibm-plex-sans/400.css", "@fontsource/ibm-plex-sans/600.css", "@fontsource/ibm-plex-mono/400.css", "./src/styles/custom.css"],

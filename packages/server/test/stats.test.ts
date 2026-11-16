@@ -18,6 +18,15 @@ describe("parseStats", () => {
     });
   });
 
+  it("reads the workspace disk's space when one is mounted, and leaves it out when not", () => {
+    assert.deepEqual(
+      [parseStats(`${line(1, 1)}|500 1500`)?.stats.workspaceUsedBytes, parseStats(`${line(1, 1)}|500 1500`)?.stats.workspaceFreeBytes],
+      [500 * 1024, 1500 * 1024],
+    );
+    assert.equal(parseStats(`${line(1, 1)}|`)?.stats.workspaceUsedBytes, undefined);
+    assert.ok(!("workspaceUsedBytes" in parseStats(`${line(1, 1)}|`)!.stats));
+  });
+
   it("tells how busy the CPUs were since the reading before, counting iowait as idle", () => {
     const first = parseStats(line(100, 900))!;
     assert.equal(first.stats.cpuPercent, undefined);
@@ -26,7 +35,7 @@ describe("parseStats", () => {
   });
 
   it("skips lines that aren't readings", () => {
-    for (const bad of ["", "hello", "1 2 3|8 6|6 26|1", `${line(1, 1)}|extra`, line(1, 1).replace("1.25", "x")]) assert.equal(parseStats(bad), undefined, bad);
+    for (const bad of ["", "hello", "1 2 3|8 6|6 26|1", `${line(1, 1)}|1 2|extra`, line(1, 1).replace("1.25", "x")]) assert.equal(parseStats(bad), undefined, bad);
   });
 
   it("reads what the script prints on Linux", { skip: process.platform !== "linux" }, async () => {

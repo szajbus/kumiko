@@ -11,7 +11,6 @@ import WebSocket from "ws";
 import { artifactsOf, paneIds, paneOf, windowState, type ArtifactState, type ServerEvent, type SessionEvent, type SessionDisk, type SessionInfo, type SessionStreamMessage } from "@kumiko/shared";
 import { LimaProvider, MetadataStore, shellQuote } from "@kumiko/sandbox";
 import { startServer, type RunningServer, type ServerOptions } from "../src/index.js";
-import { makeClone } from "./repo.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtures = resolve(here, "../../../sandbox/fixtures");
@@ -108,11 +107,12 @@ describe("widgets", () => {
     const provider = new LimaProvider({ limactl: join(fixtures, "fake-limactl.mjs"), ssh: join(fixtures, "fake-ssh.sh"), metadata: new MetadataStore(join(root, "sandboxes")), env });
     serverOpts = { provider, port: 0, refreshMs: 200, env, home: root, dataDir: join(root, "data"), sessionsDir: join(root, "sessions") };
     await boot();
-    clone = await makeClone(root, "one");
+    // The fake VM's /workspace.
+    clone = join(limaDir, "workspace");
     const since = events.length;
-    await api("/api/projects", { method: "POST", body: JSON.stringify({ name: "one", clonePath: clone, cpus: 1, memoryGiB: 1, diskGiB: 10, mounts: [], env: [] }) });
+    await api("/api/sandboxes", { method: "POST", body: JSON.stringify({ name: "one", repos: [], cpus: 1, memoryGiB: 1, diskGiB: 10, workspaceGiB: 1, mounts: [], env: [] }) });
     await waitFor(() => events.slice(since).find((e) => "sandbox" in e && e.sandbox === "one" && e.op === "creating" && e.type === "done"));
-    // The fake VM is this machine: its ~/.claude is the project's Claude home, and its ~/.kumiko/shared the project's
+    // The fake VM is this machine: its ~/.claude is the sandbox's Claude home, and its ~/.kumiko/shared the sandbox's
     // Kumiko folder, as Lima's mounts make them.
     claudeHome = join(root, "data", "claude", "one");
     kumikoHome = join(root, "data", "sandbox", "one");
@@ -240,7 +240,7 @@ describe("widgets", () => {
     s.close();
   });
 
-  it("lists the project's sessions for Claude, by their names and descriptions", async () => {
+  it("lists the sandbox's sessions for Claude, by their names and descriptions", async () => {
     const a = await start();
     const b = await start();
     await ask(b.s, b.id, widget("session_rename", { title: "Flaky upload", description: "Why the upload test fails one run in five." }));
@@ -251,14 +251,14 @@ describe("widgets", () => {
     b.s.close();
   });
 
-  it("shares artifacts with another open session of the project, as copies", async () => {
+  it("shares artifacts with another open session of the sandbox, as copies", async () => {
     const a = await start();
     const b = await start();
     const share = (args: object) => ask(a.s, a.id, widget("artifact_share", args));
     await ask(a.s, a.id, write(docPath(a.id), "# The plan\n\nStep one.\n"));
     await ask(a.s, a.id, widget("artifact_open", { path: docPath(a.id) }));
     assert.match(await share({ session: a.id, artifacts: ["w2"] }), /That is this session/);
-    assert.match(await share({ session: "nope", artifacts: ["w2"] }), /There is no session nope in this project/);
+    assert.match(await share({ session: "nope", artifacts: ["w2"] }), /There is no session nope in this sandbox/);
     assert.match(await share({ session: b.id, artifacts: ["w9"] }), /There is no artifact w9/);
 
     assert.match(await share({ session: b.id, artifacts: ["w2"] }), new RegExp(`^Copied "The plan" to ${docPath(b.id)} in session ${b.id}`));
@@ -568,7 +568,7 @@ describe("widgets", () => {
     assert.match(await ask(s, id, widget("artifact_open", { path: docPath(id, "nope.md") })), /There is no file .*nope\.md\. Write it first/);
     // The repository's files, and anything else outside the folder, aren't artifacts.
     await writeFile(join(clone, "README.md"), "# Readme\n");
-    for (const path of ["/etc/hosts", "README.md", `${clone}/README.md`, `${vmHome}/.claude/settings.json`]) {
+    for (const path of ["/etc/hosts", "README.md", "/workspace/README.md", `${vmHome}/.claude/settings.json`]) {
       assert.match(await ask(s, id, widget("artifact_open", { path })), /Artifacts live in this session's folder, .*: write the file there/, path);
     }
     await writeFile(join(dir, "data.json"), "{}");

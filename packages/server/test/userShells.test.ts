@@ -10,7 +10,6 @@ import { SHELL_KEEP_HEAD, SHELL_KEEP_TAIL, SHELL_PROMPT_CHARS, type ServerEvent,
 import { LimaProvider, MetadataStore, shellQuote } from "@kumiko/sandbox";
 import { startServer, type RunningServer, type ServerOptions } from "../src/index.js";
 import { ShellOutput } from "../src/userShells.js";
-import { makeClone } from "./repo.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtures = resolve(here, "../../../sandbox/fixtures");
@@ -23,7 +22,9 @@ describe("commands the user runs", () => {
   let server: RunningServer;
   let root: string;
   let limaDir: string;
-  let workdir: string;
+  /** Where commands run in the sandbox; in the fake VM, that is `fakeWorkspace`. */
+  const workdir = "/workspace";
+  let fakeWorkspace: string;
   let serverOpts: ServerOptions;
   const events: ServerEvent[] = [];
   let ws: WebSocket;
@@ -95,9 +96,9 @@ describe("commands the user runs", () => {
     const provider = new LimaProvider({ limactl: join(fixtures, "fake-limactl.mjs"), ssh: join(fixtures, "fake-ssh.sh"), metadata: new MetadataStore(join(root, "sandboxes")), env });
     serverOpts = { provider, port: 0, refreshMs: 200, env, home: root, dataDir: join(root, "data"), sessionsDir: join(root, "sessions") };
     await boot();
-    workdir = await makeClone(root, "one");
+    fakeWorkspace = join(limaDir, "workspace");
     const since = events.length;
-    const res = await api("/api/projects", { method: "POST", body: JSON.stringify({ name: "one", clonePath: workdir, cpus: 1, memoryGiB: 1, diskGiB: 10, mounts: [], env: ["TOKEN"] }) });
+    const res = await api("/api/sandboxes", { method: "POST", body: JSON.stringify({ name: "one", repos: [], cpus: 1, memoryGiB: 1, diskGiB: 10, workspaceGiB: 1, mounts: [], env: ["TOKEN"] }) });
     assert.equal(res.status, 202);
     await waitFor(() => events.slice(since).find((e) => "sandbox" in e && e.op === "creating" && e.type === "done"), 30000);
   });
@@ -121,7 +122,7 @@ describe("commands the user runs", () => {
     assert.equal(end.payload.stopped, undefined);
     assert.equal(end.payload.cut, 0);
     assert.deepEqual(end.payload.output.filter((c) => c.stream === "err"), [{ stream: "err", text: "oops\n" }]);
-    assert.match(text(end), new RegExp(`^${workdir}\\ntoken=forwarded-value\\n`));
+    assert.match(text(end), new RegExp(`^${fakeWorkspace}\\ntoken=forwarded-value\\n`));
     // The prompt shows as the command, and gives Claude the command and its output in Claude Code's own tags.
     const prompt = await waitFor(() => got.find((e): e is Prompted => e.kind === "user_prompt" && e.payload.shell === r));
     assert.equal(prompt.payload.text, '!pwd; echo "token=$TOKEN"; echo oops >&2; exit 3');

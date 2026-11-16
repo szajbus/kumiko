@@ -6,11 +6,11 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 import WebSocket from "ws";
-import type { ApprovalCard, SessionEvent, SessionInfo, SessionStreamMessage } from "@kumiko/shared";
+import type { ApprovalCard, SandboxView, SessionEvent, SessionInfo, SessionStreamMessage } from "@kumiko/shared";
 import { LimaProvider, MetadataStore, shellQuote } from "@kumiko/sandbox";
 import { startServer, type RunningServer } from "../src/index.js";
 import { fakeGitHub, type FakeGitHub } from "./github.js";
-import { makeClone, sh } from "./repo.js";
+import { sh } from "./repo.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtures = resolve(here, "../../../sandbox/fixtures");
@@ -58,10 +58,10 @@ describe("delivering from a session", () => {
     const env = () => ({});
     const provider = new LimaProvider({ limactl: join(fixtures, "fake-limactl.mjs"), ssh: join(fixtures, "fake-ssh.sh"), metadata: new MetadataStore(join(root, "sandboxes")), env });
     server = await startServer({ provider, port: 0, refreshMs: 200, env, home: root, dataDir: join(root, "data"), sessionsDir: join(root, "sessions") });
-    const clone = await makeClone(root, "widget");
-    sh(clone, "remote", "set-url", "origin", "git@github.com:acme/widget.git");
-    await api("/api/projects", { method: "POST", body: JSON.stringify({ name: "web", clonePath: clone, cpus: 1, memoryGiB: 1, diskGiB: 10, mounts: [], env: [] }) });
-    await waitFor(async () => ((await (await api("/api/projects")).json()) as { name: string; relay?: { state: string } }[]).find((p) => p.name === "web")?.relay?.state === "connected");
+    await api("/api/mirrors", { method: "POST", body: JSON.stringify({ repo: "acme/widget" }) });
+    await api("/api/sandboxes", { method: "POST", body: JSON.stringify({ name: "web", repos: ["acme/widget"], cpus: 1, memoryGiB: 1, diskGiB: 10, workspaceGiB: 1, mounts: [], env: [] }) });
+    // Cloned in the VM means git there reaches the mirror.
+    await waitFor(async () => ((await (await api("/api/sandboxes")).json()) as SandboxView[]).find((p) => p.name === "web")?.repos[0]?.state === "cloned");
   });
 
   after(async () => {

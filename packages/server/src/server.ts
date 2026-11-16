@@ -35,7 +35,7 @@ import {
   isBusy,
   type AddMirrorRequest,
   type ApiError,
-  type CreateProjectRequest,
+  type CreateSandboxRequest,
   type GitHubAccount,
   type GitHubReposResponse,
   type MirrorsResponse,
@@ -50,9 +50,11 @@ import {
   type PromptRequest,
   type ShellRequest,
   type OpKind,
-  type Project,
-  type ProjectEdit,
-  type ProjectView,
+  type Sandbox,
+  type SandboxEdit,
+  type SandboxRepo,
+  type SandboxView,
+  type UnpushedResponse,
   type RewindResponse,
   type SandboxInfo,
   type SandboxSpec,
@@ -67,7 +69,7 @@ import {
   type ArtifactState,
   type Side,
   type WindowOp,
-  type WorktreesResponse,
+  WORKSPACE_DIR,
 } from "@kumiko/shared";
 import { LimaProvider, shellQuote, validateSpec, type Log, type SandboxProvider } from "@kumiko/sandbox";
 import { ClaudeDriver, execOutput, Runs, type AgentDriver } from "@kumiko/agent";
@@ -75,7 +77,6 @@ import { deleteAgentScripts, readAgentScripts, withExitCodes } from "./agentSetu
 import { AttachmentRefused, AttachmentStore, attachmentHashes } from "./attachments.js";
 import { ArtifactContent, contentHashes } from "./content.js";
 import { filesBytes } from "./disk.js";
-import { GitError, worktreeStatuses } from "./git.js";
 import { GhError, GitHub, gitHubUrl } from "./github.js";
 import { MirrorFetchFailed, MirrorNotFound, MirrorRecordError, Mirrors } from "./mirrors.js";
 import { hostIdentity } from "./git.js";
@@ -86,7 +87,9 @@ import { hasToken, isLocalRequest, isToken, tokenCookie } from "./guard.js";
 import { LoginFailed, Logins } from "./logins.js";
 import { BusyError, Operations } from "./operations.js";
 import { homeId, lockHome } from "./home.js";
-import { defaultKumikoHome, ProjectExists, ProjectRecordError, ProjectStore } from "./projects.js";
+import { checkRepos, defaultKumikoHome, SandboxExists, SandboxRecordError, SandboxStore } from "./sandboxes.js";
+import { Clones } from "./clones.js";
+import { dropScript, findUnpushed } from "./unpushed.js";
 import { AskRefused, RewindRefused, SessionEnded, SessionNotFound, SessionNotResumable, Sessions, ShellRefused } from "./sessions.js";
 import { RUN_ID } from "./userShells.js";
 import { docPaneTarget, Widgets, type PaneAnswer } from "./widgets.js";
@@ -110,7 +113,7 @@ export interface ServerOptions {
   refreshMs?: number;
   /** The host user's home; defaults to the real one. */
   home?: string;
-  /** Where projects and their Claude homes are kept; defaults to Kumiko's home (`KUMIKO_HOME` or `~/.kumiko`). */
+  /** Where sandboxes and their Claude homes are kept; defaults to Kumiko's home (`KUMIKO_HOME` or `~/.kumiko`). */
   dataDir?: string;
   /** Where forwarded variables are looked up for the form's "set on host" dots. */
   env?: () => NodeJS.ProcessEnv;
@@ -171,7 +174,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   const host = opts.host ?? "127.0.0.1";
   const token = opts.token ?? randomBytes(32).toString("hex");
   const ops = new Operations();
-  const projects = new ProjectStore(opts.dataDir);
+  const sandboxes = new SandboxStore(opts.dataDir);
   /** Kumiko's own folder for files it reads out of folders the agent can change. */
   const scratch = join(home, "tmp");
   const logins = new Logins(provider.exec.bind(provider));
@@ -184,13 +187,13 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   const content = new ArtifactContent(join(sessionStore.dir, "artifacts"));
   await content.sweep(saved);
   const tabs = new TabsStore(opts.dataDir);
-  // Windows' widgets map the paths Claude names in its VM to the host: the project's mounts, and the VM user's home.
+  // Windows' widgets map the paths Claude names in its VM to the host: the sandbox's Claude home and Kumiko folder.
   const widgets = new Widgets({
     content,
     scratch,
     home: (sandbox) => {
-      const p = projectList.find((x) => x.id === sandbox);
-      return p && { claudeHome: projects.claudeHome(p.id), kumikoHome: projects.kumikoHome(p.id), roots: [p.clonePath, p.worktreesPath] };
+      const s = sandboxList.find((x) => x.name === sandbox);
+      return s && { claudeHome: sandboxes.claudeHome(s.name), kumikoHome: sandboxes.kumikoHome(s.name) };
     },
     vmHome: (sandbox) => execOutput(provider.exec.bind(provider), sandbox, `printf %s "$HOME"`, 10_000),
     pane: (session, pane, what) => askPane(session, pane, what),
@@ -240,11 +243,9 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   // ---- list state -------------------------------------------------------------------------
 
   let infos: SandboxInfo[] = [];
-  let projectList: Project[] = [];
-  /** Why each project record that can't be used can't be; those projects are left out of the list. */
+  let sandboxList: Sandbox[] = [];
+  /** Why each sandbox record that can't be used can't be; those sandboxes are left out of the list. */
   let unreadable: string[] = [];
-  /** What is wrong with each project's folders on the host, by id. */
-  let problems = new Map<string, string>();
   let listError: string | undefined;
   let lastListJson = "";
   let refreshing: Promise<void> | undefined;
@@ -255,20 +256,21 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     for (const ws of clients) if (ws.readyState === ws.OPEN) ws.send(msg);
   };
 
-  /** A project's VM as last listed; `absent` when the provider has neither the VM nor a record of it. */
-  const infoOf = (id: string): SandboxInfo => infos.find((i) => i.name === id) ?? { name: id, status: "absent" };
+  /** A sandbox's VM as last listed; `absent` when the provider has neither the VM nor a record of it. */
+  const infoOf = (name: string): SandboxInfo => infos.find((i) => i.name === name) ?? { name, status: "absent" };
 
-  /** Each project with its VM's view. VMs that aren't a project's are left out. */
-  const views = (): ProjectView[] => {
-    const vms = ops.views(projectList.map((p) => infoOf(p.id)), sessions.liveCounts());
+  /** Each sandbox with its VM's view. VMs that aren't a sandbox's are left out. */
+  const views = (): SandboxView[] => {
+    const vms = ops.views(sandboxList.map((s) => infoOf(s.name)), sessions.liveCounts());
     const waiting = new Map<string, number>();
     for (const s of sessions.list()) if (isWaiting(s)) waiting.set(s.sandbox, (waiting.get(s.sandbox) ?? 0) + 1);
-    return projectList.map((project) => {
-      const vm = vms.find((v) => v.name === project.id)!;
-      const problem = problems.get(project.id);
-      const relay = relays.view(project.id);
-      const branches = project.repo ? mirrors.branchesOf(project.repo, project.id) : [];
-      return { ...vm, project, waiting: waiting.get(project.id) ?? 0, ...(problem ? { problem } : {}), ...(relay ? { relay } : {}), ...(branches.length ? { branches } : {}) };
+    return sandboxList.map((sandbox) => {
+      const vm = vms.find((v) => v.name === sandbox.name)!;
+      // While git in the VM can't reach the mirrors, the repos waiting for it say why.
+      const relay = relays.view(sandbox.name);
+      const down = relay?.state === "down" ? `Git in the sandbox can't reach the mirrors on this Mac yet: ${relay.error ?? "the link is down"}` : undefined;
+      const repos = clones.view(sandbox.name, sandbox.repos).map((r) => (down && r.state === "pending" ? { ...r, error: down } : r));
+      return { ...vm, sandbox, repos, waiting: waiting.get(sandbox.name) ?? 0 };
     });
   };
 
@@ -277,7 +279,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     const json = JSON.stringify({ list, unreadable, listError });
     if (json === lastListJson) return;
     lastListJson = json;
-    broadcast({ type: "list", projects: list, unreadable, error: listError });
+    broadcast({ type: "list", sandboxes: list, unreadable, error: listError });
   };
 
   /** Re-reads the provider's list; concurrent calls coalesce into one extra run. */
@@ -289,8 +291,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     refreshing = (async () => {
       do {
         refreshAgain = false;
-        ({ projects: projectList, errors: unreadable } = await projects.list());
-        problems = new Map((await Promise.all(projectList.map(async (p) => [p.id, await projects.problem(p)] as const))).filter((e): e is [string, string] => Boolean(e[1])));
+        ({ sandboxes: sandboxList, errors: unreadable } = await sandboxes.list());
         try {
           infos = await provider.list();
           listError = undefined;
@@ -333,8 +334,8 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       restartTried.add(info.id);
       void (async () => {
         try {
-          const ready = await readyProject(info.sandbox);
-          // It may have started a turn, or ended, while the project was checked.
+          const ready = await readySandbox(info.sandbox);
+          // It may have started a turn, or ended, while the sandbox was checked.
           if (sessions.get(info.id)?.status === "idle") sessions.relaunch(info.id, ready.env, { keepUnread: true });
           else restartTried.delete(info.id);
         } catch (err) {
@@ -362,7 +363,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       waking.add(info.id);
       void (async () => {
         try {
-          const ready = await readyProject(info.sandbox);
+          const ready = await readySandbox(info.sandbox);
           // Its tab may have closed meanwhile.
           if (sessions.get(info.id)) sessions.wake(info.id, ready.env);
         } catch (err) {
@@ -410,7 +411,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
    */
   const reopenSessions = async () => {
     const saved = (await sessionStore.readAll()).filter((x) => x.run?.live);
-    const running = projectList.map((p) => p.id).filter((id) => infoOf(id).status === "running");
+    const running = sandboxList.map((s) => s.name).filter((name) => infoOf(name).status === "running");
     await Promise.all(
       running.map(async (sandbox) => {
         let found: Map<string, string>;
@@ -448,11 +449,10 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     credentialHelper: github.credentialHelper(),
     onChange: () => {
       broadcast({ type: "mirrors", ...mirrorsView() });
-      // The projects' pages list the branches their agents pushed.
       pushListIfChanged();
     },
   });
-  // ---- the relays from projects' VMs to their mirrors ----
+  // ---- the relays from sandboxes' VMs to their mirrors, and the clones made through them ----
   // Not under anything a VM mounts: each socket is only for the ssh forward into its own VM, and the hooks' for git on
   // the host.
   const runDir = join(home, "run");
@@ -471,6 +471,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   });
   // Without it pushes are refused, with curl saying why; Kumiko still starts.
   await pushes.start().catch((err) => console.error(`Pushes from sandboxes are off: Kumiko couldn't listen for the mirrors' hooks: ${err instanceof Error ? err.message : String(err)}`));
+  const clones = new Clones(provider.exec.bind(provider), () => pushListIfChanged());
   const relays = new Relays({
     dir: runDir,
     hookSocket: join(runDir, "hook.sock"),
@@ -479,19 +480,23 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     provider,
     identity: hostIdentity,
     onChange: () => pushListIfChanged(),
+    // Git in the VM reaches the mirrors now: the repos missing from /workspace are cloned.
+    onConnected: (name) => {
+      const s = sandboxList.find((x) => x.name === name);
+      if (s) clones.sync(name, s.repos);
+    },
   });
-  /** One sync at a time, so a slow one can't undo what a later one set. */
-  let relaySync: Promise<void> = Promise.resolve();
+  /** Each running sandbox with repos gets a relay to their mirrors; what is known of a stopped one's clones is forgotten. */
   const syncRelays = () => {
-    relaySync = relaySync.then(async () => {
-      const want = new Map<string, string>();
-      for (const p of projectList) {
-        if (infoOf(p.id).status !== "running" || ops.active().includes(p.id)) continue;
-        const repo = await projects.repo(p).catch(() => null);
-        if (repo) want.set(p.id, repo);
+    const want = new Map<string, string[]>();
+    for (const s of sandboxList) {
+      if (infoOf(s.name).status !== "running" || ops.active().includes(s.name)) {
+        if (infoOf(s.name).status !== "running") clones.forget(s.name);
+        continue;
       }
-      relays.sync(want);
-    }).catch((err) => console.error(`Couldn't update the git relays: ${err instanceof Error ? err.message : String(err)}`));
+      if (s.repos.length) want.set(s.name, s.repos.map((r) => r.repo));
+    }
+    relays.sync(want);
   };
   // ---- the tools that wait for the user's approval, and their cards ----
   const approvals = new Approvals(
@@ -507,9 +512,9 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     {
       mirrors,
       github,
-      repoOf: async (id) => {
-        const p = projectList.find((x) => x.id === id) ?? (await projects.get(id).catch(() => undefined));
-        return p ? projects.repo(p) : null;
+      reposOf: async (name) => {
+        const s = sandboxList.find((x) => x.name === name) ?? (await sandboxes.get(name).catch(() => undefined));
+        return s?.repos.map((r) => r.repo) ?? [];
       },
       identity: hostIdentity,
       choicesFile: join(home, "choices.json"),
@@ -540,7 +545,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     if (err instanceof HttpError) return c.json(fail(err.message, err.details), err.status);
     if (err instanceof AttachmentRefused || err instanceof WindowError) return c.json(fail(err.message), 400);
     if (err instanceof LoginFailed) return c.json(fail(err.message, err.output), 422);
-    if (err instanceof BusyError || err instanceof ProjectExists || err instanceof ProjectRecordError || err instanceof MirrorRecordError) return c.json(fail(err.message), 409);
+    if (err instanceof BusyError || err instanceof SandboxExists || err instanceof SandboxRecordError || err instanceof MirrorRecordError) return c.json(fail(err.message), 409);
     if (err instanceof SessionNotFound || err instanceof MirrorNotFound) return c.json(fail(err.message), 404);
     if (err instanceof MirrorFetchFailed || err instanceof GhError) return c.json(fail(err.message), 502);
     if (err instanceof SessionEnded || err instanceof SessionNotResumable || err instanceof RewindRefused || err instanceof AskRefused || err instanceof ShellRefused) return c.json(fail(err.message), 409);
@@ -583,42 +588,41 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     if (cur && !cur.endedAt) throw new BusyError(name, cur.op);
   };
 
-  /** Looks up a project's record, without asking the provider: 400 for a bad id, 404 for an unknown one. */
-  const projectOf = async (id: string): Promise<Project> => {
-    if (!NAME_PATTERN.test(id)) throw new HttpError(400, `Invalid project name "${id}".`);
-    const project = await projects.get(id);
-    if (!project) throw new HttpError(404, `There is no project ${id}.`);
-    return project;
+  /** Looks up a sandbox's record, without asking the provider: 400 for a bad name, 404 for an unknown one. */
+  const sandboxOf = async (name: string): Promise<Sandbox> => {
+    if (!NAME_PATTERN.test(name)) throw new HttpError(400, `Invalid sandbox name "${name}".`);
+    const sandbox = await sandboxes.get(name);
+    if (!sandbox) throw new HttpError(404, `There is no sandbox ${name}.`);
+    return sandbox;
   };
 
-  /** Looks up a project as `projectOf` does, with its VM's current state. */
-  const known = async (id: string): Promise<{ project: Project; info: SandboxInfo }> => {
-    const project = await projectOf(id);
+  /** Looks up a sandbox as `sandboxOf` does, with its VM's current state. */
+  const known = async (name: string): Promise<{ sandbox: Sandbox; info: SandboxInfo }> => {
+    const sandbox = await sandboxOf(name);
     await refresh();
-    return { project, info: infoOf(id) };
+    return { sandbox, info: infoOf(name) };
   };
 
   /**
-   * A project a session can start in: VM running and not busy. Refreshes Kumiko's instructions in its Claude home,
-   * so they follow the app. Returns where sessions start (the clone) and what they forward.
+   * A sandbox a session can start in: VM running and not busy. Refreshes Kumiko's instructions in its Claude home,
+   * so they follow the app. Returns where sessions start (/workspace) and what they forward.
    */
-  const readyProject = async (id: string): Promise<{ workdir: string; env: string[] }> => {
-    const { project, info } = await known(id);
-    if (info.status !== "running") throw new HttpError(409, `${vmName(id)} is not running. Start it first.`);
-    assertIdle(id);
-    await projects.writeManaged(project, setupOf(info.meta?.spec));
-    await widgets.prepare(id);
-    return { workdir: project.clonePath, env: info.meta?.spec.env ?? [] };
+  const readySandbox = async (name: string): Promise<{ workdir: string; env: string[] }> => {
+    const { sandbox, info } = await known(name);
+    if (info.status !== "running") throw new HttpError(409, `${vmName(name)} is not running. Start it first.`);
+    assertIdle(name);
+    await sandboxes.writeManaged(sandbox, info.meta?.spec);
+    await widgets.prepare(name);
+    return { workdir: WORKSPACE_DIR, env: info.meta?.spec.env ?? [] };
   };
 
-  /** What the agent's setup guide is written from: the user's side of a VM's spec, if it has one. */
-  const setupOf = (spec: SandboxSpec | undefined) => spec && { provision: spec.provision, env: spec.env };
+  /** The VM's spec for a (re)create: the stored one with the sandbox's fixed mounts made current, or the defaults. */
+  const vmSpec = (sandbox: Sandbox, info: SandboxInfo): SandboxSpec => {
+    const spec = info.meta?.spec ?? { ...DEFAULTS, mounts: [], env: [] };
+    return sandboxes.spec(sandbox.name, { ...spec, workspaceGiB: spec.workspaceGiB ?? DEFAULTS.workspaceGiB });
+  };
 
-  /** The VM's spec for a (re)create: the stored one with the project's fixed mounts made current, or the defaults. */
-  const vmSpec = (project: Project, info: SandboxInfo): SandboxSpec =>
-    projects.spec(project, info.meta?.spec ?? { ...DEFAULTS, mounts: [], env: [] });
-
-  app.get("/api/projects", async (c) => {
+  app.get("/api/sandboxes", async (c) => {
     await refresh();
     return c.json(views());
   });
@@ -635,7 +639,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     return c.json(templatesCache);
   });
 
-  app.get("/api/defaults", (c) => c.json({ home: opts.home ?? homedir(), claudeHomes: projects.claudeRoot, kumikoHomes: projects.kumikoRoot } satisfies DefaultsResponse));
+  app.get("/api/defaults", (c) => c.json({ home: opts.home ?? homedir(), claudeHomes: sandboxes.claudeRoot, kumikoHomes: sandboxes.kumikoRoot } satisfies DefaultsResponse));
 
   /** The window's tabs from its last run, or null if none were saved. */
   app.get("/api/tabs", async (c) => c.json((await tabs.read()) ?? null));
@@ -654,215 +658,278 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     return c.json(Object.fromEntries(names.map((n) => [n, e[n] !== undefined])));
   });
 
+  /** The repositories that have a mirror, which a sandbox's repos are picked from. */
+  const mirrored = () => mirrors.list().map((m) => m.repo);
+
   /**
-   * Creates a project from a local clone: checks it, creates `<clone>__worktrees` and the project's Claude home, then
-   * creates its VM in the background. Fails without leaving anything behind if a check fails.
+   * Creates a sandbox with repos picked from the mirrors: checks it, makes its record and Claude home, then creates its
+   * VM and workspace disk in the background. The repos are cloned once git in the VM reaches the mirrors. Fails
+   * without leaving anything behind if a check fails.
    */
-  app.post("/api/projects", async (c) => {
-    const req = await body<CreateProjectRequest>(c, "Body must be JSON: { name, clonePath, cpus, memoryGiB, diskGiB, mounts, env }.");
+  app.post("/api/sandboxes", async (c) => {
+    const req = await body<CreateSandboxRequest>(c, "Body must be JSON: { name, repos, cpus, memoryGiB, diskGiB, workspaceGiB, mounts, env }.");
     if (typeof req !== "object" || req === null) throw new HttpError(400, "Body must be a JSON object.");
-    const { name: rawName, clonePath, ...rest } = req;
-    const id = String(rawName ?? "").trim();
-    const base = { ...rest, mounts: Array.isArray(rest.mounts) ? rest.mounts : [], env: Array.isArray(rest.env) ? rest.env : [] };
-    assertIdle(id);
-    const checked = await projects.check(id, String(clonePath ?? ""));
+    const { name: rawName, repos: rawRepos, ...rest } = req;
+    const name = String(rawName ?? "").trim();
+    const base = { ...rest, workspaceGiB: rest.workspaceGiB ?? DEFAULTS.workspaceGiB, mounts: Array.isArray(rest.mounts) ? rest.mounts : [], env: Array.isArray(rest.env) ? rest.env : [] };
+    assertIdle(name);
+    const checked = await sandboxes.check(name, rawRepos ?? [], mirrored());
     // The VM's own settings, before anything is made on the host; the fixed mounts are checked once they exist.
-    const { errors: specErrors } = await validateSpec({ ...base, name: id }, env());
+    const { errors: specErrors } = await validateSpec({ ...base, name }, env());
     // Both checks know a bad name; it is said once.
     const errors = [...new Set([...checked.errors, ...specErrors])];
-    if (errors.length || !checked.clonePath || !checked.worktreesPath) throw new HttpError(400, "Can't create this project.", errors);
+    if (errors.length) throw new HttpError(400, "Can't create this sandbox.", errors);
 
-    const { project, rollback } = await projects.create(id, checked.clonePath, checked.worktreesPath);
-    const v = await provider.validate(projects.spec(project, base));
+    const { sandbox, rollback } = await sandboxes.create(name, checked.repos);
+    const v = await provider.validate(sandboxes.spec(name, base), { newSandbox: true });
     if (v.errors.length) {
       await rollback();
-      throw new HttpError(400, "Can't create this project.", v.errors);
+      throw new HttpError(400, "Can't create this sandbox.", v.errors);
     }
     try {
-      ops.start(id, "creating", async (log) => provider.create(v.spec, log, await agentSetup(project)));
+      ops.start(name, "creating", async (log) => {
+        // Sessions saved from an earlier sandbox of this name started in folders this one doesn't have.
+        await sessions.deleteSavedFor(name);
+        await sandboxes.writeManaged(sandbox, v.spec);
+        await provider.create(v.spec, log, await agentSetup(sandbox));
+      });
     } catch (err) {
-      // The record is this request's own claim, so undoing it can't touch another project's.
+      // The record is this request's own claim, so undoing it can't touch another sandbox's.
       await rollback();
       throw err;
     }
     void refresh();
-    return c.json({ name: id, warnings: v.warnings } satisfies CreateResponse, 202);
+    return c.json({ name, warnings: v.warnings } satisfies CreateResponse, 202);
   });
 
-  type Work = (project: Project, info: SandboxInfo, log: Log) => Promise<void>;
+  type Work = (sandbox: Sandbox, info: SandboxInfo, log: Log) => Promise<void>;
 
-  /** An operation on a project's VM, run in the background. `check` can refuse it first, by throwing. */
-  const action = (op: OpKind, work: Work, check?: (project: Project, info: SandboxInfo) => Promise<void>) => async (c: Context) => {
-    const id = c.req.param("id")!;
-    assertIdle(id);
-    const { project, info } = await known(id);
-    await check?.(project, info);
-    ops.start(id, op, (log) => work(project, info, log));
-    return c.json({ name: id, op }, 202);
+  /** An operation on a sandbox's VM, run in the background. `check` can refuse it first, by throwing. */
+  const action = (op: OpKind, work: Work, check?: (sandbox: Sandbox, info: SandboxInfo) => Promise<void>) => async (c: Context) => {
+    const name = c.req.param("name")!;
+    assertIdle(name);
+    const { sandbox, info } = await known(name);
+    await check?.(sandbox, info);
+    ops.start(name, op, (log) => work(sandbox, info, log));
+    return c.json({ name, op }, 202);
   };
-
-  /** The VM can't start without the clone and worktrees folder it mounts. */
-  const assertFolders = async (project: Project) => {
-    const problem = await projects.problem(project);
-    if (problem) throw new HttpError(409, problem);
-  };
-
-  const startVm: Work = async (p, i, log) => {
-    await projects.writeManaged(p, setupOf(i.meta?.spec));
-    await provider.start(p.id, log);
-    // Runs left from before the VM stopped have nothing running in them any more.
-    await sweepRuns(p.id, await runs.list(p.id).catch(() => new Map()));
-  };
-  const checkStart = async (p: Project, i: SandboxInfo) => {
-    if (i.status === "absent") throw new HttpError(409, `${vmName(p.id)} doesn't exist. Recreate it.`);
-    await assertFolders(p);
-  };
-
-  app.post("/api/projects/:id/start", action("starting", startVm, checkStart));
 
   /**
-   * As `readyProject`, but a stopped VM is started first, and an operation already running on it is waited out
-   * (a start from the Projects page, say), so a session can be asked for in any project.
+   * Deletes repos' folders from /workspace in the sandbox's running VM, noting it in the log; whether that worked.
+   * A failure is only noted: the folders stay dropped, to be deleted on the next start.
    */
-  const startedProject = async (id: string): Promise<{ workdir: string; env: string[] }> => {
-    const { project, info } = await known(id);
-    if (info.status === "stopped" && !ops.active().includes(id)) {
-      await checkStart(project, info);
+  const dropFolders = async (name: string, folders: string[], log?: Log): Promise<boolean> => {
+    if (!folders.length) return true;
+    try {
+      await execOutput(provider.exec.bind(provider), name, `bash -c ${shellQuote(dropScript(folders))}`, 60_000);
+      log?.(`Deleted ${folders.map((f) => `${WORKSPACE_DIR}/${f}`).join(", ")}, of repos taken out of the sandbox.`, "note");
+      return true;
+    } catch (err) {
+      log?.(`warning: couldn't delete ${folders.join(", ")} from ${WORKSPACE_DIR}: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
+  };
+
+  const startVm: Work = async (s, i, log) => {
+    await sandboxes.writeManaged(s, i.meta?.spec);
+    await provider.start(s.name, log);
+    // Repos taken out while it was stopped leave their folders now.
+    if (s.dropped?.length && (await dropFolders(s.name, s.dropped, log))) await sandboxes.dropped(s.name, s.dropped);
+    // Runs left from before the VM stopped have nothing running in them any more.
+    await sweepRuns(s.name, await runs.list(s.name).catch(() => new Map()));
+  };
+  const checkStart = async (s: Sandbox, i: SandboxInfo) => {
+    if (i.status === "absent") throw new HttpError(409, `${vmName(s.name)} doesn't exist. Rebuild it.`);
+  };
+
+  app.post("/api/sandboxes/:name/start", action("starting", startVm, checkStart));
+
+  /**
+   * As `readySandbox`, but a stopped VM is started first, and an operation already running on it is waited out
+   * (a start from the Sandboxes page, say), so a session can be asked for in any sandbox.
+   */
+  const startedSandbox = async (name: string): Promise<{ workdir: string; env: string[] }> => {
+    const { sandbox, info } = await known(name);
+    if (info.status === "stopped" && !ops.active().includes(name)) {
+      await checkStart(sandbox, info);
       try {
-        ops.start(id, "starting", (log) => startVm(project, info, log));
+        ops.start(name, "starting", (log) => startVm(sandbox, info, log));
       } catch (err) {
         // Another request started it first; wait for that one.
         if (!(err instanceof BusyError)) throw err;
       }
     }
-    const op = await ops.settled(id);
-    if (op?.op === "starting" && op.result === "error") throw new HttpError(409, `${vmName(id)} didn't start: ${op.error?.split("\n")[0]}`);
-    return readyProject(id);
+    const op = await ops.settled(name);
+    if (op?.op === "starting" && op.result === "error") throw new HttpError(409, `${vmName(name)} didn't start: ${op.error?.split("\n")[0]}`);
+    return readySandbox(name);
   };
-  app.post("/api/projects/:id/stop", action("stopping", async (p, _i, log) => {
-    await endSessions(p.id, log, { sleep: true });
-    await provider.stop(p.id, log);
+  app.post("/api/sandboxes/:name/stop", action("stopping", async (s, _i, log) => {
+    await endSessions(s.name, log, { sleep: true });
+    await provider.stop(s.name, log);
   }));
 
   /**
    * Stops the VM (its sessions fall asleep) and starts it again, running `between` while it is stopped. Lima reads its
-   * config on start, so resource and mount changes apply; the disk and what provisioning installed stay. `edited` is the
-   * spec `between` saves, which the VM starts with rather than the one in `i`.
+   * config on start, so resource and mount changes apply; the disks and what provisioning installed stay. `edited` is
+   * the spec `between` saves, which the VM starts with rather than the one in `i`.
    */
-  const restart = async (p: Project, i: SandboxInfo, log: Log, between?: () => Promise<void>, edited?: ValidSpec) => {
-    await endSessions(p.id, log, { sleep: true });
-    if (i.status !== "stopped") await provider.stop(p.id, log);
+  const restart = async (s: Sandbox, i: SandboxInfo, log: Log, between?: () => Promise<void>, edited?: ValidSpec) => {
+    await endSessions(s.name, log, { sleep: true });
+    if (i.status !== "stopped") await provider.stop(s.name, log);
     await between?.();
-    await startVm(p, edited && i.meta ? { ...i, meta: { ...i.meta, spec: edited } } : i, log);
+    await startVm(s, edited && i.meta ? { ...i, meta: { ...i.meta, spec: edited } } : i, log);
   };
 
-  app.post("/api/projects/:id/restart", action("restarting", (p, i, log) => restart(p, i, log), checkStart));
+  app.post("/api/sandboxes/:name/restart", action("restarting", (s, i, log) => restart(s, i, log), checkStart));
 
-  /** Deletes the project: its VM, its Claude home (login and Claude's history) and its saved sessions. The clone and worktrees stay. */
-  app.delete("/api/projects/:id", action("deleting", async (p, _i, log) => {
-    await endSessions(p.id, log);
-    await provider.delete(p.id, log);
-    await sessions.deleteSavedFor(p.id);
-    await projects.remove(p.id);
-    log(`Deleted the project's Claude home. ${p.clonePath} and its worktrees are untouched.`, "note");
+  /** Deletes the sandbox: its VM and workspace disk, its Claude home (login and Claude's history) and its saved sessions. */
+  app.delete("/api/sandboxes/:name", action("deleting", async (s, _i, log) => {
+    await endSessions(s.name, log);
+    await provider.delete(s.name, log);
+    await sessions.deleteSavedFor(s.name);
+    await sandboxes.remove(s.name);
+    clones.forget(s.name);
+    log("Deleted the sandbox's Claude home and saved sessions.", "note");
   }));
 
   /**
    * Deletes the VM and creates it again from `spec`, its sessions asleep meanwhile. They can continue: Claude's
-   * history is in the project's Claude home, on the host.
+   * history is in the sandbox's Claude home, on the host, and the workspace disk is kept and attached to the new VM.
+   * With `wipe` (Rebuild from scratch), the disk goes too, and a new one gets the repos cloned again from the mirrors.
    */
-  const recreate = async (project: Project, spec: SandboxSpec, log: Log) => {
-    await endSessions(project.id, log, { sleep: true });
-    await provider.delete(project.id, log);
-    await projects.writeManaged(project, setupOf(spec));
-    await provider.create(spec, log, await agentSetup(project));
+  const recreate = async (sandbox: Sandbox, spec: SandboxSpec, log: Log, { wipe = false }: { wipe?: boolean } = {}) => {
+    await endSessions(sandbox.name, log, { sleep: true });
+    await provider.delete(sandbox.name, log, { keepWorkspace: !wipe });
+    if (wipe) {
+      clones.forget(sandbox.name);
+      // Nothing is left to delete on the new disk.
+      if (sandbox.dropped?.length) sandbox = (await sandboxes.dropped(sandbox.name, sandbox.dropped)) ?? sandbox;
+      log("The workspace disk is deleted; the repos are cloned again from the mirrors once the sandbox runs.", "note");
+    }
+    await sandboxes.writeManaged(sandbox, spec);
+    await provider.create(spec, log, await agentSetup(sandbox));
+    // The kept disk still has the folders of repos taken out while there was no VM to delete them from.
+    if (sandbox.dropped?.length && (await dropFolders(sandbox.name, sandbox.dropped, log))) await sandboxes.dropped(sandbox.name, sandbox.dropped);
   };
 
   /** The agent's setup scripts a VM is created with, read once its sessions have ended, so none can change them while it is provisioned. */
-  const agentSetup = async (project: Project): Promise<AgentSetupRun | undefined> => {
-    const { scripts } = await readAgentScripts(projects.kumikoHome(project.id), scratch);
+  const agentSetup = async (sandbox: Sandbox): Promise<AgentSetupRun | undefined> => {
+    const { scripts } = await readAgentScripts(sandboxes.kumikoHome(sandbox.name), scratch);
     return scripts.length ? { scripts } : undefined;
   };
 
   /** The agent's setup scripts as they are now, with how each went when the VM was created. */
-  app.get("/api/projects/:id/agent-setup", async (c) => {
-    const { project, info } = await known(c.req.param("id"));
-    const now = await readAgentScripts(projects.kumikoHome(project.id), scratch);
+  app.get("/api/sandboxes/:name/agent-setup", async (c) => {
+    const { sandbox, info } = await known(c.req.param("name"));
+    const now = await readAgentScripts(sandboxes.kumikoHome(sandbox.name), scratch);
     return c.json(withExitCodes(info.meta?.agentSetup, now) satisfies AgentSetupResponse);
   });
 
   /**
-   * Deletes the agent's setup scripts, so the next recreate starts from the user's setup only. Not while the VM is being
+   * Deletes the agent's setup scripts, so the next rebuild starts from the user's setup only. Not while the VM is being
    * worked on, since a create reads them. The VM as it is keeps what they installed.
    */
-  app.delete("/api/projects/:id/agent-setup", async (c) => {
-    const id = c.req.param("id");
-    assertIdle(id);
-    const project = await projectOf(id);
-    const dir = `${projects.kumikoHome(project.id)}/${AGENT_SETUP_DIR}`;
-    if (!(await deleteAgentScripts(projects.kumikoHome(project.id)))) throw new HttpError(409, `Couldn't delete ${dir}: a folder on the way leads somewhere else.`);
+  app.delete("/api/sandboxes/:name/agent-setup", async (c) => {
+    const name = c.req.param("name");
+    assertIdle(name);
+    const sandbox = await sandboxOf(name);
+    const dir = `${sandboxes.kumikoHome(sandbox.name)}/${AGENT_SETUP_DIR}`;
+    if (!(await deleteAgentScripts(sandboxes.kumikoHome(sandbox.name)))) throw new HttpError(409, `Couldn't delete ${dir}: a folder on the way leads somewhere else.`);
     return c.json({});
   });
 
   /**
-   * Change resources, extra mounts (VM stopped), forwarded variables or the provisioning script. `mounts` are the extra
-   * ones; the project's own are added back. With `?recreate=1`, delete the VM and create it again from the changed spec;
-   * with `?restart=1`, stop it, save, and start it again, so resources and mounts can change while it runs.
+   * Takes `removed` out of the sandbox and adds `added`, each new one with a folder of its own, and rewrites kumiko.md.
+   * A removed repo's mirror stops being served, and its folders are deleted from /workspace: now if the VM runs, else
+   * when it next starts. The relay of a running VM serves the new ones at once, and they are cloned.
    */
-  app.patch("/api/projects/:id", async (c) => {
-    const id = c.req.param("id");
-    assertIdle(id);
-    const { project, info } = await known(id);
-    const raw = await body<ProjectEdit>(c, "Body must be a JSON object of fields to change.");
-    const { workdir: _workdir, ...edit } = (raw ?? {}) as EditSpec;
-    const patch: EditSpec = Array.isArray(edit.mounts) ? { ...edit, mounts: projects.mounts(project, edit.mounts) } : edit;
+  const changeRepos = async (sandbox: Sandbox, added: string[], removed: SandboxRepo[], spec: SandboxSpec | undefined, running: boolean): Promise<Sandbox> => {
+    let updated = sandbox;
+    // Added first, so no newcomer gets a folder taken out in the same save: the folders are those the form showed.
+    if (added.length) updated = await sandboxes.addRepos(sandbox.name, added);
+    if (removed.length) {
+      const folders = removed.map((r) => r.folder);
+      // A clone under way would move its folder back after the delete: it finishes first.
+      if (running) await clones.settled(sandbox.name, folders);
+      const deleted = running && (await dropFolders(sandbox.name, folders));
+      updated = await sandboxes.removeRepos(sandbox.name, removed.map((r) => r.repo), { deleted });
+    }
+    await sandboxes.writeManaged(updated, spec);
+    await refresh();
+    return updated;
+  };
+
+  /**
+   * Change resources, extra mounts (VM stopped), forwarded variables, the provisioning script, or the repos. `mounts`
+   * are the extra ones; the sandbox's own are added back. `repos` is the whole list: new ones are added and cloned.
+   * With `?recreate=1`, delete the VM and create it again from the changed spec, keeping the workspace disk; with
+   * `?restart=1`, stop it, save, and start it again, so resources and mounts can change while it runs.
+   */
+  app.patch("/api/sandboxes/:name", async (c) => {
+    const name = c.req.param("name");
+    assertIdle(name);
+    const { sandbox, info } = await known(name);
+    const raw = await body<SandboxEdit>(c, "Body must be a JSON object of fields to change.");
+    const { workdir: _workdir, repos: rawRepos, ...edit } = (raw ?? {}) as SandboxEdit & { workdir?: unknown };
+    // The sandbox's own repos stay valid even if their mirror was removed since: only a newcomer needs a mirror now.
+    const picked = checkRepos(rawRepos, [...mirrored(), ...sandbox.repos.map((r) => r.repo)]);
+    if (picked.errors.length) throw new HttpError(400, "Can't apply these changes.", picked.errors);
+    const added = rawRepos === undefined ? [] : picked.repos.filter((r) => !sandbox.repos.some((x) => x.repo.toLowerCase() === r.toLowerCase()));
+    const removed = rawRepos === undefined ? [] : sandbox.repos.filter((x) => !picked.repos.some((r) => r.toLowerCase() === x.repo.toLowerCase()));
+    const patch: EditSpec = Array.isArray(edit.mounts) ? { ...edit, mounts: sandboxes.mounts(name, edit.mounts) } : edit;
     const again = c.req.query("recreate") === "1";
     const restarting = !again && c.req.query("restart") === "1";
-    if (again || restarting) await assertFolders(project);
+    // Only repos: nothing for the VM to do.
+    if (!again && !restarting && Object.keys(patch).length === 0) {
+      if (added.length || removed.length) await changeRepos(sandbox, added, removed, info.meta?.spec, info.status === "running");
+      return c.json({ name, warnings: [] });
+    }
     if (again && info.status === "absent") {
       // Nothing to edit in place: build the VM from the stored spec with the changes.
-      const v = await validateSpec({ ...vmSpec(project, info), ...patch, name: id, workdir: project.clonePath }, env());
+      const v = await validateSpec({ ...vmSpec(sandbox, info), ...patch, name, workdir: WORKSPACE_DIR }, env());
       if (v.errors.length) throw new HttpError(400, "Can't apply these changes.", v.errors);
-      ops.start(id, "recreating", (log) => recreate(project, v.spec, log));
-      return c.json({ name: id, op: "recreating", warnings: v.warnings }, 202);
+      const updated = added.length || removed.length ? await changeRepos(sandbox, added, removed, v.spec, false) : sandbox;
+      ops.start(name, "recreating", (log) => recreate(updated, v.spec, log));
+      return c.json({ name, op: "recreating", warnings: v.warnings }, 202);
     }
-    const v = await provider.validateEdit(id, patch, { recreate: again, restart: restarting });
+    const v = await provider.validateEdit(name, patch, { recreate: again, restart: restarting });
     if (v.errors.length) throw new HttpError(400, "Can't apply these changes.", v.errors);
+    const updated = added.length || removed.length ? await changeRepos(sandbox, added, removed, v.spec, info.status === "running") : sandbox;
     const op: OpKind = again ? "recreating" : restarting ? "restarting" : "editing";
-    ops.start(id, op, (log) =>
+    ops.start(name, op, (log) =>
       again
-        ? recreate(project, projects.spec(project, v.spec), log)
+        ? recreate(updated, sandboxes.spec(name, v.spec), log)
         : restarting
-          ? restart(project, info, log, () => provider.edit(id, patch, log), v.spec)
+          ? restart(updated, info, log, () => provider.edit(name, patch, log), v.spec)
           : // The script and variables can change while it runs: the agent's guide follows them now, not at the next session.
-            provider.edit(id, patch, log).then(() => projects.writeManaged(project, setupOf(v.spec))),
+            provider.edit(name, patch, log).then(() => sandboxes.writeManaged(updated, v.spec)),
     );
-    return c.json({ name: id, op, warnings: v.warnings }, 202);
+    return c.json({ name, op, warnings: v.warnings }, 202);
   });
 
-  /** Delete, then create again from the stored spec (or the defaults, if there is none). */
-  app.post(
-    "/api/projects/:id/recreate",
+  /**
+   * Delete the VM, keeping its workspace disk, then create it again from the stored spec (or the defaults, if there is
+   * none). With `?wipe=1` (Rebuild from scratch), the workspace disk is deleted and made again too.
+   */
+  app.post("/api/sandboxes/:name/recreate", (c) =>
     action(
       "recreating",
-      (p, i, log) => recreate(p, vmSpec(p, i), log),
-      async (p, i) => {
+      (s, i, log) => recreate(s, vmSpec(s, i), log, { wipe: c.req.query("wipe") === "1" }),
+      async (_s, i) => {
         if (i.metaError) throw new HttpError(400, i.metaError);
-        await assertFolders(p);
       },
-    ),
+    )(c),
   );
 
-  /** The clone's worktrees, from git on the host, with what needs attention in each. Needs nothing of the VM. */
-  app.get("/api/projects/:id/worktrees", async (c) => {
-    const project = await projectOf(c.req.param("id"));
-    await assertFolders(project);
-    try {
-      return c.json((await worktreeStatuses(project.clonePath)) satisfies WorktreesResponse);
-    } catch (err) {
-      if (err instanceof GitError) throw new HttpError(500, `git: ${err.message}`);
-      throw err;
-    }
+  /**
+   * What the sandbox's VM has in its repos that isn't pushed: branches ahead of their upstream, worktrees with
+   * uncommitted changes, stashes. Found through an exec in the VM, so it must be running.
+   */
+  app.get("/api/sandboxes/:name/unpushed", async (c) => {
+    const name = c.req.param("name");
+    const { sandbox, info } = await known(name);
+    if (info.status !== "running") throw new HttpError(409, `${vmName(name)} is not running, so Kumiko can't see what isn't pushed.`);
+    return c.json({ repos: await findUnpushed(provider.exec.bind(provider), name, sandbox.repos) } satisfies UnpushedResponse);
   });
 
   // ---- agent sessions --------------------------------------------------------------------
@@ -884,7 +951,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     if (!prompt && !req?.attachments?.length) throw new HttpError(400, "The opening prompt is empty.");
     const model = typeof req?.model === "string" && req.model && req.model !== "default" ? req.model : undefined;
     if (model && !/^[\w.\[\]-]+$/.test(model)) throw new HttpError(400, `Not a model: ${model}`);
-    const ready = await startedProject(name);
+    const ready = await startedSandbox(name);
     const sent = await attachments.take(req.attachments);
     const session = sessions.start({ sandbox: name, workdir: ready.workdir, env: ready.env, prompt, model, ...sent });
     return c.json({ id: session.id }, 201);
@@ -937,7 +1004,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       if (!stored.info.claudeSessionId || (stored.run?.live && stored.info.closing?.delete)) throw new HttpError(404, `No saved session ${c.req.param("id")}.`);
       return c.json({ id: sessions.openAsleep(stored).id }, 201);
     }
-    const ready = await startedProject(stored.info.sandbox);
+    const ready = await startedSandbox(stored.info.sandbox);
     if (stored.run?.live && !sessions.get(stored.info.id)) {
       // Not knowing whether its Claude still runs, starting another on the same conversation could have two at once.
       const found = await runs.list(stored.info.sandbox).catch(() => undefined);
@@ -955,7 +1022,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   /** Starts the sandbox of a session opened asleep, if it is stopped, and Claude on the session. */
   app.post("/api/sessions/:id/wake", async (c) => {
     const { id, sandbox } = sessionOf(c);
-    const ready = await startedProject(sandbox);
+    const ready = await startedSandbox(sandbox);
     return c.json(sessions.wake(id, ready.env));
   });
 
@@ -975,7 +1042,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     const req = await c.req.json<Partial<ShellRequest>>().catch(() => ({}) as Partial<ShellRequest>);
     const command = typeof req.command === "string" ? req.command.trim() : "";
     if (!command) throw new HttpError(400, "The command is empty.");
-    const ready = await readyProject(sandbox);
+    const ready = await readySandbox(sandbox);
     return c.json({ id: sessions.runShell(id, command, ready.env) }, 202);
   });
 
@@ -998,7 +1065,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     const from = sessionOf(c);
     const req = await c.req.json<ForkRequest>().catch(() => ({}) as ForkRequest);
     if (req.prompt !== undefined && typeof req.prompt !== "string") throw new HttpError(400, "Which message to fork from?");
-    const ready = await readyProject(from.sandbox);
+    const ready = await readySandbox(from.sandbox);
     return c.json({ id: sessions.fork(from.id, ready.env, req.prompt).id }, 201);
   });
 
@@ -1006,7 +1073,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   const accepting = new Set<string>();
   /**
    * The user's answer to Claude asking to start a new session (its session_start tool): accepted, it starts in the
-   * project on the proposed prompt, or on `prompt` if the user changed it, named as proposed, with copies of the
+   * sandbox on the proposed prompt, or on `prompt` if the user changed it, named as proposed, with copies of the
    * artifacts asked for, and its id is returned, with what couldn't be copied; declined, nothing starts.
    */
   app.post("/api/sessions/:id/proposals/:proposal", async (c) => {
@@ -1025,7 +1092,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     }
     accepting.add(proposalId);
     try {
-      const ready = await startedProject(from.sandbox);
+      const ready = await startedSandbox(from.sandbox);
       const { title, artifacts = [] } = proposal;
       // The prompt the user started it on, said in the answer only when it isn't Claude's.
       const prompt = edited ?? proposal.prompt;
@@ -1051,14 +1118,14 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     const from = sessionOf(c);
     const req = await c.req.json<{ prompt?: unknown; files?: unknown }>().catch(() => ({}) as { prompt?: unknown; files?: unknown });
     if (typeof req.prompt !== "string" || !req.prompt) throw new HttpError(400, "Which message to rewind to?");
-    const ready = await readyProject(from.sandbox);
+    const ready = await readySandbox(from.sandbox);
     return c.json((await sessions.rewind(from.id, req.prompt, ready.env, { files: req.files === true })) satisfies RewindResponse);
   });
 
-  // A login is the project's: its Claude home holds it, so every session of the project shares it. It is started from
+  // A login is the sandbox's: its Claude home holds it, so every session of the sandbox shares it. It is started from
   // a session because that is where being logged out shows.
 
-  /** Whether the session's project is logged in now, without starting a login. */
+  /** Whether the session's sandbox is logged in now, without starting a login. */
   app.get("/api/sessions/:id/login", async (c) => {
     const { sandbox } = sessionOf(c);
     const { info } = await known(sandbox);
@@ -1067,10 +1134,10 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     return c.json((account ? { loggedIn: account } : {}) satisfies LoginStatusResponse);
   });
 
-  /** Starts logging Claude in for the session's project: the sign-in URL, or who it is logged in as already. */
+  /** Starts logging Claude in for the session's sandbox: the sign-in URL, or who it is logged in as already. */
   app.post("/api/sessions/:id/login", async (c) => {
     const { sandbox } = sessionOf(c);
-    const ready = await readyProject(sandbox);
+    const ready = await readySandbox(sandbox);
     return c.json((await logins.start(sandbox, ready.workdir)) satisfies LoginStartResponse);
   });
 
@@ -1095,7 +1162,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
    */
   app.post("/api/sessions/:id/retry", async (c) => {
     const { id, sandbox } = sessionOf(c);
-    const ready = await readyProject(sandbox);
+    const ready = await readySandbox(sandbox);
     const last = sessions.events(id).findLast((e) => e.kind === "user_prompt");
     // Read before the swap, so a file that is gone fails the retry instead of sending the prompt without it.
     const files = last?.kind === "user_prompt" ? await attachments.load(last.payload.attachments) : [];
@@ -1125,7 +1192,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   /** Starts the session's Claude again, carrying on its conversation: for Kumiko's tools as they are now. */
   app.post("/api/sessions/:id/restart", async (c) => {
     const { id, sandbox } = sessionOf(c);
-    const ready = await readyProject(sandbox);
+    const ready = await readySandbox(sandbox);
     // Restarted on its own meanwhile: nothing more to do.
     if (!sessions.get(id)?.toolsOutdated) return c.json(sessions.get(id));
     restartTried.add(id);
@@ -1401,7 +1468,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       clients.add(ws);
       ws.on("close", () => clients.delete(ws));
       ws.on("error", () => clients.delete(ws));
-      ws.send(JSON.stringify({ type: "snapshot", projects: views(), unreadable, logs: ops.logs(), sessions: sessions.list(), error: listError, mirrors: mirrorsView() } satisfies ServerEvent));
+      ws.send(JSON.stringify({ type: "snapshot", sandboxes: views(), unreadable, logs: ops.logs(), sessions: sessions.list(), error: listError, mirrors: mirrorsView() } satisfies ServerEvent));
     });
   });
 

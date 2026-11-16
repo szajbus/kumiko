@@ -2,35 +2,35 @@ import { useRef, useState, type AnimationEvent, type CSSProperties, type DragEve
 import { isBusy, type SessionInfo } from "@kumiko/shared";
 import { Corner } from "./Corner";
 import { Logo, Plus } from "./icons";
-import { projectHues, sessionName, sessionTitle } from "./format";
+import { sandboxHues, sessionName, sessionTitle } from "./format";
 import { sessionState } from "./status";
 
-export type TabId = "projects" | `new-session:${string}` | `session:${string}`;
+export type TabId = "sandboxes" | `new-session:${string}` | `session:${string}`;
 
-/** A New session tab: `key` tells it apart from the others, `project` is the one picked in it, if any. */
+/** A New session tab: `key` tells it apart from the others, `sandbox` is the one picked in it, if any. */
 export interface NewSessionTab {
   key: string;
-  project?: string;
+  sandbox?: string;
 }
 
 interface Props {
   sessions: SessionInfo[];
   newSessions: NewSessionTab[];
-  /** The session and New session tabs, in the order to show them: each project's together, then those with none. */
+  /** The session and New session tabs, in the order to show them: each sandbox's together, then those with none. */
   order: TabId[];
   active: TabId;
   onSelect(tab: TabId): void;
   onClose(tab: TabId): void;
   /** `tab` was dragged to just before `target`, or just after it with `after`. */
   onMove(tab: TabId, target: TabId, after: boolean): void;
-  /** Project `moving`'s tabs were dragged to just before project `target`'s, or just after them with `after`. */
+  /** Sandbox `moving`'s tabs were dragged to just before sandbox `target`'s, or just after them with `after`. */
   onMoveGroup(moving: string, target: string, after: boolean): void;
-  /** The projects whose tabs are hidden behind their label. */
+  /** The sandboxes whose tabs are hidden behind their label. */
   collapsed: ReadonlySet<string>;
-  /** A project's collapse/expand button was clicked. */
+  /** A sandbox's collapse/expand button was clicked. */
   onToggleGroup(name: string): void;
-  /** A project's label was clicked. */
-  onOpenProject(name: string): void;
+  /** A sandbox's label was clicked. */
+  onOpenSandbox(name: string): void;
   onNewSession(): void;
   /** Where the open session's usage goes. */
   cornerRef(el: HTMLDivElement | null): void;
@@ -42,18 +42,18 @@ interface DropAt {
   after: boolean;
 }
 
-/** Where a dragged project label would land if dropped now. */
+/** Where a dragged sandbox label would land if dropped now. */
 interface GroupDropAt {
   target: string;
   after: boolean;
 }
 
 /**
- * The window's title bar: the Projects button, a tab per session under its project's label, which drag to reorder
- * within the project, the labels dragging their tabs along and collapsing to hide them, and + to start a new one; in
+ * The window's title bar: the Sandboxes button, a tab per session under its sandbox's label, which drag to reorder
+ * within the sandbox, the labels dragging their tabs along and collapsing to hide them, and + to start a new one; in
  * the corner, the open session's usage.
  */
-export function Header({ sessions, newSessions, order, active, onSelect, onClose, onMove, onMoveGroup, collapsed, onToggleGroup, onOpenProject, onNewSession, cornerRef }: Props) {
+export function Header({ sessions, newSessions, order, active, onSelect, onClose, onMove, onMoveGroup, collapsed, onToggleGroup, onOpenSandbox, onNewSession, cornerRef }: Props) {
   const [dragging, setDragging] = useState<TabId | undefined>();
   const [dropAt, setDropAt] = useState<DropAt | undefined>();
   const [draggingGroup, setDraggingGroup] = useState<string | undefined>();
@@ -61,7 +61,7 @@ export function Header({ sessions, newSessions, order, active, onSelect, onClose
 
   const drag = (id: TabId): DragProps => ({
     dragging: dragging === id,
-    // A project's label dragged after another project shows where it lands at the end of that project's last tab.
+    // A sandbox's label dragged after another sandbox shows where it lands at the end of that sandbox's last tab.
     drop:
       dropAt?.target === id && dragging !== id
         ? dropAt.after ? "after" : "before"
@@ -76,7 +76,7 @@ export function Header({ sessions, newSessions, order, active, onSelect, onClose
     onDragOver(e) {
       const group = looks.get(id)?.group;
       if (draggingGroup && group !== undefined) return overGroup(e, group);
-      // A tab only moves among its project's tabs.
+      // A tab only moves among its sandbox's tabs.
       if (!dragging || looks.get(dragging)?.group !== group) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
@@ -118,7 +118,7 @@ export function Header({ sessions, newSessions, order, active, onSelect, onClose
     }
     const n = newSessions.find((x) => `new-session:${x.key}` === id);
     if (!n) return undefined;
-    return { label: "New session", title: n.project ? `${n.project} · New session` : undefined, group: n.project };
+    return { label: "New session", title: n.sandbox ? `${n.sandbox} · New session` : undefined, group: n.sandbox };
   };
   const looks = new Map<TabId, TabLook>();
   for (const id of order) {
@@ -157,7 +157,7 @@ export function Header({ sessions, newSessions, order, active, onSelect, onClose
     return <Tab key={id} id={id} active={active} onSelect={onSelect} onClose={onClose} {...l} {...drag(id)} />;
   };
 
-  /** A dragged project label is over project `name`'s label or tabs: it lands before them, or after past their middle. */
+  /** A dragged sandbox label is over sandbox `name`'s label or tabs: it lands before them, or after past their middle. */
   const overGroup = (e: DragEvent<HTMLElement>, name: string) => {
     if (!draggingGroup) return;
     e.preventDefault();
@@ -193,7 +193,7 @@ export function Header({ sessions, newSessions, order, active, onSelect, onClose
     },
   });
 
-  // Runs of tabs to show: a project's tabs under its label, and each tab with no project on its own.
+  // Runs of tabs to show: a sandbox's tabs under its label, and each tab with no sandbox on its own.
   const runs: { group?: string; tabs: TabId[] }[] = [];
   for (const id of shown) {
     const group = (looks.get(id) ?? seen.current.get(id))?.group;
@@ -202,7 +202,7 @@ export function Header({ sessions, newSessions, order, active, onSelect, onClose
     else runs.push({ group, tabs: [id] });
   }
   const lastInGroup = new Map(runs.flatMap((r) => (r.group === undefined ? [] : [[r.group, r.tabs[r.tabs.length - 1]] as const])));
-  const hues = projectHues(runs.flatMap((r) => (r.group === undefined ? [] : [r.group])));
+  const hues = sandboxHues(runs.flatMap((r) => (r.group === undefined ? [] : [r.group])));
   const run = ({ group, tabs }: { group?: string; tabs: TabId[] }) => {
     if (group === undefined) return tabs.map(tab);
     // A group whose tabs have all closed fades with its last one.
@@ -215,7 +215,7 @@ export function Header({ sessions, newSessions, order, active, onSelect, onClose
           closing={closing}
           collapsed={folded}
           count={tabs.filter((id) => looks.has(id)).length}
-          onOpen={onOpenProject}
+          onOpen={onOpenSandbox}
           onToggle={onToggleGroup}
           {...dragGroup(group)}
         />
@@ -227,7 +227,7 @@ export function Header({ sessions, newSessions, order, active, onSelect, onClose
   return (
     <header className="app-header">
       <div className="tabbar">
-        <HomeButton active={active === "projects"} onSelect={() => onSelect("projects")} />
+        <HomeButton active={active === "sandboxes"} onSelect={() => onSelect("sandboxes")} />
         <nav
           className="tabs"
           role="tablist"
@@ -252,16 +252,16 @@ export function Header({ sessions, newSessions, order, active, onSelect, onClose
   );
 }
 
-/** The way to the Projects pages: always first, never closes or moves. Icon only, so its name lives in aria-label and title. */
+/** The way to the Sandboxes pages: always first, never closes or moves. Icon only, so its name lives in aria-label and title. */
 function HomeButton({ active, onSelect }: { active: boolean; onSelect(): void }) {
   return (
-    <button type="button" className={`home-button${active ? " is-active" : ""}`} aria-current={active ? "page" : undefined} aria-label="Projects" title="Projects" onClick={onSelect}>
+    <button type="button" className={`home-button${active ? " is-active" : ""}`} aria-current={active ? "page" : undefined} aria-label="Sandboxes" title="Sandboxes" onClick={onSelect}>
       <Logo size={16} />
     </button>
   );
 }
 
-/** What makes a tab or a project's label draggable, and shows where a dragged one would land. */
+/** What makes a tab or a sandbox's label draggable, and shows where a dragged one would land. */
 interface DragProps {
   dragging: boolean;
   drop?: "before" | "after";
@@ -283,7 +283,7 @@ interface GroupLabelProps {
 }
 
 /**
- * A project's label, in front of its tabs: opens the project, drags its tabs along, and on its right collapses them out
+ * A sandbox's label, in front of its tabs: opens the sandbox, drags its tabs along, and on its right collapses them out
  * of sight or brings them back. A label dragged before it shows here.
  */
 function GroupLabel({ name, closing, collapsed, count, onOpen, onToggle, dragging, drop, ...drag }: DragProps & GroupLabelProps) {
@@ -294,7 +294,7 @@ function GroupLabel({ name, closing, collapsed, count, onOpen, onToggle, draggin
       draggable={!closing}
       {...(closing ? { "aria-hidden": true, inert: true } : drag)}
     >
-      <button type="button" className="tab-group-open" title={`${name}: open the project`} onClick={() => onOpen(name)}>
+      <button type="button" className="tab-group-open" title={`${name}: open the sandbox`} onClick={() => onOpen(name)}>
         <span className="tab-group-name">{name}</span>
       </button>
       <button
@@ -317,7 +317,7 @@ function GroupLabel({ name, closing, collapsed, count, onOpen, onToggle, draggin
 interface TabLook {
   label: string;
   title?: string;
-  /** The project whose label it goes under, if any. */
+  /** The sandbox whose label it goes under, if any. */
   group?: string;
   dot?: string;
   pulse?: boolean;

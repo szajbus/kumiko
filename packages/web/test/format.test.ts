@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { isBusy, isWaiting, type LogLine, type SandboxView, type SessionInfo } from "@kumiko/shared";
+import { isBusy, isWaiting, type LogLine, type VmView, type SessionInfo } from "@kumiko/shared";
 import { matchCommands } from "../src/commands.ts";
-import { ago, endedText, formatBytes, formatCost, formatDuration, planName, projectHue, projectHues, resetText, sessionName, sessionTitle } from "../src/format.ts";
+import { ago, endedText, formatBytes, formatCost, formatDuration, planName, sandboxHue, sandboxHues, resetText, sessionName, sessionTitle } from "../src/format.ts";
 import { COLORS, failedAgentScripts, finishingState, meters, opPill, resources, sandboxCreatedAt, sessionState, statusOf } from "../src/status.ts";
 
 describe("format", () => {
@@ -13,29 +13,29 @@ describe("format", () => {
     assert.equal(sessionTitle({ sandbox: "web", prompt: "a".repeat(40) }), `web · ${"a".repeat(28)}…`);
   });
 
-  it("names a session without its project, for a tab under the project's label", () => {
+  it("names a session without its sandbox, for a tab under the sandbox's label", () => {
     assert.equal(sessionName({ prompt: "fix the login bug" }), "fix the login bug");
     assert.equal(sessionName({ prompt: "x", title: "Login" }), "Login");
     assert.equal(sessionName({ prompt: "please refactor the whole payment module today" }), "please refactor the whole…");
   });
 
-  it("gives a project the same hue every time, and different projects mostly different ones", () => {
-    assert.equal(projectHue("kumiko"), projectHue("kumiko"));
-    const hues = new Set(["kumiko", "web", "api", "docs", "infra"].map(projectHue));
+  it("gives a sandbox the same hue every time, and different sandboxes mostly different ones", () => {
+    assert.equal(sandboxHue("kumiko"), sandboxHue("kumiko"));
+    const hues = new Set(["kumiko", "web", "api", "docs", "infra"].map(sandboxHue));
     assert.ok(hues.size >= 4, [...hues].join());
     for (const h of hues) assert.ok(h >= 0 && h < 360);
   });
 
-  it("gives open projects different hues, by name, whatever order their groups are in", () => {
+  it("gives open sandboxes different hues, by name, whatever order their groups are in", () => {
     // These two would both like 270°.
-    assert.equal(projectHue("kumiko"), projectHue("webshop"));
-    const hues = projectHues(["webshop", "kumiko", "api-server"]);
+    assert.equal(sandboxHue("kumiko"), sandboxHue("webshop"));
+    const hues = sandboxHues(["webshop", "kumiko", "api-server"]);
     assert.equal(hues.get("kumiko"), 270);
     // webshop moves as far as it can from both api-server and kumiko, not to the hue beside kumiko's.
     assert.equal(hues.get("api-server"), 150);
     assert.equal(hues.get("webshop"), 30);
-    assert.deepEqual(projectHues(["kumiko", "api-server", "webshop"]), hues);
-    assert.equal(new Set(projectHues(Array.from({ length: 12 }, (_, i) => `p${i}`)).values()).size, 12);
+    assert.deepEqual(sandboxHues(["kumiko", "api-server", "webshop"]), hues);
+    assert.equal(new Set(sandboxHues(Array.from({ length: 12 }, (_, i) => `p${i}`)).values()).size, 12);
   });
 
   it("says when a limit resets, and nothing once it has", () => {
@@ -71,6 +71,7 @@ describe("format", () => {
     ]);
     const first = meters({ ...reading, cpuPercent: undefined })[0];
     assert.deepEqual([first.percent, first.text, first.color], [undefined, "— · load 1.6", COLORS.stopped]);
+    assert.deepEqual(meters({ ...reading, workspaceUsedBytes: 18 * GiB, workspaceFreeBytes: 32 * GiB })[3], { label: "Workspace", percent: 36, text: "18 GiB used · 36%", color: COLORS.running });
   });
 
   it("names plans and endings", () => {
@@ -106,10 +107,10 @@ describe("status", () => {
     assert.deepEqual(finishingState({ ...s, asking: "plan" }), { text: "Needs attention", color: COLORS.warn, pulse: false });
   });
 
-  const sb = (over: Partial<SandboxView> = {}): SandboxView => ({ name: "web", vm: "km-web", provider: "lima", status: "running", busy: false, sessions: 0, ...over });
+  const sb = (over: Partial<VmView> = {}): VmView => ({ name: "web", vm: "kumiko-web", provider: "lima", status: "running", busy: false, sessions: 0, ...over });
   const op = { op: "creating" as const, startedAt: "2026-10-19T12:00:00Z" };
   const meta = (setup: "creating" | "ready" | "provision_failed", provisionExitCode?: number) => ({
-    spec: { name: "web", cpus: 2, memoryGiB: 4, diskGiB: 20, mounts: [], env: [], workdir: "/workspace" },
+    spec: { name: "web", cpus: 2, memoryGiB: 4, diskGiB: 20, workspaceGiB: 50, mounts: [], env: [], workdir: "/workspace" },
     provider: "lima" as const,
     createdAt: "2026-10-19T12:00:00Z",
     setup,
@@ -151,15 +152,17 @@ describe("status", () => {
     assert.equal(opPill(sb({ operation: { ...op, endedAt: "x", result: "ok" } }))?.text, "Created");
   });
 
-  it("shows Lima's resources, else the stored spec's", () => {
-    assert.deepEqual(resources(sb({ cpus: 4, memoryGiB: 8, diskGiB: 100 })), ["4", "8 GiB", "100 GiB"]);
-    assert.deepEqual(resources(sb({ meta: meta("ready") })), ["2", "4 GiB", "20 GiB"]);
+  it("shows Lima's resources, else the stored spec's, with the workspace disk", () => {
+    assert.deepEqual(resources(sb({ cpus: 4, memoryGiB: 8, diskGiB: 100, workspaceGiB: 80 })), ["4", "8 GiB", "80 GiB"]);
+    assert.deepEqual(resources(sb({ cpus: 4, memoryGiB: 8, diskGiB: 100, meta: meta("ready") })), ["4", "8 GiB", "50 GiB"], "the disk's size as recorded until Lima lists it");
+    assert.deepEqual(resources(sb({ cpus: 4, memoryGiB: 8, diskGiB: 100 })), ["4", "8 GiB", "—"], "no workspace disk");
+    assert.deepEqual(resources(sb({ meta: meta("ready") })), ["2", "4 GiB", "50 GiB"]);
     assert.equal(resources(sb()), undefined);
   });
 
-  it("dates a sandbox by its own record, which a recreate renews, not by its project", () => {
-    const project = { id: "web", clonePath: "/src/web", worktreesPath: "/src/web__worktrees", createdAt: "2026-01-01T00:00:00Z" };
-    const view = { ...sb({ meta: { ...meta("ready"), createdAt: "2026-10-20T09:00:00Z" } }), project };
+  it("dates a sandbox by its own record, which a recreate renews, not by its sandbox", () => {
+    const sandbox = { id: "web", clonePath: "/src/web", worktreesPath: "/src/web__worktrees", createdAt: "2026-01-01T00:00:00Z" };
+    const view = { ...sb({ meta: { ...meta("ready"), createdAt: "2026-10-20T09:00:00Z" } }), sandbox };
     assert.equal(sandboxCreatedAt(view), "2026-10-20T09:00:00Z");
     assert.equal(sandboxCreatedAt(sb()), undefined);
   });

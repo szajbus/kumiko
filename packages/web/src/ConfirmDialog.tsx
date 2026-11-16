@@ -4,6 +4,8 @@ interface Props {
   title: string;
   confirmLabel: string;
   danger?: boolean;
+  /** Keeps the confirm button off, as until a box that must be ticked is. */
+  confirmDisabled?: boolean;
   /** Focuses the confirm button instead of Cancel, so Enter confirms (Esc always cancels). */
   enterConfirms?: boolean;
   children?: ReactNode;
@@ -13,7 +15,7 @@ interface Props {
   onCancel(): void;
 }
 
-export function ConfirmDialog({ title, confirmLabel, danger, enterConfirms, children, alternative, onConfirm, onCancel }: Props) {
+export function ConfirmDialog({ title, confirmLabel, danger, confirmDisabled, enterConfirms, children, alternative, onConfirm, onCancel }: Props) {
   const ref = useRef<HTMLDialogElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -35,7 +37,7 @@ export function ConfirmDialog({ title, confirmLabel, danger, enterConfirms, chil
             {alternative.label}
           </button>
         )}
-        <button type="button" className={`btn ${danger ? "btn-danger" : "btn-primary"}`} onClick={onConfirm} ref={confirmRef}>
+        <button type="button" className={`btn ${danger ? "btn-danger" : "btn-primary"}`} onClick={onConfirm} disabled={confirmDisabled} ref={confirmRef}>
           {confirmLabel}
         </button>
       </div>

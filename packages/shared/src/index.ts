@@ -10,7 +10,7 @@ import type { AgentAsk, AskAnswer, AskClosedReason } from "./asks.js";
 import type { ApprovalCard } from "./cards.js";
 import type { ShellChunk, ShellStop } from "./userShell.js";
 
-export const VM_PREFIX = "km-";
+export const VM_PREFIX = "kumiko-";
 
 /** Short sandbox names: lowercase letters, digits and dashes, not starting or ending with a dash. */
 export const NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,28}[a-z0-9])?$/;
@@ -21,33 +21,33 @@ export const SESSION_ID_PATTERN = /^[0-9a-f]{1,64}$/;
 /** Variable names that can be forwarded from the host. */
 export const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-export const DEFAULTS = { cpus: 4, memoryGiB: 4, diskGiB: 100 } as const;
+export const DEFAULTS = { cpus: 4, memoryGiB: 4, diskGiB: 100, workspaceGiB: 50 } as const;
 
 /** The smallest resources a sandbox can have. */
-export const MINIMUMS = { cpus: 1, memoryGiB: 1, diskGiB: 10 } as const;
+export const MINIMUMS = { cpus: 1, memoryGiB: 1, diskGiB: 10, workspaceGiB: 1 } as const;
 
-/** The working directory in the VM of a sandbox whose spec names none. A project's VM works in its clone instead. */
+/** The sandbox's workspace disk in the VM, and where every session starts: its repos are cloned here. */
 export const WORKSPACE_DIR = "/workspace";
 
 /**
- * Where a project's Claude home is mounted in its VM, and what CLAUDE_CONFIG_DIR points at there. Set on every
+ * Where a sandbox's Claude home is mounted in its VM, and what CLAUDE_CONFIG_DIR points at there. Set on every
  * command Kumiko runs in a VM and in every shell, so Claude keeps `.claude.json` inside the mount too.
  */
 export const CLAUDE_HOME_IN_VM = "~/.claude";
 
 /**
  * Kumiko's folder in a VM: `local/` on the VM's own disk, for what must stay there (agents' runs, whose FIFOs don't
- * cross virtiofs), and `shared/`, the project's Kumiko folder mounted from the host.
+ * cross virtiofs), and `shared/`, the sandbox's Kumiko folder mounted from the host.
  */
 export const KUMIKO_DIR_IN_VM = "~/.kumiko";
 
 /**
- * Where a project's Kumiko folder is mounted in its VM: what Kumiko and the agent keep for Kumiko, such as the agent's
+ * Where a sandbox's Kumiko folder is mounted in its VM: what Kumiko and the agent keep for Kumiko, such as the agent's
  * setup scripts and sessions' artifacts. Kept out of the Claude home, which is Claude Code's to change.
  */
 export const KUMIKO_HOME_IN_VM = `${KUMIKO_DIR_IN_VM}/shared`;
 
-/** The folder beside a clone that holds its worktrees: `<clone>__worktrees`. */
+/** The folder beside a repo's clone in /workspace that holds its worktrees: `<folder>__worktrees`. */
 export const WORKTREES_SUFFIX = "__worktrees";
 
 export interface Mount {
@@ -84,13 +84,13 @@ export function sameMounts(a: Mount[], b: Mount[]): boolean {
 export interface SavedTabs {
   /** Session ids in tab order. */
   sessions: string[];
-  /** One per New session tab, in tab order: the project picked in it, or "" for none. */
+  /** One per New session tab, in tab order: the sandbox picked in it, or "" for none. */
   newSessions: string[];
   /** The active tab's id, as the UI names it. */
   active: string;
-  /** The tabs after Projects in the order they were dragged into, named as `active` is. */
+  /** The tabs after Sandboxes in the order they were dragged into, named as `active` is. */
   order: string[];
-  /** The projects whose tabs are collapsed behind their label. */
+  /** The sandboxes whose tabs are collapsed behind their label. */
   collapsed?: string[];
 }
 
@@ -100,29 +100,34 @@ export function parseSavedTabs(v: unknown): SavedTabs | undefined {
   const { sessions, newSessions, active, order, collapsed } = v as Partial<Record<keyof SavedTabs, unknown>>;
   if (!Array.isArray(sessions) || !Array.isArray(newSessions) || !Array.isArray(order) || typeof active !== "string" || active.length > 100) return undefined;
   const ids = sessions.filter((x): x is string => typeof x === "string" && SESSION_ID_PATTERN.test(x));
-  const projects = newSessions.filter((x): x is string => typeof x === "string").map((x) => (NAME_PATTERN.test(x) ? x : ""));
+  const picked = newSessions.filter((x): x is string => typeof x === "string").map((x) => (NAME_PATTERN.test(x) ? x : ""));
   const tabs = order.filter((x): x is string => typeof x === "string" && x.length <= 100);
   // Saved before tabs could collapse: none are.
   const folded = Array.isArray(collapsed) ? collapsed.filter((x): x is string => typeof x === "string" && NAME_PATTERN.test(x)) : [];
-  return { sessions: ids.slice(0, 200), newSessions: projects.slice(0, 50), active, order: tabs.slice(0, 250), collapsed: folded.slice(0, 100) };
+  return { sessions: ids.slice(0, 200), newSessions: picked.slice(0, 50), active, order: tabs.slice(0, 250), collapsed: folded.slice(0, 100) };
 }
 
 /** What the UI needs from the host. */
 export interface DefaultsResponse {
   /** The host user's home, so the UI can show paths as ~/…. */
   home: string;
-  /** The folder holding each project's Claude home, as `<claudeHomes>/<project id>`. */
+  /** The folder holding each sandbox's Claude home, as `<claudeHomes>/<sandbox>`. */
   claudeHomes: string;
-  /** The folder holding each project's Kumiko folder, as `<kumikoHomes>/<project id>`. */
+  /** The folder holding each sandbox's Kumiko folder, as `<kumikoHomes>/<sandbox>`. */
   kumikoHomes: string;
 }
 
 export interface SandboxSpec {
-  name: string;            // short name, letters/digits/dashes; the VM is "km-<name>"
+  name: string;            // short name, letters/digits/dashes; the VM is "kumiko-<name>"
   template?: string;       // adapter-specific; Lima default "template:default"
   cpus: number;
   memoryGiB: number;
   diskGiB: number;
+  /**
+   * The size of the sandbox's workspace disk: a Lima disk of its own, mounted at /workspace, which outlives the VM. It
+   * is kept when the VM is recreated and deleted with the sandbox. Missing: no workspace disk.
+   */
+  workspaceGiB?: number;
   mounts: Mount[];         // guestPath defaults to the host path
   env: string[];           // names of host variables to forward; values never stored
   provision?: string;      // shell script, run once after first start
@@ -140,12 +145,12 @@ export interface SandboxSpec {
  * and forwarded variables and the provisioning script can change anytime. Saved with a recreate, anything but
  * name and template can change. Name and template are fixed.
  */
-export type EditSpec = Partial<Pick<SandboxSpec, "cpus" | "memoryGiB" | "diskGiB" | "mounts" | "env" | "provision" | "workdir" | "hostLoopback">>;
+export type EditSpec = Partial<Pick<SandboxSpec, "cpus" | "memoryGiB" | "diskGiB" | "workspaceGiB" | "mounts" | "env" | "provision" | "workdir" | "hostLoopback">>;
 
 /** A spec as validated, which has its defaults filled in. */
 export type ValidSpec = SandboxSpec & { workdir: string };
 
-/** `absent`: a project whose VM doesn't exist (its creation failed, or it was deleted outside Kumiko). */
+/** `absent`: a sandbox whose VM doesn't exist (its creation failed, or it was deleted outside Kumiko). */
 export type SandboxStatus = "running" | "stopped" | "broken" | "unknown" | "absent";
 
 export type SetupState = "creating" | "ready" | "provision_failed";
@@ -162,7 +167,7 @@ export interface SandboxMeta {
 }
 
 /**
- * Where the agent keeps its setup scripts, in the project's Kumiko folder: `*.sh` files run in name order after the
+ * Where the agent keeps its setup scripts, in the sandbox's Kumiko folder: `*.sh` files run in name order after the
  * user's provisioning script whenever the VM is created, so what the agent set up survives a recreate.
  */
 export const AGENT_SETUP_DIR = "provision.d";
@@ -185,7 +190,7 @@ export interface AgentSetupRun {
   scripts: AgentScript[];
 }
 
-/** GET /api/projects/:id/agent-setup: the scripts as they are now, each with how it went when the VM was created, if it ran as it is now. */
+/** GET /api/sandboxes/:name/agent-setup: the scripts as they are now, each with how it went when the VM was created, if it ran as it is now. */
 export interface AgentSetupResponse {
   scripts: AgentScript[];
   /** Files in the folder Kumiko won't run: not named `*.sh`, not plain files, or too big. */
@@ -193,9 +198,11 @@ export interface AgentSetupResponse {
 }
 
 export interface SandboxInfo {
-  name: string;            // short name, without "km-"
+  name: string;            // short name, without "kumiko-"
   status: SandboxStatus;
   cpus?: number; memoryGiB?: number; diskGiB?: number;
+  /** The workspace disk's size, as Lima has it; missing when the sandbox has none, or it is gone. */
+  workspaceGiB?: number;
   /** Kumiko's metadata, when this sandbox was created by Kumiko. */
   meta?: SandboxMeta;
   /** Set when Kumiko has a record of this sandbox that it can't read; `meta` is then missing. */
@@ -216,6 +223,9 @@ export interface SandboxStats {
   /** The VM's root filesystem; folders mounted from the host aren't on it. */
   diskUsedBytes: number;
   diskFreeBytes: number;
+  /** The workspace disk at /workspace; missing when the VM has none mounted there. */
+  workspaceUsedBytes?: number;
+  workspaceFreeBytes?: number;
 }
 
 /**
@@ -250,8 +260,8 @@ export interface Operation {
   error?: string;
 }
 
-/** A sandbox as the UI sees it: Lima's view merged with metadata and the current or last operation. */
-export interface SandboxView extends SandboxInfo {
+/** A VM as the UI sees it: Lima's view merged with metadata and the current or last operation. */
+export interface VmView extends SandboxInfo {
   vm: string;
   provider: "lima";
   /** The running operation, or the last finished one. */
@@ -261,113 +271,126 @@ export interface SandboxView extends SandboxInfo {
   sessions: number;
 }
 
-// ---- projects -------------------------------------------------------------------------------
+// ---- sandboxes ------------------------------------------------------------------------------
+
+/** A repo of a sandbox: a GitHub repository with a mirror on the host, cloned in the VM at `/workspace/<folder>`. */
+export interface SandboxRepo {
+  /** "owner/name", as GitHub spells it. */
+  repo: string;
+  /** Its folder in /workspace, given when it was added and never changed; its worktrees go in `<folder>__worktrees`. */
+  folder: string;
+}
 
 /**
- * A local git clone with one VM and one Claude home. Its id is also its sandbox's name, so the VM is `km-<id>`.
- * Saved in Kumiko's home as `projects/<id>.json`; nothing is written into the repo.
+ * A sandbox: a VM of its own for Claude, with a Claude home, a Kumiko folder, and the repos cloned on its workspace
+ * disk. Its name is also its VM's, as `kumiko-<name>`. Saved in Kumiko's home as `workspaces/<name>.json`.
  */
-export interface Project {
-  id: string;
-  /** The clone's real path on the host, mounted at the same path in the VM. */
-  clonePath: string;
-  /** `<clone>__worktrees`, beside the clone, mounted at the same path in the VM. */
-  worktreesPath: string;
+export interface Sandbox {
+  name: string;
   createdAt: string;
+  repos: SandboxRepo[];
   /**
-   * The GitHub repository ("owner/name") the agent fetches and pushes through Kumiko's mirror of, read once from the
-   * clone's origin and kept: the clone is the agent's to change, and which of the user's repositories it can push to
-   * mustn't be. Null when origin wasn't on GitHub; missing until it has been read.
+   * Folders of repos taken out of the sandbox while its VM was stopped, deleted from /workspace when it next starts.
+   * Their names aren't given to another repo meanwhile.
    */
-  repo?: string | null;
-}
-
-/** A project id from its clone's folder name: lowercase letters, digits and dashes, short enough for a sandbox name. */
-export function suggestProjectId(clonePath: string): string {
-  const base = clonePath.replace(/\/+$/, "").split("/").pop() ?? "";
-  return base.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 30).replace(/-+$/, "");
+  dropped?: string[];
 }
 
 /**
- * Which of the mounts every project's VM has this one is, if any: the clone and its worktrees at their own paths, the
- * Claude home at ~/.claude and the Kumiko folder at ~/.kumiko. With `homes`, the homes' host folders must match too.
+ * The folder a repo gets in /workspace: its name, unless `taken` has that, then `owner-name`, then with a number.
+ * Folders already given keep theirs, so only the newcomer is renamed. Case is ignored, as the Mac's file system does.
  */
-export function projectMountRole(
-  p: Project,
-  m: Mount,
-  homes?: { claude: string; kumiko: string },
-): "clone" | "worktrees" | "claude-home" | "kumiko-home" | undefined {
+export function repoFolder(repo: string, taken: Iterable<string>): string {
+  const p = parseRepo(repo);
+  if (!p) throw new Error(`Not a repository: ${repo}`);
+  // Each folder comes with its worktrees folder beside it: a newcomer can't be either, nor have its own be either.
+  const used = new Set([...taken].flatMap((t) => [t.toLowerCase(), `${t}${WORKTREES_SUFFIX}`.toLowerCase()]));
+  const free = (f: string) => !used.has(f.toLowerCase()) && !used.has(`${f}${WORKTREES_SUFFIX}`.toLowerCase());
+  for (const f of [p.name, `${p.owner}-${p.name}`]) if (free(f)) return f;
+  for (let n = 2; ; n++) {
+    const f = `${p.owner}-${p.name}-${n}`;
+    if (free(f)) return f;
+  }
+}
+
+/**
+ * The folders for repos picked together: each its name, but every repo whose name another of them shares gets its
+ * owner in front, so neither depends on the order they were picked in. `kept` are folders given before, and
+ * `reserved` folders no repo may have, such as those still to be deleted.
+ */
+export function repoFolders(repos: string[], kept: SandboxRepo[] = [], reserved: string[] = []): SandboxRepo[] {
+  const names = repos.map((r) => parseRepo(r)?.name.toLowerCase());
+  const out = [...kept];
+  for (const [i, repo] of repos.entries()) {
+    if (kept.some((k) => k.repo.toLowerCase() === repo.toLowerCase())) continue;
+    const shared = names.filter((n) => n === names[i]).length > 1;
+    const p = parseRepo(repo);
+    if (!p) throw new Error(`Not a repository: ${repo}`);
+    const taken = [...reserved, ...out.map((o) => o.folder), ...(shared ? [p.name] : [])];
+    out.push({ repo, folder: repoFolder(repo, taken) });
+  }
+  return out;
+}
+
+/**
+ * Which of the mounts every sandbox's VM has this one is, if any: the Claude home at ~/.claude and the Kumiko folder
+ * at ~/.kumiko/shared. With `homes`, their host folders must match too.
+ */
+export function sandboxMountRole(m: Mount, homes?: { claude: string; kumiko: string }): "claude-home" | "kumiko-home" | undefined {
   const guest = m.guestPath ?? m.hostPath;
-  if (m.hostPath === p.clonePath && guest === p.clonePath) return "clone";
-  if (m.hostPath === p.worktreesPath && guest === p.worktreesPath) return "worktrees";
   if (guest === CLAUDE_HOME_IN_VM && (homes === undefined || m.hostPath === homes.claude)) return "claude-home";
   if (guest === KUMIKO_HOME_IN_VM && (homes === undefined || m.hostPath === homes.kumiko)) return "kumiko-home";
   return undefined;
 }
 
-/** A project as the UI sees it: its VM's view, plus the project itself and what needs the user. */
-export interface ProjectView extends SandboxView {
-  project: Project;
-  /** Set when the clone or the worktrees folder is gone from the host; the VM can't start without them. */
-  problem?: string;
-  /** Sessions in this project that are waiting on the user. */
-  waiting: number;
-  /** The relay to the project's mirror, while the VM runs and the project has a GitHub repository. */
-  relay?: RelayView;
-  /** The branches this project's agent created on GitHub that are still there, newest push first. */
-  branches?: { name: string; at: string }[];
-}
-
-/**
- * The relay that has git in a project's VM reach Kumiko's mirror of its repository: a socket on the host, forwarded
- * into the VM over ssh.
- */
-export interface RelayView {
-  repo: string;
-  state: "connecting" | "connected" | "down";
-  /** Why it is down. */
+/** How a repo's clone in the VM is, as Kumiko last found it. */
+export interface RepoState extends SandboxRepo {
+  /** `pending` until Kumiko has looked: while the VM is stopped, or git can't reach the mirrors yet. */
+  state: "pending" | "cloning" | "cloned" | "failed";
+  /** Why the clone failed, or, while it is pending, why git in the VM can't reach the mirrors. */
   error?: string;
 }
 
-/** Creates a project from a clone. Everything but `clonePath` and `name` is the VM's spec. */
-export type CreateProjectRequest = Omit<SandboxSpec, "workdir"> & {
-  clonePath: string;
+/** A sandbox as the UI sees it: its VM's view, plus the sandbox itself and what needs the user. */
+export interface SandboxView extends VmView {
+  sandbox: Sandbox;
+  /** Its repos, with how each one's clone is. */
+  repos: RepoState[];
+  /** Sessions in this sandbox that are waiting on the user. */
+  waiting: number;
+}
+
+/** Work in one repo of a sandbox that only its VM has: lost if its folder goes, or the workspace disk. */
+export interface RepoUnpushed extends SandboxRepo {
+  /** Local branches with commits that aren't on their upstream, or on no remote at all when they have none. */
+  branches: { name: string; ahead: number; upstream?: string }[];
+  /** Worktrees, the clone included, with uncommitted changes (untracked files count), as paths in the VM. */
+  dirty: { worktree: string; files: number }[];
+  stashes: number;
+  /** Why the repo couldn't be looked at: its folder is gone, or git failed there. */
+  error?: string;
+}
+
+/** `GET /api/sandboxes/:name/unpushed`: what a running sandbox's VM has that isn't pushed, repo by repo. */
+export interface UnpushedResponse {
+  repos: RepoUnpushed[];
+}
+
+/** Whether there is anything in `u` that would be lost. */
+export const hasUnpushed = (u: RepoUnpushed) => u.branches.length > 0 || u.dirty.length > 0 || u.stashes > 0;
+
+/** Creates a sandbox. Everything but `name` and `repos` is the VM's spec; the workspace disk is always there. */
+export type CreateSandboxRequest = Omit<SandboxSpec, "workdir" | "workspaceGiB"> & {
+  workspaceGiB: number;
+  /** "owner/name" of each repo, picked from the mirrors. */
+  repos: string[];
 };
 
 /**
- * What can change on a project: its VM's spec, as for a sandbox. `mounts` are the extra ones only; the clone,
- * worktrees and Claude home mounts are always there and can't change. The working directory is the clone.
+ * What can change on a sandbox: its VM's spec, as for any VM, and its repos. `mounts` are the extra ones only; the
+ * Claude home and Kumiko folder mounts are always there. `repos` is the whole list: new ones are cloned.
  */
-export type ProjectEdit = Omit<EditSpec, "workdir">;
-
-/** One worktree of a project's clone, as git on the host sees it. */
-export interface WorktreeStatus {
-  path: string;
-  /** The branch checked out, without refs/heads/; missing when HEAD is detached. */
-  branch?: string;
-  head?: string;
-  /** The clone itself, which git lists first. */
-  main: boolean;
-  /** Uncommitted changes, untracked files included. */
-  dirty: boolean;
-  /** Commits not on the branch's upstream, or on no remote at all when it has none. */
-  unpushed: number;
-  /** The upstream, e.g. "origin/fix-x"; missing when the branch has none. */
-  upstream?: string;
-  /** HEAD is contained in the remote's default branch (as of the last fetch), so the worktree can go. */
-  merged: boolean;
-  /** git's own flags: locked by the user, or prunable because its folder is gone. */
-  locked?: boolean;
-  prunable?: boolean;
-  /** Set when git couldn't read this worktree's state. */
-  error?: string;
-}
-
-export interface WorktreesResponse {
-  worktrees: WorktreeStatus[];
-  /** The remote branch "merged" is measured against, e.g. "origin/main"; missing when there is none. */
-  defaultBranch?: string;
-}
+export type SandboxEdit = Omit<EditSpec, "workdir"> & { repos?: string[] };
 
 // ---- agent sessions -------------------------------------------------------------------------
 
@@ -378,7 +401,7 @@ export const LIVE_SESSION_STATUSES: readonly SessionStatus[] = ["starting", "idl
 
 export interface SessionInfo {
   id: string;
-  /** The project's id, which is also its sandbox's short name (without "km-"). */
+  /** The sandbox's name (without "kumiko-"). */
   sandbox: string;
   workdir: string;          // where Claude was started in the VM
   status: SessionStatus;
@@ -477,7 +500,7 @@ export type SessionEvent =
   /** A change to the session's window. `toolUseId`: the tool call of Claude's that made it, if one did. */
   | { seq: number; kind: "window"; payload: { op: WindowOp; toolUseId?: string } }
   /**
-   * Claude asking, with its tool call `toolUseId`, to start a new session in the project on `prompt`, with copies of
+   * Claude asking, with its tool call `toolUseId`, to start a new session in the sandbox on `prompt`, with copies of
    * the artifacts whose files are `artifacts` (paths in the VM); see `proposal_answer`.
    */
   | { seq: number; kind: "proposal"; payload: { id: string; prompt: string; title?: string; artifacts?: string[]; toolUseId?: string } }
@@ -584,7 +607,7 @@ export function sharedNote(shares: readonly Extract<SessionEvent, { kind: "share
  */
 export type SessionStreamMessage = SessionEvent | { kind: "caught_up"; buffer: string };
 
-/** Who Claude is logged in as in a project's Claude home. */
+/** Who Claude is logged in as in a sandbox's Claude home. */
 export interface LoginAccount {
   email?: string;
   /** The subscription plan, e.g. "max" or "pro". */
@@ -593,11 +616,11 @@ export interface LoginAccount {
 
 /**
  * Starting a login from a session: the page to sign in on, after which Claude shows a code to paste back; or, when
- * the project is logged in already (from another session, say), who it is logged in as.
+ * the sandbox is logged in already (from another session, say), who it is logged in as.
  */
 export type LoginStartResponse = { url: string } | { loggedIn: LoginAccount };
 
-/** Whether a project's Claude is logged in now; `loggedIn` is missing when it isn't, or its sandbox isn't running. */
+/** Whether a sandbox's Claude is logged in now; `loggedIn` is missing when it isn't, or its sandbox isn't running. */
 export interface LoginStatusResponse {
   loggedIn?: LoginAccount;
 }
@@ -742,7 +765,7 @@ export interface AccountUsage {
 }
 
 export interface StartSessionRequest {
-  /** The project's id. */
+  /** The sandbox's name. */
   sandbox: string;
   prompt: string;
   attachments?: AttachmentInput[];
@@ -759,7 +782,7 @@ export interface TemplatesResponse {
 }
 
 export interface CreateResponse {
-  /** The project's id. */
+  /** The sandbox's name. */
   name: string;
   warnings: string[];
 }
@@ -771,9 +794,9 @@ export interface ApiError {
 
 /** Messages on the /api/events WebSocket. */
 export type ServerEvent =
-  /** `error`: the VMs couldn't be listed. `unreadable`: why each project record that can't be used can't be. */
-  | { type: "snapshot"; projects: ProjectView[]; unreadable: string[]; logs: Record<string, LogLine[]>; sessions: SessionInfo[]; error?: string; mirrors?: MirrorsResponse }
-  | { type: "list"; projects: ProjectView[]; unreadable: string[]; error?: string }
+  /** `error`: the VMs couldn't be listed. `unreadable`: why each sandbox record that can't be used can't be. */
+  | { type: "snapshot"; sandboxes: SandboxView[]; unreadable: string[]; logs: Record<string, LogLine[]>; sessions: SessionInfo[]; error?: string; mirrors?: MirrorsResponse }
+  | { type: "list"; sandboxes: SandboxView[]; unreadable: string[]; error?: string }
   /** Sent whenever a session starts, changes status or ends. */
   | { type: "sessions"; sessions: SessionInfo[] }
   /**
@@ -791,6 +814,11 @@ export type ServerEvent =
 
 export function vmName(name: string): string {
   return VM_PREFIX + name;
+}
+
+/** The Lima disk holding a sandbox's /workspace, which outlives its VM. */
+export function workspaceDiskName(name: string): string {
+  return `${vmName(name)}-workspace`;
 }
 
 /** A GitHub account or organization name: letters, digits and single dashes, up to 39 characters. */

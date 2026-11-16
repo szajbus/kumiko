@@ -10,14 +10,14 @@ const spec = (over = {}) => ({ name: "web", cpus: 4, memoryGiB: 4, diskGiB: 100,
 
 describe("parsing", () => {
   it("reads limactl's one-object-per-line JSON and arrays", () => {
-    const a = { name: "km-a", status: "Running" }, b = { name: "wm-b", status: "Stopped" };
+    const a = { name: "kumiko-a", status: "Running" }, b = { name: "wm-b", status: "Stopped" };
     assert.deepEqual(parseLimaList(`${JSON.stringify(a)}\n${JSON.stringify(b)}\n`), [a, b]);
     assert.deepEqual(parseLimaList(JSON.stringify([a, b])), [a, b]);
     assert.deepEqual(parseLimaList("\n"), []);
   });
 
   it("tidies logfmt lines", () => {
-    assert.deepEqual(tidyLimaLine('time="x" level=info msg="Starting \\"km-a\\""'), { text: 'Starting "km-a"' });
+    assert.deepEqual(tidyLimaLine('time="x" level=info msg="Starting \\"kumiko-a\\""'), { text: 'Starting "kumiko-a"' });
     assert.deepEqual(tidyLimaLine('time="x" level=fatal msg="boom"'), { text: "error: boom", kind: "err" });
     assert.deepEqual(tidyLimaLine("plain"), { text: "plain" });
   });
@@ -125,6 +125,21 @@ describe("validateSpec", () => {
     assert.match(clash.errors.join(), /overlap in the sandbox/);
   });
 
+  it("takes a whole workspace disk size, and keeps mounts out of /workspace only when there is one", async () => {
+    const { mountDir } = await fakeLima();
+    assert.deepEqual((await validateSpec(spec({ workspaceGiB: 50 }))).spec.workspaceGiB, 50);
+    assert.equal((await validateSpec(spec())).spec.workspaceGiB, undefined);
+    assert.match((await validateSpec(spec({ workspaceGiB: 0 }))).errors.join(), /Workspace disk must be a number of at least 1/);
+    assert.match((await validateSpec(spec({ workspaceGiB: 2.5 }))).errors.join(), /whole number of GiB/);
+    const at = (guestPath: string, workspaceGiB?: number) => validateSpec(spec({ workspaceGiB, mounts: [{ hostPath: mountDir, writable: true, guestPath }] }));
+    for (const g of ["/workspace", "/workspace/data", "/workspace/a/b/"]) {
+      assert.match((await at(g, 10)).errors.join(), /is the sandbox's workspace disk/, g);
+      assert.deepEqual((await at(g)).errors, [], `${g} without a workspace disk`);
+    }
+    assert.deepEqual((await at("/workspaces", 10)).errors, []);
+    assert.deepEqual((await at("~/workspace", 10)).errors, []);
+  });
+
   it("warns, not fails, on unset variables", async () => {
     const v = await validateSpec(spec({ env: ["SET_ONE", "UNSET_ONE", "SET_ONE"] }), { SET_ONE: "1" });
     assert.deepEqual(v.errors, []);
@@ -135,10 +150,10 @@ describe("validateSpec", () => {
 });
 
 describe("LimaProvider against a fake limactl", () => {
-  it("lists only km- instances", async () => {
+  it("lists only kumiko- instances", async () => {
     const { limaDir, provider } = await fakeLima();
     await writeFile(join(limaDir, "wm-other.json"), JSON.stringify({ name: "wm-other", status: "Running" }));
-    await writeFile(join(limaDir, "km-mine.json"), JSON.stringify({ name: "km-mine", status: "Broken", cpus: 2, memory: 2 * 1024 ** 3 }));
+    await writeFile(join(limaDir, "kumiko-mine.json"), JSON.stringify({ name: "kumiko-mine", status: "Broken", cpus: 2, memory: 2 * 1024 ** 3 }));
     assert.deepEqual(await provider.list(), [
       { name: "mine", status: "broken", cpus: 2, memoryGiB: 2, diskGiB: undefined, meta: undefined },
     ]);
@@ -146,7 +161,7 @@ describe("LimaProvider against a fake limactl", () => {
 
   it("reports a record it can't read instead of treating the VM as foreign", async () => {
     const { root, limaDir, provider, log, lines } = await fakeLima();
-    await writeFile(join(limaDir, "km-mine.json"), JSON.stringify({ name: "km-mine", status: "Stopped" }));
+    await writeFile(join(limaDir, "kumiko-mine.json"), JSON.stringify({ name: "kumiko-mine", status: "Stopped" }));
     await mkdir(join(root, "sandboxes"), { recursive: true });
     await writeFile(join(root, "sandboxes", "mine.json"), "{ not json");
 
@@ -161,7 +176,7 @@ describe("LimaProvider against a fake limactl", () => {
 
   it("reports a record whose spec has no working directory as one it can't read", async () => {
     const { root, limaDir, provider } = await fakeLima();
-    await writeFile(join(limaDir, "km-mine.json"), JSON.stringify({ name: "km-mine", status: "Stopped" }));
+    await writeFile(join(limaDir, "kumiko-mine.json"), JSON.stringify({ name: "kumiko-mine", status: "Stopped" }));
     await mkdir(join(root, "sandboxes"), { recursive: true });
     const meta = { spec: { name: "mine", cpus: 2, memoryGiB: 4, diskGiB: 20, mounts: [], env: [] }, provider: "lima", createdAt: "2026-01-01T00:00:00Z", setup: "ready" };
     await writeFile(join(root, "sandboxes", "mine.json"), JSON.stringify(meta));
@@ -184,7 +199,7 @@ describe("LimaProvider against a fake limactl", () => {
     const calls = (await readFile(join(limaDir, "calls.log"), "utf8")).trim().split("\n").map((l) => JSON.parse(l));
     const create = calls.find((c) => c[0] === "create");
     assert.deepEqual(create, [
-      "create", "--tty=false", "--name=km-web", "--cpus=4", "--memory=4", "--disk=100",
+      "create", "--tty=false", "--name=kumiko-web", "--cpus=4", "--memory=4", "--disk=100",
       `--set=.mounts = [{"location":"${mountDir}","mountPoint":"${mountDir}","writable":true}]`,
       "template:default",
     ]);
@@ -338,7 +353,7 @@ describe("LimaProvider against a fake limactl", () => {
     const { provider, log } = await fakeLima();
     await provider.create(spec(), log);
     const v = await provider.validate(spec());
-    assert.match(v.errors.join(), /km-web already exists/);
+    assert.match(v.errors.join(), /kumiko-web already exists/);
 
     process.env.FAKE_LIMA_FAIL_CREATE = "1";
     try {
@@ -366,7 +381,7 @@ describe("LimaProvider against a fake limactl", () => {
     assert.equal(info.meta?.spec.provision, "echo hi");
     assert.equal(info.meta?.setup, "ready", "editing doesn't change the setup state");
     v = await provider.validateEdit("web", { cpus: 4 });
-    assert.match(v.errors.join(), /Stop km-web to change its resources, mounts or access to your Mac.s localhost/);
+    assert.match(v.errors.join(), /Stop kumiko-web to change its resources, mounts or access to your Mac.s localhost/);
 
     await provider.stop("web", log);
     v = await provider.validateEdit("web", { diskGiB: 10 });
@@ -376,7 +391,7 @@ describe("LimaProvider against a fake limactl", () => {
     await provider.edit("web", { cpus: 4, memoryGiB: 6, diskGiB: 40, mounts: [{ hostPath: mountDir, writable: true, guestPath: "/workspace/m" }] }, log);
     const edit = (await readFile(join(limaDir, "calls.log"), "utf8")).trim().split("\n").map((l) => JSON.parse(l)).filter((c) => c[0] === "edit").pop();
     assert.deepEqual(edit, [
-      "edit", "--tty=false", "km-web", "--cpus=4", "--memory=6", "--disk=40",
+      "edit", "--tty=false", "kumiko-web", "--cpus=4", "--memory=6", "--disk=40",
       `--set=.mounts = [{"location":"${mountDir}","mountPoint":"/workspace/m","writable":true}]`,
     ]);
     [info] = await provider.list();
@@ -391,6 +406,130 @@ describe("LimaProvider against a fake limactl", () => {
     assert.equal(await edits(), before);
     [info] = await provider.list();
     assert.equal(info.meta?.spec.provision, undefined);
+  });
+
+  describe("the workspace disk", () => {
+    const callsOf = async (limaDir: string) => (await readFile(join(limaDir, "calls.log"), "utf8")).trim().split("\n").map((l) => JSON.parse(l) as string[]);
+    const disks = async (limaDir: string) => (await callsOf(limaDir)).filter((c) => c[0] === "disk" && c[1] !== "ls");
+
+    it("is created before the VM, attached at /workspace, and listed with its size", async () => {
+      const { limaDir, provider, log } = await fakeLima();
+      await provider.create(spec({ workspaceGiB: 50 }), log);
+      const calls = await callsOf(limaDir);
+      assert.deepEqual(await disks(limaDir), [["disk", "create", "kumiko-web-workspace", "--size=50GiB", "--format=raw"]]);
+      assert.ok(calls.findIndex((c) => c[0] === "disk") < calls.findIndex((c) => c[0] === "create"), "the disk exists before the VM that uses it");
+      assert.deepEqual(calls.find((c) => c[0] === "create"), [
+        "create", "--tty=false", "--name=kumiko-web", "--cpus=4", "--memory=4", "--disk=100", "--mount-none",
+        `--set=.additionalDisks = [{"name":"kumiko-web-workspace","format":true,"fsType":"ext4","mountPoint":"/workspace"}]`,
+        "template:default",
+      ]);
+      const [info] = await provider.list();
+      assert.equal(info.workspaceGiB, 50);
+      assert.equal(info.meta?.spec.workspaceGiB, 50);
+    });
+
+    it("joins the mounts in one --set", async () => {
+      const { limaDir, mountDir, provider, log } = await fakeLima();
+      await provider.create(spec({ workspaceGiB: 5, mounts: [{ hostPath: mountDir, writable: false }] }), log);
+      const create = (await callsOf(limaDir)).find((c) => c[0] === "create")!;
+      assert.deepEqual(create.filter((a) => a.startsWith("--set=")), [
+        `--set=.mounts = [{"location":"${mountDir}","mountPoint":"${mountDir}","writable":false}] | .additionalDisks = [{"name":"kumiko-web-workspace","format":true,"fsType":"ext4","mountPoint":"/workspace"}]`,
+      ]);
+      assert.ok(!create.includes("--mount-none"));
+    });
+
+    it("outlives a recreate, which attaches it again as it is, and goes with the sandbox", async () => {
+      const { limaDir, provider, log, lines } = await fakeLima();
+      await provider.create(spec({ workspaceGiB: 20 }), log);
+      await provider.delete("web", log, { keepWorkspace: true });
+      assert.ok(lines.includes("Deleted. The workspace disk kumiko-web-workspace is kept."));
+      let [info] = await provider.list();
+      assert.equal(info, undefined, "the VM and its record are gone");
+
+      await provider.create(spec({ workspaceGiB: 20, cpus: 2 }), log);
+      assert.deepEqual((await disks(limaDir)).map((c) => c.slice(0, 2)), [["disk", "create"]], "not created again");
+      assert.ok(lines.includes("Using the workspace disk kumiko-web-workspace, kept from before (20 GiB)."));
+      [info] = await provider.list();
+      assert.deepEqual([info.status, info.cpus, info.workspaceGiB], ["running", 2, 20]);
+
+      await provider.delete("web", log);
+      assert.deepEqual((await disks(limaDir)).at(-1), ["disk", "delete", "kumiko-web-workspace"]);
+      assert.deepEqual(await provider.list(), []);
+    });
+
+    it("is grown on a recreate that asks for more", async () => {
+      const { limaDir, provider, log } = await fakeLima();
+      await provider.create(spec({ workspaceGiB: 20 }), log);
+      await provider.delete("web", log, { keepWorkspace: true });
+      await provider.create(spec({ workspaceGiB: 30 }), log);
+      assert.deepEqual((await disks(limaDir)).at(-1), ["disk", "resize", "kumiko-web-workspace", "--size=30GiB"]);
+      assert.equal((await provider.list())[0].workspaceGiB, 30);
+    });
+
+    it("is deleted with a VM that is already gone", async () => {
+      const { limaDir, provider, log } = await fakeLima();
+      await provider.create(spec({ workspaceGiB: 5 }), log);
+      execFileSync(FAKE_LIMACTL, ["delete", "kumiko-web"], { env: { ...process.env, FAKE_LIMA_DIR: limaDir } });
+      assert.equal((await provider.list())[0].status, "absent");
+      assert.equal((await provider.list())[0].workspaceGiB, 5, "an absent sandbox's disk is still listed");
+      await provider.delete("web", log);
+      assert.deepEqual((await disks(limaDir)).at(-1), ["disk", "delete", "kumiko-web-workspace"]);
+    });
+
+    it("grows only while the VM is stopped, and never shrinks", async () => {
+      const { limaDir, provider, log } = await fakeLima();
+      await provider.create(spec({ workspaceGiB: 20 }), log);
+      assert.match((await provider.validateEdit("web", { workspaceGiB: 40 })).errors.join(), /Stop kumiko-web to change/);
+      assert.deepEqual((await provider.validateEdit("web", { workspaceGiB: 40 }, { restart: true })).errors, []);
+      await provider.stop("web", log);
+      assert.match((await provider.validateEdit("web", { workspaceGiB: 10 })).errors.join(), /can only grow; it is 20 GiB now/);
+      const before = (await callsOf(limaDir)).length;
+      await provider.edit("web", { workspaceGiB: 40 }, log);
+      assert.deepEqual((await disks(limaDir)).at(-1), ["disk", "resize", "kumiko-web-workspace", "--size=40GiB"]);
+      assert.ok(!(await callsOf(limaDir)).slice(before).some((c) => c[0] === "edit"), "nothing for limactl edit");
+      const [info] = await provider.list();
+      assert.deepEqual([info.workspaceGiB, info.meta?.spec.workspaceGiB], [40, 40]);
+    });
+
+    it("can't be added to a VM without one, short of a recreate", async () => {
+      const { provider, log } = await fakeLima();
+      await provider.create(spec(), log);
+      await provider.stop("web", log);
+      assert.match((await provider.validateEdit("web", { workspaceGiB: 10 })).errors.join(), /no workspace disk. Recreate it to add one/);
+      assert.deepEqual((await provider.validateEdit("web", { workspaceGiB: 10 }, { recreate: true })).errors, []);
+    });
+
+    it("needs Lima 2.3, and says so before creating anything", async () => {
+      const { limaDir, provider, log } = await fakeLima();
+      process.env.FAKE_LIMA_VERSION = "2.2.1";
+      try {
+        await assert.rejects(provider.create(spec({ workspaceGiB: 5 }), log), /needs Lima 2.3.0 or later; this is Lima 2.2.1. Upgrade Lima first/);
+      } finally {
+        delete process.env.FAKE_LIMA_VERSION;
+      }
+      assert.deepEqual(await disks(limaDir), []);
+      assert.ok(!(await callsOf(limaDir)).some((c) => c[0] === "create"));
+    });
+
+    it("refuses a new sandbox whose disk an earlier one of the same name left behind", async () => {
+      const { limaDir, provider } = await fakeLima();
+      assert.deepEqual((await provider.validate(spec({ workspaceGiB: 5 }), { newSandbox: true })).errors, []);
+      execFileSync(FAKE_LIMACTL, ["disk", "create", "kumiko-web-workspace", "--size=5GiB"], { env: { ...process.env, FAKE_LIMA_DIR: limaDir } });
+      assert.match(
+        (await provider.validate(spec({ workspaceGiB: 5 }), { newSandbox: true })).errors.join(),
+        /The workspace disk kumiko-web-workspace is left from an earlier sandbox called web\. Delete it with `limactl disk delete kumiko-web-workspace` first/,
+      );
+      // A rebuild attaches it, as it should.
+      assert.deepEqual((await provider.validate(spec({ workspaceGiB: 5 }))).errors, []);
+    });
+
+    it("refuses a disk another VM uses", async () => {
+      const { limaDir, provider, log } = await fakeLima();
+      const env = { ...process.env, FAKE_LIMA_DIR: limaDir };
+      execFileSync(FAKE_LIMACTL, ["disk", "create", "kumiko-web-workspace", "--size=5GiB"], { env });
+      execFileSync(FAKE_LIMACTL, ["create", "--name=kumiko-other", `--set=.additionalDisks = [{"name":"kumiko-web-workspace"}]`, "template:default"], { env });
+      await assert.rejects(provider.create(spec({ workspaceGiB: 5 }), log), /The workspace disk kumiko-web-workspace is in use by kumiko-other/);
+    });
   });
 
   describe("the Mac's localhost", () => {
@@ -411,7 +550,7 @@ describe("LimaProvider against a fake limactl", () => {
       await provider.create(spec(), log);
       const calls = await callsOf(limaDir);
       const edit = calls.findIndex((c) => c[0] === "edit");
-      assert.deepEqual(calls[edit], ["edit", "--tty=false", "km-web", "--set=.networkOpts.hostLoopback = false"]);
+      assert.deepEqual(calls[edit], ["edit", "--tty=false", "kumiko-web", "--set=.networkOpts.hostLoopback = false"]);
       assert.ok(edit < calls.findIndex((c) => c[0] === "start"), "before the VM first starts");
       const [info] = await provider.list();
       assert.equal(info.hostLoopbackOpen, undefined);
@@ -423,7 +562,7 @@ describe("LimaProvider against a fake limactl", () => {
       assert.deepEqual(await loopbackEdits(limaDir), []);
       assert.equal((await provider.list())[0].meta?.spec.hostLoopback, true);
 
-      assert.match((await provider.validateEdit("web", { hostLoopback: false })).errors.join(), /Stop km-web to change/);
+      assert.match((await provider.validateEdit("web", { hostLoopback: false })).errors.join(), /Stop kumiko-web to change/);
       await provider.stop("web", log);
       await provider.edit("web", { hostLoopback: false }, log);
       assert.deepEqual((await loopbackEdits(limaDir)).pop()?.at(-1), "--set=.networkOpts.hostLoopback = false");
@@ -461,7 +600,7 @@ describe("LimaProvider against a fake limactl", () => {
 
   it("refuses to edit VMs Kumiko didn't create", async () => {
     const { limaDir, provider } = await fakeLima();
-    await writeFile(join(limaDir, "km-alien.json"), JSON.stringify({ name: "km-alien", status: "Stopped" }));
+    await writeFile(join(limaDir, "kumiko-alien.json"), JSON.stringify({ name: "kumiko-alien", status: "Stopped" }));
     const v = await provider.validateEdit("alien", { cpus: 2 });
     assert.match(v.errors.join(), /was not created by Kumiko/);
   });

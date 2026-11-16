@@ -15,9 +15,9 @@ export interface RefUpdate {
   ref: string;
 }
 
-/** Who is pushing: the project whose VM the push came from, and its repository. */
+/** Who is pushing: the sandbox whose VM the push came from, and the repository. */
 export interface Pusher {
-  project: string;
+  sandbox: string;
   repo: string;
   /** The session the push was run from, as the VM said; only where to ask, never who may push. */
   session?: string;
@@ -42,8 +42,8 @@ export function parseUpdates(text: string): RefUpdate[] {
 }
 
 /**
- * The policy for pushes from a project's VM, in phase 1: the agent's own branches (the ones it created on GitHub
- * through this project's relay) and new ones are pushed on, force-pushes and deletions included. Everything else is
+ * The policy for pushes from a sandbox's VM, in phase 1: the agent's own branches (the ones it created on GitHub
+ * through this sandbox's relay) and new ones are pushed on, force-pushes and deletions included. Everything else is
  * refused, with what to do instead: the default branch, tags, and branches someone else created. One refused ref
  * refuses the whole push, as nothing is pushed on until all of it may be.
  */
@@ -53,7 +53,7 @@ export function decide(
   ctx: {
     defaultBranch?: string;
     createdBy(branch: string): string | undefined;
-    /** The project's branch was replaced on GitHub by a different one of the same name. */
+    /** The sandbox's branch was replaced on GitHub by a different one of the same name. */
     replaced?(branch: string): boolean;
     /** The branches there are, to catch a name that differs from one only in case, which macOS takes for the same. */
     branches?: string[];
@@ -79,10 +79,10 @@ export function decide(
       continue;
     }
     const owner = ctx.createdBy(branch);
-    if (!created && owner !== pusher.project) {
+    if (!created && owner !== pusher.sandbox) {
       reasons.push(
         owner
-          ? `${branch} was created from another project's sandbox, so this one can't change it. Push your work to a branch of its own.`
+          ? `${branch} was created from another sandbox, so this one can't change it. Push your work to a branch of its own.`
           : `${branch} wasn't created from this sandbox, so Kumiko won't change it. Push your work to a branch of its own.`,
       );
       continue;
@@ -185,7 +185,7 @@ export interface PushOptions {
 
 /**
  * Answers the mirrors' pre-receive hooks, on a socket of Kumiko's that only the user can reach: decides each push from
- * a project's VM, pushes what is allowed on to GitHub, and tells the hook what to print and how to exit.
+ * a sandbox's VM, pushes what is allowed on to GitHub, and tells the hook what to print and how to exit.
  */
 export class Pushes {
   private server?: Server;
@@ -230,12 +230,12 @@ export class Pushes {
       const dir = this.opts.mirrors.path(pusher.repo);
       const defaultBranch = await headBranch(dir);
       const branchNames = (await quarantineGit(dir, ["for-each-ref", "--format=%(refname:lstrip=2)", "refs/heads"], {})).out.split("\n").filter(Boolean);
-      // A branch the project pushed, whose tip on GitHub doesn't come from what it pushed last, is someone else's now.
+      // A branch the sandbox pushed, whose tip on GitHub doesn't come from what it pushed last, is someone else's now.
       const replaced = new Set<string>();
       for (const u of updates) {
         const branch = u.ref.replace(/^refs\/heads\//, "");
         const last = this.opts.mirrors.lastPushed(pusher.repo, branch);
-        if (!last || ZERO.test(u.old) || last === u.old || this.opts.mirrors.createdBy(pusher.repo, branch) !== pusher.project) continue;
+        if (!last || ZERO.test(u.old) || last === u.old || this.opts.mirrors.createdBy(pusher.repo, branch) !== pusher.sandbox) continue;
         if ((await quarantineGit(dir, ["merge-base", "--is-ancestor", last, u.old], {})).code !== 0) replaced.add(branch);
       }
       const decision = decide(updates, pusher, {
@@ -291,7 +291,7 @@ export class Pushes {
         return end(1);
       }
       for (const l of githubLines(output)) say(l);
-      await this.opts.mirrors.noteBranches(pusher.repo, pusher.project, decision.branches.map((b) => ({ branch: b.branch, deleted: b.deleted, sha: b.update.new, ...(ci.has(b.branch) ? { ci: ci.get(b.branch) } : {}) })));
+      await this.opts.mirrors.noteBranches(pusher.repo, pusher.sandbox, decision.branches.map((b) => ({ branch: b.branch, deleted: b.deleted, sha: b.update.new, ...(ci.has(b.branch) ? { ci: ci.get(b.branch) } : {}) })));
       for (const a of asked) a.done(true, "Pushed to GitHub, with its CI change");
       for (const b of decision.branches) say(`Kumiko: ${b.deleted ? "deleted" : "pushed"} ${b.branch} ${b.deleted ? "on" : "to"} GitHub (${pusher.repo}).`);
       this.opts.onPushed?.(pusher, decision.branches.map((b) => b.branch));

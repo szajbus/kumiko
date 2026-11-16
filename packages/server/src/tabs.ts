@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { parseSavedTabs, type SavedTabs } from "@kumiko/shared";
-import { defaultKumikoHome } from "./projects.js";
+import { defaultKumikoHome } from "./sandboxes.js";
 
 /** The window's tabs, in `tabs.json` in Kumiko's home. One file: there is one window. */
 export class TabsStore {

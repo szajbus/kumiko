@@ -7,51 +7,56 @@ sidebar:
 
 ## The sandbox
 
-The agent can reach only what the project's sandbox has: the clone and its worktrees, the agent home, extra mounts,
-forwarded variables, and the network. It can't reach the rest of your files, your own agent configuration, other
-projects, or your Mac's loopback (below). So mounts and forwarded variables are the security decision.
+The agent can reach only what its sandbox has: the workspace disk with the repos and their worktrees, the agent home,
+the Kumiko folder, extra mounts, forwarded variables, and the network. It can't reach the rest of your files, your own
+agent configuration, other sandboxes, or your Mac's loopback (below). So mounts and forwarded variables are the security
+decision.
 
-One thing to watch: the clone is writable, and that includes its git config, hooks and `.gitattributes`. These can
-tell git to run commands (hooks, an fsmonitor, filters, a pager, an SSH command), and git on your Mac runs them,
-whether you run it in a terminal or an editor such as VS Code runs it when you open the folder. Your global git config
-doesn't override the clone's. Kumiko's own git on your Mac turns these off, so the worktree statuses it shows run
-none of them.
+The repos live on the sandbox's own disk, not in a folder shared with your Mac. Nothing on your Mac opens that disk,
+so the clones' git config, hooks and `.gitattributes`, which the agent can write and which can tell git to run
+commands, never reach a git on your Mac. Code reaches your Mac only through git, as objects pushed to a mirror and
+checked there (`receive.fsckObjects`). Kumiko runs git on your Mac only in the mirrors, whose config it writes itself.
+An extra mount that is a git clone on your Mac is different: it's shared like any folder, and git there runs what the
+agent writes into its config.
 
-The sandbox has no GitHub credentials. When the clone's `origin` is on GitHub, git in the VM reaches the repository
-only through a socket Kumiko forwards in, which serves that one repository's [mirror](/guide/repos/#projects). Kumiko
-decides each push there and pushes what it allows on to GitHub itself, with your `gh` login: the agent's own branches,
-never the default branch, tags, or anyone else's branches. The default branch changes only when you approve a card to
-[merge a branch into it](/guide/repos/#merging-into-the-default-branch), and Kumiko signs that on your Mac. Which repository a project reaches is read from `origin`
-once and kept, so the agent can't point it elsewhere. Your `gh` login can bypass branch protections, so this check is
-the one that holds.
+The sandbox has no GitHub credentials. Git in the VM reaches GitHub only through a socket Kumiko forwards in, which
+serves the [mirrors](/guide/repos/#sandboxes) of that sandbox's repos and nothing else. Kumiko decides each push there
+and pushes what it allows on to GitHub itself, with your `gh` login: the agent's own branches, never the default
+branch, tags, or anyone else's branches. The default branch changes only when you approve a card to
+[merge a branch into it](/guide/repos/#merging-into-the-default-branch), and Kumiko signs that on your Mac. Which
+repositories a sandbox reaches is its list of repos, kept by Kumiko, so the agent can't point it elsewhere. Your `gh`
+login can bypass branch protections, so this check is the one that holds.
 
 Lima gives each VM an address (`host.lima.internal`, 192.168.5.2) that leads to your Mac's `127.0.0.1`. Through it the
 agent could reach every service listening there, such as databases, dev servers and other apps' local APIs, and many
-of those trust anything on localhost. Kumiko has Lima block this address, unless the project allows it (**This Mac's
+of those trust anything on localhost. Kumiko has Lima block this address, unless the sandbox allows it (**This Mac's
 localhost**).
 
-The block needs Lima 2.3 or later and a `vz` VM (the default on macOS). Without them, the project page says the
+The block needs Lima 2.3 or later and a `vz` VM (the default on macOS). Without them, the sandbox page says the
 sandbox can reach your loopback. Then run nothing there that you wouldn't let the agent use, or have it ask for a
 password.
 
-Recreating a sandbox doesn't undo everything the agent did. The agent home and the Kumiko folder survive, and with
-them what the agent can run again in the new VM: its settings, hooks and
-[setup scripts](/guide/projects/#the-agents-setup-scripts). All of these run only inside the VM. Kumiko reads the scripts on your Mac as text, and only plain files in their folder, not
-links. **Delete scripts** on the project page clears them.
+Rebuilding a sandbox doesn't undo everything the agent did. The workspace disk, the agent home and the Kumiko folder
+survive, and with them what the agent can run again in the new VM: whatever it left in `/workspace`, its settings,
+hooks and [setup scripts](/guide/sandboxes/#the-agents-setup-scripts). All of these run only inside the VM. Kumiko
+reads the scripts on your Mac as text, and only plain files in their folder, not links. **Delete scripts** on the
+sandbox page clears them, and **Rebuild from scratch** deletes the workspace disk too, so only what is pushed comes
+back. Before it, Kumiko lists what would be lost: branches that aren't pushed, worktrees with uncommitted changes and
+stashes, found with git in the VM, with nothing the repos' config names run.
 
 ## The local server
 
 Every request to the server's API must carry a secret the server makes each time it starts. The app's window gets it
 in a cookie that only the server reads and only its own pages send; scripts send it in an `Authorization` header. A
 sandbox that can reach your Mac's loopback can send any headers it likes, so without the secret the agent could drive
-Kumiko: change its own mounts, forward your variables, or prompt other projects' sessions.
+Kumiko: change its own mounts, forward your variables, or prompt other sandboxes' sessions.
 
 The server also:
 
 - listens on `127.0.0.1` only,
 - rejects requests whose `Host` isn't local, which blocks DNS rebinding,
 - rejects browser requests whose `Origin` isn't its own, which blocks other sites in your browser and other pages
-  served on your Mac, such as a project's dev server shown in a preview.
+  served on your Mac, such as a sandbox's dev server shown in a preview.
 
 In development, the UI's Vite proxy passes on its own page's requests as coming from the server's origin, and no other
 page's.

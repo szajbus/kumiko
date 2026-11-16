@@ -7,12 +7,13 @@ sidebar:
 
 Change a decision, and update this page in the same commit.
 
-## A sandbox per project, permissions bypassed
+## Sandboxes, permissions bypassed
 
-The agent gets a whole environment per project and works there without asking.
+The agent gets a whole environment, a sandbox, and works there without asking. A sandbox is the main thing in Kumiko:
+it has a name of your choosing and the repos you pick, rather than being tied to one clone.
 
 **Costs:** a sandbox uses memory and CPU while it runs, and is slow to create. The boundary is only as tight as the
-project's mounts and forwarded variables.
+sandbox's mounts and forwarded variables.
 
 ## Questions and plans over the agent's permission prompts
 
@@ -28,18 +29,21 @@ server.
 are worded for Claude. An answer is only known to have arrived once Claude's tool result for it does, so one may be sent
 twice; Claude ignores the second.
 
-## Same-path mounts
+## Repos on the sandbox's own disk
 
-The clone and `<clone>__worktrees` are mounted at their host paths, because a worktree's `.git` file holds absolute
-paths.
+The repos are cloned inside the sandbox, from the mirrors, onto a disk of its own mounted at `/workspace`, which
+outlives the VM. Nothing on the host opens that disk, so code reaches the host only through git, and git on the host
+never runs in a config the agent wrote. Every session starts in `/workspace`, and a repo's own `CLAUDE.md` is read only
+once a session works in it.
 
-**Costs:** moving a clone means moving its worktrees, repairing them and recreating the sandbox.
+**Costs:** the host can't read the clones: what the UI knows of them comes from an exec in the sandbox. Losing the disk
+loses what wasn't pushed. The disk needs Lima 2.3 or later, and grows only while the sandbox is stopped.
 
-## An agent home per project
+## An agent home per sandbox
 
-Each project's agent configuration is a folder on the host, mounted into the sandbox. Your own is never mounted.
+Each sandbox's agent configuration is a folder on the host, mounted into the sandbox. Your own is never mounted.
 
-**Costs:** you log in once per project, and settings aren't shared between projects, except through the template new
+**Costs:** you log in once per sandbox, and settings aren't shared between sandboxes, except through the template new
 homes are copied from.
 
 ## A local web server inside the desktop app
@@ -59,7 +63,7 @@ real tools.
 
 ## JSON files, not a database
 
-One JSON file per project, sandbox and saved session.
+One JSON file per sandbox, VM and saved session.
 
 **Costs:** no transactions. One operation per sandbox at a time, and saves per session are serialized.
 
@@ -80,12 +84,6 @@ A live session's full event stream is kept in memory for tabs to replay. Only th
 message still in progress.
 
 **Costs:** a resumed session shows less than the live one did.
-
-## Worktrees read from git, never fetched
-
-Worktree status comes from `git` on the host each time. Kumiko never fetches.
-
-**Costs:** "merged" is as fresh as your last fetch, and squash merges don't show as merged.
 
 ## A convention for worktrees, not a rule
 

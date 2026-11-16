@@ -16,7 +16,7 @@ sidebar:
 | <kbd>Cmd</kbd>+<kbd>W</kbd> | Close the tab (the session stays saved) |
 | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> | Close the tab and delete the saved session, after asking |
 | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>]</kbd> / <kbd>[</kbd> | Next / previous tab |
-| <kbd>Cmd</kbd>+<kbd>1</kbd>…<kbd>9</kbd> | The nth tab after Projects |
+| <kbd>Cmd</kbd>+<kbd>1</kbd>…<kbd>9</kbd> | The nth tab after Sandboxes |
 
 ## The message box
 

@@ -56,6 +56,9 @@ export async function validateSpec(input: SandboxSpec, env: NodeJS.ProcessEnv = 
   if (Number.isFinite(cpus) && !Number.isInteger(cpus)) errors.push("CPUs must be a whole number.");
   const memoryGiB = num(input.memoryGiB, "Memory", MINIMUMS.memoryGiB);
   const diskGiB = num(input.diskGiB, "Disk", MINIMUMS.diskGiB);
+  const hasWorkspace = input.workspaceGiB !== undefined && input.workspaceGiB !== null;
+  const workspaceGiB = hasWorkspace ? num(input.workspaceGiB, "Workspace disk", MINIMUMS.workspaceGiB) : undefined;
+  if (workspaceGiB !== undefined && Number.isFinite(workspaceGiB) && !Number.isInteger(workspaceGiB)) errors.push("Workspace disk must be a whole number of GiB.");
 
   const mounts = (Array.isArray(input.mounts) ? input.mounts : []).map((m) => {
     const hostPath = normalize(expandHome(String(m?.hostPath ?? "").trim())).replace(/(.)\/+$/, "$1");
@@ -93,6 +96,13 @@ export async function validateSpec(input: SandboxSpec, env: NodeJS.ProcessEnv = 
     }
   }
 
+  // The workspace disk is mounted at /workspace: a folder from the host can't be there too, nor inside it.
+  if (hasWorkspace) {
+    for (const m of mounts) {
+      if (isWithin(m.guestPath, WORKSPACE_DIR, "/")) errors.push(`${m.guestPath} can't be a mount: ${WORKSPACE_DIR} is the sandbox's workspace disk.`);
+    }
+  }
+
   const envNames = [...new Set((Array.isArray(input.env) ? input.env : []).map((e) => String(e).trim()).filter(Boolean))];
   for (const e of envNames) {
     if (!ENV_NAME_PATTERN.test(e)) errors.push(`${e} is not a valid variable name.`);
@@ -111,6 +121,6 @@ export async function validateSpec(input: SandboxSpec, env: NodeJS.ProcessEnv = 
   return {
     errors,
     warnings,
-    spec: { name, template, cpus, memoryGiB, diskGiB, mounts, env: envNames, provision, workdir: workdir ?? rawWorkdir, ...(input.hostLoopback === true ? { hostLoopback: true } : {}) },
+    spec: { name, template, cpus, memoryGiB, diskGiB, ...(workspaceGiB !== undefined ? { workspaceGiB } : {}), mounts, env: envNames, provision, workdir: workdir ?? rawWorkdir, ...(input.hostLoopback === true ? { hostLoopback: true } : {}) },
   };
 }

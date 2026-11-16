@@ -4,8 +4,15 @@ import { mkdir, rm } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
 import { eachLine, exitCode, shellQuote, type SandboxProvider } from "@kumiko/sandbox";
-import { parseRepo, type RelayView } from "@kumiko/shared";
+import { parseRepo } from "@kumiko/shared";
 import { gitEnv, type Mirrors } from "./mirrors.js";
+
+/** Whether git in a sandbox's VM reaches its mirrors: a socket on the host, forwarded into the VM over ssh. */
+export interface RelayView {
+  state: "connecting" | "connected" | "down";
+  /** Why it is down. */
+  error?: string;
+}
 
 /** The host git:// requests go to; core.gitProxy sends only this one through the socket. */
 export const RELAY_HOST = "kumiko";
@@ -91,18 +98,17 @@ const configValue = (v: string) => `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\
 
 /**
  * The git config Kumiko keeps in the VM, at ~/.config/kumiko/git.config, which the VM user's ~/.gitconfig includes:
- * GitHub's URLs for the repository go to the mirror, and git:// to the relay's host goes through the proxy script.
- * `@DIR@` is where it is, filled in in the VM. The identity is the user's, from the host.
+ * GitHub's URLs for each of the sandbox's repositories go to its mirror, and git:// to the relay's host goes through
+ * the proxy script. `@DIR@` is where it is, filled in in the VM. The identity is the user's, from the host.
  */
-export function vmGitConfig(repo: string, identity: { name?: string; email?: string }): string {
+export function vmGitConfig(repos: string[], identity: { name?: string; email?: string }): string {
   const user = [identity.name && `\tname = ${configValue(identity.name)}`, identity.email && `\temail = ${configValue(identity.email)}`].filter(Boolean);
   return [
     "# Written by Kumiko whenever the VM starts. Fetches and pushes to GitHub go to Kumiko's mirror on the host.",
     ...(user.length ? ["[user]", ...user] : []),
     "[core]",
     `\tgitProxy = ${configValue(`@DIR@/git-proxy for ${RELAY_HOST}`)}`,
-    `[url ${configValue(relayUrl(repo))}]`,
-    ...remoteForms(repo).map((u) => `\tinsteadOf = ${configValue(u)}`),
+    ...repos.flatMap((repo) => [`[url ${configValue(relayUrl(repo))}]`, ...remoteForms(repo).map((u) => `\tinsteadOf = ${configValue(u)}`)]),
     "",
   ].join("\n");
 }
@@ -110,7 +116,8 @@ export function vmGitConfig(repo: string, identity: { name?: string; email?: str
 /**
  * The proxy git runs for git:// to Kumiko, with the host and port as arguments: there is only one place to go. It says
  * first which of Kumiko's sessions the command runs in, if any (Kumiko starts Claude with KUMIKO_SESSION), so a push
- * that has to wait for the user is asked about there. That line isn't trusted for anything else.
+ * that has to wait for the user is asked about there. That line isn't trusted for anything else. Without the forwarded
+ * socket, it says so in words git shows, rather than socat's.
  */
 export const GIT_PROXY = `#!/bin/bash
 # Written by Kumiko: git:// to ${RELAY_HOST} goes to the mirrors on the host, over the socket Kumiko forwards here.
@@ -118,6 +125,10 @@ export const GIT_PROXY = `#!/bin/bash
 # left to end when git closes that. git closes its side once it has sent a push, and then waits for as long as the
 # mirror's hook takes, the user deciding on a card included: by default socat would give up half a second later. A git
 # that is gone still ends it, at receive-pack's next keepalive.
+if [ ! -S "@SOCK@" ]; then
+  echo "Kumiko: the link to the mirrors on the user's computer is down, so git can't reach GitHub. Kumiko reconnects by itself; try again in a minute." >&2
+  exit 128
+fi
 exec socat -t 7200 - "UNIX-CONNECT:@SOCK@" < <(printf 'kumiko-session %s\\n' "\${KUMIKO_SESSION:-}"; exec cat 2>/dev/null)
 `;
 
@@ -136,22 +147,32 @@ export function vmSetupScript(config: string): string {
     `cat > "$d/git-proxy.new" <<'KUMIKO_PROXY'\n${GIT_PROXY}KUMIKO_PROXY`,
     `sed "s|@SOCK@|$sock|g" "$d/git-proxy.new" > "$d/git-proxy" && rm -f "$d/git-proxy.new"`,
     `chmod 755 "$d/git-proxy"`,
-    `cat > "$d/git.config.new" <<'KUMIKO_GIT'\n${config}KUMIKO_GIT`,
-    `sed "s|@DIR@|$d|g" "$d/git.config.new" > "$d/git.config" && rm -f "$d/git.config.new"`,
-    `git config --global --get-all include.path 2>/dev/null | grep -qxF "$d/git.config" || git config --global --add include.path "$d/git.config"`,
+    ...configLines(config),
     `printf 'socket %s\\n' "$sock"`,
   ].join("\n");
 }
 
-/** Who a connection is: the project whose VM it came from, its repository, and the session the proxy named, if any. */
+/** Writes the git config Kumiko keeps in the VM, and includes it from ~/.gitconfig; `$d` is its folder. */
+const configLines = (config: string) => [
+  `cat > "$d/git.config.new" <<'KUMIKO_GIT'\n${config}KUMIKO_GIT`,
+  `sed "s|@DIR@|$d|g" "$d/git.config.new" > "$d/git.config" && rm -f "$d/git.config.new"`,
+  `git config --global --get-all include.path 2>/dev/null | grep -qxF "$d/git.config" || git config --global --add include.path "$d/git.config"`,
+];
+
+/** The script that rewrites only the VM's git config, for a relay that is up: the socket and the proxy stay as they are. */
+export function vmConfigScript(config: string): string {
+  return ["set -e", `d="$HOME/.config/kumiko"; mkdir -p "$d"`, ...configLines(config)].join("\n");
+}
+
+/** Who a connection is: the sandbox whose VM it came from, the repository asked for, and the session the proxy named, if any. */
 export interface RelayConnection {
-  project: string;
+  sandbox: string;
   repo: string;
   session?: string;
 }
 
 export interface RelayOptions {
-  /** Where the host's sockets go, one per project. Not under anything the VM mounts. */
+  /** Where the host's sockets go, one per sandbox. Not under anything the VM mounts. */
   dir: string;
   mirrors: Mirrors;
   provider: Pick<SandboxProvider, "exec" | "forward">;
@@ -161,6 +182,8 @@ export interface RelayOptions {
   hookSocket?: string;
   /** Called when a relay's view changes. */
   onChange?(): void;
+  /** Called when git in a sandbox's VM can reach its mirrors, each time a relay connects. */
+  onConnected?(id: string): void;
   /** Called when git in the VM closes a connection. */
   onConnectionClosed?(id: string): void;
   /** How long to wait before setting a relay up again after it failed, at first; it doubles up to a minute. */
@@ -168,29 +191,35 @@ export interface RelayOptions {
 }
 
 /**
- * The relays of the projects whose VMs run: each a socket on the host, forwarded into its VM by an ssh connection
- * Kumiko holds, and for each connection a `git daemon --inetd` serving only that project's mirror.
+ * The relays of the sandboxes whose VMs run: each a socket on the host, forwarded into its VM by an ssh connection
+ * Kumiko holds, and for each connection a `git daemon --inetd` serving only one of that sandbox's mirrors.
  */
 export class Relays {
   private relays = new Map<string, Relay>();
-  /** The connections being served, by the id their git daemon's hook gives: which project, repository and session. */
+  /** The connections being served, by the id their git daemon's hook gives: which sandbox, repository and session. */
   private readonly connections = new Map<string, RelayConnection>();
   /** Closed for good: a sync that was under way when Kumiko began quitting starts nothing. */
   private closed = false;
 
   constructor(private readonly opts: RelayOptions) {}
 
-  /** Starts a relay for each project in `want` (by id, to its repository) that has none, and stops the others. */
-  sync(want: Map<string, string>): void {
+  /**
+   * Starts a relay for each sandbox in `want` (by name, to its repositories) that has none, and stops the others. A
+   * sandbox whose repositories changed keeps its relay, connections and all, which serves the new list from then on.
+   */
+  sync(want: Map<string, string[]>): void {
     if (this.closed) return;
+    const key = (repos: string[]) => [...repos].map((r) => r.toLowerCase()).sort().join("\n");
     for (const [id, relay] of this.relays) {
-      if (want.get(id) === relay.repo) continue;
+      const repos = want.get(id);
+      if (repos && key(repos) !== key(relay.repos)) relay.update(repos);
+      if (repos) continue;
       this.relays.delete(id);
       void relay.stop();
     }
-    for (const [id, repo] of want) {
+    for (const [id, repos] of want) {
       if (this.relays.has(id)) continue;
-      const relay = new Relay(id, repo, this.opts, this.connections);
+      const relay = new Relay(id, repos, this.opts, this.connections);
       this.relays.set(id, relay);
       relay.start();
     }
@@ -229,16 +258,16 @@ class Relay {
 
   constructor(
     readonly id: string,
-    readonly repo: string,
+    public repos: string[],
     private readonly opts: RelayOptions,
     private readonly connections: Map<string, RelayConnection>,
   ) {
-    // A name of its own: a relay started again for the project mustn't share a path the last one is still removing.
+    // A name of its own: a relay started again for the sandbox mustn't share a path the last one is still removing.
     this.socket = join(opts.dir, `git-${id}-${randomUUID().slice(0, 8)}.sock`);
   }
 
   view(): RelayView {
-    return { repo: this.repo, state: this.state, ...(this.error ? { error: this.error } : {}) };
+    return { state: this.state, ...(this.error ? { error: this.error } : {}) };
   }
 
   start() {
@@ -263,6 +292,36 @@ class Relay {
     this.state = state;
     this.error = error;
     this.opts.onChange?.();
+    if (state === "connected") this.opts.onConnected?.(this.id);
+  }
+
+  /** The update of the VM's git config under way, if any; updates run one at a time. */
+  private updating: Promise<void> = Promise.resolve();
+
+  /**
+   * Serves `repos` from now on: connections already open carry on, and new ones may ask for any of them. Git in the
+   * VM is set up for them at once if the relay is up, and then told it can reach them (`onConnected`), so new repos are
+   * cloned; a relay still setting up picks the list up when it is done (see `setUpVm`).
+   */
+  update(repos: string[]): void {
+    this.repos = repos;
+    this.updating = this.updating.then(async () => {
+      await Promise.allSettled(repos.map((repo) => this.opts.mirrors.ensure(repo)));
+      if (this.stopped || this.state !== "connected" || this.repos !== repos) return;
+      await this.writeConfig(repos).catch((err) => this.set("down", message(err)));
+      if (!this.stopped && this.state === "connected") this.opts.onConnected?.(this.id);
+    });
+  }
+
+  /** Rewrites the VM's git config for `repos`, leaving the socket and the proxy as they are. */
+  private async writeConfig(repos: string[]): Promise<void> {
+    const identity = (await this.opts.identity?.().catch(() => ({}))) ?? {};
+    const child = this.vmCommand(`bash -c ${shellQuote(vmConfigScript(vmGitConfig(repos, identity)))}`, 60_000);
+    child.stdout!.resume();
+    const err: string[] = [];
+    eachLine(child.stderr!, (l) => err.push(l));
+    const code = await exitCode(child);
+    if (code !== 0) throw new Error(`Setting up git in the VM failed (exit ${code})${err.length ? `: ${err.slice(-3).join(" ")}` : "."}`);
   }
 
   /** Keeps the relay up until it is stopped: the socket, the mirror, the VM's setup and the forward, again after each failure. */
@@ -284,7 +343,10 @@ class Relay {
     while (!this.stopped) {
       const upAt = Date.now();
       try {
-        await this.opts.mirrors.ensure(this.repo);
+        // One mirror that can't be had doesn't keep git in the VM from the others; a fetch of that one fails on its own.
+        const ensured = await Promise.allSettled(this.repos.map((repo) => this.opts.mirrors.ensure(repo)));
+        const failed = ensured.find((r): r is PromiseRejectedResult => r.status === "rejected");
+        if (failed && ensured.every((r) => r.status === "rejected")) throw failed.reason;
         if (this.stopped) break;
         const guest = await this.setUpVm();
         if (this.stopped) break;
@@ -305,10 +367,14 @@ class Relay {
     await rm(this.socket, { force: true }).catch(() => {});
   }
 
-  /** Runs the VM's setup and resolves with the path the forward listens on in the VM. */
+  /**
+   * Runs the VM's setup and resolves with the path the forward listens on in the VM. Repos that came meanwhile (see
+   * `update`) are written into the config before it resolves.
+   */
   private async setUpVm(): Promise<string> {
     const identity = (await this.opts.identity?.().catch(() => ({}))) ?? {};
-    const script = vmSetupScript(vmGitConfig(this.repo, identity));
+    const repos = this.repos;
+    const script = vmSetupScript(vmGitConfig(repos, identity));
     // Long enough for apt to install socat on a new VM.
     const child = this.vmCommand(`bash -c ${shellQuote(script)}`, 10 * 60_000);
     const out: string[] = [];
@@ -318,6 +384,7 @@ class Relay {
     const code = await exitCode(child);
     const path = out.map((l) => /^socket (\/.+)$/.exec(l)?.[1]).find(Boolean);
     if (code !== 0 || !path) throw new Error(`Setting up git in the VM failed (exit ${code})${err.length ? `: ${err.slice(-3).join(" ")}` : "."}`);
+    if (this.repos !== repos) await this.writeConfig(this.repos);
     return path;
   }
 
@@ -362,7 +429,7 @@ class Relay {
   }
 
   /**
-   * Serves one connection: reads what it asks for, refuses anything but this project's repository, refreshes the
+   * Serves one connection: reads what it asks for, refuses anything but this sandbox's repositories, refreshes the
    * mirror before a fetch, then hands the connection to a git daemon of its own, with the request it read.
    */
   private serve(conn: Socket) {
@@ -405,15 +472,17 @@ class Relay {
   }
 
   private async handOver(conn: Socket, request: GitRequest, after: Buffer, session?: string) {
-    const path = relayPath(this.repo);
-    if (request.path.toLowerCase().replace(/(\.git)?\/?$/, ".git") !== path) {
-      conn.end(pktLine(`ERR Kumiko: this VM can only reach ${this.repo} (${relayUrl(this.repo)}), not ${request.path}.\n`));
+    const asked = request.path.toLowerCase().replace(/(\.git)?\/?$/, ".git");
+    const repo = this.repos.find((r) => relayPath(r) === asked);
+    if (!repo) {
+      conn.end(pktLine(`ERR Kumiko: this sandbox can only reach ${this.repos.join(", ")} (${this.repos.map(relayUrl).join(", ")}), not ${request.path}.\n`));
       return;
     }
+    const path = relayPath(repo);
     // A fetch gets what is on GitHub now. If GitHub can't be reached, the mirror as it is still serves.
-    if (request.service === "git-upload-pack") await this.opts.mirrors.fetch(this.repo).catch(() => {});
+    if (request.service === "git-upload-pack") await this.opts.mirrors.fetch(repo).catch(() => {});
     if (conn.destroyed || this.stopped) return conn.destroy();
-    const dir = this.opts.mirrors.path(this.repo);
+    const dir = this.opts.mirrors.path(repo);
     const connection = randomUUID();
     const daemon = spawn(
       "git",
@@ -427,7 +496,7 @@ class Relay {
       },
     );
     this.daemons.add(daemon);
-    this.connections.set(connection, { project: this.id, repo: this.repo, ...(session ? { session } : {}) });
+    this.connections.set(connection, { sandbox: this.id, repo, ...(session ? { session } : {}) });
     // A push waiting in the hook for the user stops waiting when git in the VM goes away.
     conn.once("close", () => {
       // What git in the VM sent is all there is: the service sees the end of it, rather than waiting for more forever.
