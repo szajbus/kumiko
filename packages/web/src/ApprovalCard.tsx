@@ -263,11 +263,11 @@ function Facts({ commits, files, added, deleted }: { commits: { sha: string; sub
     <>
       <div className="ac-facts">
         <button type="button" aria-expanded={open === "commits"} className={`ac-tog${open === "commits" ? " is-on" : ""}`} onClick={() => setOpen(open === "commits" ? undefined : "commits")}>
-          {commitsLabel({ commits })} ▾
+          {commitsLabel({ commits })} <span className="tri" aria-hidden="true" />
         </button>
         <span>
           <button type="button" aria-expanded={open === "files"} className={`ac-tog${open === "files" ? " is-on" : ""}`} onClick={() => setOpen(open === "files" ? undefined : "files")}>
-            {filesLabel({ files })} ▾
+            {filesLabel({ files })} <span className="tri" aria-hidden="true" />
           </button>{" "}
           <span className="ac-add">+{added}</span> <span className="ac-del">−{deleted}</span>
         </span>
@@ -324,7 +324,7 @@ function Flags({ flags }: { flags: CardFlag[] }) {
 
 /**
  * The primary button with a list of the other ways to do it; the main part does the one it shows. A disclosure, not an
- * ARIA menu: the choices are buttons Tab reaches, and focus goes back to ▾ once one is picked or the list closes.
+ * ARIA menu: the choices are buttons Tab reaches, and focus goes back to the caret once one is picked or the list closes.
  */
 function SplitButton({ label, disabled, menuDisabled, onClick, choices, choice, onChoose }: { label: string; disabled: boolean; menuDisabled: boolean; onClick(): void; choices: { choice: DeliverChoice; label: string; description: string }[]; choice: DeliverChoice; onChoose(c: DeliverChoice): void }) {
   const [open, setOpen] = useState(false);
@@ -348,7 +348,7 @@ function SplitButton({ label, disabled, menuDisabled, onClick, choices, choice, 
         {label}
       </button>
       <button ref={caret} type="button" className="btn btn-primary btn-compact ac-caret" aria-label="Other ways" aria-expanded={open} aria-controls={open ? "ac-choices" : undefined} disabled={menuDisabled} onClick={() => setOpen(!open)}>
-        ▾
+        <span className="tri" aria-hidden="true" />
       </button>
       {open && (
         <div className="ac-menu" id="ac-choices">

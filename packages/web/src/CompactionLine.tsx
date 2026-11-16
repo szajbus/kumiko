@@ -21,7 +21,7 @@ export function CompactionLine({ item }: { item: CompactionItem }) {
           {item.status === "running" && elapsed >= 1 && <span className="compaction-time">{clock(elapsed)}</span>}
           {item.summary && (
             <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}>
-              Summary {open ? "▾" : "▸"}
+              Summary <span className={`tri${open ? "" : " is-right"}`} aria-hidden="true" />
             </button>
           )}
         </span>

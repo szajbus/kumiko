@@ -107,6 +107,14 @@ code, .mono { font-family: var(--mono); }
   display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 14px;
   border-radius: 8px; border: 1px solid transparent; font-weight: 500; cursor: pointer; text-decoration: none;
 }
+/* The disclosure triangle, drawn rather than typed: the ▾ and ▸ glyphs take their size from whichever font has them,
+   and most draw them tiny. It points down, or right with .is-right; the summaries below point right until opened. */
+.tri, .details summary::before, .agent-script summary::before, .work-summary::before, .thinking summary::before, .tool summary::before {
+  display: inline-block; width: 14px; height: 14px; flex: none; vertical-align: -2px; background: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M2.5 4.5h9L7 10z'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+.tri.is-right, .details:not([open]) summary::before, .agent-script:not([open]) summary::before, .work.is-folded .work-summary::before,
+.thinking:not([open]) summary::before, .tool:not([open]) summary::before { rotate: -90deg; }
 .btn:disabled { opacity: 0.6; cursor: default; }
 .btn-primary { background: var(--primary); color: #fff; }
 .btn-primary:not(:disabled):hover { background: var(--primary-hover); }
@@ -392,8 +400,7 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 }
 .details { padding: 0 20px; }
 .details summary { min-height: 48px; display: flex; align-items: center; cursor: pointer; font-weight: 500; }
-.details summary::before { content: "▸"; margin-right: 8px; color: var(--muted); }
-.details[open] summary::before { content: "▾"; }
+.details summary::before { content: ""; margin-right: 8px; color: var(--muted); }
 .details summary::-webkit-details-marker { display: none; }
 .preview {
   margin: 0 0 20px; padding: 12px 14px; border-radius: 8px; background: var(--bg); font-size: 12.5px; line-height: 1.6;
@@ -402,8 +409,7 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 /* The agent's setup scripts: one line each, opening to the script. */
 .agent-scripts { display: flex; flex-direction: column; margin-bottom: 16px; }
 .agent-script summary { min-height: 36px; display: flex; align-items: center; gap: 10px; cursor: pointer; }
-.agent-script summary::before { content: "▸"; color: var(--muted); }
-.agent-script[open] summary::before { content: "▾"; }
+.agent-script summary::before { content: ""; color: var(--muted); }
 .agent-script summary::-webkit-details-marker { display: none; }
 .agent-script .preview { margin-bottom: 10px; }
 .agent-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-bottom: 16px; }
@@ -814,8 +820,7 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
   animation: km-fade-in 200ms ease-out;
 }
 .work-summary:hover { color: var(--text-2); border-color: var(--border); }
-.work-summary::before { content: "▾"; flex: none; width: 14px; text-align: center; color: var(--border-strong); font-size: 15px; line-height: 1; }
-.work.is-folded .work-summary::before { content: "▸"; }
+.work-summary::before { content: ""; flex: none; width: 14px; color: var(--border-strong); }
 .work-body { display: grid; grid-template-rows: 1fr; transition: grid-template-rows 360ms ease, opacity 360ms ease; }
 .work.is-folded .work-body { grid-template-rows: 0fr; opacity: 0; }
 .work-clip { min-height: 0; overflow: hidden; }
@@ -871,8 +876,7 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
   font-size: 13px; color: var(--muted);
 }
 .thinking summary::-webkit-details-marker, .tool summary::-webkit-details-marker { display: none; }
-.thinking summary::before, .tool summary::before { content: "▸"; flex: none; width: 14px; text-align: center; color: var(--border-strong); font-size: 15px; line-height: 1; }
-.thinking[open] summary::before, .tool[open] summary::before { content: "▾"; }
+.thinking summary::before, .tool summary::before { content: ""; flex: none; width: 14px; color: var(--border-strong); }
 .thinking-text { padding: 0 14px 12px; color: var(--muted); font-size: 13px; white-space: pre-wrap; font-style: italic; }
 /* Takes the same 14px box as the done and failed icons, so nothing moves when a tool finishes. */
 .tool summary .spinner { width: 10px; height: 10px; margin: 2px; }
@@ -1113,7 +1117,7 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
   border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
 }
 .bg-line-toggle:hover .bg-line-name { color: var(--text); }
-.bg-line-fold { flex: none; width: 12px; text-align: center; color: var(--muted); font-size: 13px; }
+.bg-line-fold { flex: none; display: flex; width: 14px; color: var(--muted); }
 .bg-line-mark { flex: none; width: 16px; display: flex; justify-content: center; }
 .bg-line-name { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); font-weight: 500; }
 .bg-line-what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
