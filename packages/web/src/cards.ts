@@ -32,13 +32,13 @@ export function deliverChoices(c: DeliverCard): { choice: DeliverChoice; label: 
  * The decision a choice sends, with the PR's text when it opens one. A squash takes a title the user edited (before
  * switching from the PR) as its subject; otherwise Claude's.
  */
-export function deliverDecision(choice: DeliverChoice, pr: { title: string; body: string; footer: boolean; original?: string }): CardDecision | undefined {
+export function deliverDecision(choice: DeliverChoice, pr: { title: string; body: string; original?: string }): CardDecision | undefined {
   if (choice === "merge") return { kind: "deliver", route: "main", method: "merge" };
   if (choice === "squash") {
     const title = pr.title.trim();
     return { kind: "deliver", route: "main", method: "squash", ...(title && title !== pr.original?.trim() ? { title } : {}) };
   }
-  return pr.title.trim() ? { kind: "deliver", route: "pr", method: "merge", title: pr.title.trim(), body: pr.body, ...(pr.footer ? {} : { footer: false }) } : undefined;
+  return pr.title.trim() ? { kind: "deliver", route: "pr", method: "merge", title: pr.title.trim(), body: pr.body } : undefined;
 }
 
 /**

@@ -1262,9 +1262,6 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
 .ac-body { display: flex; flex-direction: column; }
 .ac-ta { field-sizing: content; min-height: 4lh; resize: vertical; background: transparent; border: 0; color: var(--text-2); font: inherit; font-size: 13px; padding: 0; outline: none; }
 .ac-md { cursor: text; color: var(--text-2); font-size: 13px; min-height: 2lh; }
-.ac-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); border-top: 1px dashed var(--border); margin-top: 6px; padding-top: 4px; font-size: 12px; cursor: pointer; }
-.ac-foot.is-off span { text-decoration: line-through; opacity: 0.55; }
-.ac-foot input { margin: 0; accent-color: var(--primary); }
 .ac-decline { margin: 0 14px 10px; display: flex; flex-direction: column; gap: 6px; }
 .ac-decline .ac-ta { width: 100%; min-height: 2lh; }
 .ac-decline.is-dropping { border-color: #8fa6f0; border-style: dashed; background: #1c2235; }

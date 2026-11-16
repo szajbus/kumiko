@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { FOOTERS, type ApprovalCard as Card, type AttachmentInput, type CardDecision, type CardFlag, type CardFile } from "@kumiko/shared";
+import { type ApprovalCard as Card, type AttachmentInput, type CardDecision, type CardFlag, type CardFile } from "@kumiko/shared";
 import { approveLabel, barShares, cardAction, cardClosed, cardVerb, commitsLabel, deliverChoices, deliverDecision, filesLabel, initialChoice, unsignedWarning, type DeliverChoice } from "./cards";
 import { hasFiles, readFiles, toInput, type ComposerFile } from "./attachments";
 import type { ChatItem } from "./chat";
@@ -65,7 +65,6 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
   const [choice, setChoice] = useState<DeliverChoice>(c.kind === "deliver" ? initialChoice(c) : "merge");
   const [title, setTitle] = useState(c.kind === "deliver" || c.kind === "issue" ? c.title : "");
   const [body, setBody] = useState(c.kind === "push" ? "" : c.body);
-  const [footer, setFooter] = useState(true);
   const [labels, setLabels] = useState<string[]>(c.kind === "issue" ? c.labels : []);
   const [declining, setDeclining] = useState(false);
   const [reason, setReason] = useState("");
@@ -83,11 +82,11 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
   const decision = (): CardDecision | undefined => {
     switch (c.kind) {
       case "deliver":
-        return deliverDecision(choice, { title, body, footer, original: c.title });
+        return deliverDecision(choice, { title, body, original: c.title });
       case "issue":
-        return title.trim() ? { kind: "issue", title: title.trim(), body, labels, ...(footer ? {} : { footer: false }) } : undefined;
+        return title.trim() ? { kind: "issue", title: title.trim(), body, labels } : undefined;
       case "comment":
-        return body.trim() ? { kind: "comment", body, ...(footer ? {} : { footer: false }) } : undefined;
+        return body.trim() ? { kind: "comment", body } : undefined;
       case "push":
         return { kind: "push" };
     }
@@ -169,19 +168,19 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
       {!stale && c.kind === "deliver" && choice === "pr" && (
         <div className="ac-fields">
           <input className="ac-fld" value={title} onChange={(e) => setTitle(e.target.value)} aria-label="Pull request title" />
-          <BodyField value={body} onChange={setBody} footer={FOOTERS.pr} footerOn={footer} onFooter={setFooter} label="Pull request description" />
+          <BodyField value={body} onChange={setBody} label="Pull request description" />
         </div>
       )}
       {c.kind === "issue" && (
         <div className="ac-fields">
           <input className="ac-fld" value={title} onChange={(e) => setTitle(e.target.value)} aria-label="Issue title" />
-          <BodyField value={body} onChange={setBody} footer={FOOTERS.issue} footerOn={footer} onFooter={setFooter} label="Issue description" />
+          <BodyField value={body} onChange={setBody} label="Issue description" />
           <Labels all={c.repoLabels} picked={labels} onChange={setLabels} />
         </div>
       )}
       {c.kind === "comment" && (
         <div className="ac-fields">
-          <BodyField value={body} onChange={setBody} footer={FOOTERS.comment} footerOn={footer} onFooter={setFooter} label="Comment" />
+          <BodyField value={body} onChange={setBody} label="Comment" />
         </div>
       )}
       {!stale && c.kind === "deliver" && unsignedWarning(c, choice) && <div className="ac-unsigned">{unsignedWarning(c, choice)}</div>}
@@ -396,11 +395,8 @@ function Labels({ all, picked, onChange }: { all: { name: string; color?: string
   );
 }
 
-/**
- * Text that goes public: rendered as GitHub would until clicked, then a box to edit, which it stays. Under it the line
- * Kumiko adds, with a checkbox to leave it out.
- */
-export function BodyField({ value, onChange, footer, footerOn, onFooter, label }: { value: string; onChange(v: string): void; footer: string; footerOn: boolean; onFooter(on: boolean): void; label: string }): ReactNode {
+/** Text that goes public: rendered as GitHub would until clicked, then a box to edit, which it stays. */
+export function BodyField({ value, onChange, label }: { value: string; onChange(v: string): void; label: string }): ReactNode {
   const [editing, setEditing] = useState(false);
   return (
     <div className="ac-fld ac-body">
@@ -416,10 +412,6 @@ export function BodyField({ value, onChange, footer, footerOn, onFooter, label }
           {value.trim() ? <Markdown text={value} /> : <span className="dim">Empty</span>}
         </div>
       )}
-      <label className={`ac-foot${footerOn ? "" : " is-off"}`}>
-        <span>{footer}</span>
-        <input type="checkbox" checked={footerOn} onChange={(e) => onFooter(e.target.checked)} aria-label={`Add “${footer}”`} />
-      </label>
     </div>
   );
 }

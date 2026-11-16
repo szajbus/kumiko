@@ -47,12 +47,11 @@ describe("approval cards' wording", () => {
   });
 
   it("sends what the choice means, and the PR's text only for a PR", () => {
-    const text = { title: " Fix x ", body: "b", footer: true };
+    const text = { title: " Fix x ", body: "b" };
     assert.deepEqual(deliverDecision("merge", text), { kind: "deliver", route: "main", method: "merge" });
     assert.deepEqual(deliverDecision("squash", text), { kind: "deliver", route: "main", method: "squash", title: "Fix x" }, "a title the user changed");
     assert.deepEqual(deliverDecision("squash", { ...text, original: "Fix x" }), { kind: "deliver", route: "main", method: "squash" }, "Claude's, unchanged");
     assert.deepEqual(deliverDecision("pr", text), { kind: "deliver", route: "pr", method: "merge", title: "Fix x", body: "b" });
-    assert.deepEqual(deliverDecision("pr", { ...text, footer: false }), { kind: "deliver", route: "pr", method: "merge", title: "Fix x", body: "b", footer: false });
     assert.equal(deliverDecision("pr", { ...text, title: "  " }), undefined, "no PR without a title");
   });
 

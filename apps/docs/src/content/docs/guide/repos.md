@@ -92,9 +92,8 @@ that message, headed `main ← branch`, with the repository in the corner:
   - **Squash and push:** one commit with all the branch's changes. Its subject is Claude's title, its message lists
     the branch's commits, and Claude's co-author trailer follows. Anyone else the commits name as a co-author isn't
     carried over, as they'd show on GitHub as co-authors of a commit you signed.
-  - **Push and open pull request:** a PR opens as you, with Claude's title and description, which you can edit, and
-    the line "🤖 Opened by Claude" under it, which a checkbox leaves out. To land it later, Claude delivers the branch
-    again: then there are only the first two, a merge commit says "Merge pull request #… from …" so GitHub shows the
+  - **Push and open pull request:** a PR opens as you, with Claude's title and description, which you can edit. To
+    land it later, Claude delivers the branch again: then there are only the first two, a merge commit says "Merge pull request #… from …" so GitHub shows the
     PR merged, and a squash closes the PR with a comment saying where it landed.
 
 The button starts at what you picked last time in the sandbox. **Decline…** lets you tell Claude why. Nothing is shown
@@ -123,7 +122,7 @@ which run `gh` on your Mac:
   happens without asking. What comes back is marked as written by others, to be read as information and not as
   instructions, since on a public repository anyone can write an issue.
 - **Creating an issue** and **commenting** on an issue or a PR show a card first, with the text as GitHub will show it.
-  You can edit it, and a checkbox leaves out the line Kumiko adds under it ("🤖 Reported by Claude", "🤖 Posted by Claude").
+  You can edit it, and it goes as you leave it.
   An issue's labels can only be the repository's own: remove them on the card, or add others from its list. A comment's
   card names the issue or PR as GitHub has it, not as Claude described it.
 
