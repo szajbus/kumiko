@@ -26,6 +26,8 @@ import {
   nextId,
   paneOf,
   TASKS,
+  REVIEW,
+  type ReviewState,
   urlOrigin,
   TASK_FILE_BYTES,
   vmName,
@@ -81,7 +83,8 @@ import { GhError, GitHub, gitHubUrl } from "./github.js";
 import { MirrorFetchFailed, MirrorNotFound, MirrorRecordError, Mirrors } from "./mirrors.js";
 import { hostIdentity } from "./git.js";
 import { Pushes } from "./pushes.js";
-import { ApprovalError, Approvals } from "./approvals.js";
+import { ApprovalError, Approvals, cardsOf } from "./approvals.js";
+import { commitOf, isObjectName, mergeBase, parentOf, readBlob, ReviewRefused, reviewDiff } from "./review.js";
 import { Relays } from "./relay.js";
 import { hasToken, isLocalRequest, isToken, tokenCookie } from "./guard.js";
 import { LoginFailed, Logins } from "./logins.js";
@@ -1339,6 +1342,81 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     const pane = paneOf(w, TASKS);
     if (pane) return c.json(req.open === true ? w : sessions.changeWindow(id, { type: "close", pane }));
     return c.json(sessions.changeWindow(id, { type: "split", place: { split: "right", size: 0.4 }, pane: nextId(w, "p"), widget: TASKS }));
+  });
+
+  // ---- the review pane: a deliver card's changes, read from the mirror ----------------------
+  const deliverCardOf = (c: Context) => {
+    const card = cardsOf(sessions.events(sessionOf(c).id)).get(c.req.param("ask")!);
+    if (card?.card.kind !== "deliver") throw new HttpError(404, "There's no deliver card here.");
+    return card.card;
+  };
+  const reviewing = async <T>(work: () => Promise<T>): Promise<T> => {
+    try {
+      return await work();
+    } catch (err) {
+      if (err instanceof ReviewRefused) throw new HttpError(409, err.message);
+      if (err instanceof HttpError) throw err;
+      throw new HttpError(503, `Couldn't read it from the mirror: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  /**
+   * What the card's branch changes, file by file: all of it from where it left the default branch, or `commit` alone
+   * (one of the card's), or what changed `since` a commit reviewed before. `w=1` leaves out changes in whitespace;
+   * `path` (repeated) asks for those files alone, with their long patches.
+   */
+  app.get("/api/sessions/:id/cards/:ask/diff", async (c) => {
+    const card = deliverCardOf(c);
+    const dir = mirrors.path(card.repo);
+    const commit = c.req.query("commit");
+    const since = c.req.query("since");
+    const paths = (c.req.queries("path") ?? []).filter((p) => p && p.length <= 4096).slice(0, 50);
+    return c.json(
+      await reviewing(async () => {
+        if (!(await commitOf(dir, card.head))) throw new HttpError(410, `The mirror doesn't have ${card.branch} at ${card.head.slice(0, 7)} any more.`);
+        let from: string;
+        let to = card.head;
+        if (commit !== undefined) {
+          if (!card.commits.some((x) => x.sha === commit)) throw new HttpError(400, "commit must be one of the card's.");
+          to = commit;
+          from = await parentOf(dir, commit);
+        } else if (since !== undefined) {
+          if (!isObjectName(since) || !(await commitOf(dir, since))) throw new HttpError(400, "since must be a commit in the mirror.");
+          from = since;
+        } else {
+          // Once the branch has landed, it meets the default branch at its own head: its first commit's parent then.
+          const base = await mergeBase(dir, `refs/heads/${card.base}`, card.head).catch(() => undefined);
+          from = base && base !== card.head ? base : await parentOf(dir, card.commits[0].sha);
+        }
+        return reviewDiff(dir, from, to, { ignoreWhitespace: c.req.query("w") === "1", ...(paths.length ? { paths } : {}) });
+      }),
+    );
+  });
+
+  /** A file's content in the card's repository, by its blob: what the review pane shows more of around a change. */
+  app.get("/api/sessions/:id/cards/:ask/blob/:blob", async (c) => {
+    const card = deliverCardOf(c);
+    const blob = c.req.param("blob");
+    if (!isObjectName(blob)) throw new HttpError(400, "blob must be a full object name.");
+    return c.json(await reviewing(() => readBlob(mirrors.path(card.repo), blob)));
+  });
+
+  /**
+   * The review pane for the deliver card `ask`: shown beside the chat, or closed if it shows that card already; with
+   * `open`, only shown.
+   */
+  app.post("/api/sessions/:id/window/review", async (c) => {
+    const req = await body<{ ask?: unknown; open?: unknown }>(c, "Send { ask }.");
+    if (typeof req.ask !== "string") throw new HttpError(400, "ask must be a card's id.");
+    const { id } = sessionOf(c);
+    if (cardsOf(sessions.events(id)).get(req.ask)?.card.kind !== "deliver") throw new HttpError(404, "There's no deliver card here.");
+    let w = sessions.window(id)!;
+    const was = w.widgets[REVIEW]?.state as ReviewState | undefined;
+    if (!w.widgets[REVIEW]) w = sessions.changeWindow(id, { type: "add", widget: REVIEW, kind: "review", state: { ask: req.ask } satisfies ReviewState });
+    else if (was?.ask !== req.ask) w = sessions.changeWindow(id, { type: "update", widget: REVIEW, op: { ask: req.ask } satisfies ReviewState });
+    const pane = paneOf(w, REVIEW);
+    if (pane) return c.json(req.open === true || was?.ask !== req.ask ? w : sessions.changeWindow(id, { type: "close", pane }));
+    return c.json(sessions.changeWindow(id, { type: "split", place: { split: "right", size: 0.6 }, pane: nextId(w, "p"), widget: REVIEW }));
   });
 
   /** Answers what Claude asked mid-turn: its questions, or its plan. 409 once it isn't waiting for that any more. */

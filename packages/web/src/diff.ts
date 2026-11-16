@@ -170,7 +170,7 @@ function middle(a: string[], b: string[]): DiffRow[] {
  * Marks what changed within lines: a run of removed lines followed by as many added ones pairs them up, and each pair
  * marks what lies between their common start and end. A line that changed all through is left unmarked.
  */
-function marked(rows: DiffRow[]): DiffRow[] {
+export function marked(rows: DiffRow[]): DiffRow[] {
   for (let i = 0; i < rows.length; ) {
     if (rows[i].kind !== "remove") {
       i++;

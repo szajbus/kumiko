@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 import WebSocket from "ws";
-import type { ApprovalCard, SandboxView, SessionEvent, SessionInfo, SessionStreamMessage } from "@kumiko/shared";
+import { REVIEW, type ApprovalCard, type ReviewDiff, type SandboxView, type SessionEvent, type SessionInfo, type SessionStreamMessage, type WindowState } from "@kumiko/shared";
 import { LimaProvider, MetadataStore, shellQuote } from "@kumiko/sandbox";
 import { startServer, type RunningServer } from "../src/index.js";
 import { fakeGitHub, type FakeGitHub } from "./github.js";
@@ -128,6 +128,60 @@ describe("delivering from a session", () => {
     assert.equal(done.state, "done");
     const again = await api(`/api/sessions/${id}/cards/${card.id}`, { method: "POST", body: JSON.stringify({ action: "decline" }) });
     assert.equal(again.status, 409);
+    sock.close();
+  });
+
+  it("serves the card's changes to the review pane, and sends the user's notes back to Claude when they decline", async () => {
+    execFileSync("git", ["-C", work, "checkout", "--quiet", "main"]);
+    sh(work, "pull", "--quiet", "origin", "main");
+    execFileSync("git", ["-C", work, "checkout", "--quiet", "-b", "review-x"]);
+    await writeFile(join(work, "README"), "hi\nthere\n");
+    sh(work, "commit", "--quiet", "-am", "Say more\n\nCo-Authored-By: Claude <noreply@anthropic.com>");
+    const one = sh(work, "rev-parse", "HEAD").trim();
+    await writeFile(join(work, "y"), "y\n");
+    sh(work, "add", "y");
+    sh(work, "commit", "--quiet", "-m", "Add y\n\nCo-Authored-By: Claude <noreply@anthropic.com>");
+    sh(work, "push", "--quiet", "origin", "review-x");
+
+    const res = await api("/api/sessions", { method: "POST", body: JSON.stringify({ sandbox: "web", prompt: "hi" }) });
+    const { id } = (await res.json()) as { id: string };
+    await waitFor(async () => ((await (await api("/api/sessions")).json()) as SessionInfo[]).find((s) => s.id === id)?.status === "idle");
+    const got: SessionEvent[] = [];
+    const sock = new WebSocket(`${server.url.replace("http", "ws")}/api/sessions/${id}/events?after=0`, { headers: { authorization: `Bearer ${server.token}` } });
+    sock.on("message", (m) => {
+      const msg = JSON.parse(String(m)) as SessionStreamMessage;
+      if (msg.kind !== "caught_up") got.push(msg);
+    });
+    await waitFor(() => got.some((e) => e.kind === "claude" && e.payload.type === "result"));
+    const prompt = `widget deliver ${JSON.stringify({ branch: "review-x", title: "Review x", body: "." })}`;
+    assert.equal((await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: prompt }) })).status, 202);
+    const card = await waitFor(() => got.findLast((e): e is Extract<SessionEvent, { kind: "card" }> => e.kind === "card")?.payload);
+
+    const diff = (await (await api(`/api/sessions/${id}/cards/${card.id}/diff`)).json()) as ReviewDiff;
+    assert.deepEqual(diff.files.map((f) => [f.path, f.status, f.added, f.deleted]), [["README", "modified", 1, 0], ["y", "added", 1, 0]]);
+    const readme = diff.files[0];
+    assert.deepEqual(readme.hunks[0].lines, [" hi", "+there"]);
+    const blob = (await (await api(`/api/sessions/${id}/cards/${card.id}/blob/${readme.newBlob}`)).json()) as { text: string };
+    assert.equal(blob.text, "hi\nthere\n");
+    const commit = (await (await api(`/api/sessions/${id}/cards/${card.id}/diff?commit=${one}`)).json()) as ReviewDiff;
+    assert.deepEqual(commit.files.map((f) => f.path), ["README"], "one commit shows only what it changed");
+    assert.equal((await api(`/api/sessions/${id}/cards/${card.id}/diff?commit=${"0".repeat(40)}`)).status, 400, "only the card's commits");
+    assert.equal((await api(`/api/sessions/${id}/cards/${card.id}/blob/HEAD`)).status, 400);
+    assert.equal((await api(`/api/sessions/${id}/cards/nope/diff`)).status, 404);
+
+    // The card's Review button: the pane opens beside the chat, and closes on a second press.
+    const opened = (await (await api(`/api/sessions/${id}/window/review`, { method: "POST", body: JSON.stringify({ ask: card.id }) })).json()) as WindowState;
+    assert.ok(Object.values(opened.panes).includes(REVIEW));
+    assert.deepEqual(opened.widgets[REVIEW], { kind: "review", state: { ask: card.id } });
+    const closed = (await (await api(`/api/sessions/${id}/window/review`, { method: "POST", body: JSON.stringify({ ask: card.id }) })).json()) as WindowState;
+    assert.ok(!Object.values(closed.panes).includes(REVIEW));
+    assert.equal((await api(`/api/sessions/${id}/window/review`, { method: "POST", body: JSON.stringify({ ask: "nope" }) })).status, 404);
+
+    // Notes make a long reason; it reaches Claude whole.
+    const reason = `README:2\n> there\n${"Say it differently. ".repeat(300)}`;
+    assert.ok(reason.length > 4000);
+    const declined = await api(`/api/sessions/${id}/cards/${card.id}`, { method: "POST", body: JSON.stringify({ action: "decline", reason }) });
+    assert.equal(((await declined.json()) as ApprovalCard).reason, reason.trim());
     sock.close();
   });
 

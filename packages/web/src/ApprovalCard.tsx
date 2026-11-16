@@ -1,10 +1,12 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { type ApprovalCard as Card, type AttachmentInput, type CardDecision, type CardFlag, type CardFile } from "@kumiko/shared";
+import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
+import { REVIEW, type ApprovalCard as Card, type DeliverCard, type ReviewState, type AttachmentInput, type CardDecision, type CardFlag, type CardFile } from "@kumiko/shared";
 import { approveLabel, barShares, cardAction, cardClosed, cardVerb, commitsLabel, deliverChoices, deliverDecision, filesLabel, initialChoice, lostHeading, unsignedWarning, whereLabel, type DeliverChoice } from "./cards";
 import { hasFiles, readFiles, toInput, type ComposerFile } from "./attachments";
 import type { ChatItem } from "./chat";
 import { FileChips } from "./Composer";
 import { Markdown } from "./Markdown";
+import { changesReason, getReview, onRequestChanges, setReview, subscribeReviews, viewedCount, type Review } from "./review";
+import { WindowContext } from "./windowContext";
 
 type AskItem = Extract<ChatItem, { type: "ask" }>;
 
@@ -74,11 +76,26 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
   const [busy, setBusy] = useState(false);
 
   const send = async (action: CardAction) => {
-    if (!decide || busy) return;
+    if (!decide || busy) return false;
     setBusy(true);
-    await decide(card.id, action);
+    const ok = await decide(card.id, action);
     setBusy(false);
+    return ok;
   };
+  const win = useContext(WindowContext);
+  const review = useSyncExternalStore(subscribeReviews, () => (win && c.kind === "deliver" ? getReview(win.session, card.id) : NO_REVIEW));
+  const notes = review.notes;
+  const box = useRef<HTMLDivElement>(null);
+  // The review pane's Request changes: this card opens its box for a message to go with the notes.
+  useEffect(
+    () =>
+      onRequestChanges((ask) => {
+        if (ask !== card.id) return;
+        setDeclining(true);
+        box.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      }),
+    [card.id],
+  );
   const decision = (): CardDecision | undefined => {
     switch (c.kind) {
       case "deliver":
@@ -96,7 +113,11 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
 
   const declineNow = () => {
     if (!decide || busy) return;
-    void send({ action: "decline", ...(reason.trim() ? { reason: reason.trim() } : {}), ...(files.length ? { attachments: files.map(toInput) } : {}) });
+    const text = c.kind === "deliver" && notes.length ? changesReason(c, notes, reason) : reason.trim();
+    void send({ action: "decline", ...(text ? { reason: text } : {}), ...(files.length ? { attachments: files.map(toInput) } : {}) }).then((ok) => {
+      // The notes went to Claude with it.
+      if (ok && win && notes.length) setReview(win.session, card.id, (r) => ({ ...r, notes: [] }));
+    });
   };
   const attach = async (picked: File[]) => {
     if (!picked.length) return;
@@ -128,8 +149,8 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
   );
 
   const decline = (
-    <button type="button" className="btn btn-secondary btn-compact" disabled={busy || !decide} onClick={() => setDeclining(true)}>
-      Decline…
+    <button type="button" className={`btn btn-compact ${notes.length ? "btn-warn" : "btn-secondary"}`} disabled={busy || !decide} onClick={() => setDeclining(true)}>
+      {notes.length ? `Request changes (${notes.length})` : "Decline…"}
     </button>
   );
   const primary = stale ? (
@@ -145,7 +166,7 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
   );
 
   return (
-    <div className="ac-card is-pending" role="group" aria-label={cardVerb(c, choice)}>
+    <div className="ac-card is-pending" role="group" aria-label={cardVerb(c, choice)} ref={box}>
       {head}
       {c.kind === "deliver" && <Facts commits={c.commits} files={c.files} added={c.added} deleted={c.deleted} where={whereLabel(c)} />}
       {c.kind === "deliver" && !stale && c.lost.length > 0 && (
@@ -163,6 +184,7 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
         </div>
       )}
       {c.kind === "deliver" && !stale && <Flags flags={c.flags} />}
+      {c.kind === "deliver" && win && <ReviewStrip c={c} review={review} open={reviewOpen(win.window, card.id)} onToggle={() => win.review(card.id)} />}
       {stale && c.kind === "deliver" && (
         <div className="ac-stale">
           {c.branch} moved to {short(card.moved?.to ?? "")} ({card.moved?.commits ?? 0} new commit{card.moved?.commits === 1 ? "" : "s"}) after this card was shown.
@@ -211,7 +233,7 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
             <textarea
               className="ac-ta"
               autoFocus
-              placeholder="Why not, for Claude (optional)"
+              placeholder={notes.length ? `Anything to add to your ${notes.length === 1 ? "note" : `${notes.length} notes`}, for Claude (optional)` : "Why not, for Claude (optional)"}
               aria-label="Reason for declining, for Claude"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
@@ -240,7 +262,7 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
                 Back
               </button>
               <button type="button" className="btn btn-secondary btn-compact" disabled={busy || !decide} onClick={declineNow}>
-                Decline and tell Claude
+                {notes.length ? "Request changes" : "Decline and tell Claude"}
               </button>
             </>
           ) : (
@@ -412,6 +434,31 @@ export function BodyField({ value, onChange, label }: { value: string; onChange(
           {value.trim() ? <Markdown text={value} /> : <span className="dim">Empty</span>}
         </div>
       )}
+    </div>
+  );
+}
+
+const NO_REVIEW: Review = { viewed: {}, notes: [], seen: [] };
+
+/** Whether the window's review pane is on screen, showing card `ask`. */
+const reviewOpen = (w: { panes: Record<string, string>; widgets: Record<string, { state?: unknown }> }, ask: string) =>
+  Object.values(w.panes).includes(REVIEW) && (w.widgets[REVIEW]?.state as ReviewState | undefined)?.ask === ask;
+
+/** How far the user got reading the card's changes in the review pane, and the button that opens it. */
+function ReviewStrip({ c, review, open, onToggle }: { c: DeliverCard; review: Review; open: boolean; onToggle(): void }) {
+  const done = viewedCount(review, c);
+  const all = c.files.length;
+  const notes = review.notes.length;
+  return (
+    <div className={`ac-review${open ? " is-open" : ""}${all && done === all ? " is-done" : ""}`}>
+      <span className="ac-ring" style={{ "--p": all ? Math.round((done / all) * 100) : 0 } as CSSProperties} aria-hidden="true" />
+      <div className="ac-review-text">
+        <b>{all && done === all ? `All ${all} files reviewed` : `${done} of ${all} file${all === 1 ? "" : "s"} reviewed`}</b>
+        {notes > 0 && <div className="ac-review-sub">{notes === 1 ? "1 note" : `${notes} notes`} for Claude</div>}
+      </div>
+      <button type="button" className="btn btn-secondary btn-compact" aria-pressed={open} onClick={onToggle}>
+        {open ? "Close review" : "Review"}
+      </button>
     </div>
   );
 }

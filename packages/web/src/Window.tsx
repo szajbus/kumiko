@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
-import { CHAT, chatWindow, artifactsOf, edgeShare, WINDOW, LIVE_SESSION_STATUSES, MIN_RATIO, resize, paneOf, windowState, type ArtifactState, type SessionEvent, type SessionInfo, type PaneId, type SplitPath, type WidgetId, type WindowState } from "@kumiko/shared";
+import { CHAT, chatWindow, artifactsOf, edgeShare, WINDOW, LIVE_SESSION_STATUSES, MIN_RATIO, resize, paneOf, windowState, type ArtifactState, type ReviewState, type SessionEvent, type SessionInfo, type PaneId, type SplitPath, type WidgetId, type WindowState } from "@kumiko/shared";
 import { api, onPaneRequest, useSessionEvents, type PaneRequest } from "./api";
 import type { ComposerHandle } from "./Composer";
 import { ArtifactView } from "./ArtifactView";
@@ -7,6 +7,7 @@ import { PaneGrip } from "./PaneGrip";
 import { SessionView } from "./SessionView";
 import type { WakeContext } from "./WakeBanner";
 import { TasksPane } from "./TasksPane";
+import { ReviewPane } from "./ReviewPane";
 import { useFold } from "./useFold";
 import { columns, dividers, dropPreview, dropZone, lastChanges, paneRects, streamingWrites, windowEdge, type Divider, type DropZone, type PaneRect } from "./widgets";
 import { WindowContext, type ArtifactEntry, type WindowApi } from "./windowContext";
@@ -70,6 +71,8 @@ export function Window({ session, onForked, active = true, sessionNames = NO_NAM
       rects,
       move: (pane, to, side) => void api.movePane(session.id, pane, to, side).catch((err) => console.error(err)),
       sessionNames,
+      session: session.id,
+      review: (ask, open) => void api.toggleReview(session.id, ask, open).catch((err) => console.error(err)),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [win, artifacts, live, active, session.id, arrange, JSON.stringify([...rects]), sessionNames],
@@ -90,6 +93,8 @@ export function Window({ session, onForked, active = true, sessionNames = NO_NAM
       }
       case "tasks":
         return <TasksPane session={session.id} events={stream.events} pane={pane} live={live} />;
+      case "review":
+        return <ReviewPane session={session.id} pane={pane} ask={(w.state as ReviewState).ask} events={stream.events} />;
       default:
         return null;
     }

@@ -25,6 +25,9 @@ import type { Mirrors } from "./mirrors.js";
 /** A call or decision that can't be taken as it is; the message says why, for the agent or the user. */
 export class ApprovalError extends Error {}
 
+/** The longest reason a decline sends Claude; past it, the rest is cut. */
+export const MAX_REASON = 20_000;
+
 /** What approvals need of the sessions: their events, and putting cards and answers into them. */
 export interface ApprovalSessions {
   get(id: string): SessionInfo | undefined;
@@ -362,7 +365,8 @@ export class Approvals {
     if (!this.isOpen(session, askId)) throw new ApprovalError("Claude isn't waiting for this any more.");
     if (card.state !== "open" && card.state !== "stale") throw new ApprovalError("This has been decided already.");
     if (action.action === "decline") {
-      const reason = action.reason?.trim().slice(0, 4000);
+      // Room for a review's notes, each with the line it is on.
+      const reason = action.reason?.trim().slice(0, MAX_REASON);
       const { attachments = [], files = [] } = action;
       if (attachments.length) {
         // A denial carries only text: the reason goes with the files, as the user's next message, and the chat shows it there.
