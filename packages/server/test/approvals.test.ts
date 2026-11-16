@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
-import type { AgentAsk, ApprovalCard, AskAnswer, DeliverCard, SessionEvent, SessionInfo } from "@kumiko/shared";
+import type { AgentAsk, ApprovalCard, AskAnswer, Attachment, DeliverCard, SessionEvent, SessionInfo } from "@kumiko/shared";
 import { Approvals, cardsOf, untrusted, type ApprovalSessions } from "../src/approvals.js";
 import { GitHub } from "../src/github.js";
 import { land, squashMessage } from "../src/landing.js";
@@ -42,6 +42,10 @@ class FakeSessions implements ApprovalSessions {
     if (this.closed.has(askId) || this.answers.some((a) => a.id === askId)) throw new Error("not waiting");
     this.answers.push({ id: askId, answer });
     this.ev.push({ seq: this.ev.length, kind: "ask_answer", payload: { id: askId, answer } });
+  }
+  prompts: { text: string; attachments: Attachment[] }[] = [];
+  prompt(_id: string, text: string, attachments: Attachment[]) {
+    this.prompts.push({ text, attachments });
   }
   card(id: string) {
     return cardsOf(this.ev).get(id);
@@ -380,6 +384,18 @@ describe("delivering", () => {
     await assert.rejects(approvals.decide("s1", r.id, { action: "decline" }), /isn't waiting/);
     const call = await approvals.call(sessions.info, "deliver", r.input, r.toolUseId);
     assert.match(call.text, /they declined it/);
+  });
+
+  it("sends a decline's files, and its reason, as the user's next message", async () => {
+    fresh();
+    await branch("look", { l: "l\n" });
+    const r = await ask({ branch: "look", title: "Look", body: "b" });
+    const shot: Attachment = { name: "shot.png", kind: "image", mediaType: "image/png", size: 3, hash: "h" };
+    const declined = await approvals.decide("s1", r.id, { action: "decline", reason: "See this.", attachments: [shot], files: [] });
+    assert.equal(declined.state, "declined");
+    assert.equal(declined.reason, undefined, "the message shows the reason");
+    assert.deepEqual(sessions.answer(r.id), { kind: "deny", message: "The user declined delivering look. Why, with files, comes in their next message." });
+    assert.deepEqual(sessions.prompts, [{ text: "See this.", attachments: [shot] }]);
   });
 
   it("opens a PR with Kumiko's footer, then lands it with GitHub's wording", async () => {

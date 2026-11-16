@@ -50,6 +50,26 @@ interface Props {
   ref?: Ref<ComposerHandle>;
 }
 
+/** The files attached to a message, each with its size and a button that takes it off; nothing when there are none. */
+export function FileChips({ files, onChange }: { files: ComposerFile[]; onChange(files: ComposerFile[]): void }): ReactNode {
+  if (!files.length) return null;
+  return (
+    <ul className="composer-files" aria-label="Attached files">
+      {files.map((f) => (
+        <li key={f.key} className="composer-file">
+          <span className="composer-file-name" title={f.name}>
+            {f.name}
+          </span>
+          <span className="composer-file-size">{formatBytes(f.size)}</span>
+          <button type="button" className="composer-file-remove" aria-label={`Remove ${f.name}`} title="Remove" onClick={() => onChange(files.filter((x) => x !== f))}>
+            <Close />
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 const MAX_HEIGHT = 240;
 const MAX_SUGGESTIONS = 8;
 
@@ -244,21 +264,7 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
             ))}
           </ul>
         )}
-        {files.length > 0 && (
-          <ul className="composer-files" aria-label="Attached files">
-            {files.map((f) => (
-              <li key={f.key} className="composer-file">
-                <span className="composer-file-name" title={f.name}>
-                  {f.name}
-                </span>
-                <span className="composer-file-size">{formatBytes(f.size)}</span>
-                <button type="button" className="composer-file-remove" aria-label={`Remove ${f.name}`} title="Remove" onClick={() => setFiles(files.filter((x) => x !== f))}>
-                  <Close />
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
+        <FileChips files={files} onChange={setFiles} />
         {shellMode && (
           <span className="composer-mark" aria-hidden="true">
             !

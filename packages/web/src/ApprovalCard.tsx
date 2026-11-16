@@ -1,13 +1,15 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { FOOTERS, type ApprovalCard as Card, type CardDecision, type CardFlag, type CardFile } from "@kumiko/shared";
+import { FOOTERS, type ApprovalCard as Card, type AttachmentInput, type CardDecision, type CardFlag, type CardFile } from "@kumiko/shared";
 import { approveLabel, barShares, cardAction, cardClosed, cardVerb, commitsLabel, deliverChoices, deliverDecision, filesLabel, initialChoice, unsignedWarning, type DeliverChoice } from "./cards";
+import { hasFiles, readFiles, toInput, type ComposerFile } from "./attachments";
 import type { ChatItem } from "./chat";
+import { FileChips } from "./Composer";
 import { Markdown } from "./Markdown";
 
 type AskItem = Extract<ChatItem, { type: "ask" }>;
 
 /** What a card can ask the server to do; resolves to whether it went through. Missing where nobody can decide. */
-export type CardAction = { action: "approve"; decision: CardDecision } | { action: "decline"; reason?: string } | { action: "refresh" };
+export type CardAction = { action: "approve"; decision: CardDecision } | { action: "decline"; reason?: string; attachments?: AttachmentInput[] } | { action: "refresh" };
 export const CardContext = createContext<((askId: string, action: CardAction) => Promise<boolean>) | undefined>(undefined);
 
 const short = (sha: string) => sha.slice(0, 7);
@@ -67,6 +69,9 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
   const [labels, setLabels] = useState<string[]>(c.kind === "issue" ? c.labels : []);
   const [declining, setDeclining] = useState(false);
   const [reason, setReason] = useState("");
+  const [files, setFiles] = useState<ComposerFile[]>([]);
+  const [refused, setRefused] = useState<string>();
+  const [dropping, setDropping] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const send = async (action: CardAction) => {
@@ -90,6 +95,17 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
   const approve = () => {
     const d = decision();
     if (d && card.state === "open") void send({ action: "approve", decision: d });
+  };
+
+  const declineNow = () => {
+    if (!decide || busy) return;
+    void send({ action: "decline", ...(reason.trim() ? { reason: reason.trim() } : {}), ...(files.length ? { attachments: files.map(toInput) } : {}) });
+  };
+  const attach = async (picked: File[]) => {
+    if (!picked.length) return;
+    const read = await readFiles(picked, files);
+    setFiles((have) => [...have, ...read.files]);
+    setRefused(read.errors.join(" ") || undefined);
   };
 
   const stale = card.state === "stale";
@@ -170,9 +186,49 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
       )}
       {!stale && c.kind === "deliver" && unsignedWarning(c, choice) && <div className="ac-unsigned">{unsignedWarning(c, choice)}</div>}
       {declining && (
-        <div className="ac-decline">
-          <textarea className="ac-ta ac-fld" autoFocus placeholder="Why not, for Claude (optional)" aria-label="Reason for declining, for Claude" value={reason} onChange={(e) => setReason(e.target.value)} />
-        </div>
+        <>
+          <div
+            className={`ac-decline ac-fld${dropping ? " is-dropping" : ""}`}
+            onDragOver={(e) => {
+              if (!hasFiles(e.dataTransfer)) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "copy";
+              setDropping(true);
+            }}
+            // Leaving for one of its own children isn't leaving.
+            onDragLeave={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropping(false);
+            }}
+            onDrop={(e) => {
+              if (!hasFiles(e.dataTransfer)) return;
+              e.preventDefault();
+              setDropping(false);
+              void attach([...e.dataTransfer.files]);
+            }}
+          >
+            <textarea
+              className="ac-ta"
+              autoFocus
+              placeholder="Why not, for Claude (optional)"
+              aria-label="Reason for declining, for Claude"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey)) return;
+                e.preventDefault();
+                declineNow();
+              }}
+              onPaste={(e) => {
+                // A screenshot, or files copied as such; text that comes with them wins, as in the composer.
+                if (e.clipboardData.files.length === 0 || e.clipboardData.getData("text/plain")) return;
+                e.preventDefault();
+                void attach([...e.clipboardData.files]);
+              }}
+            />
+            <FileChips files={files} onChange={setFiles} />
+          </div>
+          {refused && <div className="ac-refused">{refused}</div>}
+        </>
       )}
       <div className="ac-foot-bar">
         <span className="chat-proposal-buttons">
@@ -181,7 +237,7 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
               <button type="button" className="btn btn-secondary btn-compact" disabled={busy} onClick={() => setDeclining(false)}>
                 Back
               </button>
-              <button type="button" className="btn btn-secondary btn-compact" disabled={busy || !decide} onClick={() => void send({ action: "decline", ...(reason.trim() ? { reason: reason.trim() } : {}) })}>
+              <button type="button" className="btn btn-secondary btn-compact" disabled={busy || !decide} onClick={declineNow}>
                 Decline and tell Claude
               </button>
             </>

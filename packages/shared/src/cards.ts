@@ -126,7 +126,7 @@ export interface CardReceipt {
   /** Details after it: "merge commit · signed". */
   meta?: string;
   url?: string;
-  /** What the link says: "View on GitHub", "Open PR". */
+  /** What the link says, such as "View on GitHub". */
   link?: string;
 }
 
