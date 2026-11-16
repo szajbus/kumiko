@@ -808,6 +808,8 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     }
     await sandboxes.writeManaged(sandbox, spec);
     await provider.create(spec, log, await agentSetup(sandbox));
+    // The kept disk still has the folders of repos taken out while there was no VM to delete them from.
+    if (sandbox.dropped?.length && (await dropFolders(sandbox.name, sandbox.dropped, log))) await sandboxes.dropped(sandbox.name, sandbox.dropped);
   };
 
   /** The agent's setup scripts a VM is created with, read once its sessions have ended, so none can change them while it is provisioned. */
@@ -843,11 +845,15 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
    */
   const changeRepos = async (sandbox: Sandbox, added: string[], removed: SandboxRepo[], spec: SandboxSpec | undefined, running: boolean): Promise<Sandbox> => {
     let updated = sandbox;
+    // Added first, so no newcomer gets a folder taken out in the same save: the folders are those the form showed.
+    if (added.length) updated = await sandboxes.addRepos(sandbox.name, added);
     if (removed.length) {
-      const deleted = running && (await dropFolders(sandbox.name, removed.map((r) => r.folder)));
+      const folders = removed.map((r) => r.folder);
+      // A clone under way would move its folder back after the delete: it finishes first.
+      if (running) await clones.settled(sandbox.name, folders);
+      const deleted = running && (await dropFolders(sandbox.name, folders));
       updated = await sandboxes.removeRepos(sandbox.name, removed.map((r) => r.repo), { deleted });
     }
-    if (added.length) updated = await sandboxes.addRepos(sandbox.name, added);
     await sandboxes.writeManaged(updated, spec);
     await refresh();
     return updated;

@@ -39,8 +39,15 @@ export function useLossCheck(name: string, only?: string[]): { check: LossCheck;
   const startAndCheck = () => {
     setCheck({ kind: "stopped", starting: true });
     void (async () => {
-      // Already starting, from elsewhere, is as good.
-      await api.start(name).catch(() => {});
+      // Already starting, from elsewhere, is as good; any other refusal (no VM, say) is said at once.
+      const refused = await api.start(name).then(
+        () => undefined,
+        (err: unknown) => err,
+      );
+      if (refused && !/ is busy starting/.test(errorMessage(refused))) {
+        if (!(await look()) && alive.current) setCheck({ kind: "error", message: errorMessage(refused) });
+        return;
+      }
       const end = Date.now() + START_WAIT_MS;
       while (alive.current && Date.now() < end) {
         if (await look()) return;

@@ -35,7 +35,7 @@ export function cloneScript(repos: SandboxRepo[]): string {
 export class Clones {
   private readonly states = new Map<string, Map<string, Omit<RepoState, keyof SandboxRepo>>>();
   /** The sync under way for each sandbox, and whether another was asked for meanwhile. */
-  private readonly running = new Map<string, { again?: SandboxRepo[] }>();
+  private readonly running = new Map<string, { again?: SandboxRepo[]; done: Promise<void> }>();
 
   constructor(
     private readonly exec: SandboxProvider["exec"],
@@ -55,9 +55,9 @@ export class Clones {
       run.again = repos;
       return;
     }
-    const entry: { again?: SandboxRepo[] } = {};
+    const entry: { again?: SandboxRepo[]; done: Promise<void> } = { done: Promise.resolve() };
     this.running.set(sandbox, entry);
-    void (async () => {
+    entry.done = (async () => {
       let next: SandboxRepo[] | undefined = repos;
       while (next) {
         entry.again = undefined;
@@ -66,6 +66,17 @@ export class Clones {
       }
       this.running.delete(sandbox);
     })();
+  }
+
+  /**
+   * Waits for the sandbox's cloning under way, if any, so its folders can be deleted without a clone moving one back
+   * afterwards; a run still to come leaves out the repos in `folders`.
+   */
+  async settled(sandbox: string, folders: string[] = []): Promise<void> {
+    const run = this.running.get(sandbox);
+    if (!run) return;
+    if (run.again) run.again = run.again.filter((r) => !folders.includes(r.folder));
+    await run.done;
   }
 
   /** Forgets what is known of a sandbox's clones: its VM stopped, or the sandbox is gone. */

@@ -39,6 +39,7 @@ describe("what would be lost", () => {
     assert.equal(mustConfirm({ kind: "done", groups: [] }), false);
     assert.equal(mustConfirm({ kind: "done", groups: [{ repo: "a/b", rows: [] }] }), true);
     assert.equal(mustConfirm({ kind: "stopped" }), false);
+    assert.equal(mustConfirm({ kind: "error", message: "No answer from web in 60 s." }), true, "a failed look isn't taken for nothing to lose");
     assert.equal(stillChecking({ kind: "checking" }), true);
     assert.equal(stillChecking({ kind: "stopped" }), false);
     assert.equal(stillChecking({ kind: "stopped", starting: true }), true);

@@ -158,7 +158,7 @@ function LossConfirm({ kind, sandbox, onCancel, onConfirm }: { kind: "delete" | 
       {mustConfirm(check) && (
         <label className="check loss-confirm">
           <input type="checkbox" checked={understood} onChange={(e) => setUnderstood(e.target.checked)} />
-          I understand the work above will be lost
+          {check.kind === "error" ? "I understand work Kumiko couldn't check may be lost" : "I understand the work above will be lost"}
         </label>
       )}
       {sessionsNote(sandbox)}

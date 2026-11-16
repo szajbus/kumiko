@@ -47,10 +47,10 @@ export type LossCheck =
   | { kind: "done"; groups: LossGroup[] };
 
 /**
- * Whether the user must say they understand before going on: something would be lost, or Kumiko couldn't tell for a
- * repo. A stopped VM asks nothing: the button says it goes on without checking.
+ * Whether the user must say they understand before going on: something would be lost, or Kumiko couldn't tell, for a
+ * repo or for all of them. A stopped VM asks nothing: the button says it goes on without checking.
  */
-export const mustConfirm = (c: LossCheck) => c.kind === "done" && c.groups.length > 0;
+export const mustConfirm = (c: LossCheck) => c.kind === "error" || (c.kind === "done" && c.groups.length > 0);
 
 /** Whether the dialog can't go on yet: still looking, or starting the VM to look. */
 export const stillChecking = (c: LossCheck) => c.kind === "checking" || (c.kind === "stopped" && c.starting === true);

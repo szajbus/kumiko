@@ -510,6 +510,18 @@ describe("server", () => {
     assert.equal((await finished("gh", "starting", at)).type, "done");
     assert.equal(await exists(join(workspace, "widget")), false);
     assert.equal((await sandbox("gh"))!.sandbox.dropped, undefined);
+
+    // Taken out while stopped and rebuilt, it goes once the new VM is up: a rebuild runs the VM without a start.
+    assert.equal((await api("/api/sandboxes/gh", { method: "PATCH", body: JSON.stringify({ repos: ["acme/widget"] }) })).status, 200);
+    await waitAsync(async () => (await sandbox("gh"))?.repos.every((r) => r.state === "cloned") || undefined, 30_000);
+    at = events.length;
+    assert.equal((await api("/api/sandboxes/gh/stop", { method: "POST" })).status, 202);
+    await finished("gh", "stopping", at);
+    at = events.length;
+    assert.equal((await api("/api/sandboxes/gh?recreate=1", { method: "PATCH", body: JSON.stringify({ repos: [] }) })).status, 202);
+    assert.equal((await finished("gh", "recreating", at)).type, "done");
+    assert.equal(await exists(join(workspace, "widget")), false);
+    assert.equal((await sandbox("gh"))!.sandbox.dropped, undefined);
     await remove("gh");
     await rm(workspace, { recursive: true, force: true });
   });

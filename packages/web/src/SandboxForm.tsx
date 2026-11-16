@@ -121,13 +121,17 @@ export function SandboxForm({ editing, mirrors, onCancel, onCreated }: Props) {
   const isKept = (repo: string) => kept.some((k) => k.repo.toLowerCase() === repo.toLowerCase());
   // In the mirrors' order, so the folders shown don't move about as repos are ticked.
   const adds = mirrors.map((m) => m.repo).filter((r) => picked.includes(r) && !isKept(r));
-  const folders = useMemo(() => new Map(repoFolders(adds, kept).map((r) => [r.repo, r.folder])), [adds.join(), kept]);
+  // Folders still to be deleted are given to no newcomer, as the server does.
+  const reserved = editing?.sandbox.dropped;
+  const folders = useMemo(() => new Map(repoFolders(adds, kept, reserved).map((r) => [r.repo, r.folder])), [adds.join(), kept, reserved]);
   const toggleRepo = (repo: string, on: boolean) => {
     if (isKept(repo)) return setDropped((all) => (on ? all.filter((r) => r !== repo) : [...all, repo]));
     setPicked((all) => (on ? [...all.filter((r) => r !== repo), repo] : all.filter((r) => r !== repo)));
   };
   const isDropped = (repo: string) => dropped.some((d) => d.toLowerCase() === repo.toLowerCase());
-  const shownMirrors = mirrors.filter((m) => m.repo.toLowerCase().includes(repoFilter.trim().toLowerCase()));
+  // The sandbox's repos whose mirror is gone are listed too, so they can be taken out.
+  const choices: { repo: string; private?: boolean }[] = [...mirrors, ...kept.filter((k) => !mirrors.some((m) => m.repo.toLowerCase() === k.repo.toLowerCase()))];
+  const shownMirrors = choices.filter((m) => m.repo.toLowerCase().includes(repoFilter.trim().toLowerCase()));
   const openAdd = () => {
     setAdding({});
     // The dialog lists the account's own repos first, once it knows whose.
@@ -334,7 +338,7 @@ export function SandboxForm({ editing, mirrors, onCancel, onCreated }: Props) {
           }
         >
           <div className="repo-picker">
-            {mirrors.length > 6 && (
+            {choices.length > 6 && (
               <input
                 className="input input-dark repo-picker-filter"
                 type="search"
@@ -344,7 +348,7 @@ export function SandboxForm({ editing, mirrors, onCancel, onCreated }: Props) {
                 onChange={(e) => setRepoFilter(e.target.value)}
               />
             )}
-            {mirrors.length === 0 ? (
+            {choices.length === 0 ? (
               <p className="muted">No mirrors yet. Mirror a repository from GitHub to pick it here.</p>
             ) : (
               <ul className="repo-picker-list" aria-label="Mirrors">

@@ -44,6 +44,8 @@ describe("unpushed work", () => {
     // On no remote at all: its one commit is lost with it.
     sh(clone, "checkout", "--quiet", "-b", "spike", "main");
     await commit(clone, "c");
+    // A tag of the same name makes the branch's short name ambiguous.
+    sh(clone, "tag", "spike", "main");
     // Without an upstream, but all on a remote: nothing to lose.
     sh(clone, "checkout", "--quiet", "-b", "copy", "main");
     // A stash, and a worktree with an untracked file and a change.
@@ -54,14 +56,29 @@ describe("unpushed work", () => {
     sh(clone, "worktree", "add", "--quiet", wt, "-b", "try");
     await writeFile(join(wt, "new.txt"), "x");
     await writeFile(join(wt, "README"), "edited");
+    // A detached HEAD whose commit is on no branch.
+    const loose = join(workspace, "api__worktrees", "loose");
+    sh(clone, "worktree", "add", "--quiet", "--detach", loose, "main");
+    await commit(loose, "d");
+    // A folder git can't read: what is in it can't be told, so it isn't taken for nothing.
+    await mkdir(join(workspace, "broken", ".git"), { recursive: true });
 
-    const [api, gone] = await findUnpushed(exec, "web", [{ repo: "acme/api", folder: "api" }, { repo: "acme/gone", folder: "gone" }]);
-    assert.deepEqual(api.branches.sort((a, b) => a.name.localeCompare(b.name)), [{ name: "fix-x", ahead: 2, upstream: "origin/fix-x" }, { name: "spike", ahead: 1 }]);
+    const [api, gone, broken] = await findUnpushed(exec, "web", [
+      { repo: "acme/api", folder: "api" },
+      { repo: "acme/gone", folder: "gone" },
+      { repo: "acme/broken", folder: "broken" },
+    ]);
+    assert.deepEqual(api.branches.sort((a, b) => a.name.localeCompare(b.name)), [
+      { name: "fix-x", ahead: 2, upstream: "origin/fix-x" },
+      { name: `HEAD, detached in ${loose}`, ahead: 1 },
+      { name: "spike", ahead: 1 },
+    ]);
     assert.deepEqual(api.dirty, [{ worktree: wt, files: 2 }], "the clone itself is clean");
     assert.equal(api.stashes, 1);
     assert.equal(api.error, undefined);
     assert.match(gone.error ?? "", /There's no clone at \/workspace\/gone/);
     assert.deepEqual([gone.branches, gone.dirty, gone.stashes], [[], [], 0]);
+    assert.match(broken.error ?? "", /git for-each-ref failed in \/workspace\/broken/);
   });
 
   it("reads only lines about the repos it asked for", () => {
