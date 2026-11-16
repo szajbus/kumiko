@@ -1269,6 +1269,11 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
 .ac-decline:focus-within, .ac-body:focus-within { border-color: #4a5a8a; }
 .ac-decline .ac-ta:focus-visible, .ac-body .ac-ta:focus-visible { outline: none; }
 .ac-refused { margin: -4px 14px 10px; color: #f6b3aa; font-size: 12.5px; }
+.ac-where { font-size: 11px; border: 1px solid #4a5a8a; border-radius: 4px; padding: 0 6px; color: var(--accent); }
+.ac-lost { margin: 0 14px 10px; padding: 8px 10px; border: 1px solid #5c2b2e; border-radius: 7px; background: rgba(240, 122, 106, 0.06); color: #f6b3aa; font-size: 13px; }
+.ac-lost .ac-row { grid-template-columns: 64px 1fr; }
+.ac-lost .ac-sha { color: inherit; opacity: 0.8; }
+.ac-lost .ac-why { margin-top: 4px; }
 .ac-unsigned { margin: 0 14px 10px; color: #f0cf96; font-size: 12.5px; }
 .ac-stale { margin: 0 14px 10px; padding: 8px 10px; border: 1px solid #5c2b2e; background: rgba(240, 122, 106, 0.06); border-radius: 7px; font-size: 13px; color: #f6b3aa; }
 .ac-foot-bar { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 10px 14px 12px; border-top: 1px solid var(--border); background: rgba(0, 0, 0, 0.12); border-radius: 0 0 10px 10px; }

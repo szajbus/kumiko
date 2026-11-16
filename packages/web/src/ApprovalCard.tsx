@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { type ApprovalCard as Card, type AttachmentInput, type CardDecision, type CardFlag, type CardFile } from "@kumiko/shared";
-import { approveLabel, barShares, cardAction, cardClosed, cardVerb, commitsLabel, deliverChoices, deliverDecision, filesLabel, initialChoice, unsignedWarning, type DeliverChoice } from "./cards";
+import { approveLabel, barShares, cardAction, cardClosed, cardVerb, commitsLabel, deliverChoices, deliverDecision, filesLabel, initialChoice, lostHeading, unsignedWarning, whereLabel, type DeliverChoice } from "./cards";
 import { hasFiles, readFiles, toInput, type ComposerFile } from "./attachments";
 import type { ChatItem } from "./chat";
 import { FileChips } from "./Composer";
@@ -34,7 +34,7 @@ export function ApprovalCardView({ item }: { item: AskItem }) {
     return (
       <div className="ac-receipt">
         <span className="ac-r-icon">…</span>
-        {card.state === "approved" && card.card.kind !== "push" ? "Approved; waiting for Claude to go ahead" : `${upperFirst(cardAction(card))}…`}
+        {card.state === "approved" ? "Approved; waiting for Claude to go ahead" : `${upperFirst(cardAction(card))}…`}
       </div>
     );
   }
@@ -64,7 +64,7 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
   const c = card.card;
   const [choice, setChoice] = useState<DeliverChoice>(c.kind === "deliver" ? initialChoice(c) : "merge");
   const [title, setTitle] = useState(c.kind === "deliver" || c.kind === "issue" ? c.title : "");
-  const [body, setBody] = useState(c.kind === "push" ? "" : c.body);
+  const [body, setBody] = useState(c.body);
   const [labels, setLabels] = useState<string[]>(c.kind === "issue" ? c.labels : []);
   const [declining, setDeclining] = useState(false);
   const [reason, setReason] = useState("");
@@ -87,8 +87,6 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
         return title.trim() ? { kind: "issue", title: title.trim(), body, labels } : undefined;
       case "comment":
         return body.trim() ? { kind: "comment", body } : undefined;
-      case "push":
-        return { kind: "push" };
     }
   };
   const approve = () => {
@@ -118,7 +116,6 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
             {c.pr && <span className="badge">#{c.pr.number}</span>}
           </>
         )}
-        {c.kind === "push" && <code className="ac-ref">{c.branch}</code>}
         {c.kind === "comment" && (
           <a className="ac-target" href={c.target.url} target="_blank" rel="noreferrer">
             {c.target.title}
@@ -150,16 +147,22 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
   return (
     <div className="ac-card is-pending" role="group" aria-label={cardVerb(c, choice)}>
       {head}
-      {c.kind === "deliver" && <Facts commits={c.commits} files={c.files} added={c.added} deleted={c.deleted} />}
-      {c.kind === "push" && (
-        <div className="ac-facts">
-          <span>{c.old ? (c.fastForward ? "fast-forward" : "force-push") : "new branch"}</span>
-          <span>
-            {c.commits} commit{c.commits === 1 ? "" : "s"}
-          </span>
+      {c.kind === "deliver" && <Facts commits={c.commits} files={c.files} added={c.added} deleted={c.deleted} where={whereLabel(c)} />}
+      {c.kind === "deliver" && !stale && c.lost.length > 0 && (
+        <div className="ac-lost">
+          <b>{lostHeading(c)}</b>
+          {c.lost.map((l) => (
+            <div key={l.sha} className="ac-row">
+              <code className="ac-sha">{short(l.sha)}</code>
+              <span>
+                {l.subject} <i>{l.how}</i>
+              </span>
+            </div>
+          ))}
+          <div className="ac-why">Your team can see these on GitHub already. The branch was rewritten since.</div>
         </div>
       )}
-      {(c.kind === "deliver" || c.kind === "push") && !stale && <Flags flags={c.kind === "deliver" ? c.flags : pushFlags(c.files)} />}
+      {c.kind === "deliver" && !stale && <Flags flags={c.flags} />}
       {stale && c.kind === "deliver" && (
         <div className="ac-stale">
           {c.branch} moved to {short(card.moved?.to ?? "")} ({card.moved?.commits ?? 0} new commit{card.moved?.commits === 1 ? "" : "s"}) after this card was shown.
@@ -252,11 +255,7 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
   );
 }
 
-/** The push card's one flag per .github/ file, saying why it waits. */
-const pushFlags = (files: CardFile[]): CardFlag[] =>
-  (files.length ? files : [{ path: ".github/" }]).map((f) => ({ rule: "ci", subject: f.path, why: "GitHub runs this branch's own workflows when it's pushed, with the repository's secrets." }));
-
-function Facts({ commits, files, added, deleted }: { commits: { sha: string; subject: string; claude: boolean }[]; files: CardFile[]; added: number; deleted: number }) {
+function Facts({ commits, files, added, deleted, where }: { commits: { sha: string; subject: string; claude: boolean }[]; files: CardFile[]; added: number; deleted: number; where?: string }) {
   const [open, setOpen] = useState<"commits" | "files">();
   return (
     <>
@@ -270,6 +269,7 @@ function Facts({ commits, files, added, deleted }: { commits: { sha: string; sub
           </button>{" "}
           <span className="ac-add">+{added}</span> <span className="ac-del">−{deleted}</span>
         </span>
+        {where && <span className="ac-where">{where}</span>}
       </div>
       {open === "commits" && (
         <div className="ac-panel">

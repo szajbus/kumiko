@@ -52,7 +52,8 @@ function mirrorsOf(w: World, opts: Partial<MirrorOptions> = {}): Mirrors {
   return new Mirrors({ home: w.home, remoteUrl: (repo) => `file://${w.base}/${repo.toLowerCase()}.git`, ...opts });
 }
 
-const refs = (dir: string) => sh(dir, "for-each-ref", "--format=%(refname) %(objectname)").trim().split("\n").sort();
+// What a VM sees of the mirror, and all of a stand-in GitHub: GitHub's own copies in refs/github/ are the mirror's.
+const refs = (dir: string) => sh(dir, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads", "refs/tags").trim().split("\n").sort();
 
 describe("repository mirrors", () => {
   it("makes a bare mirror of GitHub's branches and tags, under Kumiko's home, with HEAD where GitHub's is", async () => {
@@ -92,6 +93,29 @@ describe("repository mirrors", () => {
     assert.throws(() => sh(w.work, "push", "--quiet", path, "HEAD:refs/heads/main"), /pushing to this mirror isn't allowed/);
     assert.throws(() => sh(w.work, "push", "--quiet", path, "HEAD:refs/heads/new"), /pushing to this mirror isn't allowed/);
     assert.deepEqual(refs(path), refs(join(w.base, "acme", "widget.git")), "nothing changed");
+    await mirrors.close();
+  });
+
+  it("moves a mirror made before refs/github/ over on its next fetch, its branches in step with GitHub's", async () => {
+    const w = await world();
+    let mirrors = mirrorsOf(w);
+    await mirrors.start();
+    const path = await mirrors.ensure("acme/widget");
+    await mirrors.close();
+    // As an older Kumiko left it: GitHub's branches straight in refs/heads/, and no layout in the record.
+    for (const ref of sh(path, "for-each-ref", "--format=%(refname)", "refs/github").trim().split("\n").filter(Boolean)) sh(path, "update-ref", "-d", ref);
+    const record = JSON.parse(await readFile(join(w.home, "repos.json"), "utf8"));
+    delete record.repos[0].layout;
+    await writeFile(join(w.home, "repos.json"), JSON.stringify(record));
+    await writeFile(join(w.work, "NEW"), "new\n");
+    sh(w.work, "add", "NEW");
+    sh(w.work, "commit", "--quiet", "-m", "new");
+    sh(w.work, "push", "--quiet", "origin", "main", "main:feature");
+    mirrors = mirrorsOf(w);
+    await mirrors.start();
+    await mirrors.fetch("acme/widget");
+    assert.deepEqual(refs(path), refs(join(w.base, "acme", "widget.git")), "every branch followed GitHub");
+    assert.equal(JSON.parse(await readFile(join(w.home, "repos.json"), "utf8")).repos[0].layout, 2);
     await mirrors.close();
   });
 

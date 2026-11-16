@@ -297,8 +297,6 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     /** The session was opened again by a new server: what the last one left half done. */
     reopened(info: SessionInfo): void;
   };
-  /** Kumiko's own asks waiting for the user's answer, by ask id. */
-  private hostAsks = new Map<string, (answer: AskAnswer | undefined) => void>();
 
   constructor(
     private readonly makeDriver: () => AgentDriver,
@@ -615,8 +613,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
 
   /** Records that Claude stopped waiting for everything it asked, for `reason`. */
   private closeAsks(s: Session, reason: AskClosedReason) {
-    // Kumiko's own asks aren't Claude's, and wait on whatever asked them, not on this process.
-    for (const ask of openAsks(s.events)) if (!(ask.kind === "approval" && ask.host && this.hostAsks.has(ask.id))) this.push(s, { kind: "ask_closed", payload: { id: ask.id, reason } });
+    for (const ask of openAsks(s.events)) this.push(s, { kind: "ask_closed", payload: { id: ask.id, reason } });
     this.setInfo(s, { asking: openAsks(s.events).at(-1)?.kind });
   }
 
@@ -1106,45 +1103,16 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     if (s.info.status !== "running" && s.info.status !== "starting") this.save(s);
   }
 
-  /**
-   * Asks the user something on Kumiko's own behalf, in the session, as Claude's asks are: the tab shows it waits on
-   * them, and a message they send meanwhile answers it. `onAnswer` gets the answer, or undefined if it closes without one.
-   */
-  hostAsk(id: string, ask: Extract<AgentAsk, { kind: "approval" }>, onAnswer: (answer: AskAnswer | undefined) => void): void {
-    const s = this.live(id);
-    this.hostAsks.set(ask.id, onAnswer);
-    this.push(s, { kind: "ask", payload: { ...ask, host: true } });
-    this.setInfo(s, { asking: ask.kind });
-    this.save(s);
-  }
-
-  /** Closes one of Kumiko's own asks without an answer: what waited on it stopped waiting. */
-  closeHostAsk(id: string, askId: string): void {
-    const s = this.sessions.get(id);
-    this.hostAsks.delete(askId);
-    if (!s || !openAsks(s.events).some((a) => a.id === askId)) return;
-    this.push(s, { kind: "ask_closed", payload: { id: askId, reason: "interrupted" } });
-    this.setInfo(s, { asking: openAsks(s.events).at(-1)?.kind });
-    this.save(s);
-  }
-
   /** Answers what Claude asked, ask `askId`. Throws AskRefused if it isn't waiting for that, or the answer doesn't fit. */
   answerAsk(id: string, askId: string, answer: AskAnswer): void {
     const s = this.live(id);
     const ask = openAsks(s.events).find((a) => a.id === askId);
     if (!ask) throw new AskRefused("That has been answered already, or Claude stopped waiting for it.");
     if (!answerFits(ask.kind, answer)) throw new AskRefused("That isn't an answer to this.");
-    if (ask.kind === "approval" && ask.host) {
-      const waiting = this.hostAsks.get(askId);
-      if (!waiting) throw new AskRefused("Nothing is waiting for that any more.");
-      this.hostAsks.delete(askId);
-      waiting(answer);
-    } else {
-      try {
-        s.driver.answer(askId, answer);
-      } catch (err) {
-        throw new AskRefused(err instanceof Error ? err.message : String(err));
-      }
+    try {
+      s.driver.answer(askId, answer);
+    } catch (err) {
+      throw new AskRefused(err instanceof Error ? err.message : String(err));
     }
     this.push(s, { kind: "ask_answer", payload: { id: askId, answer } });
     this.setInfo(s, { asking: openAsks(s.events).at(-1)?.kind });

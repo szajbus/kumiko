@@ -456,26 +456,13 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   // Not under anything a VM mounts: each socket is only for the ssh forward into its own VM, and the hooks' for git on
   // the host.
   const runDir = join(home, "run");
-  /** Pushes waiting for the user, by relay connection: they stop waiting when git in the VM goes. */
-  const waitingPushes = new Map<string, () => void>();
-  const pushes = new Pushes({
-    socket: join(runDir, "hook.sock"),
-    mirrors,
-    connection: (id) => relays.connection(id),
-    askCi: (pusher, connection, card) => {
-      const asked = approvals.askPush(pusher, card);
-      waitingPushes.set(connection, asked.closed);
-      void asked.answer.finally(() => waitingPushes.delete(connection));
-      return asked;
-    },
-  });
+  const pushes = new Pushes({ socket: join(runDir, "hook.sock"), mirrors, connection: (id) => relays.connection(id) });
   // Without it pushes are refused, with curl saying why; Kumiko still starts.
   await pushes.start().catch((err) => console.error(`Pushes from sandboxes are off: Kumiko couldn't listen for the mirrors' hooks: ${err instanceof Error ? err.message : String(err)}`));
   const clones = new Clones(provider.exec.bind(provider), () => pushListIfChanged());
   const relays = new Relays({
     dir: runDir,
     hookSocket: join(runDir, "hook.sock"),
-    onConnectionClosed: (id) => waitingPushes.get(id)?.(),
     mirrors,
     provider,
     identity: hostIdentity,
@@ -507,8 +494,6 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       answerAsk: (id, ask, answer) => sessions.answerAsk(id, ask, answer),
       prompt: (id, text, atts, files) => sessions.prompt(id, text, atts, files),
       list: () => sessions.list(),
-      hostAsk: (id, ask, onAnswer) => sessions.hostAsk(id, ask, onAnswer),
-      closeHostAsk: (id, ask) => sessions.closeHostAsk(id, ask),
     },
     {
       mirrors,
