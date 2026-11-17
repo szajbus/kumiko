@@ -1,93 +1,151 @@
 ---
 title: Decisions and trade-offs
-description: The choices Kumiko's design rests on, and what they cost.
-sidebar:
-  order: 4
+description: The choices Kumiko's design rests on, why, and what they cost.
 ---
 
-Change a decision, and update this page in the same commit.
+Each entry says what Kumiko does, why, what it costs, and, where it matters, the obvious alternative it doesn't take. When you change a decision, update
+this page in the same commit.
 
-## Sandboxes, permissions bypassed
+## A sandbox per set of repos, with permissions bypassed
 
-The agent gets a whole environment, a sandbox, and works there without asking. A sandbox is the main thing in Kumiko:
-it has a name of your choosing and the repos you pick, rather than being tied to one clone.
+The agent gets a whole VM and works there without asking. A sandbox has a name you choose and the repos you pick, so
+one agent can work across several repos.
 
-**Costs:** a sandbox uses memory and CPU while it runs, and is slow to create. The boundary is only as tight as the
-sandbox's mounts and forwarded variables.
+**Why.** Permission prompts stop unattended work, and a VM limits what bypassed permissions can reach.
 
-## Questions and plans over the agent's permission prompts
+**Costs.** A sandbox uses memory and CPU while it runs, and takes minutes to create. The boundary is only as tight as
+the sandbox's mounts and forwarded variables.
 
-With permissions bypassed, Claude still asks the host before the two tools whose approval is the user answering:
-AskUserQuestion and, in plan mode, ExitPlanMode. Kumiko takes those asks over stream-json's control protocol
-(`--permission-prompt-tool stdio`) and shows them as cards; any other tool that asks is allowed at once. Plan mode is
-switched on with a control request rather than started with `--permission-mode plan`, which would leave the agent in
-the default mode, asking about every edit, once a plan is approved. An ask waits for its answer with no time limit, and
-outlives the server like a tool call: what is still open is saved with the session's run, and answered by the next
-server.
+**Instead of.** One sandbox per clone, and running the agent on your Mac with prompts.
 
-**Costs:** two of Claude's tools are handled outside the agent-neutral driver interface's messages, and their answers
-are worded for Claude. An answer is only known to have arrived once Claude's tool result for it does, so one may be sent
-twice; Claude ignores the second.
+## Questions and plans as cards
+
+With permissions bypassed, Claude still asks before two tools whose approval is your answer: AskUserQuestion and, in
+plan mode, ExitPlanMode. Kumiko takes these asks over stream-json's control protocol
+(`--permission-prompt-tool stdio`) and shows them as cards. It allows any other tool that asks at once. Kumiko turns
+plan mode on with a control request. An ask waits for its answer with no time limit, and is saved with the session's
+run, so the next server can answer it.
+
+**Why.** Those two tools are how the agent asks you something, and they need an answer, not an approval.
+
+**Costs.** Two of Claude's tools are handled outside the agent-neutral driver interface, and their answers are worded
+for Claude. An answer is known to have arrived only once Claude's tool result for it does, so Kumiko may send one
+twice. Claude ignores the second.
+
+**Instead of.** Starting with `--permission-mode plan`, which leaves the agent in the default mode after a plan is
+approved, asking about every edit.
 
 ## Repos on the sandbox's own disk
 
-The repos are cloned inside the sandbox, from the mirrors, onto a disk of its own mounted at `/workspace`, which
-outlives the VM. Nothing on the host opens that disk, so code reaches the host only through git, and git on the host
-never runs in a config the agent wrote. Every session starts in `/workspace`, and a repo's own `CLAUDE.md` is read only
-once a session works in it.
+The repos are cloned inside the sandbox from the mirrors, onto a workspace disk mounted at `/workspace`, which
+outlives the VM. Nothing on your Mac opens that disk. Every session starts in `/workspace`, and the agent reads a
+repo's own `CLAUDE.md` only once it works in that repo.
 
-**Costs:** the host can't read the clones: what the UI knows of them comes from an exec in the sandbox. Losing the disk
-loses what wasn't pushed. The disk needs Lima 2.3 or later, and grows only while the sandbox is stopped.
+**Why.** The agent can write a clone's git config, hooks and `.gitattributes`, which can make git run commands. If
+the clones were on your Mac, git there would run what the agent wrote. Code reaches your Mac only as git objects
+pushed to a mirror.
+
+**Costs.** Your Mac can't read the clones, so what the UI shows of them comes from commands run in the sandbox. Losing
+the disk loses what wasn't pushed. The disk needs Lima 2.3 or later, and grows only while the sandbox is stopped.
+
+**Instead of.** Cloning on your Mac and mounting the clones into the VM.
+
+## Mirrors on your Mac, no credentials in the sandbox
+
+Kumiko keeps a bare mirror of each repo on your Mac and fetches it from GitHub. Git in the sandbox reaches the mirrors
+through a socket Kumiko forwards in, which serves only that sandbox's repos. A pre-receive hook asks Kumiko about every
+push. Pushes to the default branch and tags are refused.
+
+**Why.** A sandbox with a GitHub token could push anywhere the token can, and your `gh` login can bypass branch
+protections. With the mirrors, the sandbox's list of repos decides what it reaches, and the agent can't change that
+list.
+
+**Costs.** Kumiko runs a relay per running sandbox and a hook socket. Each mirror takes disk space on your Mac. The
+agent sees GitHub only through Kumiko's tools.
+
+**Instead of.** Forwarding a GitHub token into the sandbox.
+
+## Delivery to GitHub on a card, signed on your Mac
+
+The agent calls the `deliver` tool for a branch it pushed. You choose on a card to merge it into the default branch,
+open a pull request, or update the pull request it has open. Kumiko then does it on your Mac, with your `gh` login,
+and signs the agent's commits with your key. Issues and comments the agent writes go through cards too.
+
+**Why.** You see the commits and changes before anything reaches GitHub, and what lands there is signed by you.
+
+**Costs.** Signing changes the commits' shas, so the agent has to run `git pull --rebase` afterwards. A branch that
+doesn't merge cleanly has to be fixed by the agent before a card appears.
+
+**Instead of.** Letting the agent push to GitHub and open pull requests itself.
 
 ## An agent home per sandbox
 
-Each sandbox's agent configuration is a folder on the host, mounted into the sandbox. Your own is never mounted.
+Each sandbox's agent configuration is a folder on your Mac, mounted into the sandbox. Your own is never mounted.
 
-**Costs:** you log in once per sandbox, and settings aren't shared between sandboxes, except through the template new
-homes are copied from.
+**Why.** Your own configuration holds your login and settings for every project. A sandbox should hold only its own.
+
+**Costs.** You log in once per sandbox. Settings aren't shared between sandboxes, except through the template that new
+agent homes are copied from.
+
+**Instead of.** Mounting `~/.claude`.
 
 ## A local web server inside the desktop app
 
-The window is a web page served by a server in the Electron main process, so the UI also runs in a plain browser during
-development.
+The window is a web page served by a server in the Electron main process.
 
-**Costs:** every request must be checked for a local origin.
+**Why.** The UI also runs in a plain browser during development, with hot reloading.
+
+**Costs.** Every request must carry the server's secret and come from a local origin. See
+[Security model](/architecture/security/#the-local-server).
 
 ## Shelling out to the real tools
 
-Kumiko runs the provider's and agent's CLIs, and `git`, and parses their output instead of keeping its own model. Tests
+Kumiko runs `limactl`, `claude` and `git` and parses their output, instead of keeping its own model of them. Tests
 replace them with fake executables.
 
-**Costs:** output formats change between versions, so supported versions are pinned and checked by scripts against the
-real tools.
+**Why.** The real tools stay the source of truth, and Kumiko works with what you'd run yourself.
+
+**Costs.** Output formats change between versions. Kumiko pins the supported versions and checks them with scripts
+against the real tools. See [Testing](/development/testing/).
 
 ## JSON files, not a database
 
-One JSON file per sandbox, VM and saved session.
+Kumiko keeps one JSON file per sandbox, VM and saved session, under `~/.kumiko`.
 
-**Costs:** no transactions. One operation per sandbox at a time, and saves per session are serialized.
+**Why.** You can read them, and they need no service.
+
+**Costs.** There are no transactions. Kumiko runs one operation per sandbox at a time, and serializes saves per
+session.
 
 ## Agents that outlive the server
 
-Each agent runs detached in a run in its sandbox, with a FIFO for its input and a file for its output, and the server
-attaches to it over SSH, following the output from a byte offset. A server restart, a quit or a dropped connection
-doesn't stop the agent; the next server attaches again where the saved chat ends.
+Each agent runs detached in a run in its sandbox, with a FIFO for its input and a file for its output. The server
+attaches to it over SSH and follows the output from a byte offset. A restart, a quit or a dropped connection doesn't
+stop the agent. The next server attaches again where the saved chat ends. See
+[How an agent runs](/architecture/agent-runs/).
 
-**Costs:** the output file grows with every streamed token until the agent exits (no rotation). The run is a few
-shell scripts sent with each command, which assume `bash`, `tail -F` and `setsid` (or `perl`) in the sandbox. Only
-one server may use a Kumiko home at a time, and runs are tagged with their home so servers on different homes can
-share sandboxes. A request in flight when the server goes (a prompt, a stop) is lost with it.
+**Why.** An agent's work should end only when you decide, not when Kumiko goes away.
+
+**Costs.** The output file grows with every streamed token until the agent exits. The run is a few shell scripts sent
+with each command, which need `bash`, `tail -F` and `setsid` or `perl` in the sandbox. Only one server may use a
+Kumiko home at a time. A request in flight when the server goes, such as a prompt or a stop, is lost.
+
+**Instead of.** Running the agent as a child process of the server.
 
 ## Live sessions in memory, only the chat on disk
 
-A live session's full event stream is kept in memory for tabs to replay. Only the chat is saved, with the deltas of a
-message still in progress.
+Kumiko keeps a live session's full event stream in memory for tabs to replay. It saves only the chat, with the deltas
+of a message still in progress.
 
-**Costs:** a resumed session shows less than the live one did.
+**Why.** The event stream is large, and the chat is what a resumed session needs.
+
+**Costs.** A resumed session shows less than the live one did.
 
 ## A convention for worktrees, not a rule
 
-The agent is told to work in a worktree when a task changes code. Kumiko doesn't enforce it or track which session made
-which worktree.
+Kumiko tells the agent to work in a worktree when a task changes code. It doesn't enforce it, or track which session
+made which worktree.
 
-**Costs:** the agent can still edit the clone directly.
+**Why.** The agent knows when a task needs a worktree better than a rule does, and a question or a look around doesn't.
+
+**Costs.** The agent can still edit the clone directly, and two sessions can collide there.

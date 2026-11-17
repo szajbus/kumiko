@@ -1,18 +1,18 @@
 ---
 title: Kumiko
-description: Mission control for your coding agents.
+description: Run coding agents on your GitHub repositories, each in a sandbox of its own.
 template: splash
 hero:
-  tagline: Mission control for your coding agents.
+  tagline: Run coding agents on your GitHub repositories, each in a sandbox of its own.
   image:
     dark: ../../assets/logo-dark.svg
     light: ../../assets/logo-light.svg
   actions:
-    - text: Get started
-      link: /getting-started/quick-start/
+    - text: What Kumiko is
+      link: /overview/introduction/
       icon: right-arrow
-    - text: Why it works this way
-      link: /philosophy/
+    - text: Install it
+      link: /guide/quick-start/
       variant: minimal
 ---
 
@@ -20,17 +20,17 @@ import { Card, CardGrid } from "@astrojs/starlight/components";
 
 <CardGrid>
   <Card title="A sandbox the agent owns" icon="seti:lock">
-    The agent works in a VM of its own, without permission prompts. Your machine stays out of reach.
+    The agent works in a VM of its own, without permission prompts. The rest of your Mac stays out of reach.
   </Card>
-  <Card title="Work that outlives the VM" icon="laptop">
-    The repos sit on the sandbox's own disk, and the agent's history on your Mac. Rebuild the VM anytime.
+  <Card title="Pushes you approve" icon="seti:git">
+    The agent pushes to a mirror on your Mac. Its work reaches GitHub only when you approve it on a card.
   </Card>
-  <Card title="Sessions in tabs" icon="comment">
-    Talk to the agent in tabs that survive reloads and restarts. Resume, fork or rewind any conversation.
+  <Card title="Many sessions, one overview" icon="comment">
+    Run sessions in parallel across sandboxes, each in its own worktree, and see which ones need you.
   </Card>
-  <Card title="Many tasks, many repos" icon="seti:git">
-    Agents work on several tasks in parallel, each in its own worktree, across the repos a sandbox has.
+  <Card title="Agents that outlive the app" icon="laptop">
+    Quit or restart Kumiko and the agents keep working. The VM can be rebuilt without losing the repos.
   </Card>
 </CardGrid>
 
-See [Supported sandboxes and agents](/reference/supported/) for what Kumiko works with today.
+See [Supported platforms and versions](/reference/supported/) for what Kumiko works with today.

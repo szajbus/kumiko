@@ -1,16 +1,18 @@
 ---
-title: Quick start
-description: From downloading Kumiko to an agent working on one of your repositories, in about five minutes.
+title: Install and first session
+description: Install Kumiko, add a repository, create a sandbox and start an agent on it, in about five minutes.
+sidebar:
+  order: 1
 ---
 
 import { Steps, Aside } from "@astrojs/starlight/components";
 
-By the end of this page an agent will be working on one of your repositories, in a sandbox of its own. It takes about five
-minutes, plus a few more while the first sandbox downloads its system image.
+This page takes you from nothing to an agent working on one of your repositories, in a sandbox of its own. It takes
+about five minutes. The first sandbox takes a few minutes more, while it downloads its system image.
 
-**You need:** a Mac, [Homebrew](https://brew.sh), git, a GitHub repository to work on, and a Claude account. This page
-sets up today's sandbox provider, [Lima](https://lima-vm.io), and agent, [Claude Code](https://claude.com/claude-code);
-Kumiko installs the agent for you.
+**You need** a Mac, [Homebrew](https://brew.sh), git, a GitHub repository to work on, and a Claude account. Kumiko
+uses [Lima](https://lima-vm.io) for sandboxes and [Claude Code](https://claude.com/claude-code) as the agent. You
+install Lima yourself. Kumiko installs Claude Code in each sandbox.
 
 <Steps>
 
@@ -21,35 +23,35 @@ Kumiko installs the agent for you.
    gh auth login
    ```
 
-2. **Install Kumiko.** Download a `.dmg` from the release marked **Latest** on the Releases page of the Kumiko
-   repository on GitHub: `Kumiko-<version>-arm64.dmg` for Apple silicon, `Kumiko-<version>-x64.dmg` for an Intel Mac.
-   Open it and drag **Kumiko** into **Applications**.
+2. **Install Kumiko.** Open the Releases page of the Kumiko repository on GitHub. From the release marked **Latest**,
+   download `Kumiko-<version>-arm64.dmg` for Apple silicon or `Kumiko-<version>-x64.dmg` for an Intel Mac. Open it
+   and drag **Kumiko** into **Applications**.
 
-   The **unstable** pre-release there is built from every change, before it's released. Take it to try what's coming;
-   it may be broken.
+   The **unstable** pre-release on that page is built from every change on `main`. Take it to try what's coming. It
+   may be broken.
 
-3. **Open Kumiko.** Kumiko isn't signed by Apple yet, so the first time you open it macOS says it can't check the app
-   for malicious software, and offers only **Done** and **Move to Trash**. Choose **Done**, then open **System
-   Settings → Privacy & Security**, scroll to **Security**, choose **Open Anyway** beside the message about Kumiko, and
-   confirm with your password. After that it opens like any other app.
+3. **Open Kumiko.** Apple hasn't signed Kumiko yet. The first time you open it, macOS says it can't check the app for
+   malicious software and offers only **Done** and **Move to Trash**. Choose **Done**. Open **System Settings**, then
+   **Privacy & Security**, and scroll to **Security**. Choose **Open Anyway** beside the message about Kumiko, and
+   confirm with your password. After that, Kumiko opens like any other app.
 
-   Or clear the download's quarantine in Terminal, and open it as usual:
+   You can instead clear the download's quarantine in Terminal, then open Kumiko as usual:
 
    ```sh
    xattr -dr com.apple.quarantine /Applications/Kumiko.app
    ```
 
-   Each new version you download asks again.
+   macOS asks again for each new version you download.
 
-4. **Add your repository.** Open **Repos**, choose **Add repository**, and pick it. Kumiko keeps a mirror of it on
+4. **Add your repository.** Open **Repos**, choose **Add repository**, and pick it. Kumiko makes a mirror of it on
    your Mac.
 
-5. **Create a sandbox.** Open **Sandboxes**, choose **New sandbox**, give it a name, tick your repository, and choose
-   **Create sandbox**. The defaults are fine for a first try.
+5. **Create a sandbox.** Open **Sandboxes** and choose **New sandbox**. Give it a name, tick your repository, and
+   choose **Create sandbox**. The default settings are fine for a first try.
 
    ![The New sandbox form: a name and the repos, then the sandbox's settings.](../../../assets/screenshots/new-sandbox.png)
 
-   The sandbox page shows it being built. Wait for it to say **Running**, and the repo **Cloned**.
+   The sandbox page shows the sandbox being built. Wait until it says **Running** and the repo says **Cloned**.
 
 6. **Start a session.** Choose **New session**, say what you want done, and press <kbd>Enter</kbd>:
 
@@ -57,21 +59,22 @@ Kumiko installs the agent for you.
    Read the README and tell me how to run the tests
    ```
 
-7. **Log the agent in.** The first time, the reply is a card saying **Claude isn't logged in**, and a login dialog
-   opens. Follow its link, sign in, paste the code into the dialog, and choose **Retry**. The agent gets to work.
+7. **Log the agent in.** The first reply is a card saying **Claude isn't logged in**, and the **Log in to Claude**
+   dialog opens. Follow its link, sign in, paste the code into the dialog, and choose **Log in**. Then choose
+   **Retry** on the card. The agent gets to work.
 
 </Steps>
 
-<Aside type="tip">You log in once per sandbox. The login is kept even if you rebuild the sandbox.</Aside>
+<Aside type="tip">You log in once per sandbox. A rebuild of the sandbox keeps the login.</Aside>
 
 <Aside>
-To run Kumiko from source instead, with [Node 24+](https://nodejs.org): clone the repository, then `npm install` and
-`npm run desktop`.
+To run Kumiko from source, see [Set up and run from source](/development/setup/).
 </Aside>
 
-## Next
+## Next steps
 
-- **Give it a real task.** Start a second session while the first one works, and watch both from the sandbox page:
-  see [Sessions](/guide/sessions/).
-- **Set the sandbox up for your work:** the tools it needs and the tokens it may use. See
-  [Sandboxes](/guide/sandboxes/#sandbox-settings).
+- Start a second session while the first one works, and follow both from the **Sandboxes** tab. See
+  [Work in sessions](/guide/sessions/).
+- Give the sandbox the tools and tokens your work needs. See
+  [Create and manage sandboxes](/guide/sandboxes/#sandbox-settings).
+- See how the agent's work gets to GitHub in [Review, push and merge](/guide/shipping/).

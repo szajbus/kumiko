@@ -1,39 +1,40 @@
 ---
 title: What Kumiko is
-description: Mission control for your coding agents.
+description: A desktop app that runs coding agents on your GitHub repositories, each in a sandbox of its own.
 ---
 
-Kumiko is mission control for your coding agents. Start agents on any of your repositories, let them work unattended,
-and see at a glance what each one is doing and which ones need you.
+Kumiko is a Mac app for running coding agents on your GitHub repositories. Each agent works in a sandbox, a VM that
+belongs to it, so it never stops to ask permission and can't reach the rest of your Mac. You start sessions across your
+sandboxes, and one screen shows which agents are working and which are waiting for you.
 
-![The Sandboxes tab: every sandbox, its repos, its sessions, and which ones are waiting on you.](../../assets/screenshots/sandboxes.png)
+Today the sandboxes are [Lima](https://lima-vm.io) VMs and the agent is [Claude Code](https://claude.com/claude-code).
 
-## What you get
+![The Sandboxes tab: every sandbox, its repos, its sessions, and which ones are waiting on you.](../../../assets/screenshots/sandboxes.png)
 
-- **Agents that don't stop to ask.** Each sandbox is a VM the agent owns, so it works without permission prompts while
-  your machine stays out of reach.
-- **Many tasks at once.** Run several sessions in a sandbox, each in its own tab and its own worktree, so they don't
-  step on each other.
-- **An overview of the work.** See which sessions are working and which are waiting on you.
-- **Agents that don't need Kumiko running.** Quit the app or restart it, and the agents keep working. When it's back,
-  you see everything they did meanwhile.
-- **Nothing to lose.** The work lives on the sandbox's own disk, which outlives the VM, and the agent's branches are
-  pushed to GitHub as it goes. A sandbox's VM can be thrown away and rebuilt at any time.
+## The problem
 
-## The pieces
+A coding agent asks before it runs a command, edits a file or installs a package. Answering each prompt keeps you at
+the keyboard. Approving them without reading removes the protection they were for. Running several agents at once
+multiplies both problems, and they share your machine, your credentials and your checkout.
 
-- **A repo** is one of your GitHub repositories. Kumiko keeps a mirror of it on your Mac.
-- **A sandbox** is an isolated environment where the agent works, with the repos you picked cloned onto a disk of its
-  own. It's the main thing you create; sessions hang off it.
-- **A session** is one conversation with the agent, in one tab.
-- **A worktree** is a separate checkout the agent makes for a task, so parallel tasks stay apart.
+## What Kumiko does about it
 
-See [Supported sandboxes and agents](/reference/supported/).
+- The agent runs with permissions bypassed, inside a VM. What it can reach is what you gave the sandbox when you set
+  it up: the repos, the folders you mount and the variables you forward.
+- The sandbox has no GitHub credentials. The agent pushes to a mirror on your Mac, and its work reaches GitHub only
+  when you approve it on a card.
+- Several sessions run in one sandbox, each in its own git worktree, so parallel tasks don't touch the same checkout.
+- The agent keeps working when you quit Kumiko or restart it. When Kumiko comes back, it shows what the agent did
+  meanwhile.
+- The repos sit on a disk that outlives the VM. You can rebuild a broken VM and carry on.
 
 ## Where to go next
 
-| You want to… | Read |
+| You want to | Read |
 | --- | --- |
-| Try it | [Quick start](/getting-started/quick-start/) |
-| Understand why it works this way | [Philosophy](/philosophy/) |
-| Do something specific in the app | [User guide](/guide/sandboxes/) |
+| Learn the words the docs use | [Concepts](/overview/concepts/) |
+| Know why it works this way | [Principles](/overview/principles/) and [Decisions](/overview/decisions/) |
+| See how it is built | [Architecture](/architecture/overview/) |
+| See what it can do | [Features](/features/unattended/) |
+| Try it | [Install and first session](/guide/quick-start/) |
+| Work on Kumiko itself | [Development](/development/setup/) |
