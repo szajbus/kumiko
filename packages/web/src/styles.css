@@ -1001,6 +1001,11 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
   position: absolute; inset: 0; padding: 8px 0; overflow: hidden; pointer-events: none; color: transparent;
   white-space: pre-wrap; overflow-wrap: break-word; font-size: 14px; line-height: 1.45;
 }
+/* With a code block in it, the box's own text is clear and the layer draws it all, the code in its colours. */
+.composer-input.is-drawn { color: transparent; caret-color: var(--text); }
+.composer-marks.is-drawn { color: var(--text); }
+.composer-marks.is-drawn .composer-paste { color: var(--text); }
+.composer-fence { color: var(--muted); }
 .composer-paste {
   color: transparent; background: #263152; border-radius: 4px; box-shadow: 0 0 0 2px #263152;
   -webkit-box-decoration-break: clone; box-decoration-break: clone;
