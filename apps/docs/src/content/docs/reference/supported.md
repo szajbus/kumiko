@@ -1,21 +1,21 @@
 ---
-title: Supported sandboxes and agents
-description: Which sandbox providers and coding agents Kumiko works with today, the versions they were checked against, and what adding another takes.
+title: Supported platforms and versions
+description: The host platforms, sandbox providers and coding agents Kumiko works with today, and the versions they were checked against.
 sidebar:
-  order: 0
+  order: 4
 ---
 
-Kumiko is a desktop app built around two seams: a **sandbox provider**, which gives each sandbox an isolated
-environment, and an **agent**, which works inside it. Today there is one of each. Which host platforms it runs on
-follows mostly from the sandbox provider.
+Kumiko has one sandbox provider, Lima, and one agent, Claude Code. The host platforms it runs on follow mostly from
+the sandbox provider. To add another provider or agent, see
+[Adding a sandbox provider or agent](/development/extending/).
 
 ## Host platforms
 
 | Platform | Status | Notes |
 | --- | --- | --- |
-| macOS | Supported | What Kumiko is built and used on. `dist:mac` packages it for Apple silicon and Intel. |
+| macOS | Supported | Kumiko is built and used on it. Releases have a `.dmg` and a `.zip` for Apple silicon and Intel. |
 | Linux | Possible, untested | Lima runs on Linux, and `dist:linux` makes an unpacked build, but it gets little use. |
-| Windows | Not supported | The desktop app has a Windows build config, but Lima only has experimental support there (through WSL2). |
+| Windows | Not supported | The desktop app has a Windows icon, but Lima supports Windows only experimentally, through WSL2. |
 
 ## Sandbox providers
 
@@ -23,85 +23,58 @@ follows mostly from the sandbox provider.
 | --- | --- | --- | --- | --- |
 | [Lima](https://lima-vm.io) | Supported, the default | A virtual machine per sandbox | Lima 2.3.0 | macOS, Linux |
 
-**Lima notes:**
+### Lima
 
-- Sandboxes are Lima instances named `kumiko-<name>`, kept in `~/.lima` (or `LIMA_HOME`), each with a Lima disk
-  `kumiko-<name>-workspace` mounted at `/workspace`. Kumiko never touches other instances or disks.
-- Kumiko needs Lima 2.3 or later, which can mount a disk where Kumiko asks (`additionalDisks[].mountPoint`). With an
-  older Lima, creating a sandbox says to upgrade. Lima formats the disk on the first boot only, so a rebuilt VM gets it
-  as it was. It grows only while the VM is stopped, as Lima won't resize a disk in use.
-- Any Lima template can be chosen; Debian 12 is preselected. Installing the agent uses `curl`, and installs it with
-  `apt-get` if it's missing, so a template without `curl` must be Debian- or Ubuntu-based.
-- Kumiko drives it with `limactl` and with `ssh` using the instance's generated config.
-- Lima 2.3 or later, with `vz` VMs, can keep a sandbox off your Mac's loopback (`networkOpts.hostLoopback`), which
-  Kumiko asks for unless a sandbox allows it. With another VM type, the sandbox can reach it, and the sandbox page
-  says so. Kumiko notices an upgraded Lima within a few minutes; a running sandbox needs a restart.
+- Each sandbox is a Lima instance named `kumiko-<name>`, in `~/.lima` or `LIMA_HOME`, with a Lima disk
+  `kumiko-<name>-workspace` mounted at `/workspace`. Kumiko leaves other instances and disks alone.
+- Kumiko needs Lima 2.3 or later, which mounts a disk where Kumiko asks (`additionalDisks[].mountPoint`). With an older
+  Lima, creating a sandbox says to upgrade.
+- Lima formats the workspace disk on the first boot only, so a rebuilt VM gets the disk as it was. The disk grows only
+  while the VM is stopped, as Lima won't resize a disk in use.
+- You can pick any Lima template. The form preselects Debian 12. Kumiko installs Claude Code with `curl`. A template
+  without `curl` gets it from `apt-get`, so it must be based on Debian or Ubuntu. The git relay installs `git` and
+  `socat` the same way.
+- Kumiko runs `limactl`, and `ssh` with the instance's generated config.
+- Lima 2.3 or later, with a `vz` VM, can keep a sandbox off your Mac's loopback (`networkOpts.hostLoopback`). Kumiko
+  asks for that unless the sandbox allows it. With another VM type, the sandbox can reach your loopback, and the
+  sandbox page says so. Kumiko notices an upgraded Lima within a few minutes. A running sandbox needs a restart to
+  use it.
 - Agents outlive the SSH connection that started them because systemd-logind leaves a user's processes running when
-  their session ends (`KillUserProcesses=no`, Debian's default). A template that turns it on stops the agent whenever
-  Kumiko's server goes away.
+  their session ends (`KillUserProcesses=no`, Debian's default). In a template that turns it on, the agent stops
+  whenever Kumiko's server goes away.
 
 ## Agents
 
 | Agent | Status | Checked against | How Kumiko runs it |
 | --- | --- | --- | --- |
-| [Claude Code](https://claude.com/claude-code) | Supported, the only agent | Claude Code 2.1.304 | `claude -p` in stream-json mode, permissions bypassed |
+| [Claude Code](https://claude.com/claude-code) | Supported, the only agent | Claude Code 2.1.309 | `claude -p` in stream-json mode, permissions bypassed |
 
-**Claude Code notes:**
+### Claude Code
 
-- Kumiko installs it in every sandbox with its native installer; you don't need it on the host.
-- Each sandbox has its own agent home, Claude Code's `~/.claude`, kept on the host in `~/.kumiko/claude/<name>/`.
-  Kumiko keeps its own files apart from it, in `~/.kumiko/sandbox/<name>/` on the host, mounted at the same path in the
-  sandbox and linked from `~/.kumiko/shared` there.
-- Every session feature is available with it:
+- Kumiko installs Claude Code in every sandbox with its native installer. You don't need it on your Mac.
+- Each sandbox has its own agent home, Claude Code's `~/.claude`, kept on your Mac in `~/.kumiko/claude/<name>/`.
+  Kumiko keeps its own files apart from it, in the sandbox's Kumiko folder. See [State on disk](/architecture/state/).
+
+Every session feature works with Claude Code:
 
 | Feature | Uses |
 | --- | --- |
 | Streaming replies, tool calls, cost and tokens | stream-json output with partial messages |
-| Diffs of file edits | `tool_use_result` beside an Edit's or a Write's result: its `structuredPatch`, and for a Write, `type` (`create` or `update`); a NotebookEdit's `old_source`. Subagents' results don't carry it, so theirs are diffed from the input |
-| Subagents' work | their messages, by `parent_tool_use_id` (whole, as Claude Code doesn't stream them), and the `task_*` and `background_tasks_changed` system messages |
-| Working on while Kumiko is away | stream-json input read from a FIFO, which only ends when Kumiko closes it |
-| Stop | an interrupt control request |
+| Diffs of file edits | `tool_use_result` beside an Edit's or a Write's result: its `structuredPatch`, and for a Write, `type` (`create` or `update`). A NotebookEdit's `old_source`. Subagents' results don't carry it, so Kumiko diffs theirs from the input |
+| Subagents' work | Their messages, by `parent_tool_use_id`, whole, as Claude Code doesn't stream them. The `task_*` and `background_tasks_changed` system messages |
+| Background shells, monitors and subagents | The `get_task_output`, `stop_task` and `background_tasks` control requests |
+| Working on while Kumiko is away | stream-json input read from a FIFO, which ends only when Kumiko closes it |
+| Taking back a queued message | The `cancel_async_message` control request |
+| Stop | The `interrupt` control request |
+| Questions and plans | `--permission-prompt-tool stdio`: Claude asks before `AskUserQuestion` and `ExitPlanMode` even with permissions bypassed. Plan mode is switched with `set_permission_mode` |
 | Resume, fork | `--resume`, `--fork-session`, `--resume-session-at` |
-| Rewind, and putting files back | `--replay-user-messages` and file checkpoints (`rewind_files`) |
+| Rewind, and putting files back | `--replay-user-messages` and file checkpoints (`rewind_files`), with `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=1` |
+| Suggestions | `--prompt-suggestions` |
 | Slash commands | `slash_commands` from `system/init` |
-| Compactions, and how full the context is | `system/status` (`compacting`, `compact_result`) and `system/compact_boundary` messages, the summary that follows them, and the `get_context_usage` control request, asked at the start and after each turn and compaction |
+| Compactions, and how full the context is | The `system/status` (`compacting`, `compact_result`) and `system/compact_boundary` messages, the summary that follows them, and the `get_context_usage` control request, asked at the start and after each turn and compaction |
 | Model picker | `--model` and `/model` |
 | Login | `claude auth status`, `claude auth login` |
 | Usage in the title bar | `rate_limit_event` messages, which come with each turn, and `claude auth status` for the account |
-| Artifacts, and the other tools Kumiko gives the agent | an SDK MCP server over the control protocol (`--mcp-config`), some tools deferred until `ToolSearch` loads them; `npm run tools-check` checks it against a real Claude |
+| Artifacts, `deliver` and Kumiko's other tools | An SDK MCP server over the control protocol (`--mcp-config`), with some tools deferred until `ToolSearch` loads them. `npm run tools-check` checks it against a real Claude Code |
 
-## Adding another
-
-Both seams are TypeScript interfaces, so a new provider or agent is mostly one new class. What else it needs today:
-
-### A sandbox provider
-
-Implement `SandboxProvider` (`packages/sandbox/src/provider.ts`): `list`, `create`, `start`, `stop`, `delete`, `edit`,
-`validate`, `validateEdit`, `templates`, and `exec`, which runs a command inside with stdio piped. Everything else in
-Kumiko runs commands through `exec`.
-
-It also has to honour what the rest of Kumiko assumes:
-
-- a disk of the sandbox's own, which outlives the VM, is mounted at `/workspace`,
-- the agent home is mounted where the agent looks for it,
-- forwarded variables reach commands run with `exec`, without being written to disk,
-- a process started through `exec` with `setsid` (or `perl`'s) outlives the connection, and `bash`, `mkfifo` and
-  `tail -F` are there: agents run detached in runs in the sandbox (`packages/agent/src/runs.ts`).
-
-Today the provider is chosen in code (`LimaProvider`), not per sandbox, and its `id` type only allows `"lima"`.
-
-### An agent
-
-Implement `AgentDriver` (`packages/agent/src/driver.ts`): `start`, `attach`, `position`, `send`, `interrupt`,
-`rewindFiles`, `stop`, `detach`, `pendingCalls` and `onEvent`. That covers running sessions. The tools Kumiko gives the
-agent come as a `ToolHost` in `start` and `attach` (`tools.ts`); Claude Code reaches them as an MCP server over its
-control protocol, and another agent needs some way to call them. Runs (`runs.ts`) work for any agent that
-reads lines on stdin and writes them on stdout, so `attach`, `position` and `detach` can follow `ClaudeDriver`. The rest is still specific to Claude Code and would need generalizing:
-
-- session events carry Claude Code's stream-json as-is (`kind: "claude"`), and both the server (`sessions.ts`) and the
-  UI (`chat.ts`) read its message shapes,
-- login (`logins.ts`) and the account check (`usage.ts`) run `claude` commands directly,
-- installing the agent is part of the Lima provider's provisioning,
-- the agent home is mounted at `~/.claude` and pointed to by `CLAUDE_CONFIG_DIR`.
-
-If you're planning either, read [Decisions and trade-offs](/architecture/decisions/) first.
+[Testing](/development/testing/#checks-against-the-real-tools) has the scripts that check each version.

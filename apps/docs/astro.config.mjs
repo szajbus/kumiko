@@ -22,11 +22,14 @@ export default defineConfig({
       logo: { light: "./src/assets/logo-light.svg", dark: "./src/assets/logo-dark.svg" },
       favicon: "/favicon.svg",
       customCss: ["@fontsource/ibm-plex-sans/400.css", "@fontsource/ibm-plex-sans/600.css", "@fontsource/ibm-plex-mono/400.css", "./src/styles/custom.css"],
+      // Read top to bottom: why and how Kumiko is built, what it does, how to use it, then how to work on it.
       sidebar: [
-        { label: "Start here", items: ["introduction", "getting-started/quick-start", "philosophy"] },
-        { label: "User guide", items: [{ autogenerate: { directory: "guide" } }] },
+        { label: "Overview", items: ["overview/introduction", "overview/concepts", "overview/principles", "overview/decisions"] },
         { label: "Architecture", items: [{ autogenerate: { directory: "architecture" } }] },
+        { label: "Features", items: [{ autogenerate: { directory: "features" } }] },
+        { label: "User guide", items: [{ autogenerate: { directory: "guide" } }] },
         { label: "Reference", items: [{ autogenerate: { directory: "reference" } }] },
+        { label: "Development", items: [{ autogenerate: { directory: "development" } }] },
       ],
     }),
   ],
