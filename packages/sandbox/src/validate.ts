@@ -60,10 +60,11 @@ export async function validateSpec(input: SandboxSpec, env: NodeJS.ProcessEnv = 
   const workspaceGiB = hasWorkspace ? num(input.workspaceGiB, "Workspace disk", MINIMUMS.workspaceGiB) : undefined;
   if (workspaceGiB !== undefined && Number.isFinite(workspaceGiB) && !Number.isInteger(workspaceGiB)) errors.push("Workspace disk must be a whole number of GiB.");
 
-  const mounts = (Array.isArray(input.mounts) ? input.mounts : []).map((m) => {
+  const mounts = (Array.isArray(input.mounts) ? input.mounts : []).map((m): { hostPath: string; writable: boolean; guestPath: string; alias?: string } => {
     const hostPath = normalize(expandHome(String(m?.hostPath ?? "").trim())).replace(/(.)\/+$/, "$1");
     const rawGuest = String(m?.guestPath ?? "").trim();
-    return { hostPath, writable: Boolean(m?.writable), guestPath: rawGuest || hostPath };
+    const alias = typeof m?.alias === "string" && m.alias.trim() ? m.alias.trim() : undefined;
+    return { hostPath, writable: Boolean(m?.writable), guestPath: rawGuest || hostPath, ...(alias ? { alias } : {}) };
   });
   for (const m of mounts) {
     if (!m.hostPath || m.hostPath === ".") {
@@ -93,6 +94,19 @@ export async function validateSpec(input: SandboxSpec, env: NodeJS.ProcessEnv = 
     for (let j = i + 1; j < mounts.length; j++) {
       const a = mounts[i].guestPath, b = mounts[j].guestPath;
       if (isWithin(a, b, "/") || isWithin(b, a, "/")) errors.push(`Mounts at ${a} and ${b} overlap in the sandbox.`);
+    }
+  }
+  // A mount's alias is a link Kumiko makes in the VM: not in a mount, which would put it in a folder on the host.
+  for (const m of mounts) {
+    if (m.alias === undefined) continue;
+    const g = normalizeGuestPath(m.alias);
+    if (!g || g.includes("{{")) {
+      errors.push(`${m.alias} can't be a path in the sandbox: use an absolute path or ~/…, not / or ~.`);
+      continue;
+    }
+    m.alias = g;
+    for (const o of mounts) {
+      if (isWithin(g, o.guestPath, "/") || isWithin(o.guestPath, g, "/")) errors.push(`The link at ${g} and the mount at ${o.guestPath} overlap in the sandbox.`);
     }
   }
 

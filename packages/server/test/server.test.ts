@@ -163,16 +163,19 @@ describe("server", () => {
     const p = (await sandbox("web"))!;
     assert.deepEqual([p.status, p.meta?.setup, p.vm, p.workspaceGiB, p.sandbox.repos, p.repos], ["running", "ready", "kumiko-web", 20, [], []]);
 
-    // The Claude home at ~/.claude, the Kumiko folder at ~/.kumiko/shared, then the extra mount; the workspace disk at /workspace.
+    // The Claude home at ~/.claude, the Kumiko folder at its own path (and ~/.kumiko/shared), then the extra mount; the
+    // workspace disk at /workspace.
     const claudeHome = join(dataDir, "claude", "web");
     const kumikoHome = join(dataDir, "sandbox", "web");
     const createCall = (await calls()).find((a) => a[0] === "create" && a.includes("--name=kumiko-web"))!;
     const [mountsSet, disksSet] = createCall.find((a) => a.startsWith("--set="))!.slice("--set=".length).split(" | ");
     assert.deepEqual(JSON.parse(mountsSet.slice(".mounts = ".length)), [
       { location: claudeHome, mountPoint: "{{.Home}}/.claude", writable: true },
-      { location: kumikoHome, mountPoint: "{{.Home}}/.kumiko/shared", writable: true },
+      { location: kumikoHome, mountPoint: kumikoHome, writable: true },
       { location: mountDir, mountPoint: mountDir, writable: true },
     ]);
+    assert.deepEqual(p.meta?.spec.mounts[1], { hostPath: kumikoHome, guestPath: kumikoHome, writable: true, alias: "~/.kumiko/shared" });
+    assert.ok(p.shared?.includes(kumikoHome) && p.shared.includes("~/.kumiko/shared"), "the UI can reveal files from there");
     assert.equal(disksSet, `.additionalDisks = [{"name":"kumiko-web-workspace","format":true,"fsType":"ext4","mountPoint":"/workspace"}]`);
     assert.equal(p.meta?.spec.workdir, "/workspace", "provisioning and sessions start in /workspace");
     assert.equal((await readFile(join(mountDir, "out"), "utf8")).trim(), "token=abc");
@@ -310,12 +313,45 @@ describe("server", () => {
     const p = (await sandbox("ed"))!;
     assert.deepEqual([p.cpus, p.diskGiB, p.workspaceGiB, p.meta?.spec.env], [3, 12, 4, ["TOKEN"]]);
     // Only extra mounts are the user's: the sandbox's own come back whatever is sent.
-    assert.deepEqual(p.meta?.spec.mounts.map((m) => m.guestPath), ["~/.claude", "~/.kumiko/shared", "/data"]);
+    assert.deepEqual(p.meta?.spec.mounts.map((m) => m.guestPath), ["~/.claude", join(dataDir, "sandbox", "ed"), "/data"]);
     const shrink = await api("/api/sandboxes/ed", { method: "PATCH", body: JSON.stringify({ workspaceGiB: 2 }) });
     assert.match((await json(shrink)).details.join(), /The workspace disk can only grow; it is 4 GiB now/);
 
     assert.equal((await api("/api/sandboxes/nope", { method: "PATCH", body: "{}" })).status, 404);
     await remove("ed");
+  });
+
+  it("moves the Kumiko folder of a VM made before to its own path when it starts, unless a mount is in the way", async () => {
+    await create("old");
+    let since = events.length;
+    await api("/api/sandboxes/old/stop", { method: "POST" });
+    await finished("old", "stopping", since);
+    // As Kumiko recorded a sandbox before: the Kumiko folder at ~/.kumiko/shared.
+    const kumikoHome = join(dataDir, "sandbox", "old");
+    const file = join(dataDir, "sandboxes", "old.json");
+    const meta = JSON.parse(await readFile(file, "utf8"));
+    meta.spec.mounts[1] = { hostPath: kumikoHome, guestPath: "~/.kumiko/shared", writable: true };
+    await writeFile(file, JSON.stringify(meta));
+    since = events.length;
+    await api("/api/sandboxes/old/start", { method: "POST" });
+    assert.equal((await finished("old", "starting", since)).type, "done");
+    const edit = (await calls()).findLast((a) => a[0] === "edit" && a.includes("kumiko-old"));
+    assert.ok(edit?.some((a) => a.includes(`"mountPoint":${JSON.stringify(kumikoHome)}`)), JSON.stringify(edit));
+    assert.deepEqual((await sandbox("old"))?.meta?.spec.mounts[1], { hostPath: kumikoHome, guestPath: kumikoHome, writable: true, alias: "~/.kumiko/shared" });
+    const managed = await readFile(join(dataDir, "claude", "old", "kumiko.md"), "utf8");
+    assert.ok(managed.includes(`setup script in \`${kumikoHome}/provision.d/\``), "the agent is told the new path");
+
+    // A mount of a folder holding it, at its own path, is in the way: the Kumiko folder stays at ~/.kumiko/shared,
+    // and the agent is told so.
+    since = events.length;
+    await api("/api/sandboxes/old/stop", { method: "POST" });
+    await finished("old", "stopping", since);
+    since = events.length;
+    const holding = { hostPath: dataDir, writable: false };
+    assert.equal((await api("/api/sandboxes/old", { method: "PATCH", body: JSON.stringify({ mounts: [holding] }) })).status, 202);
+    assert.equal((await finished("old", "editing", since)).type, "done");
+    assert.deepEqual((await sandbox("old"))?.meta?.spec.mounts.map((m) => m.guestPath), ["~/.claude", "~/.kumiko/shared", dataDir]);
+    await remove("old");
   });
 
   it("restarts a sandbox's VM, saving resources and mounts while it is down", async () => {

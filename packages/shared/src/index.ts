@@ -43,8 +43,10 @@ export const CLAUDE_HOME_IN_VM = "~/.claude";
 export const KUMIKO_DIR_IN_VM = "~/.kumiko";
 
 /**
- * Where a sandbox's Kumiko folder is mounted in its VM: what Kumiko and the agent keep for Kumiko, such as the agent's
- * setup scripts and sessions' artifacts. Kept out of the Claude home, which is Claude Code's to change.
+ * Where a sandbox's Kumiko folder is in its VM, whatever else: what Kumiko and the agent keep for Kumiko, such as the
+ * agent's setup scripts and sessions' artifacts. Kept out of the Claude home, which is Claude Code's to change. The
+ * folder is mounted at its path on the host, so a path in it is the same in the VM and on the user's computer, and this
+ * is a link to it (`Mount.alias`). Sandboxes made before, and ones with an extra mount in the way, mount it here.
  */
 export const KUMIKO_HOME_IN_VM = `${KUMIKO_DIR_IN_VM}/shared`;
 
@@ -56,6 +58,8 @@ export interface Mount {
   writable: boolean;
   /** Where the folder appears in the VM; "~/…" is the VM user's home. Omitted: the same path as on the host. */
   guestPath?: string;
+  /** Another path in the VM that leads to it: a link Kumiko makes on every start. Only Kumiko's own mounts have one. */
+  alias?: string;
 }
 
 /**
@@ -76,7 +80,7 @@ export function mountsExpression(mounts: Mount[]): string {
 
 /** Whether two mount lists give the VM the same folders at the same places, in the same order. */
 export function sameMounts(a: Mount[], b: Mount[]): boolean {
-  const key = (ms: Mount[]) => JSON.stringify(ms.map((m) => [m.hostPath, m.guestPath ?? m.hostPath, m.writable]));
+  const key = (ms: Mount[]) => JSON.stringify(ms.map((m) => [m.hostPath, m.guestPath ?? m.hostPath, m.writable, m.alias ?? null]));
   return key(a) === key(b);
 }
 
@@ -334,14 +338,24 @@ export function repoFolders(repos: string[], kept: SandboxRepo[] = [], reserved:
 }
 
 /**
- * Which of the mounts every sandbox's VM has this one is, if any: the Claude home at ~/.claude and the Kumiko folder
- * at ~/.kumiko/shared. With `homes`, their host folders must match too.
+ * Which of the mounts every sandbox's VM has this one is, if any: the Claude home at ~/.claude and the Kumiko folder,
+ * at its host path with ~/.kumiko/shared linking to it, or at ~/.kumiko/shared itself. With `homes`, their host folders
+ * must match too.
  */
 export function sandboxMountRole(m: Mount, homes?: { claude: string; kumiko: string }): "claude-home" | "kumiko-home" | undefined {
   const guest = m.guestPath ?? m.hostPath;
   if (guest === CLAUDE_HOME_IN_VM && (homes === undefined || m.hostPath === homes.claude)) return "claude-home";
-  if (guest === KUMIKO_HOME_IN_VM && (homes === undefined || m.hostPath === homes.kumiko)) return "kumiko-home";
+  if ((guest === KUMIKO_HOME_IN_VM || m.alias === KUMIKO_HOME_IN_VM) && (homes === undefined || m.hostPath === homes.kumiko)) return "kumiko-home";
   return undefined;
+}
+
+/**
+ * Where the sandbox's Kumiko folder is in its VM, as `mounts` (its spec's) have it: its host path, or ~/.kumiko/shared
+ * for a sandbox that mounts it there. Undefined if none of them is the Kumiko folder.
+ */
+export function kumikoFolderInVm(mounts: Mount[]): string | undefined {
+  const m = mounts.find((x) => sandboxMountRole(x) === "kumiko-home");
+  return m && (m.guestPath ?? m.hostPath);
 }
 
 /** How a repo's clone in the VM is, as Kumiko last found it. */
@@ -359,6 +373,11 @@ export interface SandboxView extends VmView {
   repos: RepoState[];
   /** Sessions in this sandbox that are waiting on the user. */
   waiting: number;
+  /**
+   * The places in its VM that are folders on this Mac (mount points, and links to them such as ~/.kumiko/shared), as
+   * paths in the VM: a file under one can be shown in the Finder.
+   */
+  shared?: string[];
 }
 
 /** Work in one repo of a sandbox that only its VM has: lost if its folder goes, or the workspace disk. */

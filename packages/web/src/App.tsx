@@ -476,6 +476,7 @@ export function App() {
               onForked={(id) => onSessionStarted(id)}
               sessionNames={sessionNames}
               wake={s.asleep ? { sandbox: live.sandboxes.find((p) => p.name === s.sandbox), log: live.logs[s.sandbox] ?? [] } : undefined}
+              shared={live.sandboxes.find((p) => p.name === s.sandbox)?.shared}
             />
           </div>
         ))}

@@ -62,7 +62,12 @@ Three are always there and can't be changed:
 | --- | --- | --- |
 | The workspace disk | `/workspace`: the repos and their worktrees | persistent |
 | The sandbox's agent home (shown as **Claude home**) | `~/.claude`, where Claude Code looks | writable |
-| The sandbox's **Kumiko folder**: the agent's setup scripts and the sessions' artifacts | `~/.kumiko/shared` | writable |
+| The sandbox's **Kumiko folder**: the agent's setup scripts and the sessions' artifacts | the same path as on your Mac, and `~/.kumiko/shared` | writable |
+
+The Kumiko folder is at the same path in the sandbox as on your Mac, `~/.kumiko/sandbox/<name>/` in your home, so a
+path the agent gives you there, such as an artifact's, is one you can open as it is. `~/.kumiko/shared` in the sandbox
+links to it. If an extra mount is in the way of that path (one of a folder holding it, at the same path), the Kumiko
+folder is mounted at `~/.kumiko/shared` instead. Sandboxes made before Kumiko did this move theirs when they next start.
 
 **Extra mounts** are folders from your Mac, nothing more: Kumiko doesn't treat them as repos. They appear at the same
 path in the sandbox unless you set another. A sandbox path of `~/…` means the sandbox user's home. Sandbox paths can't

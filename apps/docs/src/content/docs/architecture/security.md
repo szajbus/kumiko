@@ -74,6 +74,9 @@ session's artifacts folder there, and doesn't follow links out of it. So the age
 it couldn't already. Kumiko writes and deletes only artifacts in that folder: when a rewind puts them back, and when one
 is deleted.
 
+**Reveal** asks Kumiko to show a file in the Finder by its path in the sandbox. Kumiko shows only a file that is in a
+folder your Mac shares with the sandbox, found through the sandbox's mounts, and shows it rather than opening it.
+
 SVG artifacts and Mermaid diagrams are shown as images, so nothing in them runs or loads; Mermaid also draws in its
 strict mode. The window gets an artifact's content from Kumiko's server as plain text, or as a picture for an image,
 never as a page, so opening that address runs nothing.

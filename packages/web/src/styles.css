@@ -1464,3 +1464,15 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
 .rv-keys kbd { padding: 0 4px; border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 4px; font: 11px var(--mono); color: var(--muted); }
 .rv-notes { color: var(--muted); }
 .rv-notes b { font-weight: 600; color: #f0cf96; }
+
+/* A path in the chat that is a file on this Mac, with a faint button after it that reveals it in the Finder. */
+.md-path { white-space: nowrap; }
+.md-path > code { white-space: normal; }
+.md-path-btn {
+  display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; margin-left: 1px; padding: 0;
+  vertical-align: -3px; border: 0; border-radius: 4px; background: none; color: var(--muted); cursor: pointer;
+  opacity: 0.45; transition: opacity 0.12s;
+}
+.md-path:hover .md-path-btn, .md-path-btn:focus-visible, .md-path-btn.is-failed { opacity: 1; }
+.md-path-btn:hover { background: var(--surface-2); color: var(--text); }
+.md-path-btn.is-failed, .artifact-copy.is-failed { color: var(--danger); }

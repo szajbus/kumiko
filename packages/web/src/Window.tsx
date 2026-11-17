@@ -4,6 +4,7 @@ import { api, onPaneRequest, useSessionEvents, type PaneRequest } from "./api";
 import type { ComposerHandle } from "./Composer";
 import { ArtifactView } from "./ArtifactView";
 import { PaneGrip } from "./PaneGrip";
+import { revealablePath } from "./reveal";
 import { SessionView } from "./SessionView";
 import type { WakeContext } from "./WakeBanner";
 import { TasksPane } from "./TasksPane";
@@ -22,6 +23,8 @@ interface Props {
   sessionNames?: ReadonlyMap<string, string>;
   /** While the session is asleep, its sandbox and the sandbox's log. */
   wake?: WakeContext;
+  /** The places in the sandbox's VM that are folders on this Mac (`SandboxView.shared`). */
+  shared?: string[];
 }
 
 const NO_NAMES: ReadonlyMap<string, string> = new Map();
@@ -34,7 +37,7 @@ const MIN_PANE_WIDTH = 360;
  * folds its state from the stream's `window` events, and passes the stream on to the chat. Panes are placed by the
  * layout but rendered side by side, each under its own key, so the chat stays mounted as panes open and close.
  */
-export function Window({ session, onForked, active = true, sessionNames = NO_NAMES, wake }: Props) {
+export function Window({ session, onForked, active = true, sessionNames = NO_NAMES, wake, shared }: Props) {
   const stream = useSessionEvents(session.id);
   const win = useWindow(stream.events);
   const composer = useRef<ComposerHandle>(null);
@@ -73,9 +76,11 @@ export function Window({ session, onForked, active = true, sessionNames = NO_NAM
       sessionNames,
       session: session.id,
       review: (ask, open) => void api.toggleReview(session.id, ask, open).catch((err) => console.error(err)),
+      revealable: (text) => revealablePath(text, shared),
+      reveal: (path) => api.reveal(session.id, path).then(() => {}),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [win, artifacts, live, active, session.id, arrange, JSON.stringify([...rects]), sessionNames],
+    [win, artifacts, live, active, session.id, arrange, JSON.stringify([...rects]), sessionNames, JSON.stringify(shared ?? [])],
   );
 
   const widget = (pane: PaneId) => {

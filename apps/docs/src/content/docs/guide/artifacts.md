@@ -29,9 +29,12 @@ pages and websites can't reach your Mac or your network; see [Security model](/a
 - Drag a pane by its handle (⠿) right to the window's edge to have it span that whole side. Click the handle for a
   menu that moves it from the keyboard.
 - Edit an artifact in your own editor and the pane follows. The agent isn't told, so ask it to read the file again.
+- **Reveal** in an artifact's pane shows its file in the Finder. So does the button beside a path in the chat, when the
+  path is in a folder your Mac shares with the sandbox, the Kumiko folder or an extra mount.
 
 ## Where artifacts are
 
-In a folder of the session's own, `~/.kumiko/sandbox/<sandbox>/artifacts/<session>/`, not in your worktree.
+In a folder of the session's own, `~/.kumiko/sandbox/<sandbox>/artifacts/<session>/`, not in your worktree. The
+sandbox has that folder at the same path, so the path the agent names an artifact by is where it is on your Mac.
 **Rewind** puts them back as they were at that message, **fork** gives the new session its own copy, and deleting a
 saved session deletes them.

@@ -199,6 +199,8 @@ export const api = {
   answerPane: (id: string, answer: { request: string; data?: string; mimeType?: string; error?: string; fallback?: boolean; note?: string }) =>
     request("POST", `/api/sessions/${id}/window/answer`, answer),
   /** Allows an external site Claude opened, which then loads, or denies it, which takes it out of the window. */
+  /** Shows a file the session's Claude named, by its path in the VM, in the Finder; answers with where it is on the Mac. */
+  reveal: (id: string, path: string) => request<{ path: string }>("POST", `/api/sessions/${id}/reveal`, { path }),
   approveSite: (id: string, widget: string, allow: boolean) => request<WindowState>("POST", `/api/sessions/${id}/window/approve`, { widget, allow }),
   /** Takes a widget out of the window; a pane showing it shows another artifact, or closes. */
   removeWidget: (id: string, widget: string) => request<WindowState>("POST", `/api/sessions/${id}/window/remove`, { widget }),

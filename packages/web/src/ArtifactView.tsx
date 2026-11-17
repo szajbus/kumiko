@@ -6,6 +6,7 @@ import { Diagram } from "./Diagram";
 import { Markdown } from "./Markdown";
 import { PaneGrip } from "./PaneGrip";
 import { QuoteButton } from "./QuoteButton";
+import { RevealButton } from "./RevealButton";
 import { quoteFrom } from "./quote";
 import { COLORS } from "./status";
 import { withPolicy } from "./htmlPolicy";
@@ -148,6 +149,11 @@ export function ArtifactView({ widget, pane, doc, writing }: Props) {
             <button type="button" className="artifact-copy" onClick={copy} title={doc.type === "markdown" ? "Copy the Markdown" : "Copy the source"}>
               {copied ? "Copied" : "Copy"}
             </button>
+          )}
+          {hasFile(doc.type) && !doc.missing && (
+            <RevealButton path={doc.path} className="artifact-copy">
+              Reveal
+            </RevealButton>
           )}
           {ctx.live && hasFile(doc.type) && <DeleteButton title={doc.title} onDelete={() => ctx.remove(widget)} />}
           {ctx.live && (

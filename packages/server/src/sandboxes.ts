@@ -6,6 +6,7 @@ import {
   AGENT_SETUP_DIR,
   CLAUDE_HOME_IN_VM,
   KUMIKO_HOME_IN_VM,
+  kumikoFolderInVm,
   NAME_PATTERN,
   parseRepo,
   repoFolders,
@@ -47,10 +48,18 @@ export const worktreesPath = (r: SandboxRepo) => `${repoPath(r)}${WORKTREES_SUFF
  * Kumiko's instructions for a sandbox: what it is (its repos, /workspace, the folders shared with the user's
  * computer), that the VM is Claude's to change, and the worktree convention. It lists the repos without their own
  * instructions: Claude Code reads a repo's CLAUDE.md once a session works with files there, so a task in one repo
- * doesn't load the others'. `mounts` are the extra folders from the user's computer, as the VM has them.
+ * doesn't load the others'. `mounts` are the extra folders from the user's computer, as the VM has them, and `kumiko`
+ * is where the Kumiko folder is in the VM: its host path, or ~/.kumiko/shared where it is mounted there.
  */
-export function managedInstructions(s: Pick<Sandbox, "name" | "repos">, mounts: Mount[] = []): string {
-  const shared = [`\`~/.claude\``, `\`${KUMIKO_HOME_IN_VM}\``, ...mounts.map((m) => `\`${m.guestPath ?? m.hostPath}\`${m.writable ? "" : " (read-only)"}`)];
+export function managedInstructions(s: Pick<Sandbox, "name" | "repos">, mounts: Mount[] = [], kumiko = KUMIKO_HOME_IN_VM): string {
+  const aliased = kumiko !== KUMIKO_HOME_IN_VM;
+  const shared = [
+    `\`~/.claude\``,
+    `\`${kumiko}\`${aliased ? ` (also \`${KUMIKO_HOME_IN_VM}\`)` : ""}`,
+    ...mounts.map((m) => `\`${m.guestPath ?? m.hostPath}\`${m.writable ? "" : " (read-only)"}`),
+  ];
+  // Folders at the same path in the VM as on the host: a path there is one the user can open as it is.
+  const same = [...(aliased ? [kumiko] : []), ...mounts.filter((m) => (m.guestPath ?? m.hostPath) === m.hostPath).map((m) => m.hostPath)].map((p) => `\`${p}\``);
   return `<!-- Written by Kumiko, and rewritten whenever the sandbox or a session starts: edit CLAUDE.md instead. -->
 
 # Working in this sandbox
@@ -64,11 +73,11 @@ ${reposSection(s.repos)}
 - Install packages and tools, start, stop and configure services, and change system settings whenever the task needs it; you don't need to ask first.
 - \`${WORKSPACE_DIR}\` is a disk of its own, which outlives the VM: the repos, their worktrees and everything else there stay when the user rebuilds the VM.
 - Folders mounted from the user's computer are shared with it: ${list(shared)}. Take the usual care with those; the rest of the VM is yours to change.
-
+${same.length ? `- ${list(same)} ${same.length > 1 ? "are" : "is"} at the same path on the user's computer: when you tell them about a file there, give its full path, which they can open as it is.\n` : ""}
 ## Setup that survives a rebuild
 
-- The user can rebuild this VM, and everything outside \`${WORKSPACE_DIR}\` and the mounted folders is lost then. When you install or configure something you'd want again after a rebuild (packages, tools, services, system settings), keep it in a setup script in \`${KUMIKO_HOME_IN_VM}/${AGENT_SETUP_DIR}/\`.
-- Read \`${KUMIKO_HOME_IN_VM}/${SETUP_GUIDE}\` before you add or change one: it says how they run, and what the user's own setup already does.
+- The user can rebuild this VM, and everything outside \`${WORKSPACE_DIR}\` and the mounted folders is lost then. When you install or configure something you'd want again after a rebuild (packages, tools, services, system settings), keep it in a setup script in \`${kumiko}/${AGENT_SETUP_DIR}/\`.
+- Read \`${kumiko}/${SETUP_GUIDE}\` before you add or change one: it says how they run, and what the user's own setup already does.
 
 ## Worktrees
 
@@ -114,9 +123,9 @@ export type UserSetup = Pick<SandboxSpec, "provision" | "env">;
 
 /**
  * The guide to the agent's setup scripts, in the Kumiko folder next to theirs; `kumiko.md` points to it, so its
- * details cost context only when the agent is about to write a script.
+ * details cost context only when the agent is about to write a script. `kumiko` is where that folder is in the VM.
  */
-export function setupGuide(user: UserSetup): string {
+export function setupGuide(user: UserSetup, kumiko = KUMIKO_HOME_IN_VM): string {
   const vars = user.env.map((name) => `\`${name}\``).join(", ");
   return `<!-- Written by Kumiko, and rewritten whenever the sandbox or a session starts. -->
 
@@ -125,7 +134,7 @@ export function setupGuide(user: UserSetup): string {
 When the user rebuilds this VM, everything outside \`${WORKSPACE_DIR}\` and the mounted folders is lost. A new VM gets Claude Code, then the user's provisioning script, then your setup scripts: the \`*.sh\` files in \`${AGENT_SETUP_DIR}/\` here, in name order. Each runs with bash as the VM user, in \`${WORKSPACE_DIR}\`, stopping at its first failing command. Only plain files of up to ${AGENT_SCRIPT_MAX_BYTES / 1024 / 1024} MB run; links, folders and bigger files are skipped.
 
 - Keep one script per concern, named like \`20-postgres.sh\`. Look at the ones there first, and change one rather than add a second for the same thing.
-- Write them so they can run again where they ran before, then run a new or changed one right away to check it works: \`bash -e ${KUMIKO_HOME_IN_VM}/${AGENT_SETUP_DIR}/<file>\`.
+- Write them so they can run again where they ran before, then run a new or changed one right away to check it works: \`bash -e ${kumiko}/${AGENT_SETUP_DIR}/<file>\`.
 - What's in \`${WORKSPACE_DIR}\` is still there after a rebuild, so a script needn't put it back.
 - ${user.provision ? `Don't repeat what the user's provisioning script does. It is in \`${USER_PROVISION_COPY}\` here, as the user last saved it; changing that copy changes nothing.` : "The user has no provisioning script."}
 - Never write secret values into a script: this folder is on the user's computer. ${vars ? `Use the variables forwarded from it by name: ${vars}.` : "No variables are forwarded from it."}
@@ -190,7 +199,7 @@ export class SandboxStore {
     return join(this.claudeRoot, name);
   }
 
-  /** The sandbox's Kumiko folder on the host, which is `~/.kumiko/shared` in the VM. */
+  /** The sandbox's Kumiko folder on the host, which is at the same path in the VM (`kumikoInVm`), and at `~/.kumiko/shared`. */
   kumikoHome(name: string): string {
     assertName(name);
     return join(this.kumikoRoot, name);
@@ -359,17 +368,18 @@ export class SandboxStore {
     const home = this.claudeHome(s.name);
     await mkdir(home, { recursive: true });
     // Claude can make the file a link to one of the user's on the host: that is replaced, not written through.
-    await replaceFile(home, MANAGED_FILE, managedInstructions(s, spec ? this.extraMounts(s.name, spec.mounts) : []));
-    if (spec) await this.writeSetupGuide(s, spec);
+    const kumiko = this.kumikoInVm(s.name, spec?.mounts);
+    await replaceFile(home, MANAGED_FILE, managedInstructions(s, spec ? this.extraMounts(s.name, spec.mounts) : [], kumiko));
+    if (spec) await this.writeSetupGuide(s, spec, kumiko);
   }
 
   /**
    * Writes the setup guide in the Kumiko folder, beside the agent's scripts, with the copy of the user's script or none.
    * Claude can make either a link to one of the user's files on the host: that is replaced or deleted, not written through.
    */
-  private async writeSetupGuide(s: Sandbox, user: UserSetup): Promise<void> {
+  private async writeSetupGuide(s: Sandbox, user: UserSetup, kumiko: string): Promise<void> {
     const home = this.kumikoHome(s.name);
-    await replaceFile(home, SETUP_GUIDE, setupGuide(user));
+    await replaceFile(home, SETUP_GUIDE, setupGuide(user, kumiko));
     if (user.provision) await replaceFile(home, USER_PROVISION_COPY, user.provision.endsWith("\n") ? user.provision : `${user.provision}\n`);
     else await rm(join(home, USER_PROVISION_COPY), { force: true });
   }
@@ -384,12 +394,32 @@ export class SandboxStore {
     await rm(this.kumikoHome(name), { recursive: true, force: true });
   }
 
-  /** The mounts every sandbox's VM has: the Claude home as the VM user's ~/.claude, and the Kumiko folder as ~/.kumiko/shared. */
-  fixedMounts(name: string): Mount[] {
+  /**
+   * The mounts every sandbox's VM has: the Claude home as the VM user's ~/.claude, and the Kumiko folder at its host
+   * path, so the paths of artifacts and setup scripts are the same in the VM as on the host, with ~/.kumiko/shared
+   * linking to it. Where one of the `extra` mounts is in the way of that path, the Kumiko folder is mounted at
+   * ~/.kumiko/shared instead, as it was before.
+   */
+  fixedMounts(name: string, extra: Mount[] = []): Mount[] {
+    const kumiko = this.kumikoHome(name);
+    const within = (a: string, b: string) => a === b || a.startsWith(b.endsWith("/") ? b : `${b}/`);
+    const clash = extra.some((m) => {
+      const guest = m.guestPath ?? m.hostPath;
+      return within(guest, kumiko) || within(kumiko, guest);
+    });
     return [
       { hostPath: this.claudeHome(name), guestPath: CLAUDE_HOME_IN_VM, writable: true },
-      { hostPath: this.kumikoHome(name), guestPath: KUMIKO_HOME_IN_VM, writable: true },
+      clash ? { hostPath: kumiko, guestPath: KUMIKO_HOME_IN_VM, writable: true } : { hostPath: kumiko, guestPath: kumiko, writable: true, alias: KUMIKO_HOME_IN_VM },
     ];
+  }
+
+  /**
+   * Where the Kumiko folder is in the sandbox's VM, as the VM's `mounts` have it (its host path, or ~/.kumiko/shared in a
+   * VM that mounts it there); without them, where the next start puts it.
+   */
+  kumikoInVm(name: string, mounts?: Mount[]): string {
+    const live = mounts && kumikoFolderInVm(mounts.filter((m) => m.hostPath === this.kumikoHome(name)));
+    return live ?? kumikoFolderInVm(this.fixedMounts(name, mounts ? this.extraMounts(name, mounts) : []))!;
   }
 
   /** The mounts in `mounts` that aren't one of the sandbox's fixed ones. */
@@ -399,7 +429,8 @@ export class SandboxStore {
 
   /** The sandbox's fixed mounts, then the others in `mounts`; any fixed ones among those are replaced, not repeated. */
   mounts(name: string, mounts: Mount[]): Mount[] {
-    return [...this.fixedMounts(name), ...this.extraMounts(name, mounts)];
+    const extra = this.extraMounts(name, mounts);
+    return [...this.fixedMounts(name, extra), ...extra];
   }
 
   /** The VM's spec: the user's resources, extra mounts, variables and script, plus what every sandbox has. */

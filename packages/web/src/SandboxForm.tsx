@@ -247,7 +247,7 @@ export function SandboxForm({ editing, mirrors, onCancel, onCreated }: Props) {
     const fixed = [
       `#   the workspace disk ${disk}  at ${WORKSPACE_DIR}, kept when the sandbox is rebuilt`,
       `#   the sandbox's Claude home  at ${CLAUDE_HOME_IN_VM}, writable (CLAUDE_CONFIG_DIR)`,
-      `#   the sandbox's Kumiko folder  at ${KUMIKO_HOME_IN_VM}, writable`,
+      `#   the sandbox's Kumiko folder  at the same path, and ${KUMIKO_HOME_IN_VM}, writable`,
       ...s.mounts.map((m) => `#   ${m.hostPath}  at ${m.guestPath === m.hostPath ? "the same path" : m.guestPath}${m.writable ? ", writable" : ""}`),
     ];
     const lines = [
@@ -461,7 +461,7 @@ export function SandboxForm({ editing, mirrors, onCancel, onCreated }: Props) {
               },
               {
                 host: defaults ? `${tilde(defaults.kumikoHomes, home)}/${name.trim() || "<name>"}` : "The sandbox's Kumiko folder",
-                at: KUMIKO_HOME_IN_VM,
+                at: `the same path · ${KUMIKO_HOME_IN_VM}`,
                 what: "Kumiko folder: the agent's setup scripts, artifacts",
               },
             ].map((m) => (
