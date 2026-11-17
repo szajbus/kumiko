@@ -29,6 +29,7 @@ import { COLORS } from "./status";
 import { UsageStrip } from "./UsageStrip";
 import { useFold } from "./useFold";
 import { WakeBanner, type WakeContext } from "./WakeBanner";
+import { toolLine, toolName } from "./toolNames";
 import { widgetLine } from "./widgets";
 import { WindowContext } from "./windowContext";
 import { MonitorEvents, MonitorLine, MoveToBackground, onReveal, PlainLine, TaskEndLine, TasksButton, TaskToolMeta } from "./TasksPane";
@@ -1152,13 +1153,21 @@ function PlainToolCall({ block, state, meta }: { block: Extract<Block, { type: "
   // A call that opened, changed or closed something in the window says so in words, with a way back to a closed artifact.
   const line = ctx && widgetLine(block.name, block.input, ctx.window, ctx.sessionNames);
   const hidden = line?.widget && !Object.values(ctx!.window.panes).includes(line.widget);
+  // Kumiko's other tools, and loading tools, say what they did in words too; any other tool goes by its name.
+  const words = line ? undefined : toolLine(block.name, block.input);
   const summary = toolSummary(block.input) || partialToolSummary(block.partialInput ?? "");
   return (
-    <details className={`tool tool-${state}${line ? " tool-widget" : ""}`}>
+    <details className={`tool tool-${state}${line || words ? " tool-widget" : ""}`}>
       <summary>
         <ToolIcon state={state} />
-        <span className="tool-name">{line?.label ?? block.name}</span>
-        {line ? <span className="tool-summary tool-title">{line.title}</span> : <span className="mono tool-summary">{summary}</span>}
+        <span className="tool-name">{line?.label ?? words?.label ?? toolName(block.name)}</span>
+        {line ? (
+          <span className="tool-summary tool-title">{line.title}</span>
+        ) : words ? (
+          <span className={`tool-summary${words.mono ? " mono" : " tool-title"}`}>{words.title}</span>
+        ) : (
+          <span className="mono tool-summary">{summary}</span>
+        )}
         {meta}
         {hidden && ctx!.live && (
           <button
