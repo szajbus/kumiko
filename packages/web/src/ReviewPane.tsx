@@ -242,7 +242,7 @@ function ReviewBody({ session, pane, card, c }: { session: string; pane: string;
         )}
       </div>
       {card.state === "stale" && <div className="rv-banner">{c.branch} moved after the card was shown. This is the commit the card is for; review again on the card to see the new one.</div>}
-      {!open && <div className="rv-banner">This card is closed. The changes are as it showed them.</div>}
+      {!open && <div className="rv-banner">This card is closed.</div>}
       <div className="rv-body">
         <nav className="rv-tree" aria-label="Changed files">
           <input className="rv-filter" placeholder="Filter files" aria-label="Filter files" value={filter} onChange={(e) => setFilter(e.target.value)} />

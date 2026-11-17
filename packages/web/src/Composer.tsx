@@ -5,6 +5,9 @@ import { matchCommands } from "./commands";
 import { drafts } from "./drafts";
 import { Close, Paperclip, Return, Stop } from "./icons";
 import { expandPastes, isMultiline, nextPasteId, pasteLabel, pasteSpans, type Pastes } from "./pastes";
+import { codeBlocks, type CodeBlockSpan } from "./composerCode";
+import { useCodeTokens } from "./highlight";
+import { Highlighted } from "./Highlighted";
 import { quoteInsert } from "./quote";
 import { historyStep } from "./userShell";
 
@@ -106,6 +109,9 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
   const [dragging, setDragging] = useState(false);
   const picker = useRef<HTMLInputElement>(null);
   const spans = pasteSpans(text, pastes);
+  // Code blocks are drawn coloured under the box, whose own text goes clear; one with a paste label in it isn't.
+  const blocks = shellMode ? [] : codeBlocks(text).filter((b) => !spans.some((p) => p.start < b.end && p.end > b.start));
+  const drawn = blocks.length > 0;
   // The label just pasted, while the cursor stays right after it: pasting the same text there opens it up.
   const [fresh, setFresh] = useState<number>();
   const [picked, setPicked] = useState(0);
@@ -271,21 +277,15 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
           </span>
         )}
         <div className="composer-field">
-          {spans.length > 0 && (
-            <div ref={marks} className="composer-marks" aria-hidden="true">
-              {spans.map((s, i) => (
-                <Fragment key={s.start}>
-                  {text.slice(i ? spans[i - 1]!.end : 0, s.start)}
-                  <mark className="composer-paste">{text.slice(s.start, s.end)}</mark>
-                </Fragment>
-              ))}
-              {/* A trailing space keeps a last empty line, as the box has. */}
-              {text.slice(spans.at(-1)!.end)}{" "}
+          {(spans.length > 0 || drawn) && (
+            <div ref={marks} className={`composer-marks${drawn ? " is-drawn" : ""}`} aria-hidden="true">
+              <Marks text={text} spans={spans} blocks={blocks} />
+              {/* A trailing space keeps a last empty line, as the box has. */}{" "}
             </div>
           )}
           <textarea
             ref={box}
-            className="composer-input"
+            className={`composer-input${drawn ? " is-drawn" : ""}`}
             rows={1}
             value={text}
             placeholder={shellMode ? "Shell command" : (ghost ?? placeholder)}
@@ -468,5 +468,55 @@ export function Composer({ onSubmit, submitLabel, disabled, onStop, placeholder,
         )}
       </div>
     </>
+  );
+}
+
+/**
+ * The text as the layer under the box draws it: paste labels as pills, and code blocks in their colours. Only colours:
+ * the layer's text has to take the same room as the box's, or the caret would be off.
+ */
+function Marks({ text, spans, blocks }: { text: string; spans: ReturnType<typeof pasteSpans>; blocks: CodeBlockSpan[] }) {
+  const plain = (from: number, to: number) => {
+    const inside = spans.filter((s) => s.start >= from && s.end <= to);
+    let at = from;
+    const out: ReactNode[] = [];
+    for (const s of inside) {
+      out.push(text.slice(at, s.start), <mark key={s.start} className="composer-paste">{text.slice(s.start, s.end)}</mark>);
+      at = s.end;
+    }
+    out.push(text.slice(at, to));
+    return out;
+  };
+  const out: ReactNode[] = [];
+  let pos = 0;
+  for (const b of blocks) {
+    out.push(<Fragment key={`t${b.start}`}>{plain(pos, b.start)}</Fragment>);
+    out.push(
+      <Fragment key={`b${b.start}`}>
+        <span className="composer-fence">{text.slice(b.start, b.contentStart)}</span>
+        <ComposerCode code={text.slice(b.contentStart, b.contentEnd)} lang={b.lang} />
+        <span className="composer-fence">{text.slice(b.contentEnd, b.end)}</span>
+      </Fragment>,
+    );
+    pos = b.end;
+  }
+  out.push(<Fragment key="end">{plain(pos, text.length)}</Fragment>);
+  return <>{out}</>;
+}
+
+/** A code block's content in the composer, coloured once its tokens are known. */
+function ComposerCode({ code, lang }: { code: string; lang: string | undefined }) {
+  const tokens = useCodeTokens(code, lang);
+  if (!tokens) return <span className="composer-code">{code}</span>;
+  const lines = code.split("\n");
+  return (
+    <span className="composer-code">
+      {lines.map((line, i) => (
+        <Fragment key={i}>
+          {line && <Highlighted text={line} tokens={tokens[i]?.map((t) => ({ content: t.content, color: t.color }))} markClass="" />}
+          {i < lines.length - 1 && "\n"}
+        </Fragment>
+      ))}
+    </span>
   );
 }
