@@ -60,4 +60,10 @@ describe("a run's logs, for the agent", () => {
     ].join("\n");
     assert.equal(logText(log, 2), "=== build / Set up job ===\nRunner 2.3\n\n=== build / Run tests (last 2 of 3 lines) ===\n# fail 1\n##[error]Process completed with exit code 1.");
   });
+
+  it("end at the last error when gh can't tell the steps apart, not in the cleanup after it", () => {
+    const log = ["test\tUNKNOWN STEP\t2026-11-18T10:00:00Z ##[group]Run npm test", "test\tUNKNOWN STEP\t2026-11-18T10:00:01Z not ok 3 - closes", "test\tUNKNOWN STEP\t2026-11-18T10:00:02Z ##[error]Process completed with exit code 1.", "test\tUNKNOWN STEP\t2026-11-18T10:00:03Z Post job cleanup.", "test\tUNKNOWN STEP\t2026-11-18T10:00:04Z Cleaning up orphan processes"].join("\n");
+    assert.equal(logText(log, 2), "=== test / UNKNOWN STEP (last 2 of 5 lines, up to its last error, without the 2 lines after it) ===\nnot ok 3 - closes\n##[error]Process completed with exit code 1.");
+    assert.equal(logText(log, 10), "=== test / UNKNOWN STEP (up to its last error, without the 2 lines after it) ===\n##[group]Run npm test\nnot ok 3 - closes\n##[error]Process completed with exit code 1.");
+  });
 });

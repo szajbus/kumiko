@@ -100,6 +100,8 @@ export function runSummary(run: WorkflowRun): string {
 
 /** ANSI colours, and the timestamp GitHub starts each line with. */
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
+/** What gh calls a step it can't match lines to, as with GitHub's newer log archives. */
+const UNKNOWN_STEP = "UNKNOWN STEP";
 const STAMP = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z ?/;
 
 /**
@@ -119,9 +121,15 @@ export function logText(log: string, tail: number): string {
     group.lines.push(line.replace(ANSI, "").replace(STAMP, "").replace(/\r$/, ""));
   }
   const parts = steps.map((s) => {
-    const kept = s.lines.slice(-tail);
-    const cut = s.lines.length - kept.length;
-    return `=== ${s.job} / ${s.step}${cut ? ` (last ${kept.length} of ${s.lines.length} lines)` : ""} ===\n${kept.join("\n")}`;
+    // When gh can't tell the steps apart, a job's log is one "step", ending in the cleanup after the one that failed:
+    // its tail ends at the last error instead, where the failure is.
+    const lastError = s.step === UNKNOWN_STEP ? s.lines.findLastIndex((l) => l.startsWith("##[error]")) : -1;
+    const lines = lastError >= 0 ? s.lines.slice(0, lastError + 1) : s.lines;
+    const after = s.lines.length - lines.length;
+    const kept = lines.slice(-tail);
+    const cut = lines.length - kept.length;
+    const note = [cut ? `last ${kept.length} of ${s.lines.length} lines` : "", after ? `up to its last error, without the ${after} lines after it` : ""].filter(Boolean).join(", ");
+    return `=== ${s.job} / ${s.step}${note ? ` (${note})` : ""} ===\n${kept.join("\n")}`;
   });
   const text = parts.join("\n\n");
   if (text.length <= MAX_LOG_TEXT) return text;
