@@ -14,7 +14,7 @@ belong to the sandbox provider: with Lima, the VM `kumiko-<name>` and the disk `
 | `workspaces/<name>.json` | The sandbox: its repos, each with its folder in `/workspace`, and the folders of repos taken out while it was stopped, deleted from `/workspace` when it next starts. |
 | `sandboxes/<name>.json` | The sandbox's VM settings (variable names, never values) and setup state, with the agent's setup scripts it was created with and how each went. |
 | `claude/<name>/` | The sandbox's agent home: login, settings, history. |
-| `sandbox/<name>/` | The sandbox's Kumiko folder, `~/.kumiko/shared` in the sandbox: what Kumiko and the agent keep for Kumiko, apart from the agent home. |
+| `sandbox/<name>/` | The sandbox's Kumiko folder, at the same path in the sandbox, and at `~/.kumiko/shared` there: what Kumiko and the agent keep for Kumiko, apart from the agent home. |
 | `sandbox/<name>/artifacts/<session id>/` | The session's [artifacts](/guide/artifacts/), which the agent writes. |
 | `sandbox/<name>/provision.d/` | The agent's [setup scripts](/guide/sandboxes/#the-agents-setup-scripts), run when the sandbox is created. |
 | `sandbox/<name>/setup.md`, `user-provision.sh` | The guide to the agent's setup scripts, and a copy of the provisioning script for it to read. Kumiko writes them again whenever the sandbox or a session starts. |

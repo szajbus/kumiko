@@ -24,8 +24,11 @@ describe("SandboxStore", () => {
       assert.match(managed, /Written by Kumiko/);
       assert.match(managed, /`\/workspace\/web__worktrees\/`/);
       assert.match(managed, /## This machine\n\n- You are in a VM made for this sandbox, and it is yours/);
-      assert.match(managed, /## Setup that survives a rebuild\n[^]*`~\/\.kumiko\/shared\/provision\.d\/`/);
-      assert.match(managed, /Read `~\/\.kumiko\/shared\/setup\.md` before you add or change one/);
+      assert.ok(managed.includes(`keep it in a setup script in \`${store.kumikoHome("web")}/provision.d/\``), managed);
+      assert.ok(managed.includes(`Read \`${store.kumikoHome("web")}/setup.md\` before you add or change one`));
+      // The agent knows the folder is the same path on the Mac, and still at ~/.kumiko/shared.
+      assert.ok(managed.includes(`\`${store.kumikoHome("web")}\` (also \`~/.kumiko/shared\`)`));
+      assert.ok(managed.includes(`- \`${store.kumikoHome("web")}\` is at the same path on the user's computer: when you tell them about a file there, give its full path`));
     } finally {
       await rm(root, { recursive: true, force: true });
     }

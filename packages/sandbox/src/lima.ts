@@ -139,6 +139,19 @@ const LOCAL_BIN_ON_PATH = `case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) expor
  */
 export const CLAUDE_CONFIG_EXPORT = `export CLAUDE_CONFIG_DIR="$HOME"/${CLAUDE_HOME_IN_VM.slice(2)}`;
 
+/**
+ * `link <to> <at>`: makes `at` a link to `to`, for a mount's alias. A link elsewhere is replaced, and so is an empty
+ * folder, such as the one Lima mounted the folder at before (`rmdir` leaves a folder with anything in it, or still
+ * mounted). Anything else is left, with a warning. Never fails, so the rest of the shell setup runs.
+ */
+const ALIAS_LINK = `link() {
+  if [ -L "$2" ]; then [ "$(readlink "$2")" = "$1" ] || ln -sfn "$1" "$2" || echo "warning: couldn't link $2 to $1." >&2; return 0; fi
+  if [ -d "$2" ]; then rmdir "$2" 2>/dev/null || true; fi
+  if [ -e "$2" ]; then echo "warning: $2 is in the way of a link to $1, so it was left as it is." >&2; return 0; fi
+  mkdir -p "$(dirname "$2")" 2>/dev/null || sudo mkdir -p "$(dirname "$2")" || true
+  ln -s "$1" "$2" 2>/dev/null || sudo ln -s "$1" "$2" || echo "warning: couldn't link $2 to $1." >&2
+}`;
+
 /** A path in the VM for bash: quoted, with a leading "~/" left to the shell's $HOME. */
 export function shellPath(p: string): string {
   return p.startsWith("~/") ? `"$HOME"/${shellQuote(p.slice(2))}` : shellQuote(p);
@@ -418,7 +431,7 @@ export class LimaProvider implements SandboxProvider {
       log(`warning: ${err.message}`);
       return undefined;
     });
-    if (meta) await this.prepareShells(name, meta.spec.workdir, log);
+    if (meta) await this.prepareShells(name, meta.spec, log);
     if (meta?.setup === "creating") await this.runProvisioning(name, log);
     else if (meta && (await this.ensureClaude(name, log)) !== 0) log("warning: couldn't reinstall Claude Code; it is missing in the sandbox.");
   }
@@ -446,14 +459,17 @@ export class LimaProvider implements SandboxProvider {
   /**
    * Prepares the VM's shells on every start, so changes to the working directory reach them. A failure is only a warning.
    * - Creates the working directory if it's missing and hands it to the VM user if they can't write to it
-   *   (Lima creates /workspace as root when mounting under it). Likewise ~/.kumiko, which holds a mount.
+   *   (Lima creates /workspace as root when mounting under it). Likewise ~/.kumiko, which holds a mount or a link.
+   * - Makes each mount's alias a link to where it is mounted, replacing an empty folder there (where Lima mounted it
+   *   before) or a link elsewhere; anything else is left, with a warning.
    * - Puts ~/.local/bin, where Claude Code installs, on PATH for every shell: ~/.config/kumiko/env.sh is
    *   sourced from the top of ~/.bashrc (before Debian's early return, so `ssh host cmd` gets it too) and from ~/.profile.
    * - Moves interactive shells that land in ~ to the working directory: without --workdir, `limactl shell` tries
    *   the host's current directory and home, which rarely exist in the VM, and falls back to ~. That one is
    *   ~/.config/kumiko/shell.sh, sourced from the end of ~/.bashrc, which only interactive shells reach.
    */
-  private async prepareShells(name: string, workdir: string, log: Log): Promise<void> {
+  private async prepareShells(name: string, spec: Pick<SandboxSpec, "workdir" | "mounts">, log: Log): Promise<void> {
+    const workdir = spec.workdir ?? WORKSPACE_DIR;
     const env = `# Written by Kumiko on every start: ~/.local/bin (Claude Code) on PATH, and Claude's config in the sandbox's Claude home.\n` +
       `${LOCAL_BIN_ON_PATH}\n${CLAUDE_CONFIG_EXPORT}\n`;
     const rc = `# Written by Kumiko on every start: interactive shells that land in ~ move to the working directory.\n` +
@@ -463,6 +479,8 @@ export class LimaProvider implements SandboxProvider {
       `set -e`,
       `d=${shellPath(workdir)}; sudo mkdir -p "$d"; [ -w "$d" ] || sudo chown "$(id -u):$(id -g)" "$d"`,
       `k=~/${KUMIKO_DIR_IN_VM.slice(2)}; [ ! -d "$k" ] || [ -w "$k" ] || sudo chown "$(id -u):$(id -g)" "$k"`,
+      ALIAS_LINK,
+      ...spec.mounts.filter((m) => m.alias).map((m) => `link ${shellPath(m.guestPath ?? m.hostPath)} ${shellPath(m.alias!)}`),
       `mkdir -p ~/.config/kumiko`,
       `cat > ~/.config/kumiko/env.sh <<'KUMIKO_RC'\n${env}KUMIKO_RC`,
       `cat > ~/.config/kumiko/shell.sh <<'KUMIKO_RC'\n${rc}KUMIKO_RC`,
@@ -477,7 +495,10 @@ export class LimaProvider implements SandboxProvider {
     eachLine(child.stdout!, (l) => out.push(l));
     eachLine(child.stderr!, (l) => out.push(l));
     const code = await exitCode(child);
-    if (code === 0) return;
+    if (code === 0) {
+      for (const l of out) if (l.startsWith("warning: ")) log(l);
+      return;
+    }
     for (const l of out) log(l);
     log(`warning: couldn't prepare the working directory ${workdir} or the shell setup (exit ${code}).`);
   }
@@ -528,7 +549,7 @@ export class LimaProvider implements SandboxProvider {
     }
     if (plan.growWorkspace) await this.resizeWorkspace(name, plan.spec.workspaceGiB!, log);
     await this.metadata.update(name, { spec: plan.spec });
-    if (plan.prepareShells) await this.prepareShells(name, plan.spec.workdir, log);
+    if (plan.prepareShells) await this.prepareShells(name, plan.spec, log);
     log(plan.limaArgs.length || plan.growWorkspace ? "Saved. Resource and mount changes apply on the next start." : "Saved.", "ok");
   }
 

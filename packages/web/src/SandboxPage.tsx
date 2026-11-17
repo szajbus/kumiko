@@ -350,7 +350,10 @@ function Details({ p, home }: { p: SandboxView; home?: string }) {
                     <span className="badge">{m.writable ? "Writable" : "Read-only"}</span>
                   </span>
                   <span className="mount-at">at</span>
-                  <span className="mono path">{(m.guestPath ?? m.hostPath) === m.hostPath ? "the same path" : m.guestPath}</span>
+                  <span className="mono path">
+                    {(m.guestPath ?? m.hostPath) === m.hostPath ? "the same path" : m.guestPath}
+                    {m.alias && <span className="dim"> · {m.alias}</span>}
+                  </span>
                 </div>
               );
             })}

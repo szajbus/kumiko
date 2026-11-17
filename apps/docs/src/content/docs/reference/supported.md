@@ -50,7 +50,8 @@ follows mostly from the sandbox provider.
 
 - Kumiko installs it in every sandbox with its native installer; you don't need it on the host.
 - Each sandbox has its own agent home, Claude Code's `~/.claude`, kept on the host in `~/.kumiko/claude/<name>/`.
-  Kumiko keeps its own files apart from it, in `~/.kumiko/shared` in the sandbox (`~/.kumiko/sandbox/<name>/` on the host).
+  Kumiko keeps its own files apart from it, in `~/.kumiko/sandbox/<name>/` on the host, mounted at the same path in the
+  sandbox and linked from `~/.kumiko/shared` there.
 - Every session feature is available with it:
 
 | Feature | Uses |

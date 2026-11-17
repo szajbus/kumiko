@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { lstat } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -71,11 +72,13 @@ import {
   type ArtifactState,
   type Side,
   type WindowOp,
+  sameMounts,
   WORKSPACE_DIR,
 } from "@kumiko/shared";
 import { LimaProvider, shellQuote, validateSpec, type Log, type SandboxProvider } from "@kumiko/sandbox";
 import { ClaudeDriver, execOutput, Runs, type AgentDriver } from "@kumiko/agent";
 import { deleteAgentScripts, readAgentScripts, withExitCodes } from "./agentSetup.js";
+import { hostPathFor, revealOnHost, sharedRoots } from "./reveal.js";
 import { AttachmentRefused, AttachmentStore, attachmentHashes } from "./attachments.js";
 import { ArtifactContent, contentHashes } from "./content.js";
 import { filesBytes } from "./disk.js";
@@ -140,6 +143,8 @@ export interface ServerOptions {
    * Where a newly picked repository's mirror fetches from. Defaults to GitHub over HTTPS, signing in with gh's token, or `<KUMIKO_GITHUB_URL>/<owner>/<name>.git` when that is set (for running against a stand-in).
    */
   repoUrl?(repo: string): string | Promise<string>;
+  /** Shows a file on the host in the Finder; defaults to `open -R`. */
+  reveal?(hostPath: string): Promise<void>;
 }
 
 export interface RunningServer {
@@ -196,7 +201,9 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
     scratch,
     home: (sandbox) => {
       const s = sandboxList.find((x) => x.name === sandbox);
-      return s && { claudeHome: sandboxes.claudeHome(s.name), kumikoHome: sandboxes.kumikoHome(s.name) };
+      if (!s) return undefined;
+      const spec = infos.find((i) => i.name === s.name)?.meta?.spec;
+      return { claudeHome: sandboxes.claudeHome(s.name), kumikoHome: sandboxes.kumikoHome(s.name), kumikoInVm: sandboxes.kumikoInVm(s.name, spec?.mounts) };
     },
     vmHome: (sandbox) => execOutput(provider.exec.bind(provider), sandbox, `printf %s "$HOME"`, 10_000),
     pane: (session, pane, what) => askPane(session, pane, what),
@@ -273,7 +280,8 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       const relay = relays.view(sandbox.name);
       const down = relay?.state === "down" ? `Git in the sandbox can't reach the mirrors on this Mac yet: ${relay.error ?? "the link is down"}` : undefined;
       const repos = clones.view(sandbox.name, sandbox.repos).map((r) => (down && r.state === "pending" ? { ...r, error: down } : r));
-      return { ...vm, sandbox, repos, waiting: waiting.get(sandbox.name) ?? 0 };
+      const mounts = vm.meta?.spec.mounts;
+      return { ...vm, sandbox, repos, waiting: waiting.get(sandbox.name) ?? 0, ...(mounts ? { shared: sharedRoots(mounts, widgets.knownHome(sandbox.name)) } : {}) };
     });
   };
 
@@ -720,7 +728,20 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   };
 
   const startVm: Work = async (s, i, log) => {
-    await sandboxes.writeManaged(s, i.meta?.spec);
+    let spec = i.meta?.spec;
+    // A VM made before its fixed mounts changed (the Kumiko folder moved to its host path) gets them now, while stopped.
+    if (spec && !sameMounts(spec.mounts, sandboxes.mounts(s.name, spec.mounts))) {
+      const mounts = sandboxes.mounts(s.name, spec.mounts);
+      log("Moving the sandbox's Kumiko folder to the same path in the sandbox as on your Mac.", "note");
+      try {
+        await provider.edit(s.name, { mounts }, log);
+        spec = { ...spec, mounts };
+      } catch (err) {
+        // It starts as it was: everything still works through ~/.kumiko/shared.
+        log(`warning: couldn't move it, so it stays at ~/.kumiko/shared: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    await sandboxes.writeManaged(s, spec);
     await provider.start(s.name, log);
     // Repos taken out while it was stopped leave their folders now.
     if (s.dropped?.length && (await dropFolders(s.name, s.dropped, log))) await sandboxes.dropped(s.name, s.dropped);
@@ -1009,6 +1030,28 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
   });
 
   /** Starts the sandbox of a session opened asleep, if it is stopped, and Claude on the session. */
+  /**
+   * Shows a file the session's Claude named, by its path in the VM, in the Finder: one in a folder mounted from this Mac,
+   * the Kumiko folder's included. Paths with "~/" need the VM running, to know its home.
+   */
+  app.post("/api/sessions/:id/reveal", async (c) => {
+    const { sandbox } = sessionOf(c);
+    const req = await body<{ path?: unknown }>(c, "Body must be JSON: { path }.");
+    const path = typeof req?.path === "string" ? req.path.trim() : "";
+    if (!path) throw new HttpError(400, "No path to show.");
+    const mounts = infos.find((i) => i.name === sandbox)?.meta?.spec.mounts ?? [];
+    if (!widgets.knownHome(sandbox) && infos.find((i) => i.name === sandbox)?.status === "running") await widgets.prepare(sandbox);
+    const host = hostPathFor(path, mounts, widgets.knownHome(sandbox));
+    if (!host) throw new HttpError(404, `${path} isn't in a folder shared with your Mac.`);
+    if (!(await lstat(host).then(() => true, () => false))) throw new HttpError(404, `${host} isn't there.`);
+    try {
+      await (opts.reveal ?? revealOnHost)(host);
+    } catch (err) {
+      throw new HttpError(500, `Couldn't show ${host} in the Finder: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return c.json({ path: host });
+  });
+
   app.post("/api/sessions/:id/wake", async (c) => {
     const { id, sandbox } = sessionOf(c);
     const ready = await startedSandbox(sandbox);

@@ -52,6 +52,10 @@ export interface WindowApi {
   session: string;
   /** Shows the review pane for deliver card `ask` beside the chat, or closes it if it shows that card; `open` only shows it. */
   review(ask: string, open?: boolean): void;
+  /** The path in `text` (code Claude wrote), if it is a file on this Mac that `reveal` can show. */
+  revealable(text: string): string | undefined;
+  /** Shows a path in the VM in the Finder; rejects with why it couldn't. */
+  reveal(path: string): Promise<void>;
 }
 
 export const WindowContext = createContext<WindowApi | undefined>(undefined);

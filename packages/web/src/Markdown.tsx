@@ -1,4 +1,4 @@
-import { memo, useState, useSyncExternalStore, type ComponentProps } from "react";
+import { memo, useContext, useState, useSyncExternalStore, type ComponentProps } from "react";
 import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { codeWrap } from "./codeWrap";
@@ -6,6 +6,8 @@ import { Diagram } from "./Diagram";
 import { fenceLanguage } from "./highlight";
 import { HighlightedCode } from "./Highlighted";
 import { imageSource } from "./imageSource";
+import { RevealButton } from "./RevealButton";
+import { WindowContext } from "./windowContext";
 
 /** The text of a hast node and everything in it. */
 type Element = NonNullable<ExtraProps["node"]>;
@@ -61,11 +63,25 @@ function CodeBlock({ node, className, children, ...props }: ComponentProps<"pre"
   );
 }
 
+/** Inline code; a path in it that is a file on this Mac gets a button that reveals it in the Finder. */
+function InlineCode({ node: _node, children, ...props }: ComponentProps<"code"> & ExtraProps) {
+  const ctx = useContext(WindowContext);
+  const path = typeof children === "string" ? ctx?.revealable(children) : undefined;
+  if (!path) return <code {...props}>{children}</code>;
+  return (
+    <span className="md-path">
+      <code {...props}>{children}</code>
+      <RevealButton path={path} className="md-path-btn" />
+    </span>
+  );
+}
+
 // Links open outside the app (the desktop shell sends new windows to the browser). Raw HTML is never rendered. Images
 // load only from where `imageSource` lets them; others show their text instead.
 const components: Components = {
   a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
   pre: CodeBlock,
+  code: InlineCode,
   img: ({ node: _node, src, alt, ...props }) => {
     const shown = imageSource(src);
     if (shown) return <img {...props} src={shown} alt={alt} />;

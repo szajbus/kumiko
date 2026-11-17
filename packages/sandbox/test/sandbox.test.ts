@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readlink, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { execScript, exitCode, LimaProvider, mountsExpression, parseLimaList, parseLimaVersion, provisionCommand, tidyLimaLine, validateSpec } from "../src/index.js";
@@ -226,6 +226,36 @@ describe("LimaProvider against a fake limactl", () => {
     await provider.create(spec({ workdir: mountDir, provision: "pwd > here" }), log);
     assert.equal((await readFile(join(mountDir, "here"), "utf8")).trim(), mountDir);
     assert.ok(!lines.some((l) => l.includes("couldn't prepare")), "an existing, writable directory needs nothing");
+  });
+
+  it("links each mount's alias to it on every start, replacing an empty folder but nothing else", async () => {
+    const { limaDir, mountDir, provider, log, lines } = await fakeLima();
+    const home = join(limaDir, "vm-home");
+    // Where Lima mounted the folder before: an empty folder once it no longer does.
+    await mkdir(join(home, ".kumiko", "shared"), { recursive: true });
+    await provider.create(spec({ mounts: [{ hostPath: mountDir, writable: true, alias: "~/.kumiko/shared" }] }), log);
+    assert.equal(await readlink(join(home, ".kumiko", "shared")), mountDir);
+    assert.deepEqual((await provider.metadata.read("web"))?.spec.mounts, [{ hostPath: mountDir, guestPath: mountDir, writable: true, alias: "~/.kumiko/shared" }]);
+    await provider.stop("web", log);
+    await provider.start("web", log);
+    assert.equal(await readlink(join(home, ".kumiko", "shared")), mountDir, "kept as it is on the next start");
+
+    // A folder with something in it is someone's: left, with a warning.
+    await rm(join(home, ".kumiko", "shared"));
+    await mkdir(join(home, ".kumiko", "shared"));
+    await writeFile(join(home, ".kumiko", "shared", "mine"), "");
+    await provider.stop("web", log);
+    await provider.start("web", log);
+    assert.ok((await lstat(join(home, ".kumiko", "shared"))).isDirectory());
+    assert.ok(lines.some((l) => /warning: .*\.kumiko\/shared is in the way of a link to/.test(l)), lines.join("\n"));
+  });
+
+  it("refuses an alias in a mount, or one that isn't a path in the VM", async () => {
+    const { mountDir } = await fakeLima();
+    const bad = async (alias: string) => (await validateSpec(spec({ mounts: [{ hostPath: mountDir, guestPath: "/data", writable: true, alias }] }), {})).errors.join();
+    assert.match(await bad("/data/inside"), /The link at \/data\/inside and the mount at \/data overlap/);
+    assert.match(await bad("relative"), /can't be a path in the sandbox/);
+    assert.equal(await bad("~/.kumiko/shared"), "");
   });
 
   it("points interactive shells that land in ~ at the working directory, once per .bashrc", async () => {

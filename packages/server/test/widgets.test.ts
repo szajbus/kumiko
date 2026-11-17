@@ -24,9 +24,11 @@ describe("widgets", () => {
   let clone: string;
   /** Project "one"'s Claude home on the host, which the fake VM sees as ~/.claude. */
   let claudeHome: string;
-  /** Project "one"'s Kumiko folder on the host, which the fake VM sees as ~/.kumiko/shared. */
+  /** Project "one"'s Kumiko folder on the host, which the fake VM sees at the same path, and as ~/.kumiko/shared. */
   let kumikoHome: string;
   let serverOpts: ServerOptions;
+  /** What the server showed in the Finder. */
+  const revealed: string[] = [];
   /** What the window shows of an artifact, as the server keeps it. */
   const textOf = (a: ArtifactState | undefined) => (a?.content ? readFileSync(join(root, "sessions", "artifacts", a.content), "utf8") : "");
   const events: ServerEvent[] = [];
@@ -90,7 +92,7 @@ describe("widgets", () => {
     await waitFor(async () => (await session(id))?.status === "idle");
     return { id: id as string, s: await listen(id) };
   };
-  const docPath = (id: string, name = "plan.md") => `${vmHome}/.kumiko/shared/artifacts/${id}/${name}`;
+  const docPath = (id: string, name = "plan.md") => `${kumikoHome}/artifacts/${id}/${name}`;
   const write = (path: string, content: string) => `write ${JSON.stringify({ file_path: path, content })}`;
   const widget = (name: string, args: object) => `widget ${name} ${JSON.stringify(args)}`;
 
@@ -105,14 +107,14 @@ describe("widgets", () => {
     await chmod(join(bin, "claude"), 0o755);
     const env = () => ({});
     const provider = new LimaProvider({ limactl: join(fixtures, "fake-limactl.mjs"), ssh: join(fixtures, "fake-ssh.sh"), metadata: new MetadataStore(join(root, "sandboxes")), env });
-    serverOpts = { provider, port: 0, refreshMs: 200, env, home: root, dataDir: join(root, "data"), sessionsDir: join(root, "sessions") };
+    serverOpts = { provider, port: 0, refreshMs: 200, env, home: root, dataDir: join(root, "data"), sessionsDir: join(root, "sessions"), reveal: async (p) => void revealed.push(p) };
     await boot();
     // The fake VM's /workspace.
     clone = join(limaDir, "workspace");
     const since = events.length;
     await api("/api/sandboxes", { method: "POST", body: JSON.stringify({ name: "one", repos: [], cpus: 1, memoryGiB: 1, diskGiB: 10, workspaceGiB: 1, mounts: [], env: [] }) });
     await waitFor(() => events.slice(since).find((e) => "sandbox" in e && e.sandbox === "one" && e.op === "creating" && e.type === "done"));
-    // The fake VM is this machine: its ~/.claude is the sandbox's Claude home, and its ~/.kumiko/shared the sandbox's
+    // The fake VM is this machine: its ~/.claude is the sandbox's Claude home, and its ~/.kumiko/shared links to the sandbox's
     // Kumiko folder, as Lima's mounts make them.
     claudeHome = join(root, "data", "claude", "one");
     kumikoHome = join(root, "data", "sandbox", "one");
@@ -132,11 +134,11 @@ describe("widgets", () => {
   it("tells Claude where its artifacts go, and gives it the tools", async () => {
     const { id, s } = await start();
     assert.ok(existsSync(join(kumikoHome, "artifacts", id)), "the session's folder is made");
-    assert.match(await ask(s, id, "system prompt"), new RegExp(`${vmHome}/\\.kumiko/shared/artifacts/${id}/`));
+    assert.match(await ask(s, id, "system prompt"), new RegExp(`${kumikoHome}/artifacts/${id}/`));
     const tools = JSON.parse(await ask(s, id, "tools")) as { name: string; description: string }[];
     assert.deepEqual(tools.map((t) => t.name).sort(), ["artifact_capture", "artifact_open", "artifact_reload", "artifact_remove", "artifact_share", "deliver", "github_issue_comment", "github_issue_create", "github_issue_list", "github_issue_view", "github_label_list", "github_pr_comment", "github_pr_list", "github_pr_view", "session_list", "session_rename", "session_start", "window_close", "window_list"]);
     // The tool names the session's folder itself, so Claude needn't find it in its instructions.
-    assert.ok(tools.find((t) => t.name === "artifact_open")?.description.includes(`${vmHome}/.kumiko/shared/artifacts/${id}/`));
+    assert.ok(tools.find((t) => t.name === "artifact_open")?.description.includes(`${kumikoHome}/artifacts/${id}/`));
     s.close();
   });
 
@@ -309,6 +311,66 @@ describe("widgets", () => {
     assert.ok(paneOf(t.window(), widget2), "its window shows it");
     t.close();
     await api(`/api/sessions/${started}`, { method: "DELETE" });
+    s.close();
+  });
+
+  it("takes an artifact named through ~/.kumiko/shared, and names it at the Kumiko folder's own path", async () => {
+    const { id, s } = await start();
+    await ask(s, id, write(docPath(id), "# The plan\n"));
+    for (const path of [`${vmHome}/.kumiko/shared/artifacts/${id}/plan.md`, `~/.kumiko/shared/artifacts/${id}/plan.md`]) {
+      assert.match(await ask(s, id, widget("artifact_open", { path })), new RegExp(`^(Showing |${docPath(id)} is shown already)`));
+      const all = artifactsOf(s.window());
+      assert.equal(all.length, 1, "the same artifact, by either name");
+      assert.equal(all[0][1].path, docPath(id));
+    }
+    s.close();
+  });
+
+  it("keeps a window's artifacts from before the Kumiko folder moved, under either name", async () => {
+    // As a sandbox made before: the Kumiko folder mounted at ~/.kumiko/shared, which names it then.
+    const file = join(root, "sandboxes", "one.json");
+    const now = await readFile(file, "utf8");
+    const old = JSON.parse(now);
+    old.spec.mounts[1] = { hostPath: kumikoHome, guestPath: "~/.kumiko/shared", writable: true };
+    await writeFile(file, JSON.stringify(old));
+    try {
+      await waitFor(async () => ((await json(await api("/api/sandboxes"))) as { name: string; meta?: { spec: { mounts: { guestPath?: string }[] } } }[]).find((v) => v.name === "one")?.meta?.spec.mounts[1].guestPath === "~/.kumiko/shared");
+      const { id, s } = await start();
+      const oldPath = `${vmHome}/.kumiko/shared/artifacts/${id}/plan.md`;
+      assert.match(await ask(s, id, "system prompt"), new RegExp(`${vmHome}/\\.kumiko/shared/artifacts/${id}/`), "Claude is told the folder as the VM has it");
+      await ask(s, id, write(oldPath, "# The plan\n"));
+      await ask(s, id, widget("artifact_open", { path: oldPath }));
+      assert.equal(artifactsOf(s.window())[0][1].path, oldPath);
+
+      // The VM starts again with the folder at its own path: the artifact is the same one by either name.
+      await writeFile(file, now);
+      await waitFor(async () => ((await json(await api("/api/sandboxes"))) as { name: string; meta?: { spec: { mounts: { guestPath?: string }[] } } }[]).find((v) => v.name === "one")?.meta?.spec.mounts[1].guestPath === kumikoHome);
+      assert.match(await ask(s, id, widget("artifact_open", { path: docPath(id) })), /is shown already/);
+      assert.match(await ask(s, id, widget("artifact_remove", { artifact: docPath(id) })), /^Removed/);
+      assert.deepEqual(artifactsOf(s.window()), []);
+      s.close();
+    } finally {
+      await writeFile(file, now);
+    }
+  });
+
+  it("reveals a file in a folder shared with the Mac, and nothing else", async () => {
+    const { id, s } = await start();
+    await ask(s, id, write(docPath(id), "# The plan\n"));
+    const reveal = (path: string) => api(`/api/sessions/${id}/reveal`, { method: "POST", body: JSON.stringify({ path }) });
+    for (const path of [docPath(id), `~/.kumiko/shared/artifacts/${id}/plan.md`, `${vmHome}/.kumiko/shared/artifacts/${id}/plan.md`]) {
+      const res = await reveal(path);
+      assert.equal(res.status, 200, path);
+      assert.deepEqual(await json(res), { path: join(kumikoHome, "artifacts", id, "plan.md") });
+    }
+    assert.deepEqual(revealed.splice(0), Array(3).fill(join(kumikoHome, "artifacts", id, "plan.md")));
+    assert.equal((await reveal("/workspace/README.md")).status, 404, "the workspace disk isn't the Mac's");
+    assert.equal((await reveal(`${kumikoHome}/../claude/one/kumiko.md`)).status, 404, "not out of a shared folder");
+    assert.equal((await reveal(`${kumikoHome}/artifacts/${id}/gone.md`)).status, 404, "nor a file that isn't there");
+    assert.deepEqual(revealed, []);
+    // The sandbox's view lists where it can reveal from.
+    const views = (await json(await api("/api/sandboxes"))) as { name: string; shared?: string[] }[];
+    assert.ok(views.find((v) => v.name === "one")?.shared?.includes(kumikoHome));
     s.close();
   });
 
