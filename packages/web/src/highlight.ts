@@ -114,6 +114,20 @@ export function languageOf(path: string): string | undefined {
   return dot > 0 ? EXTENSIONS[name.slice(dot + 1)] : undefined;
 }
 
+// What a code block's fence names, as people write it, where it isn't a language's own name or a file extension.
+const FENCES: Record<string, string> = {
+  shell: "shellscript", console: "shellscript", shellsession: "shellscript", terminal: "shellscript",
+  golang: "go", "c++": "cpp", "c#": "csharp", "f#": "fsharp", "objective-c": "objective-c", objc: "objective-c",
+  dockerfile: "docker", makefile: "make", terraform: "hcl", protobuf: "proto", "patch": "diff", svg: "xml",
+};
+
+/** The language of a code block, from its fence's info (```ts); undefined for one Kumiko doesn't highlight. */
+export function fenceLanguage(info: string | undefined): string | undefined {
+  const name = info?.trim().toLowerCase().split(/[\s{]/)[0];
+  if (!name) return undefined;
+  return GRAMMARS[name] ? name : (FENCES[name] ?? EXTENSIONS[name]);
+}
+
 // The app's own colours, as a TextMate theme: muted, so the diff's green and red still read under them.
 const THEME: ThemeRegistration = {
   name: "kumiko",
@@ -141,6 +155,8 @@ const THEME: ThemeRegistration = {
     { scope: ["markup.deleted", "punctuation.definition.deleted"], settings: { foreground: "#f29b8f" } },
     { scope: ["meta.diff.range", "meta.diff.header"], settings: { foreground: "#8fa6f0" } },
     { scope: ["invalid"], settings: { foreground: "#f07a6a" } },
+    // A shell command's plain arguments are words, not strings: yellow all along a command line is noise.
+    { scope: ["string.unquoted.argument.shell"], settings: { foreground: "#c9ced6" } },
   ],
 };
 
@@ -212,6 +228,40 @@ export function useRowTokens(path: string, rows: readonly DiffRow[]): ReadonlyMa
     };
   }, [rows, lang]);
   return tokens && tokens.lang === lang ? tokens.map : NONE;
+}
+
+// Code blocks highlighted lately, so one drawn again (a message scrolled back to, a tab come back to) has its colours
+// at once rather than after a moment.
+const recent = new Map<string, Token[][]>();
+const RECENT = 100;
+/** Code longer than this isn't kept in `recent`. */
+const RECENT_MAX_CHARS = 100_000;
+
+/**
+ * The tokens of each line of `code`, highlighted as `lang`, once they are known; undefined before, or for no language.
+ * While changed code (a block still streaming in) is highlighted, the last tokens stay: lines they still spell keep
+ * their colours.
+ */
+export function useCodeTokens(code: string, lang: string | undefined): Token[][] | undefined {
+  const key = lang ? `${lang}\0${code}` : undefined;
+  const [tokens, setTokens] = useState<{ lang: string; lines: Token[][] }>();
+  useEffect(() => {
+    if (!lang || !key || recent.has(key)) return;
+    let gone = false;
+    void tokenize(code.split("\n"), lang).then((lines) => {
+      if (!lines) return;
+      if (code.length <= RECENT_MAX_CHARS) {
+        recent.set(key, lines);
+        if (recent.size > RECENT) recent.delete(recent.keys().next().value!);
+      }
+      if (!gone) setTokens({ lang, lines });
+    });
+    return () => {
+      gone = true;
+    };
+  }, [key, code, lang]);
+  if (!key) return undefined;
+  return recent.get(key) ?? (tokens && tokens.lang === lang ? tokens.lines : undefined);
 }
 
 /** A piece of a line to draw: a token's text, or part of it, with whether it is in the line's changed part. */
