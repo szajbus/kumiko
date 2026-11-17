@@ -1278,12 +1278,15 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
       clearTimeout(s.closeTimer);
       const { id } = s.info;
       await this.end(id, "user");
+      // Its saved chat goes, when it is to, before the session does: once it is gone, nothing of it is left to read.
+      const forget = s.info.closing?.delete === true && this.store !== undefined;
+      if (forget) this.forget(s);
       await s.saving;
       for (const sub of s.subscribers) sub.gone();
       s.subscribers.clear();
       this.sessions.delete(id);
       this.widgets?.closed(id);
-      if (s.info.closing?.delete) await this.deleteSaved(id).catch(() => {});
+      if (forget) this.widgets?.deleted(s.info);
       this.emit("changed");
     })();
     return s.finishing;
