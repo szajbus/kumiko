@@ -78,7 +78,8 @@ export async function deliverFacts(dir: string, branch: string, identityEmail: s
   };
 }
 
-const isCi = (path: string) => path === ".github" || path.startsWith(".github/");
+/** Whether a file is under .github/, which decides what CI runs, with the repository's secrets. */
+export const isCi = (path: string) => path === ".github" || path.startsWith(".github/");
 
 /**
  * Claude's Co-Authored-By trailers from the branch's commits, each once. Only Claude's: the commits are the agent's to

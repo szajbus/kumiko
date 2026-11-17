@@ -36,6 +36,7 @@ import type {
   StartSessionRequest,
   TemplatesResponse,
   UnpushedResponse,
+  ReviewDiff,
   WindowState,
 } from "@kumiko/shared";
 
@@ -164,6 +165,20 @@ export const api = {
   backgroundTasks: (id: string, toolUseId?: string) => request("POST", `/api/sessions/${id}/tasks/background`, toolUseId ? { toolUseId } : {}),
   /** Opens the Tasks pane beside the chat, or closes it; with `open`, only opens it. */
   toggleTasks: (id: string, open?: boolean) => request<WindowState>("POST", `/api/sessions/${id}/window/tasks`, open ? { open } : {}),
+  /** Opens the review pane for deliver card `ask` beside the chat, or closes it; with `open`, only opens it. */
+  toggleReview: (id: string, ask: string, open?: boolean) => request<WindowState>("POST", `/api/sessions/${id}/window/review`, open ? { ask, open } : { ask }),
+  /** What a deliver card's branch changes: all of it, one commit, or since a commit; `path` asks for those files whole. */
+  reviewDiff: (id: string, ask: string, q: { commit?: string; since?: string; w?: boolean; path?: string[] } = {}) => {
+    const params = new URLSearchParams();
+    if (q.commit) params.set("commit", q.commit);
+    if (q.since) params.set("since", q.since);
+    if (q.w) params.set("w", "1");
+    for (const p of q.path ?? []) params.append("path", p);
+    const qs = params.toString();
+    return request<ReviewDiff>("GET", `/api/sessions/${id}/cards/${encodeURIComponent(ask)}/diff${qs ? `?${qs}` : ""}`);
+  },
+  /** A file's content in a deliver card's repository, by blob, to show more of it around a change. */
+  reviewBlob: (id: string, ask: string, blob: string) => request<{ text?: string; binary?: boolean }>("GET", `/api/sessions/${id}/cards/${encodeURIComponent(ask)}/blob/${blob}`),
   /** Answers what Claude asked mid-turn: its questions, or its plan. */
   answerAsk: (id: string, ask: string, answer: AskAnswer) => request("POST", `/api/sessions/${id}/asks/${encodeURIComponent(ask)}`, answer),
   /** Decides on an approval card: approve with the choices made on it, decline with a reason, or look again. */

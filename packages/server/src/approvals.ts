@@ -16,6 +16,7 @@ import {
   type DeliverRoute,
   type SessionEvent,
   type SessionInfo,
+  MAX_REASON,
 } from "@kumiko/shared";
 import { replaceFile } from "./files.js";
 import type { GitHub, GitHubItem } from "./github.js";
@@ -362,7 +363,9 @@ export class Approvals {
     if (!this.isOpen(session, askId)) throw new ApprovalError("Claude isn't waiting for this any more.");
     if (card.state !== "open" && card.state !== "stale") throw new ApprovalError("This has been decided already.");
     if (action.action === "decline") {
-      const reason = action.reason?.trim().slice(0, 4000);
+      // Room for a review's notes, each with the line it is on.
+      const full = action.reason?.trim();
+      const reason = full && full.length > MAX_REASON ? `${full.slice(0, MAX_REASON)}\n[Kumiko cut the rest: it was longer than ${MAX_REASON} characters.]` : full;
       const { attachments = [], files = [] } = action;
       if (attachments.length) {
         // A denial carries only text: the reason goes with the files, as the user's next message, and the chat shows it there.

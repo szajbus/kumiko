@@ -944,6 +944,7 @@ function describe(w: WindowState): string {
     const widget = w.widgets[id];
     if (widget?.kind === "chat") return `${pane} (the chat)`;
     if (widget?.kind === "tasks") return `${pane} (the Tasks pane, listing your background tasks)`;
+    if (widget?.kind === "review") return `${pane} (the Review pane, where the user reads a deliver card's changes before deciding on it)`;
     const d = widget?.state as ArtifactState | undefined;
     return `${pane} (artifact ${id} "${d?.title}", ${d?.path}${d?.missing ? ", file missing" : ""}${d?.type === "web" && !d.approved ? ", waiting for the user to allow it" : ""})`;
   };

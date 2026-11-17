@@ -4,6 +4,9 @@
  * on the host from the mirror and GitHub.
  */
 
+/** The longest reason a decline sends Claude, a review's notes included; the card refuses a longer one. */
+export const MAX_REASON = 20_000;
+
 /** Where delivered work goes: straight onto the default branch, or into a pull request first. */
 export type DeliverRoute = "main" | "pr";
 /** How it lands on the default branch: one merge commit, or one commit with all of its changes. */

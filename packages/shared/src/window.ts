@@ -12,7 +12,7 @@ export type Layout =
   | { kind: "split"; dir: "row" | "column"; ratio: number; a: Layout; b: Layout };
 
 export interface Widget {
-  /** Which kind of widget: "chat", "artifact" or "tasks". */
+  /** Which kind of widget: "chat", "artifact", "tasks" or "review". */
   kind: string;
   state?: unknown;
 }
@@ -408,6 +408,10 @@ export const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 export const WIDGET_KINDS: Record<string, WidgetKind> = {
   chat: {},
   tasks: {},
+  // The review pane's state is the card it shows; showing it for another card replaces it.
+  review: {
+    apply: (_state, op) => op,
+  },
   artifact: {
     apply: (state, op) => ({ ...(state as ArtifactState), ...(op as ArtifactOp) }),
   },

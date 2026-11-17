@@ -48,6 +48,10 @@ export interface WindowApi {
   move(pane: PaneId, to: PaneId, side: Side | "swap"): void;
   /** The open sessions' names as their tabs show them, by id, for the chat to name a session Claude names by its id. */
   sessionNames: ReadonlyMap<string, string>;
+  /** The session's id. */
+  session: string;
+  /** Shows the review pane for deliver card `ask` beside the chat, or closes it if it shows that card; `open` only shows it. */
+  review(ask: string, open?: boolean): void;
 }
 
 export const WindowContext = createContext<WindowApi | undefined>(undefined);
