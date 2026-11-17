@@ -14,6 +14,8 @@ import { Composer, type ComposerHandle } from "./Composer";
 import { HeaderCorner } from "./Corner";
 import { Markdown } from "./Markdown";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { Highlighted } from "./Highlighted";
+import { rowKey, useRowTokens } from "./highlight";
 import { fileDiff, lineCount, newText, shortPath, shownRows, workChanges, type Changes, type FileDiff } from "./diff";
 import { drafts } from "./drafts";
 import { endedText, formatCost, formatDuration, formatTokens, planName } from "./format";
@@ -1083,6 +1085,8 @@ function DiffView({ diff, dim }: { diff: FileDiff; dim: boolean }) {
   const [copied, setCopied] = useState(false);
   const wrapped = useSyncExternalStore(codeWrap.subscribe, codeWrap.get);
   const rows = shownRows(diff.rows, all);
+  // All the rows, shown or not, so showing the rest doesn't highlight again.
+  const tokens = useRowTokens(diff.path, diff.rows);
   const total = lineCount(diff.rows);
   const hidden = total - lineCount(rows);
   // Old and new line numbers from a patch; a written file has only new ones.
@@ -1109,15 +1113,7 @@ function DiffView({ diff, dim }: { diff: FileDiff; dim: boolean }) {
                   {columns > 0 && <td className="diff-n">{r.new}</td>}
                   <td className="diff-sign">{r.kind === "add" ? "+" : r.kind === "remove" ? "−" : " "}</td>
                   <td className="diff-code">
-                    {r.mark ? (
-                      <>
-                        {r.text.slice(0, r.mark[0])}
-                        <span className="diff-mark">{r.text.slice(r.mark[0], r.mark[1])}</span>
-                        {r.text.slice(r.mark[1])}
-                      </>
-                    ) : (
-                      r.text || " "
-                    )}
+                    <Highlighted text={r.text} tokens={tokens.get(rowKey(r))} mark={r.mark} markClass="diff-mark" />
                   </td>
                 </tr>
               ),

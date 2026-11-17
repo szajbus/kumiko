@@ -3,6 +3,8 @@ import * as Menu from "@radix-ui/react-dropdown-menu";
 import type { ApprovalCard, DeliverCard, ReviewDiff, ReviewFile, SessionEvent } from "@kumiko/shared";
 import { api, errorMessage } from "./api";
 import { splitLines } from "./diff";
+import { Highlighted } from "./Highlighted";
+import { rowKey, useRowTokens, type Token } from "./highlight";
 import { PaneGrip } from "./PaneGrip";
 import {
   byFolder,
@@ -385,6 +387,7 @@ const FileSection = memo(function FileSection({ ref, session, ask, review, head,
   }, [viewed]);
 
   const rows = useMemo(() => reviewRows(file, lines, openGaps), [file, lines, openGaps]);
+  const tokens = useRowTokens(file.path, rows);
   // Notes at this commit go on their lines; ones left at an earlier commit, or on lines not shown, above the diff.
   const mine = useMemo(() => (notes ?? []).filter((n) => n.head === head), [notes, head]);
   const byKey = useMemo(() => {
@@ -527,10 +530,10 @@ const FileSection = memo(function FileSection({ ref, session, ask, review, head,
                 <tr key={k}>
                   {l ? lineNo(l.old, l, cls(l)) : <td className="rv-n is-empty" />}
                   <td className={`rv-s ${cls(l)}`}>{l?.kind === "remove" ? "−" : ""}</td>
-                  <td className={`rv-code ${cls(l)}`}>{l && <Code r={l} />}</td>
+                  <td className={`rv-code ${cls(l)}`}>{l && <Code r={l} tokens={tokens} />}</td>
                   {r ? lineNo(r.new, r, `rv-mid ${cls(r)}`) : <td className="rv-n rv-mid is-empty" />}
                   <td className={`rv-s ${cls(r)}`}>{r?.kind === "add" ? "+" : ""}</td>
-                  <td className={`rv-code ${cls(r)}`}>{r && <Code r={r} />}</td>
+                  <td className={`rv-code ${cls(r)}`}>{r && <Code r={r} tokens={tokens} />}</td>
                 </tr>,
                 ...noteRows(keys, 6),
               ];
@@ -556,7 +559,7 @@ const FileSection = memo(function FileSection({ ref, session, ask, review, head,
                 {lineNo(r.new, r)}
                 <td className="rv-s">{r.kind === "remove" ? "−" : r.kind === "add" ? "+" : ""}</td>
                 <td className="rv-code">
-                  <Code r={r} />
+                  <Code r={r} tokens={tokens} />
                 </td>
               </tr>,
               ...noteRows([target(file.path, r)], 4),
@@ -624,16 +627,8 @@ const FileSection = memo(function FileSection({ ref, session, ask, review, head,
 /** Where a note on a row goes: the line on the new side, or the old side's for a removed line. */
 const target = (path: string, r: ReviewRow) => (r.kind === "remove" ? noteKey(path, "old", r.old!) : noteKey(path, "new", r.new!));
 
-function Code({ r }: { r: ReviewRow }) {
-  if (!r.mark) return <>{r.text || " "}</>;
-  const [a, b] = r.mark;
-  return (
-    <>
-      {r.text.slice(0, a)}
-      <span className="rv-mark">{r.text.slice(a, b)}</span>
-      {r.text.slice(b)}
-    </>
-  );
+function Code({ r, tokens }: { r: ReviewRow; tokens: ReadonlyMap<string, Token[]> }) {
+  return <Highlighted text={r.text} tokens={tokens.get(rowKey(r))} mark={r.mark} markClass="rv-mark" />;
 }
 
 /** A note; `where` says why it isn't on its line: left at an earlier commit, or on a line the diff doesn't show. */
