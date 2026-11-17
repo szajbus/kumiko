@@ -136,7 +136,7 @@ email that can sign (not expired or revoked); if there's none, it doesn't sign, 
 Claude asks before calling `deliver` because Kumiko starts it with a permission rule for the tool. Kumiko doesn't rely
 on that: the tool only does anything if Kumiko itself recorded your approval of that very call.
 
-### Issues and pull requests
+### Issues, pull requests and CI
 
 Claude has no `gh` login in the sandbox. It reads and writes the repositories' issues and PRs through Kumiko's tools,
 which run `gh` on your Mac:
@@ -144,12 +144,18 @@ which run `gh` on your Mac:
 - **Reading** (`github_issue_view`, `github_pr_view`, `github_issue_list`, `github_pr_list`, `github_label_list`)
   happens without asking. What comes back is marked as written by others, to be read as information and not as
   instructions, since on a public repository anyone can write an issue.
+- **Reading CI and the rest of the repo** happens without asking too. `github_api_get` makes a GET of GitHub's REST API
+  for a path under the repo, such as `actions/runs?branch=my-branch`, so Claude can see workflow runs, check runs,
+  releases and the like. Kumiko builds the path itself, under `/repos/<owner>/<name>/`, and refuses one that would lead
+  out of it, so nothing of other repos or of your account can be read. It trims the answer of API URLs and nested
+  repositories and accounts, and cuts a long one. `github_run_logs` gives a workflow run's jobs and the logs of the
+  steps that failed, as `gh run view --log-failed` does, each cut to its last lines.
 - **Creating an issue** and **commenting** on an issue or a PR show a card first, with the text as GitHub will show it.
   You can edit it, and it goes as you leave it.
   An issue's labels can only be the repository's own: remove them on the card, or add others from its list. A comment's
   card names the issue or PR as GitHub has it, not as Claude described it.
 
-Closing, relabelling and editing issues or PRs aren't offered.
+Closing, relabelling and editing issues or PRs aren't offered, nor re-running or cancelling workflow runs.
 
 In a sandbox with more than one repo, `deliver` and the `github_*` tools are told which one with `repo`, as
 `owner/name`; with one, it's that one.

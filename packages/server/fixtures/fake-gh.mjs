@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // A stand-in for the GitHub CLI, gh, for tests and UI development without a GitHub account.
 // State lives in $FAKE_GH_DIR: user.json (the signed-in user, as GitHub's API returns it; signed out without it),
-// repos.json (an array of repos as GET /user/repos returns them) and token (the token gh hands git; "fake-token"
+// repos.json (an array of repos as GET /user/repos returns them), github.json (issues, PRs, labels, runs and REST
+// answers: see below) and token (the token gh hands git; "fake-token"
 // without it).
 // Every invocation is appended to $FAKE_GH_DIR/calls.log. Only the calls Kumiko makes are known; anything else fails,
 // so a change to them shows up here.
@@ -50,7 +51,17 @@ if (is("auth", "status", "--hostname", "github.com")) {
   console.log(`protocol=https\nhost=github.com\nusername=${user.login}\npassword=${token}`);
 } else if (is("auth", "git-credential", "store") || is("auth", "git-credential", "erase")) {
   // gh keeps its own token: nothing to store or forget.
-} else if (args[0] === "pr" || args[0] === "issue" || args[0] === "label") {
+} else if (args[0] === "api" && args[1] === "--method" && args[2] === "GET" && args.length === 4) {
+  // REST GETs, kept in github.json's api: { "<path as asked>": <body> }; a string body is sent as it is.
+  if (!user) signedOut();
+  const body = (read("github.json")?.api ?? {})[args[3]];
+  if (body === undefined) {
+    console.log(JSON.stringify({ message: "Not Found", documentation_url: "https://docs.github.com/rest", status: "404" }));
+    console.error("gh: Not Found (HTTP 404)");
+    process.exit(1);
+  }
+  process.stdout.write(typeof body === "string" ? body : JSON.stringify(body));
+} else if (args[0] === "pr" || args[0] === "issue" || args[0] === "label" || args[0] === "run") {
   github();
 } else {
   console.error(`fake gh: unknown command: ${args.join(" ")}`);
@@ -128,6 +139,24 @@ function github() {
     item.comments.push({ author: user.login, body: readFileSync(0, "utf8") });
     save();
     console.log(`${url(item.type, item.number)}#issuecomment-${1000 + item.comments.length}`);
+  } else if (noun === "run" && verb === "view") {
+    // Runs, kept in github.json's runs: { "<id>": { run: <as --json gives it>, log, logFailed, logError } }.
+    const run = (db.runs ?? {})[args[2]];
+    if (!run) {
+      console.error(`HTTP 404: Not Found (https://api.github.com/repos/${repo}/actions/runs/${args[2]})`);
+      process.exit(1);
+    }
+    if (opt("--json")) {
+      console.log(JSON.stringify(run.run));
+    } else if (run.logError) {
+      console.error(run.logError);
+      process.exit(1);
+    } else {
+      const job = opt("--job");
+      const jobName = job && run.run.jobs.find((j) => String(j.databaseId) === job)?.name;
+      const log = args.includes("--log-failed") ? run.logFailed : run.log;
+      process.stdout.write(jobName ? log.split("\n").filter((l) => !l || l.startsWith(`${jobName}\t`)).join("\n") : log);
+    }
   } else if (noun === "label" && verb === "list") {
     console.log(JSON.stringify(db.labels));
   } else {

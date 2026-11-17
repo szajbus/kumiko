@@ -158,6 +158,47 @@ export class GitHub {
     return this.json<{ name: string; color?: string; description?: string }[]>(["label", "list", "--repo", repo, "--limit", "500", "--json", "name,color,description"], "label list");
   }
 
+  /**
+   * A GET of GitHub's REST API as the user, for a path Kumiko checked is the repo's own (see actions.ts). Resolves with
+   * the response's body; a status GitHub refused with resolves too, with its message, since that is an answer the agent
+   * reads.
+   */
+  async apiGet(path: string): Promise<{ ok: true; body: string } | { ok: false; message: string }> {
+    const r = await this.run(["api", "--method", "GET", path], 60_000);
+    if (r.code === 0) return { ok: true, body: r.stdout };
+    const said = firstLines(r.stderr).replace(/^gh: /, "");
+    if (!said) throw new GhError(`gh api exited with ${r.code}.`);
+    return { ok: false, message: said };
+  }
+
+  /** A GitHub Actions run, with its jobs and their steps; undefined when there is no such run. */
+  async workflowRun(repo: string, id: number, attempt?: number): Promise<WorkflowRun | undefined> {
+    const r = await this.run(["run", "view", String(id), "--repo", repo, ...(attempt ? ["--attempt", String(attempt)] : []), "--json", RUN_FIELDS], 60_000);
+    if (r.code !== 0) {
+      if (/not found|could not find|404/i.test(r.stderr)) return undefined;
+      throw new GhError(firstLines(r.stderr) || `gh run view exited with ${r.code}.`);
+    }
+    try {
+      return JSON.parse(r.stdout) as WorkflowRun;
+    } catch {
+      throw new GhError("gh run view answered with something Kumiko can't read.");
+    }
+  }
+
+  /**
+   * A run's logs as gh prints them, a line each: job, step and the line, tab-separated. Only the failed steps' with
+   * `failed`; only one job's with `job`. Resolves with gh's message instead when it can't give them, as for a run still
+   * going.
+   */
+  async runLog(repo: string, id: number, opts: { failed: boolean; job?: number; attempt?: number }): Promise<{ ok: true; log: string } | { ok: false; message: string }> {
+    const args = ["run", "view", String(id), "--repo", repo, opts.failed ? "--log-failed" : "--log", ...(opts.job ? ["--job", String(opts.job)] : []), ...(opts.attempt ? ["--attempt", String(opts.attempt)] : [])];
+    const r = await this.run(args, 3 * 60_000);
+    if (r.code === 0) return { ok: true, log: r.stdout };
+    const said = firstLines(r.stderr);
+    if (!said) throw new GhError(`gh run view exited with ${r.code}.`);
+    return { ok: false, message: said };
+  }
+
   /** Opens an issue as the user; resolves with its number and URL. */
   async issueCreate(repo: string, opts: { title: string; body: string; labels: string[] }): Promise<{ number: number; url: string }> {
     const r = await this.run(["issue", "create", "--repo", repo, "--title", opts.title, ...opts.labels.flatMap((l) => ["--label", l]), "--body-file", "-"], 60_000, opts.body);
@@ -225,6 +266,26 @@ export interface GitHubItem {
   baseRefName?: string;
   files?: { path: string; additions?: number; deletions?: number }[];
   reviews?: { author?: { login?: string }; body?: string; state?: string }[];
+}
+
+/** The fields Kumiko reads of a workflow run. */
+const RUN_FIELDS = "attempt,conclusion,createdAt,databaseId,displayTitle,event,headBranch,headSha,jobs,name,status,url,workflowName";
+
+/** A workflow run as gh run view's --json gives it. */
+export interface WorkflowRun {
+  databaseId: number;
+  attempt?: number;
+  name?: string;
+  workflowName?: string;
+  displayTitle?: string;
+  status: string;
+  conclusion?: string;
+  event?: string;
+  headBranch?: string;
+  headSha?: string;
+  createdAt?: string;
+  url: string;
+  jobs?: { databaseId: number; name: string; status: string; conclusion?: string; url?: string; steps?: { number: number; name: string; status: string; conclusion?: string }[] }[];
 }
 
 /** The number and URL of the issue or PR whose URL gh printed last. */
