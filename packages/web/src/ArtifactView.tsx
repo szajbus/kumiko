@@ -12,6 +12,8 @@ import { withPolicy } from "./htmlPolicy";
 import { api } from "./api";
 import { markdownFull, sourceWrap } from "./codeWrap";
 import { shownSource, SOURCE_LANG } from "./artifactSource";
+import { fenceLanguage } from "./highlight";
+import { HighlightedCode } from "./Highlighted";
 import { WindowContext, type ArtifactEntry, type WindowApi } from "./windowContext";
 
 /** How long "Updated" shows after the text changes. */
@@ -410,7 +412,7 @@ function Rendered({ doc, text, writing, source, wrapped, loading }: { doc: Artif
   if (lang) {
     return (
       <pre className={`mono artifact-source${wrapped ? " is-wrapped" : ""}`}>
-        <code className={`language-${lang}`}>{text}</code>
+        <code className={`language-${lang}`}>{writing ? text : <HighlightedCode code={text} lang={fenceLanguage(lang)} />}</code>
       </pre>
     );
   }

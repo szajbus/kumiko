@@ -55,3 +55,18 @@ describe("highlighting diffs", () => {
     assert.equal(map.get(rowKey(rows[1]))![0].color, map.get(rowKey(rows[2]))![0].color);
   });
 });
+
+describe("highlighting code blocks", () => {
+  it("knows a block's language by its fence, as people write it", async () => {
+    const { fenceLanguage } = await import("../src/highlight.ts");
+    assert.equal(fenceLanguage("ts"), "typescript");
+    assert.equal(fenceLanguage("typescript"), "typescript");
+    assert.equal(fenceLanguage("sh"), "shellscript");
+    assert.equal(fenceLanguage("console"), "shellscript");
+    assert.equal(fenceLanguage("Python"), "python");
+    assert.equal(fenceLanguage("js {1,3}"), "javascript");
+    assert.equal(fenceLanguage("text"), undefined);
+    assert.equal(fenceLanguage("mermaid"), undefined);
+    assert.equal(fenceLanguage(undefined), undefined);
+  });
+});

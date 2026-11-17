@@ -3,6 +3,8 @@ import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown"
 import remarkGfm from "remark-gfm";
 import { codeWrap } from "./codeWrap";
 import { Diagram } from "./Diagram";
+import { fenceLanguage } from "./highlight";
+import { HighlightedCode } from "./Highlighted";
 import { imageSource } from "./imageSource";
 
 /** The text of a hast node and everything in it. */
@@ -17,8 +19,12 @@ function textOf(node: Element | undefined): string {
  * A code block, with buttons that show when the pointer is over it: one to copy its text, one to wrap long lines, in this
  * block and every other.
  */
-function CodeBlock({ node, className, ...props }: ComponentProps<"pre"> & ExtraProps) {
+function CodeBlock({ node, className, children, ...props }: ComponentProps<"pre"> & ExtraProps) {
   const [copied, setCopied] = useState(false);
+  // The block's <code>, with its language as remark marks it ("language-ts"): drawn here, in its colours.
+  const code = node?.children[0]?.type === "element" && node.children[0].tagName === "code" ? node.children[0] : undefined;
+  const codeClass = code ? ([] as unknown[]).concat(code.properties.className ?? []).map(String) : [];
+  const lang = fenceLanguage(codeClass.find((c) => c.startsWith("language-"))?.slice("language-".length));
   const wrapped = useSyncExternalStore(codeWrap.subscribe, codeWrap.get);
   const copy = () => {
     void navigator.clipboard.writeText(textOf(node).replace(/\n$/, "")).then(() => {
@@ -28,7 +34,15 @@ function CodeBlock({ node, className, ...props }: ComponentProps<"pre"> & ExtraP
   };
   return (
     <div className="md-code">
-      <pre {...props} className={wrapped ? `${className ?? ""} md-code-wrapped`.trim() : className} />
+      <pre {...props} className={wrapped ? `${className ?? ""} md-code-wrapped`.trim() : className}>
+        {code ? (
+          <code className={codeClass.join(" ") || undefined}>
+            <HighlightedCode code={textOf(code).replace(/\n$/, "")} lang={lang} />
+          </code>
+        ) : (
+          children
+        )}
+      </pre>
       <div className="md-code-actions">
         <button
           type="button"
