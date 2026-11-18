@@ -1143,6 +1143,12 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
   border: 1px solid #2b5c45; border-radius: 999px; color: #a9e3c4; font-size: 11px; font-variant-numeric: tabular-nums;
 }
 
+/* Cards waiting for the user's decision: filled, so it reads apart from the background count beside it. */
+.tab-cards {
+  flex: none; min-width: 18px; height: 18px; padding: 0 5px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px; background: #E3A24A; color: #1a1d23; font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+
 /* Sandboxes and Repos: the switch between Kumiko's own pages, above their titles */
 .home-nav { display: flex; gap: 4px; margin-bottom: -6px; }
 .home-nav-link {
