@@ -100,7 +100,7 @@ whatever the agent's settings say.
 
 | Tool | The card |
 | --- | --- |
-| `deliver` | A pushed branch: merge it into the default branch, open a pull request for it, or update the PR it has open. |
+| `deliver` | A pushed branch: merge it into its base, open a pull request for it, or update the PR it has open. |
 | `github_issue_create` | A new issue, which you can edit before it posts. |
 | `github_issue_comment`, `github_pr_comment` | A comment, as GitHub will show it, which you can edit. |
 
@@ -113,8 +113,13 @@ what they return as data written by whoever can write on the repository, not as 
 ## Delivering a branch
 
 When the agent calls `deliver`, Kumiko fetches the mirror and checks the branch. It refuses, and tells the agent why,
-when the branch isn't pushed, is the default branch, has no new commits, or doesn't merge cleanly. Then the agent
-merges the default branch into it first. Otherwise the card shows:
+when the branch isn't pushed, is its base, has no new commits, or doesn't merge cleanly. Then the agent merges the
+base into it first.
+
+The base is the branch the work lands on. It is the default branch unless the agent names another with `base`, such as
+the branch a stacked pull request goes on. A branch with an open PR lands on the PR's base, and naming another is
+refused. The base must be on GitHub, and the mirror's copy of it must be GitHub's. A base with pushes GitHub doesn't
+have is refused, and the agent delivers it first. Otherwise the card shows:
 
 - the commits and the changed files, with a review pane for the diff,
 - changes under `.github/`, which decide what CI runs and with which secrets,
@@ -126,12 +131,11 @@ merges the default branch into it first. Otherwise the card shows:
 You pick a route and a method. The card starts at what you picked last time in that sandbox, kept in
 `~/.kumiko/choices.json`.
 
-- **Merge into the default branch**, as a merge commit or a squash. Kumiko merges in the mirror and pushes the
-  default branch to GitHub with a lease. If the default branch moved on GitHub meanwhile, Kumiko fetches and merges
-  once more. A branch the agent created is then deleted on GitHub. A branch with an open PR is pushed to the PR first,
+- **Merge into the base**, as a merge commit or a squash. Kumiko merges in the mirror and pushes the base to GitHub
+  with a lease. If the base moved on GitHub meanwhile, Kumiko fetches and merges once more. A branch the agent created is then deleted on GitHub. A branch with an open PR is pushed to the PR first,
   so GitHub marks the PR merged. After a squash, Kumiko closes the PR with a comment naming the commit.
 - **Open a pull request**, or update the open one. Kumiko pushes the branch to GitHub with a lease and opens the PR
-  with the agent's title and body. Nothing reaches the default branch. The agent lands the PR later by calling
+  with the agent's title and body, on the base. Nothing reaches the base. The agent lands the PR later by calling
   `deliver` again.
 
 If the branch moved after the card was shown, the approval is refused. The card delivers exactly the commit you saw.

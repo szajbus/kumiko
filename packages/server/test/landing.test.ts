@@ -38,6 +38,8 @@ describe("signing with GPG's key for the user's email", () => {
     sh(work, "push", "--quiet", "origin", "fix");
     dir = join(root, "mirror.git");
     sh(root, "clone", "--quiet", "--mirror", github, dir);
+    // GitHub's branches where Kumiko's mirrors keep them, too.
+    sh(dir, "fetch", "--quiet", github, "+refs/heads/*:refs/github/heads/*");
   });
 
   after(async () => {
@@ -48,7 +50,7 @@ describe("signing with GPG's key for the user's email", () => {
   it("signs when GPG has a key for the user's email, though their config names none", async () => {
     assert.equal(await signs(dir), true);
     const head = sh(dir, "rev-parse", "refs/heads/fix").trim();
-    const landed = await land(dir, join(root, "github.git"), { branch: "fix", head, method: "merge", message: "Merge branch 'fix'\n", sign: await signingKey(dir), fetch: async () => void sh(dir, "fetch", "--quiet", "origin") });
+    const landed = await land(dir, join(root, "github.git"), { branch: "fix", head, method: "merge", message: "Merge branch 'fix'\n", sign: await signingKey(dir), base: "main", fetch: async () => void sh(dir, "fetch", "--quiet", "origin", "+refs/heads/*:refs/github/heads/*") });
     assert.match(sh(join(root, "github.git"), "cat-file", "commit", landed.sha), /^gpgsig -----BEGIN PGP SIGNATURE-----/m);
   });
 
@@ -58,7 +60,7 @@ describe("signing with GPG's key for the user's email", () => {
     const key = await signingKey(dir);
     assert.match(key?.key ?? "", /^[0-9A-F]{40}$/);
     const head = sh(dir, "rev-parse", "refs/heads/fix").trim();
-    const landed = await land(dir, join(root, "github.git"), { branch: "fix", head, method: "squash", message: "Fix\n", sign: key, fetch: async () => void sh(dir, "fetch", "--quiet", "origin") });
+    const landed = await land(dir, join(root, "github.git"), { branch: "fix", head, method: "squash", message: "Fix\n", sign: key, base: "main", fetch: async () => void sh(dir, "fetch", "--quiet", "origin", "+refs/heads/*:refs/github/heads/*") });
     assert.match(sh(join(root, "github.git"), "cat-file", "commit", landed.sha), /^gpgsig -----BEGIN PGP SIGNATURE-----/m);
   });
 
@@ -70,7 +72,7 @@ describe("signing with GPG's key for the user's email", () => {
       assert.equal(await signs(dir), false, email);
     }
     const head = sh(dir, "rev-parse", "refs/heads/fix").trim();
-    const landed = await land(dir, join(root, "github.git"), { branch: "fix", head, method: "squash", message: "Fix, unsigned\n", sign: undefined, fetch: async () => void sh(dir, "fetch", "--quiet", "origin") });
+    const landed = await land(dir, join(root, "github.git"), { branch: "fix", head, method: "squash", message: "Fix, unsigned\n", sign: undefined, base: "main", fetch: async () => void sh(dir, "fetch", "--quiet", "origin", "+refs/heads/*:refs/github/heads/*") });
     assert.doesNotMatch(sh(join(root, "github.git"), "cat-file", "commit", landed.sha), /^gpgsig/m);
     assert.equal(landed.signed, false);
   });

@@ -28,15 +28,32 @@ export function isBranchName(branch: string): boolean {
   return /^[A-Za-z0-9._/-]{1,200}$/.test(branch) && !branch.startsWith("-") && !branch.startsWith("/") && !branch.endsWith("/") && !branch.endsWith(".lock") && !branch.includes("..") && !branch.includes("//");
 }
 
-/** What the card shows of a branch, all from the mirror, which is fetched first: commits, files, flags, the merge check. */
-export async function deliverFacts(dir: string, branch: string, identityEmail: string | undefined): Promise<Omit<DeliverCard, "kind" | "repo" | "pr" | "title" | "body" | "route" | "method" | "signs" | "toSign" | "github" | "ahead" | "lost">> {
-  if (!isBranchName(branch)) throw new NotDeliverable(`"${branch}" isn't a branch name Kumiko delivers.`);
-  const base = await headBranch(dir);
-  if (!base) throw new NotDeliverable("The repository's mirror has no default branch yet.");
+/**
+ * The branch work lands on: `wanted` if the agent named one, else the default branch. Either way it must be on GitHub,
+ * where it lands, and the mirror's copy must be GitHub's: a base with pushes GitHub doesn't have is delivered first.
+ */
+export async function baseOf(dir: string, branch: string, wanted: string | undefined): Promise<{ base: string; baseSha: string }> {
+  const def = await headBranch(dir);
+  if (!def) throw new NotDeliverable("The repository's mirror has no default branch yet.");
+  const base = wanted ?? def;
+  if (!isBranchName(base)) throw new NotDeliverable(`"${base}" isn't a branch name Kumiko delivers to.`);
   if (branch === base) throw new NotDeliverable(`${base} is the branch work is delivered to. Deliver a branch made for the work.`);
+  const baseSha = await rev(dir, `refs/github/heads/${base}`);
+  if (!baseSha) throw new NotDeliverable(`${base} isn't on GitHub, so nothing can be delivered to it.${wanted ? ` Deliver ${base} first, or pick a base GitHub has.` : ""}`);
+  const mirror = await rev(dir, `refs/heads/${base}`);
+  if (mirror && mirror !== baseSha) throw new NotDeliverable(`${base} has commits in the mirror that GitHub doesn't have. Deliver ${base} first, then call deliver on ${branch} again.`);
+  return { base, baseSha };
+}
+
+/**
+ * What the card shows of a branch, all from the mirror, which is fetched first: commits, files, flags, the merge check.
+ * Compared with `base`, the default branch unless the agent named another.
+ */
+export async function deliverFacts(dir: string, branch: string, identityEmail: string | undefined, wantedBase?: string): Promise<Omit<DeliverCard, "kind" | "repo" | "pr" | "title" | "body" | "route" | "method" | "signs" | "toSign" | "github" | "ahead" | "lost">> {
+  if (!isBranchName(branch)) throw new NotDeliverable(`"${branch}" isn't a branch name Kumiko delivers.`);
+  const { base, baseSha } = await baseOf(dir, branch, wantedBase);
   const head = await rev(dir, `refs/heads/${branch}`);
   if (!head) throw new NotDeliverable(`${branch} isn't pushed. Push it first (git push -u origin ${branch}), then call deliver again.`);
-  const baseSha = (await rev(dir, `refs/heads/${base}`))!;
   const log = await mirrorGit(dir, ["log", "--reverse", "--no-color", "--format=%H%x00%s%x00%an%x00%ae%x00%(trailers:unfold,separator=%x01)%x1e", `${baseSha}..${head}`]);
   const commits: CardCommit[] = log.out
     .split("\x1e")
@@ -295,7 +312,7 @@ export interface Landed {
 }
 
 /**
- * Lands the card's branch on the default branch in the mirror and pushes it to GitHub: a merge commit or a squash,
+ * Lands the card's branch on its base (the default branch, or the one the agent named) in the mirror and pushes it to GitHub: a merge commit or a squash,
  * signed with the user's key when their config has one. The branch must still be where the card had it. If the default
  * branch moves on GitHub meanwhile, the lease fails, and it is merged again once. `as` is who the commit is by, when
  * git's config doesn't say.
@@ -311,6 +328,8 @@ export async function land(
     check?: string;
     method: DeliverMethod;
     message: string;
+    /** The branch it lands on, as the card showed it. */
+    base: string;
     sign: { key?: string } | undefined;
     as?: { name: string; email: string };
     fetch(): Promise<void>;
@@ -318,14 +337,12 @@ export async function land(
 ): Promise<Landed> {
   for (let attempt = 0; ; attempt++) {
     await opts.fetch();
-    const base = await headBranch(dir);
-    if (!base) throw new Error("The repository's mirror has no default branch.");
+    const { base, baseSha } = await baseOf(dir, opts.branch, opts.base);
     const now = await rev(dir, `refs/heads/${opts.branch}`);
     if (now !== opts.head && now !== opts.check) {
       const count = now ? Number((await mirrorGit(dir, ["rev-list", "--count", `${opts.check ?? opts.head}..${now}`], { ok: [128] })).out.trim()) || 0 : 0;
       throw new BranchMoved(now ?? "", count);
     }
-    const baseSha = (await rev(dir, `refs/heads/${base}`))!;
     const tree = await mergeTree(dir, baseSha, opts.head, opts.branch, base);
     const parents = opts.method === "merge" ? ["-p", baseSha, "-p", opts.head] : ["-p", baseSha];
     // Not signing means not signing: commit.gpgsign would otherwise have git try the lookup that just found nothing.

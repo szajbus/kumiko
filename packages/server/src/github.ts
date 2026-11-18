@@ -115,14 +115,14 @@ export class GitHub {
   }
 
   /** The open pull request from `branch` in `repo` itself (one origin, no forks), if there is one. */
-  async prForBranch(repo: string, branch: string): Promise<{ number: number; title: string; url: string } | undefined> {
-    const prs = await this.json<{ number: number; title: string; url: string; headRepositoryOwner?: { login?: string } }[]>(
-      ["pr", "list", "--repo", repo, "--head", branch, "--state", "open", "--json", "number,title,url,headRepositoryOwner", "--limit", "10"],
+  async prForBranch(repo: string, branch: string): Promise<{ number: number; title: string; url: string; base?: string } | undefined> {
+    const prs = await this.json<{ number: number; title: string; url: string; baseRefName?: string; headRepositoryOwner?: { login?: string } }[]>(
+      ["pr", "list", "--repo", repo, "--head", branch, "--state", "open", "--json", "number,title,url,baseRefName,headRepositoryOwner", "--limit", "10"],
       "pr list",
     );
     const owner = repo.split("/")[0].toLowerCase();
     const pr = prs.find((p) => !p.headRepositoryOwner?.login || p.headRepositoryOwner.login.toLowerCase() === owner);
-    return pr && { number: pr.number, title: pr.title, url: pr.url };
+    return pr && { number: pr.number, title: pr.title, url: pr.url, ...(pr.baseRefName ? { base: pr.baseRefName } : {}) };
   }
 
   /** Opens a pull request as the user; resolves with its number and URL. The body goes on stdin, never as an argument. */

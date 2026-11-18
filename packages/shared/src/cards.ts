@@ -43,13 +43,15 @@ export interface CardPr {
   number: number;
   title: string;
   url: string;
+  /** The branch it is open on. */
+  base?: string;
 }
 
 export interface DeliverCard {
   kind: "deliver";
   repo: string;
   branch: string;
-  /** The default branch, where it lands. */
+  /** Where it lands: the default branch, the branch Claude named, or the open PR's base. */
   base: string;
   /** The branch's commit the card is for: approving delivers exactly this. */
   head: string;

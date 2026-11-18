@@ -56,12 +56,13 @@ const REPO_PROPERTY = { type: "string", description: "The repository, as owner/n
 const DELIVER: ToolSpec = {
   name: "deliver",
   description:
-    "Send a pushed branch on to GitHub: merge it into the default branch, open a pull request for it, or add it to the PR it has open. Your pushes go only to Kumiko's mirror on the user's computer; this is how work reaches GitHub. Kumiko shows the user a card with the branch's commits and changes, the user chooses, and you wait for their answer. Say in your message before the call why, and what you'd pick: the user reads it just above the card. Kumiko does it on the user's computer, signing your commits with their key on the way, which changes their shas: when it says so, run git pull --rebase on the branch. Push the branch first. If it doesn't merge cleanly, you're told to merge the default branch into it first, and no card is shown. A branch with a PR open is landed by delivering it again.",
+    "Send a pushed branch on to GitHub: merge it into its base, open a pull request for it, or add it to the PR it has open. The base is the default branch unless you name another with base, such as the branch a stacked PR goes on; a branch with a PR open lands on the PR's base. Your pushes go only to Kumiko's mirror on the user's computer; this is how work reaches GitHub. Kumiko shows the user a card with the branch's commits and changes, the user chooses, and you wait for their answer. Say in your message before the call why, and what you'd pick: the user reads it just above the card. Kumiko does it on the user's computer, signing your commits with their key on the way, which changes their shas: when it says so, run git pull --rebase on the branch. Push the branch first. If it doesn't merge cleanly, you're told to merge the base into it first, and no card is shown. A branch with a PR open is landed by delivering it again.",
   inputSchema: {
     type: "object",
     properties: {
       repo: REPO_PROPERTY,
       branch: { type: "string", description: "The branch to deliver, as pushed to origin." },
+      base: { type: "string", description: "The branch it goes on, merged into or as the PR's base, which GitHub must have. Leave it out for the default branch, or for a branch with a PR open, the PR's base." },
       title: { type: "string", description: "A title for the work: the PR's title if the user opens one, and the commit's subject if they squash it." },
       body: { type: "string", description: "What the work does and why, in Markdown: the PR's description if the user opens one." },
     },
@@ -300,13 +301,16 @@ export class Approvals {
     await this.opts.mirrors.fetch(repo, { force: true });
     const dir = this.opts.mirrors.path(repo);
     const identity = await this.opts.identity().catch(() => ({}) as { email?: string });
-    const facts = await deliverFacts(dir, branch, identity.email);
+    const wanted = str(input.base, "base", 200, false)?.trim() || undefined;
     const pr = await this.opts.github.prForBranch(repo, branch);
+    // Landing an open PR anywhere but its base would leave GitHub showing it open, with other changes.
+    if (pr?.base && wanted && wanted !== pr.base) throw new ApprovalError(`${branch} has PR #${pr.number} open on ${pr.base}. Deliver it without base, or with base ${pr.base}.`);
+    const facts = await deliverFacts(dir, branch, identity.email, wanted ?? pr?.base);
     const last = (await this.choices())[info.sandbox];
     const route: DeliverRoute = pr ? "main" : (last?.route ?? "main");
     const github = await this.opts.mirrors.githubHead(repo, branch);
     const ahead = github ? await this.opts.mirrors.countBetween(repo, github, facts.head) : facts.commits.length;
-    const lost = await lostCommits(dir, github, facts.head, `refs/heads/${facts.base}`);
+    const lost = await lostCommits(dir, github, facts.head, `refs/github/heads/${facts.base}`);
     return {
       kind: "deliver",
       repo,
@@ -606,7 +610,7 @@ export class Approvals {
     }
     const message = d.method === "merge" ? mergeMessage(c.repo, c.branch, c.pr) : squashMessage(d.title ?? c.title, c.squashBody, c.trailers);
     const as = await this.commitIdentity(dir);
-    const landed = await land(dir, url, { branch: c.branch, head, check: c.head, method: d.method, message, sign: await signingKey(dir), ...(as ? { as } : {}), fetch: () => this.opts.mirrors.fetch(c.repo, { force: true }) });
+    const landed = await land(dir, url, { branch: c.branch, head, check: c.head, method: d.method, base: c.base, message, sign: await signingKey(dir), ...(as ? { as } : {}), fetch: () => this.opts.mirrors.fetch(c.repo, { force: true }) });
     const short = landed.sha.slice(0, 7);
     const notes: string[] = [];
     if (as) notes.push(`The user's git config has no name or email, so the commit is by their GitHub account, ${as.name} <${as.email}>.`);

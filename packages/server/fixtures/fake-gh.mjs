@@ -93,7 +93,7 @@ function github() {
   const [noun, verb] = args;
   if (noun === "pr" && verb === "list" && opt("--head")) {
     const prs = db.items.filter((i) => i.type === "pr" && i.head === opt("--head") && i.state === "OPEN");
-    console.log(JSON.stringify(prs.map((p) => ({ number: p.number, title: p.title, url: url("pr", p.number), headRepositoryOwner: { login: repo.split("/")[0] } }))));
+    console.log(JSON.stringify(prs.map((p) => ({ number: p.number, title: p.title, url: url("pr", p.number), baseRefName: p.base, headRepositoryOwner: { login: repo.split("/")[0] } }))));
   } else if (noun === "pr" && verb === "create") {
     const body = readFileSync(0, "utf8");
     if (db.items.some((i) => i.type === "pr" && i.head === opt("--head") && i.state === "OPEN")) {

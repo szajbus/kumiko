@@ -25,7 +25,9 @@ In the sandbox, `git push` works as usual and goes to the mirror.
 
 When work is ready, the agent pushes its branch, says in the chat what it did and which way it would land it, and
 calls its `deliver` tool. It then waits while Kumiko shows a card under that message. The card is headed
-`main ← branch`, with the repository in the corner.
+`main ← branch`, with the repository in the corner. `main` is the base, the branch the work lands on. The agent can
+name another base, such as the branch below a stacked pull request. A branch with an open pull request lands on that
+pull request's base.
 
 The card shows what's in the branch, worked out by Kumiko from the mirror: its commits, and its files with their
 changes. Flags mark what needs a look:
@@ -44,7 +46,7 @@ The main button does what its label says. Its ▾ menu offers the other ways:
 
 | Choice | Does |
 | --- | --- |
-| **Merge and push** | Makes one merge commit on top of the default branch, with the branch's commits as they are. |
+| **Merge and push** | Makes one merge commit on top of the base, with the branch's commits as they are. |
 | **Squash and push** | Makes one commit with all the branch's changes. Its subject is the agent's title, its message lists the branch's commits, and Claude's co-author trailer follows. |
 | **Push and open pull request** | Sends the branch to GitHub, signed, and opens a pull request as you, with the agent's title and description. You can edit both on the card. |
 | **Update pull request** | The first choice for a branch whose pull request is open but lacks commits the mirror has. Sends the new commits to the pull request. |
