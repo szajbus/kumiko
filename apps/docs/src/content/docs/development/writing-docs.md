@@ -64,7 +64,8 @@ npm run build && node apps/docs/scripts/screenshots.mjs
 ```
 
 The script starts a server against the fakes, builds a demo of three sandboxes with sessions, and photographs it with
-a headless Chrome. The pictures go to `apps/docs/src/assets/screenshots`.
+a headless Chrome. The pictures go to `apps/docs/src/assets/screenshots`. For the session, the script drives Chrome over
+its DevTools protocol, to unfold the last turn's tool calls before the picture is taken.
 
 - `DEMO_ROOT` is where the demo's Kumiko home and GitHub stand-in go. Its path shows in the screenshots. It defaults
   to `/Users/you`, which has to exist and be writable:
