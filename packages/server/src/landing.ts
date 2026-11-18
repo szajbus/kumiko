@@ -351,7 +351,13 @@ export async function land(
     const commit = await mirrorGit(dir, ["commit-tree", ...sign, tree, ...parents, "-F", "-"], { input: opts.message, env: as, timeoutMs: 5 * 60_000 });
     const sha = commit.out.trim();
     const push = await mirrorGit(dir, ["push", "--porcelain", `--force-with-lease=refs/heads/${base}:${baseSha}`, url, `${sha}:refs/heads/${base}`], { ok: [1], timeoutMs: 5 * 60_000 });
-    if (push.code === 0) return { sha, base, signed: opts.sign !== undefined };
+    if (push.code === 0) {
+      // The mirror's base was GitHub's (see baseOf), so it moves with it, unless a push landed in it meanwhile. Left to
+      // the next fetch, it wouldn't with newer git (2.56, not 2.39), whose push to a remote's URL moves that remote's
+      // refs/github/heads too: the mirror's branch then looks ahead of GitHub's, as an agent's push would.
+      await mirrorGit(dir, ["update-ref", `refs/heads/${base}`, sha, baseSha], { ok: [1, 128] });
+      return { sha, base, signed: opts.sign !== undefined };
+    }
     // Someone else landed something first: merge again on top of theirs, once.
     // Only for a lease that failed, not for GitHub refusing it outright (a protected branch, say).
     if (attempt === 0 && /stale info|fetch first/.test(push.out + push.err)) continue;
