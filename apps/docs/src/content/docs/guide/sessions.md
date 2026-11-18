@@ -8,7 +8,7 @@ sidebar:
 A session is one conversation with the agent, in one tab. The agent runs in the sandbox, starting in `/workspace`,
 above its repos. It keeps running between your messages until you close the tab, even while Kumiko isn't running.
 
-![A session: the first turn's tool calls folded into one line, the agent's reply, and the turn's time, cost and tokens.](../../../assets/screenshots/session.png)
+![A session: a turn's tool calls folded into one line, and the last turn's unfolded, each saying what it did, such as opening a pull request and reading CI, then the agent's reply, with the turn's time, cost and tokens.](../../../assets/screenshots/session.png)
 
 ## Start a session
 

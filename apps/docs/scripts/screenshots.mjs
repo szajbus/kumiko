@@ -124,6 +124,14 @@ function seedSession(id) {
   tool("Bash", { command: "git push -u origin add-checkout", description: "Push the branch" }, "branch 'add-checkout' set up to track 'origin/add-checkout'.");
   assistant([{ type: "text", text: "Committed and pushed `add-checkout`. Open a pull request from it when you're ready." }]);
   result(21000, 0.51, 600, 4000);
+  // A turn with Kumiko's own tools, which the screenshot shows unfolded: delivering, then reading CI.
+  prompt("Open a pull request, and tell me how CI does");
+  tool("ToolSearch", { query: "select:mcp__kumiko__deliver,mcp__kumiko__github_api_get,mcp__kumiko__github_run_logs", max_results: 3 }, "Loaded 3 tools.");
+  tool("mcp__kumiko__deliver", { branch: "add-checkout", title: "Add the checkout page", body: "The checkout page, and the discount applied once, to the total." }, "Opened PR #12 (https://github.com/you/webshop/pull/12).");
+  tool("mcp__kumiko__github_api_get", { path: "actions/runs?branch=add-checkout&per_page=1" }, '{"total_count":1,"workflow_runs":[{"id":4211,"name":"Test","status":"completed","conclusion":"failure"}]}');
+  tool("mcp__kumiko__github_run_logs", { run_id: 4211 }, "Run 4211: Test · Add the checkout page\nStatus: completed · failure\nJobs:\n- lint (job 9031): failure; failed: step 3 \"Run eslint\"\n\n=== lint / Run eslint ===\nsrc/pages/checkout.tsx\n  14:18  error  'formatPrice' is not defined  no-undef");
+  assistant([{ type: "text", text: "Opened [PR #12](https://github.com/you/webshop/pull/12). CI fails on lint: `checkout.tsx` uses `formatPrice` without importing it. The tests pass. Shall I add the import and push?" }]);
+  result(32000, 0.18, 900, 6000);
 
   const info = {
     id, sandbox: "webshop", workdir: "/workspace", status: "ended", prompt: "Add a checkout page in a worktree, with tests for the cart total",
@@ -132,6 +140,64 @@ function seedSession(id) {
   };
   mkdirSync(join(kumikoHome, "sessions"), { recursive: true });
   writeFileSync(join(kumikoHome, "sessions", `${id}.json`), JSON.stringify({ info, events }));
+}
+
+/**
+ * Opens a page in a headless Chrome driven over its DevTools protocol, for a screenshot that needs the page acted on
+ * first (`act` gets `eval`, which runs an expression in the page), then saves it as `name`.png.
+ */
+async function drive(browser, url, width, height, file, act) {
+  const chrome = spawn(browser, ["--headless", "--no-sandbox", "--hide-scrollbars", "--remote-debugging-port=0", `--window-size=${width},${height}`, "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
+  try {
+    const wsBrowser = await new Promise((resolve, reject) => {
+      let err = "";
+      chrome.stderr.on("data", (d) => {
+        err += d;
+        const m = /DevTools listening on (ws:\/\/\S+)/.exec(err);
+        if (m) resolve(m[1]);
+      });
+      chrome.on("exit", () => reject(new Error(`Chrome exited: ${err.trim().split("\n").at(-1)}`)));
+    });
+    const port = new URL(wsBrowser).port;
+    const target = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find((t) => t.type === "page");
+    const ws = new WebSocket(target.webSocketDebuggerUrl);
+    await new Promise((r, j) => ((ws.onopen = r), (ws.onerror = j)));
+    let next = 0;
+    const waiting = new Map();
+    const loaded = [];
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.id !== undefined) {
+        const w = waiting.get(msg.id);
+        waiting.delete(msg.id);
+        msg.error ? w.reject(new Error(msg.error.message)) : w.resolve(msg.result);
+      } else if (msg.method === "Page.loadEventFired") loaded.splice(0).forEach((r) => r());
+    };
+    const send = (method, params = {}) => new Promise((resolve, reject) => {
+      const id = ++next;
+      waiting.set(id, { resolve, reject });
+      ws.send(JSON.stringify({ id, method, params }));
+    });
+    await send("Page.enable");
+    await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+    const load = new Promise((r) => loaded.push(r));
+    await send("Page.navigate", { url });
+    await load;
+    // The app loads its data after the page does.
+    await sleep(2500);
+    await act({
+      eval: async (expression) => {
+        const r = await send("Runtime.evaluate", { expression, awaitPromise: true });
+        if (r.exceptionDetails) throw new Error(`In the page: ${r.exceptionDetails.exception?.description ?? r.exceptionDetails.text}`);
+        return r.result.value;
+      },
+    });
+    const { data } = await send("Page.captureScreenshot", { format: "png" });
+    writeFileSync(file, Buffer.from(data, "base64"));
+    ws.close();
+  } finally {
+    chrome.kill();
+  }
 }
 
 /** A stand-in GitHub, a folder of bare repositories, and a fake gh signed in to it, for the Repos page. */
@@ -206,10 +272,19 @@ try {
     execFileSync(browser, ["--headless", "--no-sandbox", "--hide-scrollbars", `--window-size=1280,${height}`, "--virtual-time-budget=10000", `--screenshot=${join(out, `${name}.png`)}`, `${api}/login?token=${token}${hash}`], { stdio: "ignore" });
     console.log(`${name}.png`);
   };
+  const driven = (name, hash, height, act) => drive(browser, `${api}/login?token=${token}${hash}`, 1280, height, join(out, `${name}.png`), act);
   await shot("sandboxes", "#/", 440);
   await shot("new-sandbox", "#/new", 1400);
   await shot("repos", "#/repos", 470);
-  await shot("session", `#/session/${seeded}`, 800, `session:${seeded}`);
+  await tabs(`session:${seeded}`);
+  await driven("session", `#/session/${seeded}`, 800, async (page) => {
+    // The last turn's work unfolded, to show its tool calls; then the chat scrolled to its end again.
+    await page.eval(`document.querySelectorAll(".work-summary")[document.querySelectorAll(".work-summary").length - 1].click()`);
+    await sleep(800);
+    await page.eval(`(() => { const c = document.querySelector(".chat"); c.scrollTop = c.scrollHeight; })()`);
+    await sleep(300);
+  });
+  console.log("session.png");
 } finally {
   server.kill();
   rmSync(lima, { recursive: true, force: true });
