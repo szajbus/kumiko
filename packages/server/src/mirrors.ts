@@ -76,8 +76,9 @@ const HOOK_MESSAGE = "Kumiko: pushing to this mirror isn't allowed.";
 /**
  * The only hook in a mirror. A push that comes through a sandbox's relay is in a git daemon Kumiko started, which
  * says in its environment how to reach Kumiko and which connection it is: the hook hands Kumiko the quarantine the
- * push waits in and the ref updates, prints what Kumiko says, and exits with the code Kumiko gives, its last line. Kumiko
- * pushes them on to GitHub before answering. Any other push, or one Kumiko can't be asked about, is refused.
+ * push waits in and the ref updates, prints what Kumiko says, and exits with the code Kumiko gives, its last line. An
+ * allowed push stays in the mirror: it goes on to GitHub only when the user approves a card. Any other push, or one
+ * Kumiko can't be asked about, is refused.
  */
 const PRE_RECEIVE = `#!/bin/sh
 # Written by Kumiko, and rewritten whenever it starts.
