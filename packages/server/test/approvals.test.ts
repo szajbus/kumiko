@@ -761,6 +761,60 @@ describe("delivering", () => {
       const unapproved = await approvals.call(sessions.info, "github_pr_comment", { number, body: "sneaky" }, "made-up");
       assert.match(unapproved.text, /^Not approved/);
     });
+
+    it("closes and reopens an issue with the reason and comment as left on the card", async () => {
+      fresh();
+      const number = await issueNumber();
+      const item = async () => (await db()).items.find((i: { number: number }) => i.number === number);
+      const reopen = await ask({ number }, "github_issue_reopen");
+      assert.match((reopen.answer as { message: string }).message, new RegExp(`Issue #${number} is open already`));
+      const badReason = await ask({ number, reason: "duplicate" }, "github_issue_close");
+      assert.match((badReason.answer as { message: string }).message, /reason is completed or not_planned/);
+
+      const r = await ask({ number, comment: "Can't reproduce." }, "github_issue_close");
+      assert.deepEqual(r.card!.card, { kind: "state", repo: "acme/widget", target: { type: "issue", number, title: "Tabs flicker", state: "open", author: "octo", url: `https://github.com/acme/widget/issues/${number}` }, action: "close", reason: "completed", body: "Can't reproduce." });
+      await assert.rejects(approvals.decide("s1", r.id, { action: "approve", decision: { kind: "state", body: "" } }), /Say why the issue is closed/);
+      await approvals.decide("s1", r.id, { action: "approve", decision: { kind: "state", body: "-Can't reproduce on main.", reason: "not_planned" } });
+      const res = await approvals.call(sessions.info, "github_issue_close", r.input, r.toolUseId);
+      assert.equal(res.text, `Closed issue #${number} (https://github.com/acme/widget/issues/${number}) as not planned, with a comment.`);
+      const closed = await item();
+      assert.deepEqual([closed.state, closed.stateReason, closed.comments.at(-1).body], ["CLOSED", "not planned", "-Can't reproduce on main."]);
+      assert.equal(sessions.card(r.id)!.receipt!.text, `Closed issue #${number}`);
+
+      const again = await ask({ number }, "github_issue_close");
+      assert.match((again.answer as { message: string }).message, new RegExp(`Issue #${number} is closed already`));
+      const back = await ask({ number }, "github_issue_reopen");
+      assert.equal((back.card!.card as { reason?: string }).reason, undefined);
+      await assert.rejects(approvals.decide("s1", back.id, { action: "approve", decision: { kind: "state", body: "", reason: "completed" } }), /Only closing an issue has a reason/);
+      await approvals.decide("s1", back.id, { action: "approve", decision: { kind: "state", body: "" } });
+      const reopened = await approvals.call(sessions.info, "github_issue_reopen", back.input, back.toolUseId);
+      assert.equal(reopened.text, `Reopened issue #${number} (https://github.com/acme/widget/issues/${number}).`);
+      const open = await item();
+      assert.equal(open.state, "OPEN");
+      assert.equal(open.comments.length, closed.comments.length, "no comment without one");
+    });
+
+    it("closes and reopens a pull request, and won't take one for an issue", async () => {
+      fresh();
+      const pr = (await db()).items.find((i: { type: string; state: string }) => i.type === "pr" && i.state === "OPEN");
+      const asIssue = await ask({ number: pr.number }, "github_issue_close");
+      assert.match((asIssue.answer as { message: string }).message, /(has no issue #\d+\. For a pull request,|is a pull request:) use github_pr_close/);
+      const noIssue = await ask({ number: await issueNumber() }, "github_pr_close");
+      assert.match((noIssue.answer as { message: string }).message, /acme\/widget has no pull request #/);
+
+      const r = await ask({ number: pr.number, comment: "Superseded." }, "github_pr_close");
+      assert.equal(r.card!.card.kind, "state");
+      await approvals.decide("s1", r.id, { action: "approve", decision: { kind: "state", body: "Superseded by #9." } });
+      assert.match((await approvals.call(sessions.info, "github_pr_close", r.input, r.toolUseId)).text, new RegExp(`^Closed pull request #${pr.number} \\(.*/pull/${pr.number}\\) with a comment\\.$`));
+      const back = await ask({ number: pr.number }, "github_pr_reopen");
+      await approvals.decide("s1", back.id, { action: "approve", decision: { kind: "state", body: "" } });
+      await approvals.call(sessions.info, "github_pr_reopen", back.input, back.toolUseId);
+      const now = (await db()).items.find((i: { number: number }) => i.number === pr.number);
+      assert.deepEqual([now.state, now.comments.at(-1).body], ["OPEN", "Superseded by #9."]);
+
+      const unapproved = await approvals.call(sessions.info, "github_pr_close", { number: pr.number }, "made-up");
+      assert.match(unapproved.text, /^Not approved/);
+    });
   });
 
   it("marks text from GitHub as data, and keeps it from closing its own quote", () => {

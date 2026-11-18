@@ -101,7 +101,23 @@ export interface CommentCard {
   body: string;
 }
 
-export type ApprovalCardBody = DeliverCard | IssueCard | CommentCard;
+/** Why an issue is closed, as GitHub records it. */
+export type CloseReason = "completed" | "not_planned";
+
+/** Closing or reopening an issue or a PR, with a comment if there's one. */
+export interface StateCard {
+  kind: "state";
+  repo: string;
+  /** What it closes or reopens, as GitHub has it. */
+  target: CommentCard["target"];
+  action: "close" | "reopen";
+  /** Why, for closing an issue only. */
+  reason?: CloseReason;
+  /** A comment posted with it; empty for none. */
+  body: string;
+}
+
+export type ApprovalCardBody = DeliverCard | IssueCard | CommentCard | StateCard;
 
 /**
  * What the user decided on a card, with what they changed: for Deliver the route and method, for the text that goes
@@ -110,7 +126,8 @@ export type ApprovalCardBody = DeliverCard | IssueCard | CommentCard;
 export type CardDecision =
   | { kind: "deliver"; route: DeliverRoute; method: DeliverMethod; title?: string; body?: string }
   | { kind: "issue"; title: string; body: string; labels: string[] }
-  | { kind: "comment"; body: string };
+  | { kind: "comment"; body: string }
+  | { kind: "state"; body: string; reason?: CloseReason };
 
 /** What happened, as the card's one-line receipt shows it. */
 export interface CardReceipt {
@@ -171,6 +188,11 @@ export function parseCardDecision(value: unknown): CardDecision | undefined {
     case "comment": {
       const body = text(v.body, MAX_BODY);
       return body?.trim() ? { kind: "comment", body } : undefined;
+    }
+    case "state": {
+      const body = text(v.body, MAX_BODY);
+      if (v.reason !== undefined && v.reason !== "completed" && v.reason !== "not_planned") return undefined;
+      return body !== undefined ? { kind: "state", body, ...(v.reason ? { reason: v.reason } : {}) } : undefined;
     }
     default:
       return undefined;

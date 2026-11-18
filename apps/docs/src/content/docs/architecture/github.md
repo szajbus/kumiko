@@ -103,6 +103,7 @@ whatever the agent's settings say.
 | `deliver` | A pushed branch: merge it into its base, open a pull request for it, or update the PR it has open. |
 | `github_issue_create` | A new issue, which you can edit before it posts. |
 | `github_issue_comment`, `github_pr_comment` | A comment, as GitHub will show it, which you can edit. |
+| `github_issue_close`, `github_issue_reopen`, `github_pr_close`, `github_pr_reopen` | The issue or PR, and the comment that goes with it, which you can edit or empty. Closing an issue also shows its reason, completed or not planned, which you can change. |
 
 Reading needs no card. `github_issue_view`, `github_issue_list`, `github_pr_view`, `github_pr_list` and
 `github_label_list` read issues, PRs and labels. `github_api_get` makes a GET request to any path of the repository in
@@ -155,7 +156,7 @@ The result tells the agent its shas changed, and to run `git pull --rebase` on t
 | Fetch the sandbox's repositories, through their mirrors | Reach any other repository through the relay |
 | Push, force-push and delete its branches in the mirror | Push the default branch or tags |
 | Read issues, PRs, CI runs and logs of those repositories | Use your gh token, or any GitHub credential |
-| Ask for a merge, a PR, an issue or a comment | Make any of them happen without your approval |
+| Ask for a merge, a PR, an issue, a comment, or for closing or reopening an issue or a PR | Make any of them happen without your approval |
 
 Your gh login can bypass branch protections, so the card is the check that holds. See
 [Security model](/architecture/security/).
