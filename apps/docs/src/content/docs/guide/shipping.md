@@ -109,7 +109,8 @@ Kumiko uses the key named in your global git config as `user.signingkey`. With G
 GPG key for your `user.email` that can sign, as `git commit -S` would. When there's no key to sign with, the card
 warns that the commit won't be signed. Kumiko doesn't sign then, even with `commit.gpgsign` on.
 
-If your global git config has no name and email, Kumiko asks GitHub who you are. If that fails too, the agent is told
+A merge or squash commit Kumiko writes is by the `user.name` and `user.email` in your global git config. If it has no
+name and email, Kumiko asks GitHub who you are. If that fails too, the agent is told
 to have you set `user.name` and `user.email` with `git config --global`.
 
 ## Issues, pull requests and CI
