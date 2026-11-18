@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { parseRepo, type GitHubAccount, type GitHubRepo } from "@kumiko/shared";
+import { parseRepo, type CloseReason, type GitHubAccount, type GitHubRepo } from "@kumiko/shared";
 
 /** gh failed to run, or said something Kumiko can't read. */
 export class GhError extends Error {}
@@ -211,6 +211,18 @@ export class GitHub {
     const r = await this.run([type, "comment", String(number), "--repo", repo, "--body-file", "-"], 60_000, body);
     if (r.code !== 0) throw new GhError(firstLines(r.stderr) || `gh ${type} comment exited with ${r.code}.`);
     return r.stdout.trim().split("\n").reverse().find((l) => l.startsWith("https://"))?.trim() ?? "";
+  }
+
+  /**
+   * Closes or reopens an issue or a PR as the user, with a comment if there is one, and for an issue closed, why. The
+   * comment goes as `--comment=…`, so one starting with a dash stays a comment.
+   */
+  async setState(repo: string, type: "issue" | "pr", number: number, action: "close" | "reopen", opts: { comment?: string; reason?: CloseReason } = {}): Promise<void> {
+    const args = [type, action, String(number), "--repo", repo];
+    if (opts.reason) args.push(`--reason=${opts.reason === "not_planned" ? "not planned" : "completed"}`);
+    if (opts.comment) args.push(`--comment=${opts.comment}`);
+    const r = await this.run(args, 60_000);
+    if (r.code !== 0) throw new GhError(firstLines(r.stderr) || `gh ${type} ${action} exited with ${r.code}.`);
   }
 
   /** Closes a pull request with a comment. */

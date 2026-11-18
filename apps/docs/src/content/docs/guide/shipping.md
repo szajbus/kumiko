@@ -124,11 +124,15 @@ The agent has no `gh` login in the sandbox. It works with issues and pull reques
 - **Writing asks you first.** Creating an issue or commenting on an issue or pull request shows a card with the text
   as GitHub will show it. You can edit it, and it posts as you leave it, from your account. An issue's labels can only
   be the repository's own labels.
+- **Closing and reopening ask you too.** The agent can close or reopen an issue or a pull request, with a comment. The
+  card shows the comment, which you can edit or empty. For an issue it closes, the card also shows the reason, completed
+  or not planned, which you can change. Closing a pull request leaves its branch. A merged pull request can't be closed
+  or reopened.
 
 Kumiko marks what the tools return as written by others: information, not instructions. On a public repository,
 anyone can write an issue.
 
-The agent can't close, relabel or edit issues or pull requests, and can't re-run or cancel workflow runs.
+The agent can't relabel or edit issues or pull requests, and can't re-run or cancel workflow runs.
 
 In a sandbox with several repos, the agent names the repository in each call. In a sandbox with one, that one is
 used.

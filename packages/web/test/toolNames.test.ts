@@ -21,6 +21,8 @@ describe("tool names in the chat", () => {
     assert.deepEqual(toolLine("mcp__kumiko__github_pr_list", { state: "all", search: "tabs" }), { label: "Listed pull requests", title: "matching “tabs”" });
     assert.deepEqual(toolLine("mcp__kumiko__github_issue_create", { title: "Tabs flicker", body: "…" }), { label: "Asked to create an issue", title: "Tabs flicker" });
     assert.deepEqual(toolLine("mcp__kumiko__github_pr_comment", { number: 4, body: "…" }), { label: "Asked to comment on pull request", title: "#4" });
+    assert.deepEqual(toolLine("mcp__kumiko__github_issue_close", { number: 7, reason: "not_planned" }), { label: "Asked to close issue", title: "#7" });
+    assert.deepEqual(toolLine("mcp__kumiko__github_pr_reopen", { number: 4, repo: "acme/widget" }), { label: "Asked to reopen pull request", title: "#4 in acme/widget" });
     assert.deepEqual(toolLine("mcp__kumiko__deliver", { branch: "log-tail", title: "T", body: "B" }), { label: "Asked to deliver", title: "log-tail", mono: true });
   });
 

@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
-import { MAX_REASON, REVIEW, type ApprovalCard as Card, type DeliverCard, type ReviewState, type AttachmentInput, type CardDecision, type CardFlag, type CardFile } from "@kumiko/shared";
+import { MAX_REASON, REVIEW, type ApprovalCard as Card, type DeliverCard, type ReviewState, type AttachmentInput, type CardDecision, type CardFlag, type CloseReason, type CardFile } from "@kumiko/shared";
 import { approveLabel, barShares, cardAction, cardClosed, cardVerb, commitsLabel, deliverChoices, deliverDecision, filesLabel, initialChoice, lostHeading, unsignedWarning, whereLabel, type DeliverChoice } from "./cards";
 import { hasFiles, readFiles, toInput, type ComposerFile } from "./attachments";
 import type { ChatItem } from "./chat";
@@ -68,6 +68,7 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
   const [title, setTitle] = useState(c.kind === "deliver" || c.kind === "issue" ? c.title : "");
   const [body, setBody] = useState(c.body);
   const [labels, setLabels] = useState<string[]>(c.kind === "issue" ? c.labels : []);
+  const [closeReason, setCloseReason] = useState<CloseReason | undefined>(c.kind === "state" ? c.reason : undefined);
   const [declining, setDeclining] = useState(false);
   const [reason, setReason] = useState("");
   const [files, setFiles] = useState<ComposerFile[]>([]);
@@ -104,6 +105,8 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
         return title.trim() ? { kind: "issue", title: title.trim(), body, labels } : undefined;
       case "comment":
         return body.trim() ? { kind: "comment", body } : undefined;
+      case "state":
+        return { kind: "state", body, ...(closeReason ? { reason: closeReason } : {}) };
     }
   };
   const approve = () => {
@@ -142,7 +145,7 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
             {c.pr && <span className="badge">#{c.pr.number}</span>}
           </>
         )}
-        {c.kind === "comment" && (
+        {(c.kind === "comment" || c.kind === "state") && (
           <a className="ac-target" href={c.target.url} target="_blank" rel="noreferrer">
             {c.target.title}
           </a>
@@ -211,6 +214,20 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
       {c.kind === "comment" && (
         <div className="ac-fields">
           <BodyField value={body} onChange={setBody} label="Comment" />
+        </div>
+      )}
+      {c.kind === "state" && (
+        <div className="ac-fields">
+          {closeReason && (
+            <label className="ac-labels">
+              Reason
+              <select className="ac-label-add" value={closeReason} onChange={(e) => setCloseReason(e.target.value as CloseReason)} aria-label="Why it's closed">
+                <option value="completed">Completed</option>
+                <option value="not_planned">Not planned</option>
+              </select>
+            </label>
+          )}
+          <BodyField value={body} onChange={setBody} label="Comment, optional" />
         </div>
       )}
       {!stale && c.kind === "deliver" && unsignedWarning(c, choice) && <div className="ac-unsigned">{unsignedWarning(c, choice)}</div>}

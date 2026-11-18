@@ -43,6 +43,13 @@ export function toolLine(name: string, input: Record<string, unknown>): ToolLine
       return { label: "Asked to comment on issue", title: inRepo(n ? `#${n}` : undefined) };
     case "github_pr_comment":
       return { label: "Asked to comment on pull request", title: inRepo(n ? `#${n}` : undefined) };
+    case "github_issue_close":
+    case "github_issue_reopen":
+    case "github_pr_close":
+    case "github_pr_reopen": {
+      const verb = name.endsWith("_close") ? "close" : "reopen";
+      return { label: `Asked to ${verb} ${name.includes("_pr_") ? "pull request" : "issue"}`, title: inRepo(n ? `#${n}` : undefined) };
+    }
     case "github_api_get":
       return { label: "Read from GitHub", title: str(input.path) ?? "the repository", mono: true };
     case "github_run_logs": {

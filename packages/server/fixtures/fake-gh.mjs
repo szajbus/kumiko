@@ -104,11 +104,15 @@ function github() {
     db.items.push({ number: n, type: "pr", title: opt("--title"), body, state: "OPEN", author: user.login, labels: [], comments: [], head: opt("--head"), base: opt("--base") });
     save();
     console.log(url("pr", n));
-  } else if (noun === "pr" && verb === "close") {
-    const pr = find(args[2]);
-    if (!pr) process.exit(1);
-    pr.state = "CLOSED";
-    if (opt("--comment")) pr.comments.push({ author: user.login, body: opt("--comment") });
+  } else if ((noun === "issue" || noun === "pr") && (verb === "close" || verb === "reopen")) {
+    // The flags come as --flag value or --flag=value, as gh takes them.
+    const flag = (name) => opt(name) ?? args.find((a) => a.startsWith(`${name}=`))?.slice(name.length + 1);
+    const item = find(args[2]);
+    if (!item) process.exit(1);
+    item.state = verb === "close" ? "CLOSED" : "OPEN";
+    const reason = flag("--reason");
+    if (reason) item.stateReason = reason;
+    if (flag("--comment")) item.comments.push({ author: user.login, body: flag("--comment") });
     save();
   } else if ((noun === "issue" || noun === "pr") && verb === "view") {
     const item = find(args[2]);
