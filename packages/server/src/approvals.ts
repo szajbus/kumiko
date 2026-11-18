@@ -609,11 +609,11 @@ export class Approvals {
       if (key) ({ tip: head, signed } = await resign(dir, c.head, key));
     }
     const message = d.method === "merge" ? mergeMessage(c.repo, c.branch, c.pr) : squashMessage(d.title ?? c.title, c.squashBody, c.trailers);
-    const as = await this.commitIdentity(dir);
+    const { as, fromGitHub } = await this.commitIdentity(dir);
     const landed = await land(dir, url, { branch: c.branch, head, check: c.head, method: d.method, base: c.base, message, sign: await signingKey(dir), ...(as ? { as } : {}), fetch: () => this.opts.mirrors.fetch(c.repo, { force: true }) });
     const short = landed.sha.slice(0, 7);
     const notes: string[] = [];
-    if (as) notes.push(`The user's git config has no name or email, so the commit is by their GitHub account, ${as.name} <${as.email}>.`);
+    if (as && fromGitHub) notes.push(`The user's git config has no name or email, so the commit is by their GitHub account, ${as.name} <${as.email}>.`);
     if (c.pr && d.method === "squash") {
       await this.opts.github.prClose(c.repo, c.pr.number, `Landed as ${landed.sha} on ${landed.base}.`).then(
         () => notes.push(`PR #${c.pr!.number} was closed with a comment saying so.`),
@@ -642,16 +642,21 @@ export class Approvals {
   }
 
   /**
-   * Who a commit Kumiko writes on the default branch is by, when git's config doesn't say: the user's GitHub account,
-   * with the noreply address GitHub gives it, as GitHub's own merge button would. Undefined when git's config says.
+   * Who a commit Kumiko writes on the default branch is by: the name and email in the user's global git config, given
+   * to git outright, as re-signing gives it a commit's own. Left to git's lookup, the macOS app's git wrote a name like
+   * "Michał" garbled (its UTF-8 read as Latin-1, then encoded again), though the same lookup in a terminal is right.
+   * Without both in the global config, git's own lookup decides, if it finds one; else it's the user's GitHub account,
+   * with the noreply address GitHub gives it, as GitHub's own merge button would.
    */
-  private async commitIdentity(dir: string): Promise<{ name: string; email: string } | undefined> {
-    if (await gitHasIdentity(dir)) return undefined;
+  private async commitIdentity(dir: string): Promise<{ as?: { name: string; email: string }; fromGitHub: boolean }> {
+    const host = await this.opts.identity().catch(() => ({}) as { name?: string; email?: string });
+    if (host.name && host.email) return { as: { name: host.name, email: host.email }, fromGitHub: false };
+    if (await gitHasIdentity(dir)) return { fromGitHub: false };
     const account = await this.opts.github.account();
     if (account.status !== "signed-in" || account.id === undefined) {
       throw new Error("Git on the user's computer has no name and email to write the commit as, and Kumiko couldn't ask GitHub who they are. The user can set them with git config --global user.name and user.email, and deliver again.");
     }
-    return { name: account.name ?? account.login, email: `${account.id}+${account.login}@users.noreply.github.com` };
+    return { as: { name: account.name ?? account.login, email: `${account.id}+${account.login}@users.noreply.github.com` }, fromGitHub: true };
   }
 
   /**

@@ -106,13 +106,13 @@ describe("delivering", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  const fresh = () => {
+  const fresh = (identity: { name?: string; email?: string } = { name: "Test", email: "test@example.com" }) => {
     sessions = new FakeSessions();
     approvals = new Approvals(sessions, {
       mirrors,
       github: new GitHub({ gh: fakeGh }),
       reposOf: async () => ["acme/widget"],
-      identity: async () => ({ name: "Test", email: "test@example.com" }),
+      identity: async () => identity,
       choicesFile: join(root, `choices-${++choiceFiles}`, "choices.json"),
     });
   };
@@ -266,6 +266,18 @@ describe("delivering", () => {
     const again = await approvals.call(sessions.info, "deliver", r.input, r.toolUseId);
     assert.match(again.text, /^Done already/);
     assert.equal(onGitHub("refs/heads/main"), main);
+  });
+
+  it("writes the commit as the user's global git config names them, handing git the name outright", async () => {
+    // Not git's own lookup, which the macOS app's git got wrong for a name like this one: here it would find "Test".
+    fresh({ name: "Michał Szajbe", email: "michal@example.com" });
+    await branch("named", { "named.txt": "ł\n" });
+    const r = await ask({ branch: "named", title: "Named", body: "b" });
+    await approvals.decide("s1", r.id, { action: "approve", decision: { kind: "deliver", route: "main", method: "merge" } });
+    const res = await approvals.call(sessions.info, "deliver", r.input, r.toolUseId);
+    assert.doesNotMatch(res.text, /GitHub account/);
+    const raw = execFileSync("git", ["-C", bare, "log", "-1", "--format=%an <%ae> / %cn <%ce>", "main"]);
+    assert.equal(raw.toString("utf8").trim(), "Michał Szajbe <michal@example.com> / Michał Szajbe <michal@example.com>");
   });
 
   it("squashes into one signed commit with Claude's co-author trailer, and remembers the choice", async () => {
