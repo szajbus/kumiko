@@ -1460,6 +1460,8 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
 .rv-note-b { padding: 8px 10px; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
 .rv-note.is-editing { border-color: #4a5a8a; background: var(--surface-2); }
 .rv-note-ta { display: block; width: 100%; min-height: 64px; padding: 8px 10px; border: 0; outline: none; resize: vertical; background: transparent; color: var(--text); font: inherit; }
+/* The note's box already shows it's being edited; no ring round the bare text inside it, as with the approval cards' textareas. */
+.rv-note-ta:focus-visible { outline: none; }
 .rv-note-f { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 6px 8px; border-top: 1px solid var(--border); }
 .rv-note-f .btn-compact { min-height: 28px; padding: 0 10px; font-size: 12px; }
 .rv-note-hint { margin-right: auto; font-size: 11.5px; color: var(--muted); }
