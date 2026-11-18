@@ -314,6 +314,7 @@ describe("delivering", () => {
       branch: "lease",
       head,
       method: "merge",
+      base: "main",
       message: "Merge branch 'lease'\n",
       sign: undefined,
       fetch: async () => {
@@ -435,7 +436,7 @@ describe("delivering", () => {
 
     const again = await ask({ branch: "pr-me", title: "ignored", body: "ignored" });
     const c = again.card!.card as DeliverCard;
-    assert.deepEqual(c.pr, { number: pr.number, title: "PR me, edited", url: `https://github.com/acme/widget/pull/${pr.number}` });
+    assert.deepEqual(c.pr, { number: pr.number, title: "PR me, edited", url: `https://github.com/acme/widget/pull/${pr.number}`, base: "main" });
     await assert.rejects(approvals.decide("s1", again.id, { action: "approve", decision: { kind: "deliver", route: "pr", method: "merge" } }), /PR #\d+ has all of pr-me already/);
     await approvals.decide("s1", again.id, { action: "approve", decision: { kind: "deliver", route: "main", method: "merge" } });
     const landed = await approvals.call(sessions.info, "deliver", again.input, again.toolUseId);
@@ -498,6 +499,60 @@ describe("delivering", () => {
     assert.doesNotMatch(res.text, /signed/);
     assert.equal(onGitHub("refs/heads/theirs-pr"), head);
     assert.equal(sessions.card(r.id)!.receipt!.meta, "as you");
+  });
+
+  it("delivers onto the base Claude names: a stacked PR, then landing it on that base, not main", async () => {
+    fresh();
+    // The branch below, on GitHub; the one on top of it, in the mirror only.
+    await branch("stack-base", { sb: "b\n" });
+    git(work, ["push", "--quiet", "origin", "stack-base"]);
+    const below = git(work, ["rev-parse", "HEAD"]).trim();
+    await branch("stack-top", { st: "t\n" }, { from: "origin/stack-base" });
+    const r = await ask({ branch: "stack-top", base: "stack-base", title: "Top", body: "On top." });
+    const c = r.card!.card as DeliverCard;
+    assert.equal(c.base, "stack-base");
+    assert.deepEqual(c.commits.map((x) => x.subject), ["Change st"], "only what isn't on its base");
+    await approvals.decide("s1", r.id, { action: "approve", decision: { kind: "deliver", route: "pr", method: "merge", title: "Top", body: "On top." } });
+    const opened = await approvals.call(sessions.info, "deliver", r.input, r.toolUseId);
+    assert.match(opened.text, /^Opened PR #\d+ .* Nothing is on stack-base yet/);
+    const db = JSON.parse(await readFile(join(root, "gh", "github.json"), "utf8"));
+    const pr = db.items.find((i: { head: string }) => i.head === "stack-top");
+    assert.equal(pr.base, "stack-base");
+
+    // Delivered again without a base: the PR's.
+    const mismatch = await ask({ branch: "stack-top", base: "main", title: "Top", body: "b" });
+    assert.match((mismatch.answer as { message: string }).message, new RegExp(`stack-top has PR #${pr.number} open on stack-base\\. Deliver it without base, or with base stack-base\\.`));
+    const main = onGitHub("refs/heads/main");
+    const again = await ask({ branch: "stack-top", title: "Top", body: "b" });
+    assert.equal((again.card!.card as DeliverCard).base, "stack-base");
+    await approvals.decide("s1", again.id, { action: "approve", decision: { kind: "deliver", route: "main", method: "merge" } });
+    const landed = await approvals.call(sessions.info, "deliver", again.input, again.toolUseId);
+    assert.match(landed.text, /^Delivered stack-top to stack-base as [0-9a-f]{7}/);
+    const tip = onGitHub("refs/heads/stack-base")!;
+    assert.equal(git(bare, ["rev-parse", `${tip}^1`]).trim(), below);
+    assert.equal(onGitHub("refs/heads/main"), main, "main is as it was");
+    assert.equal(inMirror("refs/heads/stack-base"), tip, "the mirror's base follows GitHub's");
+  });
+
+  it("refuses a base that isn't GitHub's as it is", async () => {
+    fresh();
+    await branch("on-nothing", { on: "n\n" });
+    const cases: [Record<string, unknown>, RegExp][] = [
+      [{ branch: "on-nothing", base: "nope", title: "t", body: "b" }, /nope isn't on GitHub, so nothing can be delivered to it\. Deliver nope first/],
+      [{ branch: "on-nothing", base: "on-nothing", title: "t", body: "b" }, /on-nothing is the branch work is delivered to/],
+      [{ branch: "on-nothing", base: "--x", title: "t", body: "b" }, /isn't a branch name Kumiko delivers to/],
+    ];
+    // A base with a push in the mirror that GitHub hasn't got.
+    await branch("ahead-base", { ab: "1\n" });
+    git(work, ["push", "--quiet", "origin", "ahead-base"]);
+    git(work, ["commit", "--quiet", "--allow-empty", "-m", "Mirror only"]);
+    await toMirror("ahead-base");
+    cases.push([{ branch: "on-nothing", base: "ahead-base", title: "t", body: "b" }, /ahead-base has commits in the mirror that GitHub doesn't have\. Deliver ahead-base first/]);
+    for (const [input, why] of cases) {
+      const r = await ask(input);
+      assert.equal(r.card, undefined, JSON.stringify(input));
+      assert.match((r.answer as { message: string }).message, why);
+    }
   });
 
   it("updates an open PR with what the mirror has, signed, and first of all when the PR is landed", async () => {

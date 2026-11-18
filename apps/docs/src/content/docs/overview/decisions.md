@@ -67,8 +67,8 @@ agent sees GitHub only through Kumiko's tools.
 
 ## Delivery to GitHub on a card, signed on your Mac
 
-The agent calls the `deliver` tool for a branch it pushed. You choose on a card to merge it into the default branch,
-open a pull request, or update the pull request it has open. Kumiko then does it on your Mac, with your `gh` login,
+The agent calls the `deliver` tool for a branch it pushed. You choose on a card to merge it into the default branch or
+the base the agent names, open a pull request, or update the pull request it has open. Kumiko then does it on your Mac, with your `gh` login,
 and signs the agent's commits with your key. Issues and comments the agent writes go through cards too.
 
 **Why.** You see the commits and changes before anything reaches GitHub, and what lands there is signed by you.
