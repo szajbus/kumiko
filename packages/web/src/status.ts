@@ -178,6 +178,9 @@ const ownState = (s: SessionInfo) =>
 
 export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
+/** What a tab's count of cards says, read aloud and on hover. */
+export const cardsWaiting = (n: number) => `${plural(n, "card")} waiting for your decision`;
+
 /**
  * What a session Claude finishes after its tab closed says it is doing: finishing, or waiting on the user, who can open
  * it again to answer while it waits.

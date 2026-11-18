@@ -47,8 +47,9 @@ sandbox and state.
 - Click the arrow beside the name to hide or show the sandbox's tabs.
 - A New session tab sits with the sandbox picked in it, and moves when you pick another.
 
-A tab shows whether the agent is working, has finished, or is waiting on you, and how many tasks run in the
-background.
+A tab shows whether the agent is working, has finished, or is waiting on you. A green number counts the tasks that
+run in the background. An amber number counts the cards in the chat that wait for your decision: questions, a plan,
+an approval, or a proposal to start a new session. Hover it to read what it counts.
 
 ## Follow the agent's work
 

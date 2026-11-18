@@ -392,6 +392,7 @@ describe("sessions", () => {
       assert.equal(ask.kind, "questions");
       const waiting = await waitFor(async () => { const i = await session(id); return i?.asking ? i : undefined; });
       assert.equal(waiting.asking, "questions");
+      assert.equal(waiting.cards, 1, "one card waits for the user");
       assert.equal(waiting.status, "running", "the turn is still open");
       assert.ok(isWaiting(waiting) && !isBusy(waiting), "waiting on the user, not working");
       const saved = await waitFor(async () => {
@@ -408,6 +409,7 @@ describe("sessions", () => {
       assert.ok(s.got.some((e) => e.kind === "ask_answer" && e.payload.id === ask.id));
       const after = await waitFor(async () => { const i = await session(id); return i?.status === "idle" ? i : undefined; });
       assert.equal(after.asking, undefined);
+      assert.equal(after.cards, undefined, "answered, no card waits");
       assert.equal((await answer(id, ask.id, { kind: "skip" })).status, 409, "answered already");
       await api(`/api/sessions/${id}`, { method: "DELETE" });
     });
@@ -1052,6 +1054,7 @@ describe("sessions", () => {
       await waitFor(async () => ((await stored(id)).run?.asks?.length ? true : undefined));
       await restart();
       assert.equal((await session(id))?.asking, "questions", "still waiting on the user");
+      assert.equal((await session(id))?.cards, 1, "its card counted again");
       const back = await listen(id);
       assert.equal(back.got.filter((e) => e.kind === "ask").length, 1, "the question is there once");
       const res = await api(`/api/sessions/${id}/asks/${ask.payload.id}`, { method: "POST", body: JSON.stringify({ kind: "answers", answers: { "Which color do you prefer?": ["Red"] } }) });

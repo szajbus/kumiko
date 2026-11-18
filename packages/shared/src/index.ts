@@ -477,6 +477,11 @@ export interface SessionInfo {
   shells?: number;
   /** Claude waits, mid-turn, for the user to answer its questions or approve its plan; see the `ask` event. */
   asking?: AgentAsk["kind"];
+  /**
+   * Cards in the chat waiting for the user's decision: what Claude asks (questions, a plan, an approval) and its
+   * proposals to start a new session, which it doesn't wait on; none when missing.
+   */
+  cards?: number;
   /** Claude is in plan mode: it plans, and waits for the user to approve the plan before it changes anything. */
   planMode?: boolean;
 }

@@ -195,6 +195,7 @@ describe("widgets", () => {
     assert.deepEqual({ prompt: asked.prompt, title: asked.title }, { prompt: "Fix the flaky upload test.", title: "Flaky upload" });
     assert.match(String(asked.toolUseId), /^toolu_/);
     assert.equal(((await json(await api("/api/sessions"))) as SessionInfo[]).length, before, "nothing starts on Claude's say-so");
+    assert.equal((await session(id))?.cards, 1, "its card waits for the user, though Claude doesn't");
 
     // Accepted, it starts on the prompt, named as Claude asked, and can't be accepted twice.
     const res = await answer(asked.id, true);
@@ -205,6 +206,7 @@ describe("widgets", () => {
     assert.deepEqual(s.events().findLast((e) => e.kind === "proposal_answer")?.payload, { id: asked.id, accepted: true, session: started });
     assert.equal((await answer(asked.id, true)).status, 409);
     assert.equal((await answer(asked.id, false)).status, 409);
+    assert.equal((await session(id))?.cards, undefined, "answered, no card waits");
 
     // Declined, nothing starts.
     await propose({ prompt: "Something else." });

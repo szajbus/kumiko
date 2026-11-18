@@ -280,6 +280,15 @@ function openAsks(events: readonly SessionEvent[]): AgentAsk[] {
   return events.flatMap((e) => (e.kind === "ask" && !settled.has(e.payload.id) ? [e.payload] : []));
 }
 
+/** The events that open or settle a card waiting for the user's decision. */
+const CARD_EVENTS = new Set<SessionEvent["kind"]>(["ask", "ask_answer", "ask_closed", "proposal", "proposal_answer"]);
+
+/** How many cards wait for the user's decision: open asks, and proposals not answered yet. */
+function openCards(events: readonly SessionEvent[]): number {
+  const answered = new Set(events.flatMap((e) => (e.kind === "proposal_answer" ? [e.payload.id] : [])));
+  return openAsks(events).length + events.filter((e) => e.kind === "proposal" && !answered.has(e.payload.id)).length;
+}
+
 /**
  * Agent sessions, kept in memory: one driver per session and a buffer of everything it said, so a tab that opens
  * or reconnects can replay it. Sessions that end stay listed until they are removed, so their tab keeps the transcript.
@@ -568,7 +577,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     for (const ev of seed) this.push(s, ev);
     for (const ev of lostShells(s.events, s.userShells)) this.push(s, ev);
     this.dropShellOutput(s);
-    s.info = { ...info, bufferBytes: s.bytes };
+    s.info = { ...info, bufferBytes: s.bytes, cards: openCards(s.events) || undefined };
     return s;
   }
 
@@ -867,6 +876,12 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     s.events.push(full);
     s.bytes += sizeOf(full);
     for (const sub of s.subscribers) sub.event(full);
+    if (CARD_EVENTS.has(full.kind)) {
+      const cards = openCards(s.events) || undefined;
+      // A session still being opened isn't listed yet: it is announced once it is, with its count.
+      if (this.sessions.get(s.info.id) === s) this.setInfo(s, { cards });
+      else s.info = { ...s.info, cards };
+    }
   }
 
   private live(id: string): Session {

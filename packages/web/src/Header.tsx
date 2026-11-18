@@ -3,7 +3,7 @@ import { isBusy, type SessionInfo } from "@kumiko/shared";
 import { Corner } from "./Corner";
 import { Logo, Plus } from "./icons";
 import { sandboxHues, sessionName, sessionTitle } from "./format";
-import { sessionState } from "./status";
+import { cardsWaiting, sessionState } from "./status";
 
 export type TabId = "sandboxes" | `new-session:${string}` | `session:${string}`;
 
@@ -114,6 +114,7 @@ export function Header({ sessions, newSessions, order, active, onSelect, onClose
         pulse: isBusy(s),
         asleep: s.asleep,
         background: (s.agents ?? 0) + (s.shells ?? 0) || undefined,
+        cards: s.cards,
       };
     }
     const n = newSessions.find((x) => `new-session:${x.key}` === id);
@@ -325,6 +326,8 @@ interface TabLook {
   asleep?: boolean;
   /** How many subagents, shells and monitors Claude has running in the background. */
   background?: number;
+  /** How many cards in its chat wait for the user's decision. */
+  cards?: number;
 }
 
 type TabProps = TabLook & { id: TabId; active: TabId } & (
@@ -334,7 +337,7 @@ type TabProps = TabLook & { id: TabId; active: TabId } & (
 );
 
 function Tab(props: TabProps) {
-  const { id, active, label, title, dot, pulse, asleep, background } = props;
+  const { id, active, label, title, dot, pulse, asleep, background, cards } = props;
   const selected = id === active && !props.closing;
   const onSelect = props.closing ? () => {} : props.onSelect;
   const onClose = props.closing ? () => {} : props.onClose;
@@ -361,6 +364,11 @@ function Tab(props: TabProps) {
       <button type="button" role="tab" aria-selected={selected} className="tab-main" title={title ?? label} onClick={() => onSelect(id)}>
         {dot && <span className={`dot dot-small${pulse ? " dot-pulse" : ""}`} style={{ background: dot }} aria-hidden="true" />}
         <span className="tab-label">{label}</span>
+        {cards ? (
+          <span className="tab-cards" aria-label={cardsWaiting(cards)} title={cardsWaiting(cards)}>
+            {cards}
+          </span>
+        ) : null}
         {background ? (
           <span className="tab-background" aria-label={`${background} running in the background`}>
             {background}
