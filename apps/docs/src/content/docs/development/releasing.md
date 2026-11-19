@@ -35,9 +35,10 @@ A release is an unstable build that someone has tried.
    as `0.0.0`, so `minor` makes `0.1.0`.
 
    The workflow (`.github/workflows/release.yml`) takes the commit of the `unstable` tag, not the newest commit on
-   `main`, so the release is the build you tried. It stops if that commit is already released. It runs the tests,
-   builds the `.dmg` and `.zip` for Apple silicon and Intel with the new version, tags the commit `vX.Y.Z`, and uploads
-   the app to a **draft** GitHub release. Each tag has its build, because the tag comes last.
+   `main`, so the release is the build you tried. It stops if that commit is already released. It doesn't run the
+   tests again, because the Unstable workflow builds only commits that passed them. It builds the `.dmg` and `.zip` for
+   Apple silicon and Intel with the new version, tags the commit `vX.Y.Z`, and uploads the app to a **draft** GitHub
+   release. Each tag has its build, because the tag comes last.
 3. **Publish the draft.** Its notes list the commit subjects since the last release. Rewrite them for the people who
    install it: leave out docs, tests and fixes to things that never shipped. Then publish it.
 
