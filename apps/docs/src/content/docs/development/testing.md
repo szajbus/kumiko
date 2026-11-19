@@ -20,6 +20,10 @@ installed for testing.
 CI runs `npm test` on every push and pull request, on Ubuntu, in the Test workflow (`.github/workflows/test.yml`). The
 git relay's tests need `socat`, as the real relay does, so install it to run them on your machine.
 
+A test whose Unix sockets live in its folder makes that folder with `shortTmp` from `packages/server/test/tmp.ts`, which
+puts it under `/tmp`. A socket's path can be 104 bytes at most on macOS, and a folder in macOS's temp folder under
+`/var/folders` leaves too little of that. The relay's sockets and gpg-agent's in `GNUPGHOME` are such sockets.
+
 ## One file
 
 ```sh

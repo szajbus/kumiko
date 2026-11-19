@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
@@ -11,6 +10,7 @@ import { LimaProvider, MetadataStore, shellQuote } from "@kumiko/sandbox";
 import { startServer, type RunningServer } from "../src/index.js";
 import { fakeGitHub, type FakeGitHub } from "./github.js";
 import { sh } from "./repo.js";
+import { shortTmp } from "./tmp.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtures = resolve(here, "../../../sandbox/fixtures");
@@ -37,7 +37,7 @@ describe("delivering from a session", () => {
   };
 
   before(async () => {
-    root = await realpath(await mkdtemp(join(tmpdir(), "kumiko-deliver-e2e-")));
+    root = await shortTmp("kumiko-deliver-e2e-");
     const limaDir = join(root, "lima");
     const vmHome = join(limaDir, "vm-home");
     process.env.FAKE_LIMA_DIR = limaDir;
