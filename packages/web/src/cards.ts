@@ -89,6 +89,8 @@ export function cardVerb(card: ApprovalCard["card"], choice?: DeliverChoice): st
       return `Comment on #${card.target.number}`;
     case "state":
       return `${card.action === "close" ? "Close" : "Reopen"} #${card.target.number}`;
+    case "edit":
+      return `Edit #${card.target.number}`;
   }
 }
 
@@ -103,6 +105,8 @@ export function approveLabel(card: ApprovalCard["card"], choice?: DeliverChoice)
       return "Post comment";
     case "state":
       return `${card.action === "close" ? "Close" : "Reopen"} ${card.target.type === "pr" ? "pull request" : "issue"}`;
+    case "edit":
+      return `Update ${card.target.type === "pr" ? "pull request" : "issue"}`;
   }
 }
 
@@ -124,6 +128,8 @@ export function cardAction(card: ApprovalCard): string {
       return `comment on #${c.target.number}`;
     case "state":
       return `${c.action} #${c.target.number}`;
+    case "edit":
+      return `edit #${c.target.number}`;
   }
 }
 

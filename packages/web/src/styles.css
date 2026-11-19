@@ -1269,6 +1269,8 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
 .ac-warn { color: #f0cf96; }
 .ac-why { color: var(--muted); font-size: 12.5px; }
 .ac-fields { margin: 0 14px; padding: 6px 0 10px; display: flex; flex-direction: column; gap: 6px; }
+.ac-was .ac-md { cursor: auto; }
+.ac-was-title { font-weight: 600; color: var(--text-2); margin-bottom: 4px; }
 .ac-fld { border: 1px solid var(--border); border-radius: 6px; background: rgba(0, 0, 0, 0.25); padding: 6px 9px; font: inherit; font-size: 13.5px; color: var(--text); }
 .ac-body { display: flex; flex-direction: column; }
 .ac-ta { field-sizing: content; min-height: 4lh; resize: vertical; background: transparent; border: 0; color: var(--text-2); font: inherit; font-size: 13px; padding: 0; outline: none; }

@@ -43,6 +43,10 @@ export function toolLine(name: string, input: Record<string, unknown>): ToolLine
       return { label: "Asked to comment on issue", title: inRepo(n ? `#${n}` : undefined) };
     case "github_pr_comment":
       return { label: "Asked to comment on pull request", title: inRepo(n ? `#${n}` : undefined) };
+    case "github_issue_edit":
+      return { label: "Asked to edit issue", title: inRepo(n ? `#${n}` : undefined) };
+    case "github_pr_edit":
+      return { label: "Asked to edit pull request", title: inRepo(n ? `#${n}` : undefined) };
     case "github_issue_close":
     case "github_issue_reopen":
     case "github_pr_close":

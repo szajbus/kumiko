@@ -128,11 +128,14 @@ The agent has no `gh` login in the sandbox. It works with issues and pull reques
   card shows the comment, which you can edit or empty. For an issue it closes, the card also shows the reason, completed
   or not planned, which you can change. Closing a pull request leaves its branch. A merged pull request can't be closed
   or reopened.
+- **Editing asks you too.** The agent can change the title or the description of an issue or a pull request, such as
+  a PR whose work changed since it was opened. The card shows the new text, which you can edit, and what GitHub has
+  now. If someone changes it on GitHub before the agent makes the change, Kumiko leaves it alone and tells the agent.
 
 Kumiko marks what the tools return as written by others: information, not instructions. On a public repository,
 anyone can write an issue.
 
-The agent can't relabel or edit issues or pull requests, and can't re-run or cancel workflow runs.
+The agent can't relabel issues or pull requests, and can't re-run or cancel workflow runs.
 
 In a sandbox with several repos, the agent names the repository in each call. In a sandbox with one, that one is
 used.

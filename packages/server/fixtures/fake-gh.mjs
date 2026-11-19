@@ -114,6 +114,14 @@ function github() {
     if (reason) item.stateReason = reason;
     if (flag("--comment")) item.comments.push({ author: user.login, body: flag("--comment") });
     save();
+  } else if ((noun === "issue" || noun === "pr") && verb === "edit") {
+    const item = find(args[2]);
+    if (!item) process.exit(1);
+    const title = opt("--title") ?? args.find((a) => a.startsWith("--title="))?.slice("--title=".length);
+    if (title !== undefined) item.title = title;
+    if (args.includes("--body-file")) item.body = readFileSync(0, "utf8");
+    save();
+    console.log(url(item.type, item.number));
   } else if ((noun === "issue" || noun === "pr") && verb === "view") {
     const item = find(args[2]);
     if (!item || (noun === "pr") !== (item.type === "pr")) {

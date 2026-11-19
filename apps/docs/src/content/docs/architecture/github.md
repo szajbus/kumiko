@@ -104,6 +104,7 @@ whatever the agent's settings say.
 | `github_issue_create` | A new issue, which you can edit before it posts. |
 | `github_issue_comment`, `github_pr_comment` | A comment, as GitHub will show it, which you can edit. |
 | `github_issue_close`, `github_issue_reopen`, `github_pr_close`, `github_pr_reopen` | The issue or PR, and the comment that goes with it, which you can edit or empty. Closing an issue also shows its reason, completed or not planned, which you can change. |
+| `github_issue_edit`, `github_pr_edit` | The new title, description or both, which you can edit, and what GitHub has now. The agent gives only the fields that change. If GitHub's copy changed since the card was shown, Kumiko changes nothing and tells the agent. |
 
 Reading needs no card. `github_issue_view`, `github_issue_list`, `github_pr_view`, `github_pr_list` and
 `github_label_list` read issues, PRs and labels. `github_api_get` makes a GET request to any path of the repository in

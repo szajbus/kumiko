@@ -65,8 +65,8 @@ function Receipt({ card, note }: { card: Card; note?: string }) {
 function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, action: CardAction) => Promise<boolean> }) {
   const c = card.card;
   const [choice, setChoice] = useState<DeliverChoice>(c.kind === "deliver" ? initialChoice(c) : "merge");
-  const [title, setTitle] = useState(c.kind === "deliver" || c.kind === "issue" ? c.title : "");
-  const [body, setBody] = useState(c.body);
+  const [title, setTitle] = useState((c.kind === "deliver" || c.kind === "issue" || c.kind === "edit" ? c.title : undefined) ?? "");
+  const [body, setBody] = useState(c.body ?? "");
   const [labels, setLabels] = useState<string[]>(c.kind === "issue" ? c.labels : []);
   const [closeReason, setCloseReason] = useState<CloseReason | undefined>(c.kind === "state" ? c.reason : undefined);
   const [declining, setDeclining] = useState(false);
@@ -107,6 +107,9 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
         return body.trim() ? { kind: "comment", body } : undefined;
       case "state":
         return { kind: "state", body, ...(closeReason ? { reason: closeReason } : {}) };
+      case "edit":
+        if (c.title !== undefined && !title.trim()) return undefined;
+        return { kind: "edit", ...(c.title !== undefined ? { title: title.trim() } : {}), ...(c.body !== undefined ? { body } : {}) };
     }
   };
   const approve = () => {
@@ -145,7 +148,7 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
             {c.pr && <span className="badge">#{c.pr.number}</span>}
           </>
         )}
-        {(c.kind === "comment" || c.kind === "state") && (
+        {(c.kind === "comment" || c.kind === "state" || c.kind === "edit") && (
           <a className="ac-target" href={c.target.url} target="_blank" rel="noreferrer">
             {c.target.title}
           </a>
@@ -216,6 +219,13 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
           <BodyField value={body} onChange={setBody} label="Comment" />
         </div>
       )}
+      {c.kind === "edit" && (
+        <div className="ac-fields">
+          {c.title !== undefined && <input className="ac-fld" value={title} onChange={(e) => setTitle(e.target.value)} aria-label={`New ${c.target.type === "pr" ? "pull request" : "issue"} title`} />}
+          {c.body !== undefined && <BodyField value={body} onChange={setBody} label={`New ${c.target.type === "pr" ? "pull request" : "issue"} description`} />}
+        </div>
+      )}
+      {c.kind === "edit" && <Was title={c.title !== undefined ? c.was.title : undefined} body={c.body !== undefined ? c.was.body : undefined} />}
       {c.kind === "state" && (
         <div className="ac-fields">
           {closeReason && (
@@ -341,6 +351,26 @@ function Facts({ commits, files, added, deleted, where }: { commits: { sha: stri
               </div>
             );
           })}
+        </div>
+      )}
+    </>
+  );
+}
+
+/** What GitHub has now, of the fields the card changes: folded away until asked for. */
+function Was({ title, body }: { title?: string; body?: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <div className="ac-facts">
+        <button type="button" aria-expanded={open} className={`ac-tog${open ? " is-on" : ""}`} onClick={() => setOpen(!open)}>
+          Now on GitHub <span className="tri" aria-hidden="true" />
+        </button>
+      </div>
+      {open && (
+        <div className="ac-panel ac-was">
+          {title !== undefined && <div className="ac-was-title">{title}</div>}
+          {body !== undefined && <div className="ac-md">{body.trim() ? <Markdown text={body} /> : <span className="dim">Empty</span>}</div>}
         </div>
       )}
     </>

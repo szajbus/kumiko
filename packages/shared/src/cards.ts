@@ -117,7 +117,21 @@ export interface StateCard {
   body: string;
 }
 
-export type ApprovalCardBody = DeliverCard | IssueCard | CommentCard | StateCard;
+/**
+ * Changing an issue's or a PR's title, description or both. A field Claude left out stays as it is and isn't on the
+ * card; `was` is what GitHub has now, and approving changes nothing if GitHub's copy changed since.
+ */
+export interface EditCard {
+  kind: "edit";
+  repo: string;
+  target: CommentCard["target"];
+  /** The new title and description; undefined for one that stays. */
+  title?: string;
+  body?: string;
+  was: { title: string; body: string };
+}
+
+export type ApprovalCardBody = DeliverCard | IssueCard | CommentCard | StateCard | EditCard;
 
 /**
  * What the user decided on a card, with what they changed: for Deliver the route and method, for the text that goes
@@ -127,7 +141,8 @@ export type CardDecision =
   | { kind: "deliver"; route: DeliverRoute; method: DeliverMethod; title?: string; body?: string }
   | { kind: "issue"; title: string; body: string; labels: string[] }
   | { kind: "comment"; body: string }
-  | { kind: "state"; body: string; reason?: CloseReason };
+  | { kind: "state"; body: string; reason?: CloseReason }
+  | { kind: "edit"; title?: string; body?: string };
 
 /** What happened, as the card's one-line receipt shows it. */
 export interface CardReceipt {
@@ -193,6 +208,12 @@ export function parseCardDecision(value: unknown): CardDecision | undefined {
       const body = text(v.body, MAX_BODY);
       if (v.reason !== undefined && v.reason !== "completed" && v.reason !== "not_planned") return undefined;
       return body !== undefined ? { kind: "state", body, ...(v.reason ? { reason: v.reason } : {}) } : undefined;
+    }
+    case "edit": {
+      const title = v.title === undefined ? undefined : line(v.title);
+      const body = v.body === undefined ? undefined : text(v.body, MAX_BODY);
+      if ((v.title !== undefined && !title) || (v.body !== undefined && body === undefined) || (title === undefined && body === undefined)) return undefined;
+      return { kind: "edit", ...(title ? { title } : {}), ...(body !== undefined ? { body } : {}) };
     }
     default:
       return undefined;
