@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,7 @@ import { LimaProvider, MetadataStore } from "@kumiko/sandbox";
 import { startServer, type RunningServer } from "../src/index.js";
 import { sh } from "./repo.js";
 import { fakeGitHub, type FakeGitHub } from "./github.js";
+import { shortTmp } from "./tmp.js";
 
 const fixtures = resolve(dirname(fileURLToPath(import.meta.url)), "../../../sandbox/fixtures");
 
@@ -25,7 +26,7 @@ describe("server", () => {
   let github: FakeGitHub;
 
   before(async () => {
-    root = await realpath(await mkdtemp(join(tmpdir(), "kumiko-server-test-")));
+    root = await shortTmp("kumiko-server-test-");
     limaDir = join(root, "lima");
     mountDir = join(root, "mount");
     dataDir = join(root, "data");

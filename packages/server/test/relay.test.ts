@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
@@ -13,6 +12,7 @@ import { pktLine, readRequest, readSessionLine, Relays, remoteForms, vmGitConfig
 import { decide, parseHookBody, parseUpdates, Pushes } from "../src/pushes.js";
 import { fakeGitHub, type FakeGitHub } from "./github.js";
 import { sh } from "./repo.js";
+import { shortTmp } from "./tmp.js";
 
 const sandboxFixtures = resolve(dirname(fileURLToPath(import.meta.url)), "../../../sandbox/fixtures");
 
@@ -102,7 +102,7 @@ describe("git relay", () => {
   const provider = () => new LimaProvider({ limactl: join(sandboxFixtures, "fake-limactl.mjs"), ssh: join(sandboxFixtures, "fake-ssh.sh"), metadata: new MetadataStore(join(root, "sandboxes")) });
 
   before(async () => {
-    root = await realpath(await mkdtemp(join(tmpdir(), "kumiko-relay-test-")));
+    root = await shortTmp("kumiko-relay-test-");
     limaDir = join(root, "lima");
     vmHome = join(limaDir, "vm-home");
     await mkdir(limaDir, { recursive: true });
@@ -409,7 +409,7 @@ describe("git relays, closed", () => {
   it("start nothing once closed, so a sync that was under way can't leave one running", async () => {
     let forwards = 0;
     const relays = new Relays({
-      dir: await mkdtemp(join(tmpdir(), "kumiko-relay-closed-")),
+      dir: await shortTmp("kumiko-relay-closed-"),
       mirrors: { ensure: async () => "", fetch: async () => {}, path: () => "", root: "" } as unknown as Mirrors,
       provider: { exec: () => { throw new Error("no VM"); }, forward: () => { forwards++; throw new Error("no VM"); } },
     });

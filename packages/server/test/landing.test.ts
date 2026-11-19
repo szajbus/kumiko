@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { land, signingKey, signs, usableKey } from "../src/landing.js";
 import { sh } from "./repo.js";
+import { shortTmp } from "./tmp.js";
 
 /** As the user's Mac may have it: GPG with a key for their email, and a git config that names no key. */
 describe("signing with GPG's key for the user's email", () => {
@@ -14,7 +14,7 @@ describe("signing with GPG's key for the user's email", () => {
   const saved = { ...process.env };
 
   before(async () => {
-    root = await realpath(await mkdtemp(join(tmpdir(), "kumiko-gpg-test-")));
+    root = await shortTmp("kumiko-gpg-test-");
     const gnupg = join(root, "gnupg");
     await mkdir(gnupg, { mode: 0o700 });
     process.env.GNUPGHOME = gnupg;
