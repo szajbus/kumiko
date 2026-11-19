@@ -15,7 +15,7 @@ packages/sandbox/  SandboxProvider and the Lima provider
 packages/agent/    AgentDriver and the Claude Code driver
 packages/server/   HTTP and WebSocket server: sandboxes, sessions, mirrors, git relay
 packages/web/      React and Vite UI
-scripts/           release.mjs
+scripts/           version.sh, the release version from git tags
 ```
 
 ## Dependencies
