@@ -48,7 +48,3 @@ npm test                 # builds, then runs every test against fake limactl, ss
 
 [Development](apps/docs/src/content/docs/development/setup.md) covers the rest: working on the UI in a browser,
 running against the fakes, the real-tool checks and releasing.
-
-## Changes
-
-[`CHANGELOG.md`](CHANGELOG.md) lists what changed for users in each release.

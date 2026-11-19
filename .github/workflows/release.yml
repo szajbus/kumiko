@@ -1,31 +1,70 @@
 name: Release
 
-# Builds the Mac app for a version tag pushed by `npm run release`, and uploads it to a draft GitHub release.
-# Nothing is public until the draft is published by hand.
+# Releases the unstable build that was tried. Run it by hand on main and pick which part of the version to bump: it
+# takes the unstable build's commit, gives it the version after the latest vX.Y.Z tag, builds the app with that version,
+# tags the commit and uploads the app to a draft GitHub release. Nothing is public until the draft is published by hand.
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Which part of the version to bump
+        type: choice
+        options: [patch, minor, major]
+        default: minor
 
 permissions:
-  contents: write
+  contents: write # to push the release's tag
+
+# One release at a time, and never cancelled partway.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
+    if: github.ref == 'refs/heads/main'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0 # the tags, for the versions and the notes
+      - name: Find the unstable build and its version
+        env:
+          BUMP: ${{ inputs.bump }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! sha=$(git rev-parse --verify -q 'unstable^{commit}'); then
+            echo "::error::There's no unstable build yet. Push to main and try the build first."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$sha" HEAD; then
+            echo "::error::The unstable build isn't from main's history. Wait for the build of main, and try that."
+            exit 1
+          fi
+
+          # A commit tagged without a release is one whose release failed after tagging: finish that one.
+          tag=$(git tag --points-at "$sha" --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)
+          if [ -n "$tag" ]; then
+            if gh release view "$tag" > /dev/null 2>&1; then
+              echo "::error::The unstable build is already released as $tag. Push to main and try the new build first."
+              exit 1
+            fi
+            version=${tag#v}
+            echo "TAGGED=true" >> "$GITHUB_ENV"
+          else
+            version=$(scripts/version.sh next "$sha" "$BUMP")
+            echo "TAGGED=false" >> "$GITHUB_ENV"
+          fi
+
+          build=$(git tag --list --format='%(contents:subject)' unstable)
+          echo "Releasing $build ($(git log -1 --format='%h %s' "$sha")) as $version"
+          echo "SHA=$sha" >> "$GITHUB_ENV"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          git checkout -q --detach "$sha"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm
-      - name: Check the tag matches the app's version
-        run: |
-          version=$(node -p "require('./apps/desktop/package.json').version")
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME doesn't match the app's version $version"
-            exit 1
-          fi
-          echo "VERSION=$version" >> "$GITHUB_ENV"
       - run: npm ci
       - run: npm test
       - name: Build the app
@@ -43,16 +82,25 @@ jobs:
             [ -n "${!name}" ] || unset "$name"
           done
           [ -n "${CSC_LINK:-}" ] || export CSC_IDENTITY_AUTO_DISCOVERY=false
-          npm run dist:mac -w @kumiko/desktop
-      - name: Upload to a draft release
+          npm run dist:mac -w @kumiko/desktop -- -c.extraMetadata.version="$VERSION"
+      # Last, so each tag has its build.
+      - name: Tag and upload to a draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # The notes are this version's section of the changelog, up to the next heading.
-          awk -v v="$VERSION" '/^## / { if (p) exit; p = ($2 == v); next } p' CHANGELOG.md > notes.md
-          if [ ! -s notes.md ]; then
-            echo "::error::CHANGELOG.md has no section for $VERSION"
-            exit 1
+          tag="v$VERSION"
+          if [ "$TAGGED" = false ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$tag" -m "Kumiko $VERSION" "$SHA"
+            git push origin "refs/tags/$tag"
           fi
-          gh release create "$GITHUB_REF_NAME" --draft --title "Kumiko $VERSION" --notes-file notes.md \
+          # The notes list the commits since the last release. Edit them on the draft for the people installing it.
+          last=$(scripts/version.sh latest "$SHA^")
+          {
+            if [ -n "$last" ]; then echo "Changes since $last:"; else echo "Changes:"; fi
+            echo
+            git log --no-merges --format='- %s' "${last:+$last..}$SHA"
+          } > notes.md
+          gh release create "$tag" --verify-tag --draft --title "Kumiko $VERSION" --notes-file notes.md \
             apps/desktop/release/*.dmg apps/desktop/release/*.zip
