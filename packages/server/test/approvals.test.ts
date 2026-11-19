@@ -815,6 +815,56 @@ describe("delivering", () => {
       const unapproved = await approvals.call(sessions.info, "github_pr_close", { number: pr.number }, "made-up");
       assert.match(unapproved.text, /^Not approved/);
     });
+
+    it("edits an issue's description as left on the card, and only what Claude changed", async () => {
+      fresh();
+      const number = await issueNumber();
+      const item = async () => (await db()).items.find((i: { number: number }) => i.number === number);
+      const was = await item();
+      const nothing = await ask({ number }, "github_issue_edit");
+      assert.match((nothing.answer as { message: string }).message, /Give a title, a body or both/);
+      const same = await ask({ number, body: `${was.body}\n` }, "github_issue_edit");
+      assert.match((same.answer as { message: string }).message, /nothing to change/);
+      const twoLines = await ask({ number, title: "a\nb" }, "github_issue_edit");
+      assert.match((twoLines.answer as { message: string }).message, /title must be one non-empty line/);
+
+      const r = await ask({ number, body: "Tabs flicker when switching." }, "github_issue_edit");
+      assert.deepEqual(r.card!.card, { kind: "edit", repo: "acme/widget", target: { type: "issue", number, title: "Tabs flicker", state: "open", author: "octo", url: `https://github.com/acme/widget/issues/${number}` }, body: "Tabs flicker when switching.", was: { title: "Tabs flicker", body: was.body } });
+      await assert.rejects(approvals.decide("s1", r.id, { action: "approve", decision: { kind: "edit", title: "Sneaky", body: "x" } }), /changes other fields than the card/);
+      await approvals.decide("s1", r.id, { action: "approve", decision: { kind: "edit", body: "Tabs flicker when switching, on macOS.\n" } });
+      const res = await approvals.call(sessions.info, "github_issue_edit", r.input, r.toolUseId);
+      assert.equal(res.text, `Changed the description of issue #${number} (https://github.com/acme/widget/issues/${number}).`);
+      const now = await item();
+      assert.deepEqual([now.title, now.body], ["Tabs flicker", "Tabs flicker when switching, on macOS."]);
+      assert.equal(sessions.card(r.id)!.receipt!.text, `Changed the description of issue #${number}`);
+    });
+
+    it("edits a pull request's title, and leaves one changed on GitHub meanwhile alone", async () => {
+      fresh();
+      const pr = (await db()).items.find((i: { type: string; state: string }) => i.type === "pr" && i.state === "OPEN");
+      const asIssue = await ask({ number: pr.number, title: "x" }, "github_issue_edit");
+      assert.match((asIssue.answer as { message: string }).message, /(has no issue #\d+\. For a pull request,|is a pull request:) use github_pr_edit/);
+
+      const r = await ask({ number: pr.number, title: "Better title" }, "github_pr_edit");
+      const card = r.card!.card;
+      assert.ok(card.kind === "edit");
+      assert.deepEqual([card.title, card.body, card.was.title], ["Better title", undefined, pr.title]);
+      await approvals.decide("s1", r.id, { action: "approve", decision: { kind: "edit", title: "Better title, edited" } });
+      assert.match((await approvals.call(sessions.info, "github_pr_edit", r.input, r.toolUseId)).text, new RegExp(`^Changed the title of pull request #${pr.number} `));
+      const now = async () => (await db()).items.find((i: { number: number }) => i.number === pr.number);
+      assert.deepEqual([(await now()).title, (await now()).body], ["Better title, edited", pr.body]);
+
+      const late = await ask({ number: pr.number, body: "New description" }, "github_pr_edit");
+      await approvals.decide("s1", late.id, { action: "approve", decision: { kind: "edit", body: "New description" } });
+      const current = await db();
+      current.items.find((i: { number: number }) => i.number === pr.number).body = "Someone else's words";
+      await writeFile(join(root, "gh", "github.json"), JSON.stringify(current));
+      const res = await approvals.call(sessions.info, "github_pr_edit", late.input, late.toolUseId);
+      assert.equal(res.isError, true);
+      assert.match(res.text, /was changed on GitHub since the card was shown/);
+      assert.equal((await now()).body, "Someone else's words");
+      assert.equal(sessions.card(late.id)!.state, "failed");
+    });
   });
 
   it("marks text from GitHub as data, and keeps it from closing its own quote", () => {

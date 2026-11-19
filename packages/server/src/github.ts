@@ -225,6 +225,15 @@ export class GitHub {
     if (r.code !== 0) throw new GhError(firstLines(r.stderr) || `gh ${type} ${action} exited with ${r.code}.`);
   }
 
+  /** Changes an issue's or a PR's title, description or both, as the user. */
+  async edit(repo: string, type: "issue" | "pr", number: number, opts: { title?: string; body?: string }): Promise<void> {
+    const args = [type, "edit", String(number), "--repo", repo];
+    if (opts.title !== undefined) args.push(`--title=${opts.title}`);
+    if (opts.body !== undefined) args.push("--body-file", "-");
+    const r = await this.run(args, 60_000, opts.body);
+    if (r.code !== 0) throw new GhError(firstLines(r.stderr) || `gh ${type} edit exited with ${r.code}.`);
+  }
+
   /** Closes a pull request with a comment. */
   async prClose(repo: string, number: number, comment: string): Promise<void> {
     const r = await this.run(["pr", "close", String(number), "--repo", repo, "--comment", comment], 60_000);
