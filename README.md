@@ -18,6 +18,13 @@ brew install lima gh
 gh auth login
 ```
 
+Kumiko isn't signed yet, so macOS won't open it at first. After you drag it into Applications, clear the download's
+quarantine, then open it as usual. Do this again for each new version:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Kumiko.app
+```
+
 ## Docs
 
 The docs site covers the design, the architecture, the features, the user guide and how to work on Kumiko. Its pages
