@@ -171,6 +171,13 @@ export const Quote = () => (
   </svg>
 );
 
+/** Two sheets, one over the other: a copy. */
+export const Copy = () => (
+  <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M5.5 5.5h7v7h-7zM10.5 5.5v-2h-7v7h2" {...stroke} />
+  </svg>
+);
+
 /** What kind of artifact an entry is. SVG and images share the picture: to the user, both are pictures. */
 export function ArtifactIcon({ type }: { type: ArtifactType }) {
   const path = {

@@ -857,8 +857,9 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
 .md-code-btn[aria-pressed="true"]:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
 .md pre.md-code-wrapped { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* Over the text selected in the chat, to quote it in the message. */
+.selection-actions { position: fixed; z-index: 15; display: flex; gap: 4px; }
 .quote-btn {
-  position: fixed; z-index: 15; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px;
+  display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px;
   border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface-2); color: var(--text);
   font-size: 12.5px; cursor: pointer; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
 }

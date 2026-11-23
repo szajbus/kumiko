@@ -40,6 +40,7 @@ The next and previous tab skip the tabs of sandboxes whose tabs you hid.
 | Keys | Does |
 | --- | --- |
 | <kbd>Q</kbd> | Quote the selected text into the message box |
+| <kbd>C</kbd> | Copy the selected text as Markdown |
 | A number key | Pick that option of the question that has focus |
 | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd> | Show or hide the Tasks pane |
 | <kbd>Ctrl</kbd>+<kbd>B</kbd> | Move the commands the agent is waiting on to the background |

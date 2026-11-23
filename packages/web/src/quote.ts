@@ -1,3 +1,5 @@
+import { fence } from "./markdownOf.ts";
+
 /** Where a quote comes from: prose, or a code block, with the language it is marked as, if any. */
 export type QuoteSource = { code: false } | { code: true; lang?: string };
 
@@ -13,11 +15,7 @@ export function quote(text: string, source: QuoteSource = { code: false }): stri
   const first = lines.findIndex((l) => !blank(l));
   if (first < 0) return "";
   lines = lines.slice(first, lines.findLastIndex((l) => !blank(l)) + 1);
-  if (source.code) {
-    const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
-    const fence = "`".repeat(Math.max(3, longest + 1));
-    lines = [fence + (source.lang ?? ""), ...lines, fence];
-  }
+  if (source.code) lines = fence(lines.join("\n"), source.lang).split("\n");
   return lines.map((l) => (blank(l) ? ">" : `> ${l}`)).join("\n");
 }
 

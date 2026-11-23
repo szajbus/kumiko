@@ -1,6 +1,6 @@
 ---
 title: Write messages
-description: Send messages and files, paste and quote text, use slash commands and suggestions, and run shell commands.
+description: Send messages and files, paste, quote and copy text, use slash commands and suggestions, and run shell commands.
 sidebar:
   order: 6
 ---
@@ -45,6 +45,12 @@ again right after the label opens it up into the box.
 Select text in the chat or in an [artifact](/guide/artifacts/), then press <kbd>Q</kbd> or the **Quote** button that
 appears. The text goes into the box as a Markdown quote. Text from a code block keeps its fence and language. A quote
 from an artifact comes with a line naming the artifact.
+
+## Copy the chat as Markdown
+
+Select text in the chat, then press <kbd>C</kbd> or the **Copy** button next to **Quote**. The clipboard gets the
+text as Markdown, with its headings, lists, links, tables and code fences. Text selected inside a code block is copied
+as a fenced block. <kbd>Cmd</kbd>+<kbd>C</kbd> still copies plain text.
 
 ## Take a suggestion
 
