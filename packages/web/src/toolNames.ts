@@ -1,6 +1,6 @@
 /**
  * Words for tool calls the window doesn't hang on (see widgets.ts for those): Kumiko's GitHub tools and deliver, loading
- * deferred tools, and any other MCP server's tools, which Claude Code names mcp__<server>__<tool>.
+ * deferred tools, using a skill, and any other MCP server's tools, which Claude Code names mcp__<server>__<tool>.
  */
 
 /** A tool call's line in the chat: what was done, and to what; `mono` when that is a path or a name, not words. */
@@ -15,13 +15,13 @@ const KUMIKO = "mcp__kumiko__";
 const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 
-/** The chat's line for one of Kumiko's own tools that isn't about the window, or for loading tools; undefined for others. */
+/** The chat's line for one of Kumiko's own tools that isn't about the window, for loading tools or for a skill; undefined for others. */
 export function toolLine(name: string, input: Record<string, unknown>): ToolLine | undefined {
   const n = num(input.number);
   const repo = str(input.repo);
   // In a sandbox with several repos, the call says which.
   const inRepo = (t: string | undefined) => [t, repo && `in ${repo}`].filter(Boolean).join(" ") || undefined;
-  switch (name.startsWith(KUMIKO) ? name.slice(KUMIKO.length) : name === "ToolSearch" ? "ToolSearch" : "") {
+  switch (name.startsWith(KUMIKO) ? name.slice(KUMIKO.length) : name === "ToolSearch" || name === "Skill" ? name : "") {
     case "deliver":
       return { label: "Asked to deliver", title: str(input.branch), mono: true };
     case "github_issue_view":
@@ -70,6 +70,8 @@ export function toolLine(name: string, input: Record<string, unknown>): ToolLine
       }
       return { label: "Looked for tools", title: query || undefined };
     }
+    case "Skill":
+      return { label: "Used skill", title: str(input.skill), mono: true };
     default:
       return undefined;
   }

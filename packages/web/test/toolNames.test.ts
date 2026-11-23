@@ -33,6 +33,11 @@ describe("tool names in the chat", () => {
     assert.deepEqual(toolLine("ToolSearch", { query: "notebook jupyter" }), { label: "Looked for tools", title: "notebook jupyter" });
   });
 
+  it("name the skill Claude used", () => {
+    assert.deepEqual(toolLine("Skill", { skill: "dataviz", args: "a chart" }), { label: "Used skill", title: "dataviz", mono: true });
+    assert.deepEqual(toolLine("Skill", { skill: "cowork-plugin-management:create-cowork-plugin" }), { label: "Used skill", title: "cowork-plugin-management:create-cowork-plugin", mono: true });
+  });
+
   it("leave other tools to their names", () => {
     assert.equal(toolLine("Bash", { command: "ls" }), undefined);
     assert.equal(toolLine("mcp__kumiko__artifact_open", { path: "x.md" }), undefined);
