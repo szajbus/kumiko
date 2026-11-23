@@ -431,12 +431,16 @@ export class Approvals {
     const last = (await this.choices())[info.sandbox];
     const route: DeliverRoute = pr ? "main" : (last?.route ?? "main");
     const github = await this.opts.mirrors.githubHead(repo, branch);
-    const ahead = github ? await this.opts.mirrors.countBetween(repo, github, facts.head) : facts.commits.length;
+    // The commits the PR shows already, or GitHub's copy of the branch: the rest are what this card adds.
+    const fresh = github ? await this.opts.mirrors.listBetween(repo, github, facts.head) : undefined;
+    const commits = fresh ? facts.commits.map((x) => (fresh.has(x.sha) ? x : { ...x, onGithub: true })) : facts.commits;
+    const ahead = fresh ? fresh.size : facts.commits.length;
     const lost = await lostCommits(dir, github, facts.head, `refs/github/heads/${facts.base}`);
     return {
       kind: "deliver",
       repo,
       ...facts,
+      commits,
       toSign: await unsignedCount(dir, facts.head),
       ...(github ? { github } : {}),
       ahead,

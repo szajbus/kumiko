@@ -28,6 +28,8 @@ export interface CardCommit {
   email: string;
   /** Has a Co-Authored-By trailer naming Claude. */
   claude: boolean;
+  /** GitHub's copy of the branch has it already: on a branch with a PR open, the PR shows it. */
+  onGithub?: boolean;
 }
 
 export interface CardFile {

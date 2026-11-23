@@ -351,6 +351,12 @@ export class Mirrors {
     return runGit(this.path(repo), ["rev-list", "--count", `${from}..${to}`], { env: gitEnv() }).then((o) => Number(o.trim()) || 0, () => 0);
   }
 
+  /** The commits `to` has that `from` hasn't. */
+  async listBetween(repo: string, from: string, to: string): Promise<Set<string>> {
+    const out = await runGit(this.path(repo), ["rev-list", `${from}..${to}`], { env: gitEnv() });
+    return new Set(out.split("\n").filter(Boolean));
+  }
+
   /** The sandbox whose agent created `branch` on GitHub through the relay, if one did. */
   createdBy(repo: string, branch: string): string | undefined {
     return this.entryOf(repo)?.record.created?.[branch]?.sandbox;

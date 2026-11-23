@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ReviewFile } from "@kumiko/shared";
-import { byFolder, changesReason, restamp, reviewRows, splitRows, viewedCount, viewedMarks, viewedState, type Review, type ReviewNote } from "../src/review.ts";
+import { byFolder, changesReason, newCommits, prUpdate, restamp, reviewRows, splitRows, viewedCount, viewedMarks, viewedState, type Review, type ReviewNote } from "../src/review.ts";
 
 const file = (hunks: ReviewFile["hunks"], status: ReviewFile["status"] = "modified") => ({ hunks, status });
 const short = (rows: ReturnType<typeof reviewRows>) => rows.map((r) => (r.kind === "gap" ? `gap ${r.skipped ?? "?"}` : `${r.kind[0]} ${r.old ?? "-"} ${r.new ?? "-"} ${r.text}`));
@@ -83,5 +83,29 @@ describe("a review's marks and notes", () => {
 
   it("groups files by folder, folders in order", () => {
     assert.deepEqual(byFolder([{ path: "b/x" }, { path: "top" }, { path: "a/y" }, { path: "b/z" }]).map(([d, fs]) => [d, fs.map((f) => f.path)]), [["", ["top"]], ["a", ["a/y"]], ["b", ["b/x", "b/z"]]]);
+  });
+});
+
+describe("a card that adds to an open PR", () => {
+  const commit = (sha: string, onGithub?: boolean) => ({ sha, subject: sha, author: "a", email: "e", claude: true, ...(onGithub ? { onGithub } : {}) });
+  const pr = { number: 7, title: "t", url: "u" };
+  const card = { pr, github: "g", head: "h", commits: [commit("a", true), commit("b"), commit("c")] };
+
+  it("compares with the PR's head on GitHub and marks the commits it doesn't show", () => {
+    const u = prUpdate(card)!;
+    assert.deepEqual([u.number, u.from, [...u.fresh]], [7, "g", ["b", "c"]]);
+    assert.deepEqual([...newCommits(card)!], ["b", "c"]);
+  });
+
+  it("has nothing new without a PR, or at the PR's own head", () => {
+    assert.equal(prUpdate({ ...card, pr: undefined }), undefined);
+    assert.equal(prUpdate({ ...card, github: "h" }), undefined);
+    assert.equal(prUpdate({ ...card, github: undefined }), undefined);
+  });
+
+  it("marks no commit new when the PR has none of them, as after a rewrite", () => {
+    const rewritten = { ...card, commits: [commit("b"), commit("c")] };
+    assert.ok(prUpdate(rewritten));
+    assert.equal(newCommits(rewritten), undefined);
   });
 });

@@ -5,7 +5,7 @@ import { hasFiles, readFiles, toInput, type ComposerFile } from "./attachments";
 import type { ChatItem } from "./chat";
 import { FileChips } from "./Composer";
 import { Markdown } from "./Markdown";
-import { changesReason, getReview, onRequestChanges, reviewOf, setReview, subscribeReviews, viewedCount, type Review } from "./review";
+import { changesReason, getReview, newCommits, onRequestChanges, reviewOf, setReview, subscribeReviews, viewedCount, type Review } from "./review";
 import { WindowContext } from "./windowContext";
 
 type AskItem = Extract<ChatItem, { type: "ask" }>;
@@ -179,7 +179,7 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
   return (
     <div className="ac-card is-pending" role="group" aria-label={cardVerb(c, choice)} ref={box}>
       {head}
-      {c.kind === "deliver" && <Facts commits={c.commits} files={c.files} added={c.added} deleted={c.deleted} where={whereLabel(c)} />}
+      {c.kind === "deliver" && <Facts commits={c.commits} fresh={newCommits(c)} files={c.files} added={c.added} deleted={c.deleted} where={whereLabel(c)} />}
       {c.kind === "deliver" && !stale && c.lost.length > 0 && (
         <div className="ac-lost">
           <b>{lostHeading(c)}</b>
@@ -309,13 +309,14 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
   );
 }
 
-function Facts({ commits, files, added, deleted, where }: { commits: { sha: string; subject: string; claude: boolean }[]; files: CardFile[]; added: number; deleted: number; where?: string }) {
+function Facts({ commits, fresh, files, added, deleted, where }: { commits: { sha: string; subject: string; claude: boolean }[]; fresh?: Set<string>; files: CardFile[]; added: number; deleted: number; where?: string }) {
   const [open, setOpen] = useState<"commits" | "files">();
   return (
     <>
       <div className="ac-facts">
         <button type="button" aria-expanded={open === "commits"} className={`ac-tog${open === "commits" ? " is-on" : ""}`} onClick={() => setOpen(open === "commits" ? undefined : "commits")}>
-          {commitsLabel({ commits })} <span className="tri" aria-hidden="true" />
+          {commitsLabel({ commits })}
+          {fresh && `, ${fresh.size} new`} <span className="tri" aria-hidden="true" />
         </button>
         <span>
           <button type="button" aria-expanded={open === "files"} className={`ac-tog${open === "files" ? " is-on" : ""}`} onClick={() => setOpen(open === "files" ? undefined : "files")}>
@@ -330,7 +331,9 @@ function Facts({ commits, files, added, deleted, where }: { commits: { sha: stri
           {commits.map((x) => (
             <div key={x.sha} className="ac-row">
               <code className="ac-sha">{short(x.sha)}</code>
-              <span>{x.subject}</span>
+              <span>
+                {x.subject} {fresh?.has(x.sha) && <span className="ac-new">new</span>}
+              </span>
               {x.claude ? <span className="ac-co">+ Claude</span> : <span />}
             </div>
           ))}
