@@ -1381,6 +1381,10 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
 .rv-prog { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .rv-prog-bar { width: 90px; height: 5px; border-radius: 3px; background: var(--border); overflow: hidden; }
 .rv-prog-bar i { display: block; height: 100%; background: var(--accent); transition: width 0.2s; }
+.rv-commit { margin: 0 0 14px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); }
+.rv-commit-h { display: flex; align-items: baseline; gap: 10px; font-size: 13px; color: var(--text); }
+.rv-commit-meta { flex: none; color: var(--muted); font-size: 12px; }
+.rv-commit-b { margin: 8px 0 0; font: 12.5px/1.5 var(--mono); color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
 .rv-pr { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; padding: 6px 14px; border-bottom: 1px solid var(--border-soft); color: var(--text-2); font-size: 12.5px; }
 .rv-pr-btn { font: inherit; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; }
 .rv-pr-btn:hover { color: var(--accent-hover); }

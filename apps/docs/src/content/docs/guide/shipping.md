@@ -94,12 +94,16 @@ would land, read from the mirror at the card's commit.
 When the agent delivers the branch again, files that didn't change stay viewed. A file that changed is marked
 "changed since viewed". **Since you last looked**, in the menu at the top left, shows only what changed in the
 branch's own files, leaving out what a merge or rebase brought in from the default branch. The same menu shows one
-commit at a time.
+commit at a time, with its message above its diff.
 
 When the branch has a pull request open, the card and the pane mark the commits the pull request doesn't have yet
-as new. A line under the pane's toolbar says how many there are, and **Show only what's new** shows what they change.
-It compares the branch with the pull request's head on GitHub, and it leaves out what a merge or rebase brought in
-too. **New since PR #N**, in the menu, does the same. Viewed marks and notes work only in **All changes**.
+as new. If the pull request has some of the branch's commits already, the pane opens on **New since PR #N**: what
+the new commits change, compared with the pull request's head on GitHub. It leaves out what a merge or rebase
+brought in, as **Since you last looked** does. A line under the pane's toolbar says how many commits are new, with a
+button to switch to all changes and back.
+
+Viewed marks and notes work in every view but one commit's. A note on a removed line in **New since PR #N** stays
+in that view, and the agent is told which commit the line is from.
 
 Kumiko keeps what you viewed and your notes in the app, per branch and session. Nothing goes to GitHub. You don't
 need to review to approve: the card's button works whatever the pane says.

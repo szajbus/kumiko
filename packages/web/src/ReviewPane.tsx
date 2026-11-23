@@ -9,7 +9,10 @@ import { PaneGrip } from "./PaneGrip";
 import {
   byFolder,
   getReview,
+  initialScope,
+  markable,
   newCommits,
+  noteFits,
   noteKey,
   prUpdate,
   requestChanges,
@@ -19,6 +22,7 @@ import {
   reviewRows,
   setReview,
   splitRows,
+  scopeFrom,
   scopeQuery,
   subscribeReviews,
   viewedMarks,
@@ -90,7 +94,7 @@ function ReviewBody({ session, pane, card, c }: { session: string; pane: string;
   const rkey = reviewOf(c);
   const review = useSyncExternalStore(subscribeReviews, () => getReview(session, rkey));
   const prefs = useSyncExternalStore(reviewPrefs.subscribe, reviewPrefs.get);
-  const [scope, setScope] = useState<Scope>({ kind: "all" });
+  const [scope, setScope] = useState<Scope>(() => initialScope(c));
   const [diff, setDiff] = useState<ReviewDiff>();
   const [error, setError] = useState<string>();
   const [filter, setFilter] = useState("");
@@ -99,11 +103,28 @@ function ReviewBody({ session, pane, card, c }: { session: string; pane: string;
   const open = card.state === "open" || card.state === "stale";
   const decidable = open && Boolean(ctx?.live);
   const all = scope.kind === "all";
+  // Viewed marks and notes work where the diff ends at the card's commit: all changes, or what changed since one.
+  const marks = markable(scope);
 
   // The heads the user reviewed at, for "since": this one goes last.
   useEffect(() => {
     setReview(session, rkey, (r) => (r.seen.at(-1) === c.head ? r : { ...r, seen: [...r.seen.filter((h) => h !== c.head), c.head].slice(-10) }));
   }, [session, rkey, c.head]);
+  // Files viewed at an earlier head that haven't changed since are viewed at this one too. The view of all changes
+  // says which those are; when the pane opens on another, they are read from all changes once.
+  useEffect(() => {
+    if (initialScope(c).kind === "all") return;
+    let gone = false;
+    api
+      .reviewDiff(session, card.id, {})
+      .then((d) => !gone && setReview(session, rkey, (r) => restamp(r, c.head, d.files)))
+      .catch(() => {});
+    return () => {
+      gone = true;
+    };
+    // Once per card: the pane starts over for another head.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const before = review.seen.at(-1) === c.head ? review.seen.at(-2) : review.seen.at(-1);
   // A card that adds to an open PR: what's new is what the PR doesn't show yet.
   const upd = useMemo(() => prUpdate(c), [c]);
@@ -118,7 +139,6 @@ function ReviewBody({ session, pane, card, c }: { session: string; pane: string;
       .then((d) => {
         if (gone) return;
         setDiff(d);
-        // Files viewed at an earlier head that haven't changed since are viewed at this one too.
         if (scope.kind === "all") setReview(session, rkey, (r) => restamp(r, c.head, d.files));
       })
       .catch((err) => !gone && setError(errorMessage(err)));
@@ -147,7 +167,7 @@ function ReviewBody({ session, pane, card, c }: { session: string; pane: string;
     }
     return r;
   };
-  const viewed = all ? files.filter((f) => viewedState(review, f) === "yes").length : 0;
+  const viewed = marks ? files.filter((f) => viewedState(review, f) === "yes").length : 0;
 
   const go = useCallback((path: string) => {
     setCurrent(path);
@@ -173,7 +193,7 @@ function ReviewBody({ session, pane, card, c }: { session: string; pane: string;
       if (!shownFiles.length) return;
       e.preventDefault();
       go(shownFiles[i < 0 ? 0 : Math.min(shownFiles.length - 1, Math.max(0, i + (e.key === "j" ? 1 : -1)))].path);
-    } else if (e.key === "v" && all && i >= 0) {
+    } else if (e.key === "v" && marks && i >= 0) {
       e.preventDefault();
       setViewed(shownFiles[i], viewedState(review, shownFiles[i]) !== "yes");
     }
@@ -247,7 +267,7 @@ function ReviewBody({ session, pane, card, c }: { session: string; pane: string;
           <input type="checkbox" checked={prefs.whitespace} onChange={(e) => reviewPrefs.set({ whitespace: e.target.checked })} /> Hide whitespace
         </label>
         <span className="rv-spacer" />
-        {all && diff && (
+        {marks && diff && (
           <span className="rv-prog">
             {viewed} / {files.length} viewed
             <span className="rv-prog-bar">
@@ -277,7 +297,7 @@ function ReviewBody({ session, pane, card, c }: { session: string; pane: string;
             <div key={dir}>
               {dir && <div className="rv-dir">{dir}/</div>}
               {fs.map((f) => (
-                <TreeFile key={f.path} f={f} current={f.path === current} state={all ? viewedState(review, f) : "no"} notes={notes.some((n) => n.path === f.path)} onClick={() => go(f.path)} />
+                <TreeFile key={f.path} f={f} current={f.path === current} state={marks ? viewedState(review, f) : "no"} notes={notes.some((n) => n.path === f.path)} onClick={() => go(f.path)} />
               ))}
             </div>
           ))}
@@ -295,7 +315,9 @@ function ReviewBody({ session, pane, card, c }: { session: string; pane: string;
             <p className="rv-error">{error}</p>
           ) : !diff ? (
             <p className="rv-empty">Reading the changes…</p>
-          ) : !files.length ? (
+          ) : null}
+          {!error && diff?.message !== undefined && scope.kind === "commit" && <CommitMessage sha={scope.sha} message={diff.message} author={c.commits.find((x) => x.sha === scope.sha)?.author} />}
+          {error || !diff ? null : !files.length ? (
             <p className="rv-empty">{onlyNew ? `Nothing new in the branch's own files since PR #${upd!.number}.` : scope.kind === "since" ? "Nothing changed since then." : "No changes."}</p>
           ) : (
             files.map((f) => (
@@ -309,9 +331,9 @@ function ReviewBody({ session, pane, card, c }: { session: string; pane: string;
                 head={c.head}
                 scope={scope}
                 file={f}
-                viewed={all ? viewedState(review, f) : undefined}
-                notes={all ? (notesByPath.get(f.path) ?? NO_NOTES) : undefined}
-                canNote={all && decidable}
+                viewed={marks ? viewedState(review, f) : undefined}
+                notes={marks ? (notesByPath.get(f.path) ?? NO_NOTES) : undefined}
+                canNote={marks && decidable}
                 split={prefs.split}
                 whitespace={prefs.whitespace}
                 onViewed={setViewed}
@@ -323,7 +345,7 @@ function ReviewBody({ session, pane, card, c }: { session: string; pane: string;
       </div>
       <div className="rv-foot">
         <span className="rv-keys">
-          <kbd>j</kbd> <kbd>k</kbd> next / previous file{all && (
+          <kbd>j</kbd> <kbd>k</kbd> next / previous file{marks && (
             <>
               {" "}
               · <kbd>v</kbd> viewed
@@ -331,7 +353,7 @@ function ReviewBody({ session, pane, card, c }: { session: string; pane: string;
           )}
         </span>
         <span className="rv-spacer" />
-        {all && decidable && (
+        {marks && decidable && (
           <span className="rv-notes">{notes.length ? <><b>{notes.length === 1 ? "1 note" : `${notes.length} notes`}</b> for Claude</> : "Click a line number to leave a note for Claude"}</span>
         )}
         {decidable && notes.length > 0 && (
@@ -340,6 +362,26 @@ function ReviewBody({ session, pane, card, c }: { session: string; pane: string;
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+/** One commit's message, above its diff: its subject, then the rest as written. */
+function CommitMessage({ sha, message, author }: { sha: string; message: string; author?: string }) {
+  const nl = message.indexOf("\n");
+  const subject = nl < 0 ? message : message.slice(0, nl);
+  const rest = nl < 0 ? "" : message.slice(nl).replace(/^\n+/, "");
+  return (
+    <div className="rv-commit">
+      <div className="rv-commit-h">
+        <b>{subject}</b>
+        <span className="rv-spacer" />
+        <span className="rv-commit-meta">
+          {author ? `${author} · ` : ""}
+          <code title={sha}>{short(sha)}</code>
+        </span>
+      </div>
+      {rest && <pre className="rv-commit-b">{rest}</pre>}
     </div>
   );
 }
@@ -377,9 +419,9 @@ interface FileProps {
   head: string;
   scope: Scope;
   file: ReviewFile;
-  /** Whether it is viewed, where marks count: in the review of all changes. */
+  /** Whether it is viewed, where marks count: in a diff that ends at the card's commit. */
   viewed?: "yes" | "changed" | "no";
-  /** The file's notes, where notes show: in the review of all changes. */
+  /** The file's notes, where notes show: in a diff that ends at the card's commit. */
   notes?: ReviewNote[];
   canNote: boolean;
   split: boolean;
@@ -415,15 +457,17 @@ const FileSection = memo(function FileSection({ ref, session, ask, review, head,
 
   const rows = useMemo(() => reviewRows(file, lines, openGaps), [file, lines, openGaps]);
   const tokens = useRowTokens(file.path, rows);
-  // Notes at this commit go on their lines; ones left at an earlier commit, or on lines not shown, above the diff.
-  const mine = useMemo(() => (notes ?? []).filter((n) => n.head === head), [notes, head]);
+  // Notes on this diff's lines go on them; ones left at an earlier commit, in another view, or on lines not shown, above
+  // the diff.
+  const from = scopeFrom(scope);
+  const mine = useMemo(() => (notes ?? []).filter((n) => noteFits(n, head, from)), [notes, head, from]);
   const byKey = useMemo(() => {
     const m = new Map<string, ReviewNote[]>();
     for (const n of mine) m.set(noteKey(n.path, n.side, n.line), [...(m.get(noteKey(n.path, n.side, n.line)) ?? []), n]);
     return m;
   }, [mine]);
   const shownKeys = useMemo(() => new Set(rows.filter((r) => r.kind !== "gap").map((r) => target(file.path, r))), [rows, file.path]);
-  const elsewhere = (notes ?? []).filter((n) => n.head !== head || !shownKeys.has(noteKey(n.path, n.side, n.line)));
+  const elsewhere = (notes ?? []).filter((n) => !noteFits(n, head, from) || !shownKeys.has(noteKey(n.path, n.side, n.line)));
 
   const expand = async (index: number) => {
     if (!lines) {
@@ -463,7 +507,7 @@ const FileSection = memo(function FileSection({ ref, session, ask, review, head,
     setReview(session, review, (r) => {
       const rest = r.notes.filter((n) => n.id !== draft.id);
       if (!t) return { ...r, notes: rest };
-      const note: ReviewNote = { id: draft.id ?? crypto.randomUUID(), path: file.path, side: draft.side, line: draft.line, quote: draft.quote, text: t, head };
+      const note: ReviewNote = { id: draft.id ?? crypto.randomUUID(), path: file.path, side: draft.side, line: draft.line, quote: draft.quote, text: t, head, ...(draft.side === "old" && from ? { from } : {}) };
       return { ...r, notes: [...rest, note] };
     });
     setDraft(undefined);

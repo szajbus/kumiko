@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ReviewFile } from "@kumiko/shared";
-import { byFolder, changesReason, newCommits, prUpdate, restamp, reviewRows, splitRows, viewedCount, viewedMarks, viewedState, type Review, type ReviewNote } from "../src/review.ts";
+import { byFolder, changesReason, initialScope, newCommits, noteFits, prUpdate, restamp, reviewRows, splitRows, viewedCount, viewedMarks, viewedState, type Review, type ReviewNote } from "../src/review.ts";
 
 const file = (hunks: ReviewFile["hunks"], status: ReviewFile["status"] = "modified") => ({ hunks, status });
 const short = (rows: ReturnType<typeof reviewRows>) => rows.map((r) => (r.kind === "gap" ? `gap ${r.skipped ?? "?"}` : `${r.kind[0]} ${r.old ?? "-"} ${r.new ?? "-"} ${r.text}`));
@@ -107,5 +107,25 @@ describe("a card that adds to an open PR", () => {
     const rewritten = { ...card, commits: [commit("b"), commit("c")] };
     assert.ok(prUpdate(rewritten));
     assert.equal(newCommits(rewritten), undefined);
+  });
+
+  it("opens on what's new, unless the PR has none of the commits or there is no PR", () => {
+    assert.deepEqual(initialScope(card), { kind: "since", sha: "g" });
+    assert.deepEqual(initialScope({ ...card, commits: [commit("b")] }), { kind: "all" });
+    assert.deepEqual(initialScope({ ...card, pr: undefined }), { kind: "all" });
+  });
+
+  it("puts a note on a removed line only in the view it was left in", () => {
+    const note = { head: "h", side: "old" as const, from: "g" };
+    assert.equal(noteFits(note, "h", "g"), true);
+    assert.equal(noteFits(note, "h", undefined), false, "not in all changes, where old lines are the base's");
+    assert.equal(noteFits({ head: "h", side: "old" }, "h", undefined), true);
+    assert.equal(noteFits({ head: "h", side: "new", from: undefined }, "h", "g"), true, "new lines are the card's commit's in either");
+    assert.equal(noteFits({ ...note, head: "x" }, "h", "g"), false);
+  });
+
+  it("tells Claude which commit a removed line is in", () => {
+    const n: ReviewNote = { id: "1", path: "a.ts", side: "old", line: 4, quote: "old()", text: "Why?", head: "h", from: "abcdef123" };
+    assert.equal(changesReason({ branch: "fix", head: "h" }, [n], ""), "Notes on fix at h:\n\na.ts, line 4 at abcdef1, before the later commits\n> old()\nWhy?");
   });
 });

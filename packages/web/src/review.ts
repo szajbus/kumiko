@@ -94,6 +94,11 @@ export interface ReviewNote {
   text: string;
   /** The card's commit the note was left at: `line` is a line of that version. */
   head: string;
+  /**
+   * For a note on a removed line in a view of what changed since a commit, such as what's new on a PR: that commit,
+   * which `line` is a line of. Undefined for one left in the view of all changes, where it is the branch's base.
+   */
+  from?: string;
 }
 
 /** Where a note sits: a file's line on one side. */
@@ -167,7 +172,7 @@ export function changesReason(card: Pick<DeliverCard, "branch" | "head">, notes:
       `Notes on ${card.branch} at ${short(head)}${head === card.head ? "" : ", an earlier commit of the branch"}:\n\n` +
         sorted
           .map((n) => {
-            const where = n.side === "new" ? `${n.path}:${n.line}` : `${n.path}, line ${n.line} before the change`;
+            const where = n.side === "new" ? `${n.path}:${n.line}` : n.from ? `${n.path}, line ${n.line} at ${short(n.from)}, before the later commits` : `${n.path}, line ${n.line} before the change`;
             return `${where}\n> ${n.quote.trim()}\n${n.text.trim()}`;
           })
           .join("\n\n"),
@@ -311,6 +316,24 @@ export function newCommits(c: Pick<DeliverCard, "pr" | "github" | "head" | "comm
 
 /** What the pane shows of the branch: all it changes, one commit, or what changed since the head reviewed before. */
 export type Scope = { kind: "all" } | { kind: "commit"; sha: string } | { kind: "since"; sha: string };
+
+/** What a scope's diff compares with, where notes on removed lines are: undefined for the branch's base. */
+export const scopeFrom = (scope: Scope) => (scope.kind === "since" ? scope.sha : undefined);
+
+/** Whether a scope's diff ends at the card's commit, so that viewed marks and notes work in it: not one commit's. */
+export const markable = (scope: Scope) => scope.kind !== "commit";
+
+/** Whether note `n` is on a line of the diff from `from` (see `scopeFrom`) to `head`. */
+export const noteFits = (n: Pick<ReviewNote, "head" | "side" | "from">, head: string, from: string | undefined) => n.head === head && (n.side === "new" || n.from === from);
+
+/**
+ * What the pane opens on: what's new, for a card that adds commits to a PR that has some of the others already;
+ * else all changes.
+ */
+export function initialScope(c: Pick<DeliverCard, "pr" | "github" | "head" | "commits">): Scope {
+  const u = prUpdate(c);
+  return u && newCommits(c) ? { kind: "since", sha: u.from } : { kind: "all" };
+}
 
 /** The diff request for `scope`. */
 export const scopeQuery = (scope: Scope, whitespace: boolean) => ({

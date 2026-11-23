@@ -49,6 +49,8 @@ export interface ReviewDiff {
   from: string;
   to: string;
   files: ReviewFile[];
+  /** For a diff of one commit: its whole message. */
+  message?: string;
 }
 
 /** How many patch lines a review diff holds before the rest of its files come as `tooLarge`. */
