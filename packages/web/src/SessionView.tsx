@@ -694,7 +694,7 @@ function Chat({ session, chat, workdir, running, live, active, onRewind, onFork,
       </div>
     </div>
     {/* Outside the log, so it isn't read out as new output. */}
-    <QuoteButton root={box} onQuote={onQuote} />
+    <QuoteButton root={box} onQuote={onQuote} copy />
     </>
   );
 }
