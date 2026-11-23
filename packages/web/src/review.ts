@@ -294,6 +294,21 @@ export function byFolder<T extends { path: string }>(files: T[]): [string, T[]][
   return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
 }
 
+/**
+ * A card that adds to an open PR: where the PR's branch is on GitHub, what its new commits go on, and the card's
+ * commits that the PR doesn't show yet. Undefined for a card with no PR, or one that adds nothing to it.
+ */
+export function prUpdate(c: Pick<DeliverCard, "pr" | "github" | "head" | "commits">): { number: number; from: string; fresh: Set<string> } | undefined {
+  if (!c.pr || !c.github || c.github === c.head) return undefined;
+  return { number: c.pr.number, from: c.github, fresh: new Set(c.commits.filter((x) => !x.onGithub).map((x) => x.sha)) };
+}
+
+/** The card's commits that its open PR doesn't show yet, when the PR shows some of the others: what to mark new. */
+export function newCommits(c: Pick<DeliverCard, "pr" | "github" | "head" | "commits">): Set<string> | undefined {
+  const u = prUpdate(c);
+  return u && u.fresh.size < c.commits.length ? u.fresh : undefined;
+}
+
 /** What the pane shows of the branch: all it changes, one commit, or what changed since the head reviewed before. */
 export type Scope = { kind: "all" } | { kind: "commit"; sha: string } | { kind: "since"; sha: string };
 

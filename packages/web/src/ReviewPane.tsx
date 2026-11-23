@@ -9,7 +9,9 @@ import { PaneGrip } from "./PaneGrip";
 import {
   byFolder,
   getReview,
+  newCommits,
   noteKey,
+  prUpdate,
   requestChanges,
   restamp,
   reviewOf,
@@ -103,6 +105,10 @@ function ReviewBody({ session, pane, card, c }: { session: string; pane: string;
     setReview(session, rkey, (r) => (r.seen.at(-1) === c.head ? r : { ...r, seen: [...r.seen.filter((h) => h !== c.head), c.head].slice(-10) }));
   }, [session, rkey, c.head]);
   const before = review.seen.at(-1) === c.head ? review.seen.at(-2) : review.seen.at(-1);
+  // A card that adds to an open PR: what's new is what the PR doesn't show yet.
+  const upd = useMemo(() => prUpdate(c), [c]);
+  const onlyNew = scope.kind === "since" && scope.sha === upd?.from;
+  const fresh = useMemo(() => newCommits(c), [c]);
 
   useEffect(() => {
     let gone = false;
@@ -173,7 +179,8 @@ function ReviewBody({ session, pane, card, c }: { session: string; pane: string;
     }
   };
 
-  const scopeLabel = scope.kind === "all" ? `All ${c.commits.length} commit${c.commits.length === 1 ? "" : "s"}` : scope.kind === "since" ? `Since ${short(scope.sha)}` : `${short(scope.sha)} · ${c.commits.find((x) => x.sha === scope.sha)?.subject ?? ""}`;
+  const commitCount = (n: number) => `${n} commit${n === 1 ? "" : "s"}`;
+  const scopeLabel = scope.kind === "all" ? `All ${commitCount(c.commits.length)}` : onlyNew ? `New since PR #${upd!.number} · ${commitCount(upd!.fresh.size)}` : scope.kind === "since" ? `Since ${short(scope.sha)}` : `${short(scope.sha)} · ${c.commits.find((x) => x.sha === scope.sha)?.subject ?? ""}`;
   const scopeId = scope.kind === "all" ? "all" : `${scope.kind}:${scope.sha}`;
 
   return (
@@ -198,7 +205,14 @@ function ReviewBody({ session, pane, card, c }: { session: string; pane: string;
                 <span>All changes</span>
                 <span className="rv-mi-d">what lands on {c.base}</span>
               </Menu.Item>
-              {before && (
+              {upd && (
+                <Menu.Item className="menu-item rv-mi" onSelect={() => setScope({ kind: "since", sha: upd.from })}>
+                  <span className="rv-ck">{onlyNew ? "✓" : ""}</span>
+                  <span>New since PR #{upd.number}</span>
+                  <span className="rv-mi-d">what the PR doesn't have yet</span>
+                </Menu.Item>
+              )}
+              {before && before !== upd?.from && (
                 <Menu.Item className="menu-item rv-mi" onSelect={() => setScope({ kind: "since", sha: before })}>
                   <span className="rv-ck">{scope.kind === "since" ? "✓" : ""}</span>
                   <span>Since you last looked</span>
@@ -212,6 +226,7 @@ function ReviewBody({ session, pane, card, c }: { session: string; pane: string;
                   <span className="rv-ck">{scope.kind === "commit" && scope.sha === x.sha ? "✓" : ""}</span>
                   <code className="rv-mi-sha">{short(x.sha)}</code>
                   <span className="rv-mi-subject">{x.subject}</span>
+                  {fresh?.has(x.sha) ? <span className="rv-new">new</span> : <span />}
                 </Menu.Item>
               ))}
             </Menu.Content>
@@ -241,6 +256,18 @@ function ReviewBody({ session, pane, card, c }: { session: string; pane: string;
           </span>
         )}
       </div>
+      {upd && open && (
+        <div className="rv-pr">
+          <span>
+            {fresh
+              ? `PR #${upd.number} has ${commitCount(c.commits.length - upd.fresh.size)} of these already; ${upd.fresh.size === 1 ? "1 is" : `${upd.fresh.size} are`} new.`
+              : `${c.branch} was rewritten since PR #${upd.number} got it.`}
+          </span>
+          <button type="button" className="rv-pr-btn" onClick={() => setScope(onlyNew ? { kind: "all" } : { kind: "since", sha: upd.from })}>
+            {onlyNew ? "Show all changes" : fresh ? "Show only what's new" : "Show what changes on the PR"}
+          </button>
+        </div>
+      )}
       {card.state === "stale" && <div className="rv-banner">{c.branch} moved after the card was shown. This is the commit the card is for; review again on the card to see the new one.</div>}
       {!open && <div className="rv-banner">This card is closed.</div>}
       <div className="rv-body">
@@ -256,7 +283,7 @@ function ReviewBody({ session, pane, card, c }: { session: string; pane: string;
           ))}
           {diff && (
             <div className="rv-sum">
-              {files.length} file{files.length === 1 ? "" : "s"} changed in {scope.kind === "commit" ? "1 commit" : `${c.commits.length} commit${c.commits.length === 1 ? "" : "s"}`} ·{" "}
+              {files.length} file{files.length === 1 ? "" : "s"} changed in {scope.kind === "commit" ? "1 commit" : commitCount(onlyNew ? upd!.fresh.size : c.commits.length)} ·{" "}
               <span className="rv-nowrap">
                 <span className="ac-add">+{files.reduce((n, f) => n + (f.added ?? 0), 0)}</span> <span className="ac-del">−{files.reduce((n, f) => n + (f.deleted ?? 0), 0)}</span>
               </span>
@@ -269,7 +296,7 @@ function ReviewBody({ session, pane, card, c }: { session: string; pane: string;
           ) : !diff ? (
             <p className="rv-empty">Reading the changes…</p>
           ) : !files.length ? (
-            <p className="rv-empty">{scope.kind === "since" ? "Nothing changed since then." : "No changes."}</p>
+            <p className="rv-empty">{onlyNew ? `Nothing new in the branch's own files since PR #${upd!.number}.` : scope.kind === "since" ? "Nothing changed since then." : "No changes."}</p>
           ) : (
             files.map((f) => (
               <FileSection

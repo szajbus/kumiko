@@ -586,6 +586,11 @@ describe("delivering", () => {
     const c = again.card!.card as DeliverCard;
     assert.equal(c.github, published);
     assert.equal(c.ahead, 1);
+    assert.deepEqual(
+      c.commits.map((x) => [x.subject, x.onGithub ?? false]),
+      [["Change g1", true], ["Change g2", false]],
+      "the PR's commit is marked, the new one isn't",
+    );
     assert.deepEqual(c.lost, []);
     assert.ok(c.pr);
     await approvals.decide("s1", again.id, { action: "approve", decision: { kind: "deliver", route: "pr", method: "merge" } });
