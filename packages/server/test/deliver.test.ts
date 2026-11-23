@@ -165,6 +165,8 @@ describe("delivering from a session", () => {
     assert.equal(blob.text, "hi\nthere\n");
     const commit = (await (await api(`/api/sessions/${id}/cards/${card.id}/diff?commit=${one}`)).json()) as ReviewDiff;
     assert.deepEqual(commit.files.map((f) => f.path), ["README"], "one commit shows only what it changed");
+    assert.equal(commit.message, "Say more\n\nCo-Authored-By: Claude <noreply@anthropic.com>", "with its whole message");
+    assert.equal(diff.message, undefined);
     assert.equal((await api(`/api/sessions/${id}/cards/${card.id}/diff?commit=${"0".repeat(40)}`)).status, 400, "only the card's commits");
     assert.equal((await api(`/api/sessions/${id}/cards/${card.id}/blob/HEAD`)).status, 400);
     assert.equal((await api(`/api/sessions/${id}/cards/nope/diff`)).status, 404);

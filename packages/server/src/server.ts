@@ -87,7 +87,7 @@ import { MirrorFetchFailed, MirrorNotFound, MirrorRecordError, Mirrors } from ".
 import { hostIdentity } from "./git.js";
 import { Pushes } from "./pushes.js";
 import { ApprovalError, Approvals, cardsOf } from "./approvals.js";
-import { branchPaths, commitOf, isObjectName, mergeBase, parentOf, readBlob, ReviewRefused, reviewDiff } from "./review.js";
+import { branchPaths, commitMessage, commitOf, isObjectName, mergeBase, parentOf, readBlob, ReviewRefused, reviewDiff } from "./review.js";
 import { Relays } from "./relay.js";
 import { hasToken, isLocalRequest, isToken, tokenCookie } from "./guard.js";
 import { LoginFailed, Logins } from "./logins.js";
@@ -1405,7 +1405,7 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
 
   /**
    * What the card's branch changes, file by file: all of it from where it left the default branch, or `commit` alone
-   * (one of the card's), or what changed `since` a commit reviewed before. `w=1` leaves out changes in whitespace;
+   * (one of the card's), with its message, or what changed `since` a commit reviewed before. `w=1` leaves out changes in whitespace;
    * `path` (repeated) asks for those files alone, with their long patches.
    */
   app.get("/api/sessions/:id/cards/:ask/diff", async (c) => {
@@ -1439,7 +1439,8 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
             if (own) only = own;
           }
         } else from = await branchBase();
-        return reviewDiff(dir, from, to, { ignoreWhitespace: c.req.query("w") === "1", ...(only.length ? { paths: only } : {}), ...(paths.length ? { whole: true } : {}) });
+        const diff = await reviewDiff(dir, from, to, { ignoreWhitespace: c.req.query("w") === "1", ...(only.length ? { paths: only } : {}), ...(paths.length ? { whole: true } : {}) });
+        return commit !== undefined && !paths.length ? { ...diff, message: await commitMessage(dir, commit) } : diff;
       }),
     );
   });

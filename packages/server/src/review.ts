@@ -26,6 +26,11 @@ export async function mergeBase(dir: string, a: string, b: string): Promise<stri
   return r.out.trim();
 }
 
+/** A commit's whole message, as its author wrote it. */
+export async function commitMessage(dir: string, commit: string): Promise<string> {
+  return (await mirrorGit(dir, ["log", "-1", "--no-color", "--format=%B", commit])).out.trimEnd();
+}
+
 /** A commit's first parent: what it changed is counted from there. */
 export async function parentOf(dir: string, commit: string): Promise<string> {
   const parent = await commitOf(dir, `${commit}^`);
