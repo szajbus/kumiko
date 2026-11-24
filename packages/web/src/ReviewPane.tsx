@@ -46,7 +46,7 @@ function useCard(events: readonly SessionEvent[], ask: string): ApprovalCard | u
 }
 
 /** The review pane: a deliver card's changes, file by file, to read before deciding on the card. */
-export function ReviewPane({ session, pane, ask, events }: { session: string; pane: string; ask: string; events: readonly SessionEvent[] }) {
+export function ReviewPane({ session, pane, ask, refreshed, events }: { session: string; pane: string; ask: string; refreshed?: string; events: readonly SessionEvent[] }) {
   const card = useCard(events, ask);
   const c = card?.card.kind === "deliver" ? card.card : undefined;
   if (!card || !c) {
@@ -58,7 +58,7 @@ export function ReviewPane({ session, pane, ask, events }: { session: string; pa
     );
   }
   // A card worked out again (a stale one reviewed) is another state of the branch: the pane starts over for it.
-  return <ReviewBody key={c.head} session={session} pane={pane} card={card} c={c} />;
+  return <ReviewBody key={`${card.id}|${c.head}`} session={session} pane={pane} card={card} c={c} refreshed={refreshed} />;
 }
 
 function Head({ pane, c, children }: { pane: string; c?: DeliverCard; children?: ReactNode }) {
@@ -89,7 +89,7 @@ function Head({ pane, c, children }: { pane: string; c?: DeliverCard; children?:
   );
 }
 
-function ReviewBody({ session, pane, card, c }: { session: string; pane: string; card: ApprovalCard; c: DeliverCard }) {
+function ReviewBody({ session, pane, card, c, refreshed }: { session: string; pane: string; card: ApprovalCard; c: DeliverCard; refreshed?: string }) {
   const ctx = useContext(WindowContext);
   const rkey = reviewOf(c);
   const review = useSyncExternalStore(subscribeReviews, () => getReview(session, rkey));
@@ -290,6 +290,16 @@ function ReviewBody({ session, pane, card, c }: { session: string; pane: string;
       )}
       {card.state === "stale" && <div className="rv-banner">{c.branch} moved after the card was shown. This is the commit the card is for; review again on the card to see the new one.</div>}
       {!open && <div className="rv-banner">This card is closed.</div>}
+      {open && refreshed && (
+        <div className="rv-pr">
+          <span>Refreshed: Claude delivered {c.branch} again{refreshed === c.head ? "" : `, at ${short(c.head)}`}. This is the new card.</span>
+          {refreshed !== c.head && (
+            <button type="button" className="rv-pr-btn" onClick={() => setScope(scope.kind === "since" && scope.sha === refreshed ? { kind: "all" } : { kind: "since", sha: refreshed })}>
+              {scope.kind === "since" && scope.sha === refreshed ? "Show all changes" : `Show what changed since ${short(refreshed)}`}
+            </button>
+          )}
+        </div>
+      )}
       <div className="rv-body">
         <nav className="rv-tree" aria-label="Changed files">
           <input className="rv-filter" placeholder="Filter files" aria-label="Filter files" value={filter} onChange={(e) => setFilter(e.target.value)} />
@@ -316,7 +326,9 @@ function ReviewBody({ session, pane, card, c }: { session: string; pane: string;
           ) : !diff ? (
             <p className="rv-empty">Reading the changes…</p>
           ) : null}
-          {!error && diff?.message !== undefined && scope.kind === "commit" && <CommitMessage sha={scope.sha} message={diff.message} author={c.commits.find((x) => x.sha === scope.sha)?.author} />}
+          {!error && diff?.message !== undefined && (scope.kind === "commit" || (all && c.commits.length === 1)) && (
+            <CommitMessage sha={scope.kind === "commit" ? scope.sha : c.commits[0].sha} message={diff.message} author={(scope.kind === "commit" ? c.commits.find((x) => x.sha === scope.sha) : c.commits[0])?.author} />
+          )}
           {error || !diff ? null : !files.length ? (
             <p className="rv-empty">{onlyNew ? `Nothing new in the branch's own files since PR #${upd!.number}.` : scope.kind === "since" ? "Nothing changed since then." : "No changes."}</p>
           ) : (

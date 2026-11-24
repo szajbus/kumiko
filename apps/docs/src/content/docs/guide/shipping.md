@@ -92,9 +92,11 @@ would land, read from the mirror at the card's commit.
 - <kbd>j</kbd> and <kbd>k</kbd> go to the next and previous file. <kbd>v</kbd> marks the file viewed.
 
 When the agent delivers the branch again, files that didn't change stay viewed. A file that changed is marked
-"changed since viewed". **Since you last looked**, in the menu at the top left, shows only what changed in the
-branch's own files, leaving out what a merge or rebase brought in from the default branch. The same menu shows one
-commit at a time, with its message above its diff.
+"changed since viewed". If the review pane showed the earlier card, it moves to the new one. A line under the
+toolbar says it was refreshed, with a button that shows only what changed since the earlier card's commit.
+**Since you last looked**, in the menu at the top left, shows only what changed in the branch's own files, leaving
+out what a merge or rebase brought in from the default branch. The same menu shows one commit at a time, with its
+message above its diff. A branch of one commit shows that commit's message above all its changes.
 
 When the branch has a pull request open, the card and the pane mark the commits the pull request doesn't have yet
 as new. If the pull request has some of the branch's commits already, the pane opens on **New since PR #N**: what

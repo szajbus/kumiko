@@ -97,6 +97,8 @@ describe("delivering from a session", () => {
     const card = await waitFor(() => got.findLast((e): e is Extract<SessionEvent, { kind: "card" }> => e.kind === "card")?.payload);
     assert.equal(card.state, "open");
     assert.equal(card.card.kind === "deliver" && card.card.head, head);
+    const whole = (await (await api(`/api/sessions/${id}/cards/${card.id}/diff`)).json()) as ReviewDiff;
+    assert.equal(whole.message, "Fix x\n\nCo-Authored-By: Claude <noreply@anthropic.com>", "a branch of one commit comes with its message");
     assert.equal(((await (await api("/api/sessions")).json()) as SessionInfo[]).find((s) => s.id === id)?.asking, "approval", "the tab says it waits on the user");
 
     const bad = await api(`/api/sessions/${id}/cards/${card.id}`, { method: "POST", body: JSON.stringify({ action: "approve", decision: { kind: "deliver", route: "sideways", method: "merge" } }) });
@@ -184,6 +186,17 @@ describe("delivering from a session", () => {
     assert.ok(reason.length > 4000);
     const declined = await api(`/api/sessions/${id}/cards/${card.id}`, { method: "POST", body: JSON.stringify({ action: "decline", reason }) });
     assert.equal(((await declined.json()) as ApprovalCard).reason, reason.trim());
+
+    // The user reads the declined card while Claude makes the changes; delivering again moves the pane to the new card.
+    await waitFor(() => got.filter((e) => e.kind === "claude" && e.payload.type === "result").length >= 2);
+    await api(`/api/sessions/${id}/window/review`, { method: "POST", body: JSON.stringify({ ask: card.id }) });
+    await writeFile(join(work, "README"), "hi\nthere, again\n");
+    sh(work, "commit", "--quiet", "-am", "Say it differently\n\nCo-Authored-By: Claude <noreply@anthropic.com>");
+    sh(work, "push", "--quiet", "origin", "review-x");
+    assert.equal((await api(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify({ text: prompt }) })).status, 202);
+    const next = await waitFor(() => got.findLast((e): e is Extract<SessionEvent, { kind: "card" }> => e.kind === "card" && e.payload.id !== card.id)?.payload);
+    const win = await waitFor(() => got.findLast((e): e is Extract<SessionEvent, { kind: "window" }> => e.kind === "window" && e.seq > 0 && JSON.stringify(e.payload.op).includes(next.id)));
+    assert.deepEqual(win.payload.op, { type: "update", widget: REVIEW, op: { ask: next.id, refreshed: card.card.kind === "deliver" ? card.card.head : "" } });
     sock.close();
   });
 

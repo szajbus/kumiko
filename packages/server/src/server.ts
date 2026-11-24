@@ -1405,7 +1405,8 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
 
   /**
    * What the card's branch changes, file by file: all of it from where it left the default branch, or `commit` alone
-   * (one of the card's), with its message, or what changed `since` a commit reviewed before. `w=1` leaves out changes in whitespace;
+   * (one of the card's), with its message, or what changed `since` a commit reviewed before. All of a branch of one
+   * commit comes with that commit's message too. `w=1` leaves out changes in whitespace;
    * `path` (repeated) asks for those files alone, with their long patches.
    */
   app.get("/api/sessions/:id/cards/:ask/diff", async (c) => {
@@ -1440,7 +1441,8 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
           }
         } else from = await branchBase();
         const diff = await reviewDiff(dir, from, to, { ignoreWhitespace: c.req.query("w") === "1", ...(only.length ? { paths: only } : {}), ...(paths.length ? { whole: true } : {}) });
-        return commit !== undefined && !paths.length ? { ...diff, message: await commitMessage(dir, commit) } : diff;
+        const one = commit ?? (since === undefined && card.commits.length === 1 ? card.commits[0].sha : undefined);
+        return one !== undefined && !paths.length ? { ...diff, message: await commitMessage(dir, one) } : diff;
       }),
     );
   });
