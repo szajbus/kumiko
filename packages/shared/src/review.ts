@@ -6,6 +6,11 @@ export const REVIEW = "review";
 /** What the review pane shows: the approval card it is for, by its ask's id. */
 export interface ReviewState {
   ask: string;
+  /**
+   * The head of the card it showed before Kumiko moved it to this one: Claude delivered the same branch again, after a
+   * request for changes. Absent when the user opened the pane on this card.
+   */
+  refreshed?: string;
 }
 
 /** One hunk of a file's patch, as git writes it: each line starts with " ", "+", "-" or "\\". */
@@ -49,7 +54,7 @@ export interface ReviewDiff {
   from: string;
   to: string;
   files: ReviewFile[];
-  /** For a diff of one commit: its whole message. */
+  /** For a diff of one commit, or of all a branch that has only one: that commit's whole message. */
   message?: string;
 }
 

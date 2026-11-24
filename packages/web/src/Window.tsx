@@ -99,7 +99,7 @@ export function Window({ session, onForked, active = true, sessionNames = NO_NAM
       case "tasks":
         return <TasksPane session={session.id} events={stream.events} pane={pane} live={live} />;
       case "review":
-        return <ReviewPane session={session.id} pane={pane} ask={(w.state as ReviewState).ask} events={stream.events} />;
+        return <ReviewPane session={session.id} pane={pane} ask={(w.state as ReviewState).ask} refreshed={(w.state as ReviewState).refreshed} events={stream.events} />;
       default:
         return null;
     }

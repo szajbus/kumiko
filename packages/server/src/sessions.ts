@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { answerFits, applyWindowOp, chatWindow, chunksLength, compactWindow, isBusy, isCommand, isCompactSummary, keepEnds, LIVE_SESSION_STATUSES, mergeChunks, sharedNote, sharesWaiting, SHELL_COMMAND_MAX, SHELL_KEEP_HEAD, SHELL_KEEP_TAIL, SHELL_PROMPT_CHARS, shellPrompt, windowState, type Attachment, type ShellChunk, type ShellEnd, type ShellStop, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo, type WindowOp, type WindowState, type AgentAsk, type AskAnswer, type AskClosedReason, type ApprovalCard } from "@kumiko/shared";
+import { answerFits, applyWindowOp, chatWindow, chunksLength, compactWindow, isBusy, isCommand, isCompactSummary, keepEnds, LIVE_SESSION_STATUSES, mergeChunks, sharedNote, sharesWaiting, SHELL_COMMAND_MAX, SHELL_KEEP_HEAD, SHELL_KEEP_TAIL, SHELL_PROMPT_CHARS, shellPrompt, windowState, type Attachment, type ShellChunk, type ShellEnd, type ShellStop, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo, type WindowOp, type WindowState, type AgentAsk, type AskAnswer, type AskClosedReason, type ApprovalCard, REVIEW, type ReviewState } from "@kumiko/shared";
 import { TOOL_TIMEOUT_MS, type AgentDriver, type AgentFile, type AgentMessage, type StartOptions, type TaskOutput, type ToolHost } from "@kumiko/agent";
 import { chatEvents, type SessionStore, type StoredSession } from "./store.js";
 import { trimMessage } from "./trim.js";
@@ -652,8 +652,25 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
   putCard(id: string, card: ApprovalCard): void {
     const s = this.sessions.get(id);
     if (!s) throw new SessionNotFound(`No session ${id}.`);
+    const was = this.reviewed(s);
+    const isNew = !s.events.some((e) => e.kind === "card" && e.payload.id === card.id);
     this.push(s, { kind: "card", payload: card });
+    // Claude delivering the branch again, after a request for changes: the review pane goes on to the new card.
+    const c = card.card;
+    if (isNew && c.kind === "deliver" && was && was.id !== card.id && was.card.kind === "deliver" && was.card.repo === c.repo && was.card.branch === c.branch) {
+      const op = { type: "update", widget: REVIEW, op: { ask: card.id, refreshed: was.card.head } satisfies ReviewState } as const;
+      this.push(s, { kind: "window", payload: { op } }, applyWindowOp(s.window, op));
+    }
     this.save(s);
+  }
+
+  /** The card the window's review pane is for, as it is now. */
+  private reviewed(s: Session): ApprovalCard | undefined {
+    const ask = (s.window.widgets[REVIEW]?.state as ReviewState | undefined)?.ask;
+    if (!ask) return undefined;
+    let card: ApprovalCard | undefined;
+    for (const e of s.events) if (e.kind === "card" && e.payload.id === ask) card = e.payload;
+    return card;
   }
 
   /** Makes `driver` the session's. Once another replaces it, or the session is detached, nothing it says reaches the session. */
