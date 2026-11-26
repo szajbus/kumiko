@@ -65,9 +65,10 @@ The button starts at the choice you made last time in that sandbox.
 
 ### Decline or ask for changes
 
-**Decline…** opens a box to tell the agent why. With notes from a review, the button becomes **Request changes**.
-The agent gets each note with its file and line, after anything you write in the box. <kbd>Cmd</kbd>+<kbd>Enter</kbd>
-in the box sends it.
+**Decline…** opens a box to tell the agent why. When the agent said in the review that it would change something, the
+button becomes **Request changes**. The agent gets those threads, each with its file and line and its conversation,
+after anything you write in the box. If the review has replies you haven't read, the box says so.
+<kbd>Cmd</kbd>+<kbd>Enter</kbd> in the box sends it.
 
 The card shows only when there's something to decide. If the branch isn't pushed, or doesn't merge cleanly, Kumiko
 tells the agent what to fix instead.
@@ -75,8 +76,10 @@ tells the agent what to fix instead.
 ### When the branch moves
 
 A card is for the exact commit it shows. If the branch moves before you decide, the card goes out of date, and
-**Review again** shows the new state. Once you decide, the card shrinks to a one-line receipt that says whether the
-commit was signed.
+**Review again** shows the new state. Neither the card nor the review pane moves to the new commits by itself, so
+approving never lands code you haven't seen. The review pane says how many commits are new, and its **Show** does
+what **Review again** does, then shows what changed since. Once you decide, the card shrinks to a one-line receipt
+that says whether the commit was signed.
 
 ## Review the changes
 
@@ -87,8 +90,6 @@ would land, read from the mirror at the card's commit.
 - The right side shows each file's diff, unified or split, with **Wrap** and **Hide whitespace**. Click the hidden
   lines between changes to show them. A very long file opens on request. A binary file only says it's binary.
 - **Viewed** folds a file and counts it. The card shows how many files you've viewed.
-- To leave a note for the agent, click a line number. <kbd>Cmd</kbd>+<kbd>Enter</kbd> saves the note and
-  <kbd>Esc</kbd> drops it. A note left at an earlier commit of the branch says so.
 - <kbd>j</kbd> and <kbd>k</kbd> go to the next and previous file. <kbd>v</kbd> marks the file viewed.
 
 When the agent delivers the branch again, files that didn't change stay viewed. A file that changed is marked
@@ -104,11 +105,68 @@ the new commits change, compared with the pull request's head on GitHub. It leav
 brought in, as **Since you last looked** does. A line under the pane's toolbar says how many commits are new, with a
 button to switch to all changes and back.
 
-Viewed marks and notes work in every view but one commit's. A note on a removed line in **New since PR #N** stays
-in that view, and the agent is told which commit the line is from.
+Viewed marks and line comments work in every view but one commit's. A comment on a removed line in
+**New since PR #N** stays in that view, and the agent is told which commit the line is from.
 
-Kumiko keeps what you viewed and your notes in the app, per branch and session. Nothing goes to GitHub. You don't
-need to review to approve: the card's button works whatever the pane says.
+Kumiko keeps what you viewed in the app, per branch and session. Nothing goes to GitHub. You don't need to review to
+approve: the card's button works whatever the pane says.
+
+## Talk about the changes
+
+While the card is open, you can ask the agent about the changes in the review pane, and it answers there, next to the
+code. Comments go to the agent as soon as you send them. Code review on GitHub works the same way, but these threads
+stay in Kumiko, even when the branch has a pull request.
+
+A comment starts a thread:
+
+| On | How |
+| --- | --- |
+| A line | Click its line number. |
+| A file | The speech bubble in the file's header. |
+| A commit | **Comment on this commit…**, in the view of that commit. |
+| All of the change | **Comment on the whole change…**, at the top of the pane. |
+
+<kbd>Cmd</kbd>+<kbd>Enter</kbd> sends a comment and <kbd>Esc</kbd> drops it. **Reply…** under a thread answers in
+it. Comments you send while the agent works wait their turn, as messages do.
+
+The agent stops waiting on the card at your first comment, so it can answer. The card stays open, and the chat shows
+each comment as one line, which opens its thread. The agent answers with its `review_reply` tool, which puts the
+answer in the thread. When you ask for a change, it says what it would do and marks the thread **will change**. It
+makes the change only when you request changes on the card.
+
+A thread shows where it stands: **waiting for Claude**, **will change**, **change requested** once a request for
+changes carried it, or **resolved**. **Resolve** folds a thread, and resolving a **will change** thread takes it out of
+the next request for changes. A thread started at an earlier commit says so, and is marked **outdated** when its line
+or file changed since. A **will change** thread whose line changed says the agent may have made the change, with a
+button to resolve it. Kumiko doesn't resolve it for you.
+
+### Read the replies
+
+An answer from the agent stays unread until you acknowledge it. A dot marks it on the thread and on its file in the
+list. The pane's toolbar and the card count the new replies, and once the agent is done with its turn the session's
+tab says **Replies to read**.
+
+- **Next reply**, or <kbd>n</kbd>, goes to the next thread with an unread reply, opening its file or view.
+  <kbd>Shift</kbd>+<kbd>n</kbd> goes back.
+- **Got it** on a thread, or <kbd>a</kbd> on the thread you went to, marks its replies read. Replying marks it read
+  too.
+- **Mark all read** marks every reply in the review read.
+
+Reading a reply doesn't resolve its thread. Once the card is decided, its replies stop counting for the tab.
+
+### Decide after talking
+
+You decide on the card as before, and Kumiko tells the agent what you decided in a message.
+
+- **Approve** lands the branch from Kumiko itself, as the agent no longer waits on the card. With **will change**
+  threads open, the card asks first, then resolves them and tells the agent they were dropped.
+- **Request changes** sends the open **will change** threads, as above.
+- **Review again** on an out-of-date card shows the branch as it is now on the same card, which keeps its threads.
+
+If the agent delivers the branch again, the new card takes the review over, with its threads, and the old card closes.
+
+Notes left in the pane before comments went to the agent straight away show in a bar at the top of the pane. **Send
+them to Claude** starts a thread for each, and **Delete them** drops them.
 
 ## Signing
 

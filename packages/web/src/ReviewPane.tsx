@@ -1,6 +1,6 @@
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from "react";
 import * as Menu from "@radix-ui/react-dropdown-menu";
-import type { ApprovalCard, DeliverCard, ReviewDiff, ReviewFile, SessionEvent } from "@kumiko/shared";
+import { threadUnread, threadWhere, type ApprovalCard, type DeliverCard, type ReviewDiff, type ReviewFile, type ReviewThread, type SessionEvent, type ThreadAnchor } from "@kumiko/shared";
 import { api, errorMessage } from "./api";
 import { splitLines } from "./diff";
 import { Highlighted } from "./Highlighted";
@@ -12,8 +12,9 @@ import {
   initialScope,
   markable,
   newCommits,
-  noteFits,
+  noteComment,
   noteKey,
+  onFocusThread,
   prUpdate,
   requestChanges,
   restamp,
@@ -25,15 +26,26 @@ import {
   scopeFrom,
   scopeQuery,
   subscribeReviews,
+  takeFocus,
+  threadCounts,
+  threadFits,
+  threadKey,
+  threadPath,
+  touched,
+  unreadOrder,
   viewedMarks,
   viewedState,
   type Scope,
-  type ReviewNote,
   type ReviewRow,
 } from "./review";
+import { CommentEditor, ThreadView, type ThreadActions } from "./ReviewThreads";
 import { WindowContext } from "./windowContext";
 
 const short = (sha: string) => sha.slice(0, 7);
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+/** A card reviewed again from the pane, from the head it was at: the pane opens on what changed since. */
+let refreshedFrom: { ask: string; head: string } | undefined;
 const STATUS_LETTER: Record<ReviewFile["status"], string> = { added: "A", modified: "M", deleted: "D", renamed: "R", copied: "C", type: "T" };
 
 /** The latest state of card `ask`, from the session's events. */
@@ -94,7 +106,11 @@ function ReviewBody({ session, pane, card, c, refreshed }: { session: string; pa
   const rkey = reviewOf(c);
   const review = useSyncExternalStore(subscribeReviews, () => getReview(session, rkey));
   const prefs = useSyncExternalStore(reviewPrefs.subscribe, reviewPrefs.get);
-  const [scope, setScope] = useState<Scope>(() => initialScope(c));
+  const [scope, setScope] = useState<Scope>(() => {
+    const from = refreshedFrom?.ask === card.id ? refreshedFrom.head : undefined;
+    refreshedFrom = undefined;
+    return from && from !== c.head ? { kind: "since", sha: from } : initialScope(c);
+  });
   const [diff, setDiff] = useState<ReviewDiff>();
   const [error, setError] = useState<string>();
   const [filter, setFilter] = useState("");
@@ -102,6 +118,14 @@ function ReviewBody({ session, pane, card, c, refreshed }: { session: string; pa
   const sections = useRef(new Map<string, HTMLElement>());
   const open = card.state === "open" || card.state === "stale";
   const decidable = open && Boolean(ctx?.live);
+  const root = useRef<HTMLDivElement>(null);
+  const allThreads = ctx?.threads;
+  const threads = useMemo(() => (allThreads ?? []).filter((t) => t.review === rkey), [allThreads, rkey]);
+  const counts = threadCounts(threads);
+  const [focused, setFocused] = useState<string>();
+  const [target, setTarget] = useState<{ id: string; n: number }>();
+  const [topDraft, setTopDraft] = useState(false);
+  const [sending, setSending] = useState(false);
   const all = scope.kind === "all";
   // Viewed marks and notes work where the diff ends at the card's commit: all changes, or what changed since one.
   const marks = markable(scope);
@@ -149,11 +173,57 @@ function ReviewBody({ session, pane, card, c, refreshed }: { session: string; pa
 
   const files = useMemo(() => (diff ? byFolder(diff.files).flatMap(([, fs]) => fs) : []), [diff]);
   const notes = review.notes;
-  const notesByPath = useMemo(() => {
-    const m = new Map<string, ReviewNote[]>();
-    for (const n of notes) m.set(n.path, [...(m.get(n.path) ?? []), n]);
+  const threadsByPath = useMemo(() => {
+    const m = new Map<string, ReviewThread[]>();
+    for (const t of threads) {
+      const p = threadPath(t.anchor);
+      if (p) m.set(p, [...(m.get(p) ?? []), t]);
+    }
     return m;
-  }, [notes]);
+  }, [threads]);
+  const top = threads.filter((t) => t.anchor.kind === "change" || (t.anchor.kind === "commit" && (scope.kind !== "commit" || scope.sha === t.anchor.sha)));
+
+  // Threads started at an earlier commit: whether what they're on changed since, read from the mirror.
+  const [outdated, setOutdated] = useState<ReadonlySet<string>>(new Set());
+  const earlier = threads.filter((t) => t.head !== c.head && threadPath(t.anchor) !== undefined && !t.resolved);
+  const earlierKey = earlier.map((t) => t.id).join(",");
+  useEffect(() => {
+    let gone = false;
+    const byHead = new Map<string, ReviewThread[]>();
+    for (const t of earlier) byHead.set(t.head, [...(byHead.get(t.head) ?? []), t]);
+    void Promise.all(
+      [...byHead].map(([head, ts]) =>
+        api
+          .reviewDiff(session, card.id, { since: head, path: [...new Set(ts.map((t) => threadPath(t.anchor)!))] })
+          .then((d) => ts.filter((t) => touched(t, d.files.find((f) => f.path === threadPath(t.anchor)))).map((t) => t.id))
+          .catch(() => [] as string[]),
+      ),
+    ).then((ids) => !gone && setOutdated(new Set(ids.flat())));
+    return () => {
+      gone = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, card.id, earlierKey]);
+
+  const actions = useMemo<ThreadActions>(
+    () => ({
+      reply: (t, text) =>
+        api.comment(session, card.id, { thread: t.id, text }).then(
+          () => undefined,
+          (err: unknown) => errorMessage(err),
+        ),
+      mark: (t, change) => void api.markThread(session, t.id, change).catch((err) => console.error(err)),
+    }),
+    [session, card.id],
+  );
+  const startThread = useCallback(
+    (anchor: ThreadAnchor, text: string) =>
+      api.comment(session, card.id, { anchor, text }).then(
+        () => undefined,
+        (err: unknown) => errorMessage(err),
+      ),
+    [session, card.id],
+  );
   // One ref callback per file, kept, so the files' sections aren't drawn again for a new one each time.
   const refs = useRef(new Map<string, (el: HTMLElement | null) => void>());
   const refFor = (path: string) => {
@@ -185,6 +255,63 @@ function ReviewBody({ session, pane, card, c, refreshed }: { session: string; pa
   );
 
   const shownFiles = filter.trim() ? files.filter((f) => f.path.toLowerCase().includes(filter.trim().toLowerCase())) : files;
+
+  /** Shows thread `t`: in the view and the file it is in, unfolded, scrolled to. */
+  const goThread = (t: ReviewThread) => {
+    const path = threadPath(t.anchor);
+    if (t.anchor.kind === "commit" ? scope.kind === "commit" && scope.sha !== t.anchor.sha : scope.kind === "commit" || (path !== undefined && diff !== undefined && !files.some((f) => f.path === path))) setScope({ kind: "all" });
+    if (path && filter.trim() && !path.toLowerCase().includes(filter.trim().toLowerCase())) setFilter("");
+    if (path) setCurrent(path);
+    setFocused(t.id);
+    setTarget({ id: t.id, n: Date.now() });
+  };
+  useEffect(() => {
+    if (!target) return;
+    const frame = requestAnimationFrame(() => root.current?.querySelector(`[data-thread="${CSS.escape(target.id)}"]`)?.scrollIntoView({ block: "center" }));
+    return () => cancelAnimationFrame(frame);
+  }, [target, diff]);
+  const unreadList = unreadOrder(threads, files.map((f) => f.path), c.commits.map((x) => x.sha));
+  const nextReply = (dir: 1 | -1) => {
+    if (!unreadList.length) return;
+    const i = unreadList.findIndex((t) => t.id === focused);
+    goThread(unreadList[i < 0 ? (dir === 1 ? 0 : unreadList.length - 1) : (i + dir + unreadList.length) % unreadList.length]);
+  };
+  // The chat asks for a thread: shown once the diff is here.
+  const threadsRef = useRef(threads);
+  threadsRef.current = threads;
+  const goRef = useRef(goThread);
+  goRef.current = goThread;
+  useEffect(() => {
+    if (!diff) return;
+    const check = () => {
+      const id = takeFocus(card.id);
+      const t = id && threadsRef.current.find((x) => x.id === id);
+      if (t) goRef.current(t);
+    };
+    check();
+    return onFocusThread(check);
+  }, [diff, card.id]);
+
+  const refresh = () => {
+    refreshedFrom = { ask: card.id, head: c.head };
+    void api.decideCard(session, card.id, { action: "refresh" }).catch((err) => {
+      refreshedFrom = undefined;
+      setError(errorMessage(err));
+    });
+  };
+  const sendNotes = async () => {
+    setSending(true);
+    for (const n of notes) {
+      const { anchor, text } = noteComment(n, c.head);
+      const err = await startThread(anchor, text);
+      if (err) {
+        setError(err);
+        break;
+      }
+      setReview(session, rkey, (r) => ({ ...r, notes: r.notes.filter((x) => x.id !== n.id) }));
+    }
+    setSending(false);
+  };
   // The keys go through the files the list shows.
   const onKey = (e: KeyboardEvent) => {
     if (e.metaKey || e.ctrlKey || e.altKey || (e.target as HTMLElement).closest("input, textarea, select, [contenteditable]")) return;
@@ -196,6 +323,15 @@ function ReviewBody({ session, pane, card, c, refreshed }: { session: string; pa
     } else if (e.key === "v" && marks && i >= 0) {
       e.preventDefault();
       setViewed(shownFiles[i], viewedState(review, shownFiles[i]) !== "yes");
+    } else if (e.key === "n" || e.key === "N") {
+      e.preventDefault();
+      nextReply(e.shiftKey ? -1 : 1);
+    } else if (e.key === "a") {
+      const t = threads.find((x) => x.id === focused);
+      if (t) {
+        e.preventDefault();
+        actions.mark(t, { read: true });
+      }
     }
   };
 
@@ -205,7 +341,7 @@ function ReviewBody({ session, pane, card, c, refreshed }: { session: string; pa
 
   return (
     // Focusable, so a click anywhere in it lets the keys reach it.
-    <div className="rv" tabIndex={-1} onKeyDown={onKey}>
+    <div className="rv" tabIndex={-1} onKeyDown={onKey} ref={root}>
       <Head pane={pane} c={c}>
         <span className="rv-at" title={c.head}>
           at <code>{short(c.head)}</code>
@@ -267,6 +403,17 @@ function ReviewBody({ session, pane, card, c, refreshed }: { session: string; pa
           <input type="checkbox" checked={prefs.whitespace} onChange={(e) => reviewPrefs.set({ whitespace: e.target.checked })} /> Hide whitespace
         </label>
         <span className="rv-spacer" />
+        {counts.unread > 0 && (
+          <span className="rv-replies">
+            <b>{plural(counts.unread, "new reply", "new replies")}</b>
+            <button type="button" className="btn btn-secondary btn-compact" onClick={() => nextReply(1)} title="Next unread reply (n)">
+              Next reply
+            </button>
+            <button type="button" className="link-btn" onClick={() => void api.readThreads(session, rkey).catch((err) => console.error(err))}>
+              Mark all read
+            </button>
+          </span>
+        )}
         {marks && diff && (
           <span className="rv-prog">
             {viewed} / {files.length} viewed
@@ -288,7 +435,29 @@ function ReviewBody({ session, pane, card, c, refreshed }: { session: string; pa
           </button>
         </div>
       )}
-      {card.state === "stale" && <div className="rv-banner">{c.branch} moved after the card was shown. This is the commit the card is for; review again on the card to see the new one.</div>}
+      {card.state === "stale" && (
+        <div className="rv-banner rv-moved">
+          <span>
+            {card.moved?.commits ? `${plural(card.moved.commits, "new commit")} on ${c.branch} since you opened this.` : `${c.branch} moved since you opened this.`} You're reading {short(c.head)}, the commit this card is for.
+          </span>
+          {decidable && (
+            <button type="button" className="rv-pr-btn" onClick={refresh}>
+              Show
+            </button>
+          )}
+        </div>
+      )}
+      {decidable && notes.length > 0 && (
+        <div className="rv-pr">
+          <span>{plural(notes.length, "note")} from before comments went to Claude straight away.</span>
+          <button type="button" className="rv-pr-btn" disabled={sending} onClick={() => void sendNotes()}>
+            {sending ? "Sending…" : notes.length === 1 ? "Send it to Claude" : "Send them to Claude"}
+          </button>
+          <button type="button" className="rv-pr-btn" disabled={sending} onClick={() => setReview(session, rkey, (r) => ({ ...r, notes: [] }))}>
+            Delete {notes.length === 1 ? "it" : "them"}
+          </button>
+        </div>
+      )}
       {!open && <div className="rv-banner">This card is closed.</div>}
       {open && refreshed && (
         <div className="rv-pr">
@@ -307,7 +476,7 @@ function ReviewBody({ session, pane, card, c, refreshed }: { session: string; pa
             <div key={dir}>
               {dir && <div className="rv-dir">{dir}/</div>}
               {fs.map((f) => (
-                <TreeFile key={f.path} f={f} current={f.path === current} state={marks ? viewedState(review, f) : "no"} notes={notes.some((n) => n.path === f.path)} onClick={() => go(f.path)} />
+                <TreeFile key={f.path} f={f} current={f.path === current} state={marks ? viewedState(review, f) : "no"} threads={threadsByPath.get(f.path)} onClick={() => go(f.path)} />
               ))}
             </div>
           ))}
@@ -329,6 +498,29 @@ function ReviewBody({ session, pane, card, c, refreshed }: { session: string; pa
           {!error && diff?.message !== undefined && (scope.kind === "commit" || (all && c.commits.length === 1)) && (
             <CommitMessage sha={scope.kind === "commit" ? scope.sha : c.commits[0].sha} message={diff.message} author={(scope.kind === "commit" ? c.commits.find((x) => x.sha === scope.sha) : c.commits[0])?.author} />
           )}
+          {!error && diff && (top.length > 0 || decidable) && (
+            <div className="rv-top">
+              {top.map((t) => (
+                <ThreadView key={t.id} t={t} where={t.anchor.kind === "commit" ? `On ${threadWhere(t.anchor)}` : "On the whole change"} head={c.head} canReply={decidable} actions={actions} focused={focused === t.id} />
+              ))}
+              {decidable &&
+                (topDraft ? (
+                  <CommentEditor
+                    placeholder={scope.kind === "commit" ? `Ask Claude about commit ${short(scope.sha)}, or ask for a change` : "Ask Claude about the whole change, or ask for a change"}
+                    onSend={async (text) => {
+                      const err = await startThread(scope.kind === "commit" ? { kind: "commit", sha: scope.sha } : { kind: "change" }, text);
+                      if (!err) setTopDraft(false);
+                      return err;
+                    }}
+                    onCancel={() => setTopDraft(false)}
+                  />
+                ) : (
+                  <button type="button" className="rv-thread-reply rv-top-add" onClick={() => setTopDraft(true)}>
+                    {scope.kind === "commit" ? "Comment on this commit…" : "Comment on the whole change…"}
+                  </button>
+                ))}
+            </div>
+          )}
           {error || !diff ? null : !files.length ? (
             <p className="rv-empty">{onlyNew ? `Nothing new in the branch's own files since PR #${upd!.number}.` : scope.kind === "since" ? "Nothing changed since then." : "No changes."}</p>
           ) : (
@@ -339,13 +531,18 @@ function ReviewBody({ session, pane, card, c, refreshed }: { session: string; pa
                 ref={refFor(f.path)}
                 session={session}
                 ask={card.id}
-                review={rkey}
                 head={c.head}
                 scope={scope}
                 file={f}
                 viewed={marks ? viewedState(review, f) : undefined}
-                notes={marks ? (notesByPath.get(f.path) ?? NO_NOTES) : undefined}
-                canNote={marks && decidable}
+                threads={threadsByPath.get(f.path) ?? NO_THREADS}
+                inView={marks}
+                canComment={decidable}
+                actions={actions}
+                startThread={startThread}
+                outdated={outdated}
+                focused={focused}
+                reveal={target}
                 split={prefs.split}
                 whitespace={prefs.whitespace}
                 onViewed={setViewed}
@@ -363,14 +560,29 @@ function ReviewBody({ session, pane, card, c, refreshed }: { session: string; pa
               · <kbd>v</kbd> viewed
             </>
           )}
+          {threads.length > 0 && (
+            <>
+              {" "}
+              · <kbd>n</kbd> next reply · <kbd>a</kbd> got it
+            </>
+          )}
         </span>
         <span className="rv-spacer" />
-        {marks && decidable && (
-          <span className="rv-notes">{notes.length ? <><b>{notes.length === 1 ? "1 note" : `${notes.length} notes`}</b> for Claude</> : "Click a line number to leave a note for Claude"}</span>
+        {decidable && (
+          <span className="rv-notes">
+            {counts.open ? (
+              <>
+                <b>{plural(counts.open, "open thread")}</b>
+                {counts.willChange > 0 && ` · Claude will change ${plural(counts.willChange, "thing")}`}
+              </>
+            ) : (
+              "Click a line number to ask Claude about it"
+            )}
+          </span>
         )}
-        {decidable && notes.length > 0 && (
+        {decidable && counts.willChange > 0 && (
           <button type="button" className="btn btn-secondary btn-compact" onClick={() => requestChanges(card.id)}>
-            Request changes
+            Request changes ({counts.willChange})
           </button>
         )}
       </div>
@@ -398,14 +610,16 @@ function CommitMessage({ sha, message, author }: { sha: string; message: string;
   );
 }
 
-function TreeFile({ f, current, state, notes, onClick }: { f: ReviewFile; current: boolean; state: "yes" | "changed" | "no"; notes: boolean; onClick(): void }) {
+function TreeFile({ f, current, state, threads, onClick }: { f: ReviewFile; current: boolean; state: "yes" | "changed" | "no"; threads?: ReviewThread[]; onClick(): void }) {
+  const unread = threads?.some((t) => threadUnread(t) > 0);
+  const open = threads?.some((t) => !t.resolved);
   const name = f.path.slice(f.path.lastIndexOf("/") + 1);
   return (
     <button type="button" className={`rv-file${current ? " is-current" : ""}${state === "yes" ? " is-viewed" : ""}${f.flagged ? " is-flagged" : ""}`} onClick={onClick} title={f.oldPath ? `${f.oldPath} → ${f.path}` : f.path}>
       <span className={`rv-st rv-st-${f.status}`}>{STATUS_LETTER[f.status]}</span>
       <span className="rv-name">{name}</span>
       <span className="rv-fc">
-        {notes && <span className="rv-note-dot" title="Has notes" />}
+        {unread ? <span className="rv-unread-dot" title="Unread replies" /> : open ? <span className="rv-note-dot" title="Has open threads" /> : null}
         {state === "yes" ? <span className="rv-tick" aria-label="viewed">✓</span> : state === "changed" ? <span className="rv-changed" title="Changed since you viewed it">●</span> : null}
         {state !== "yes" && (f.binary ? <span>bin</span> : <Counts f={f} />)}
       </span>
@@ -420,38 +634,39 @@ const Counts = ({ f }: { f: Pick<ReviewFile, "added" | "deleted"> }) => (
   </>
 );
 
-const NO_NOTES: ReviewNote[] = [];
+const NO_THREADS: ReviewThread[] = [];
 
 interface FileProps {
   session: string;
   ask: string;
-  /** The review it is part of, by `reviewOf`. */
-  review: string;
-  /** The card's commit: where new notes are left. */
+  /** The card's commit: where new threads start. */
   head: string;
   scope: Scope;
   file: ReviewFile;
   /** Whether it is viewed, where marks count: in a diff that ends at the card's commit. */
   viewed?: "yes" | "changed" | "no";
-  /** The file's notes, where notes show: in a diff that ends at the card's commit. */
-  notes?: ReviewNote[];
-  canNote: boolean;
+  /** The file's threads: on its lines, and on all of it. */
+  threads: ReviewThread[];
+  /** The diff ends at the card's commit, so line threads can go on its lines: not one commit's. */
+  inView: boolean;
+  canComment: boolean;
+  actions: ThreadActions;
+  startThread(anchor: ThreadAnchor, text: string): Promise<string | undefined>;
+  /** Threads whose line or file changed since they were started. */
+  outdated: ReadonlySet<string>;
+  focused?: string;
+  /** A thread being gone to: its file unfolds. */
+  reveal?: { id: string; n: number };
   split: boolean;
   whitespace: boolean;
   onViewed(f: ReviewFile, on: boolean): void;
   onFocus(path: string): void;
 }
 
-/** A note being written: where it goes, and the line it quotes. */
-interface Draft {
-  side: "old" | "new";
-  line: number;
-  quote: string;
-  /** The note it changes, if it is one already. */
-  id?: string;
-}
+/** A comment being written that starts a thread: on a line, which it quotes, or on the whole file. */
+type Draft = { side: "old" | "new"; line: number; quote: string } | { file: true };
 
-const FileSection = memo(function FileSection({ ref, session, ask, review, head, scope, file: given, viewed, notes, canNote, split, whitespace, onViewed, onFocus }: FileProps & { ref?: (el: HTMLElement | null) => void }) {
+const FileSection = memo(function FileSection({ ref, session, ask, head, scope, file: given, viewed, threads, inView, canComment, actions, startThread, outdated, focused, reveal, split, whitespace, onViewed, onFocus }: FileProps & { ref?: (el: HTMLElement | null) => void }) {
   const [file, setFile] = useState(given);
   const [folded, setFolded] = useState(viewed === "yes");
   const [lines, setLines] = useState<string[]>();
@@ -469,17 +684,29 @@ const FileSection = memo(function FileSection({ ref, session, ask, review, head,
 
   const rows = useMemo(() => reviewRows(file, lines, openGaps), [file, lines, openGaps]);
   const tokens = useRowTokens(file.path, rows);
-  // Notes on this diff's lines go on them; ones left at an earlier commit, in another view, or on lines not shown, above
-  // the diff.
+  // Threads on this diff's lines go on them; ones started at an earlier commit, in another view, or on lines not shown,
+  // above the diff, with the file's own.
   const from = scopeFrom(scope);
-  const mine = useMemo(() => (notes ?? []).filter((n) => noteFits(n, head, from)), [notes, head, from]);
+  const mine = useMemo(() => (inView ? threads.filter((t) => threadFits(t, head, from)) : []), [threads, inView, head, from]);
   const byKey = useMemo(() => {
-    const m = new Map<string, ReviewNote[]>();
-    for (const n of mine) m.set(noteKey(n.path, n.side, n.line), [...(m.get(noteKey(n.path, n.side, n.line)) ?? []), n]);
+    const m = new Map<string, ReviewThread[]>();
+    for (const t of mine) m.set(threadKey(t)!, [...(m.get(threadKey(t)!) ?? []), t]);
     return m;
   }, [mine]);
   const shownKeys = useMemo(() => new Set(rows.filter((r) => r.kind !== "gap").map((r) => target(file.path, r))), [rows, file.path]);
-  const elsewhere = (notes ?? []).filter((n) => !noteFits(n, head, from) || !shownKeys.has(noteKey(n.path, n.side, n.line)));
+  const onLines = new Set(mine.filter((t) => shownKeys.has(threadKey(t)!)).map((t) => t.id));
+  const fileThreads = threads.filter((t) => t.anchor.kind === "file");
+  const elsewhere = threads.filter((t) => t.anchor.kind === "line" && !onLines.has(t.id));
+  // Gone to from the toolbar or the chat: open, so the thread shows.
+  useEffect(() => {
+    if (reveal && threads.some((t) => t.id === reveal.id)) setFolded(false);
+  }, [reveal, threads]);
+  const lineWhere = (t: ReviewThread) => {
+    const a = t.anchor;
+    if (a.kind !== "line") return undefined;
+    const line = `${a.side === "old" ? "Removed line" : "Line"} ${a.line}`;
+    return t.head !== head ? `${line}, at an earlier commit` : !threadFits(t, head, from) ? `${line}, in another view` : `${line}, not in the diff now`;
+  };
 
   const expand = async (index: number) => {
     if (!lines) {
@@ -513,36 +740,32 @@ const FileSection = memo(function FileSection({ ref, session, ask, review, head,
     }
   };
 
-  const save = (text: string) => {
-    if (!draft) return;
-    const t = text.trim();
-    setReview(session, review, (r) => {
-      const rest = r.notes.filter((n) => n.id !== draft.id);
-      if (!t) return { ...r, notes: rest };
-      const note: ReviewNote = { id: draft.id ?? crypto.randomUUID(), path: file.path, side: draft.side, line: draft.line, quote: draft.quote, text: t, head, ...(draft.side === "old" && from ? { from } : {}) };
-      return { ...r, notes: [...rest, note] };
-    });
-    setDraft(undefined);
+  const send = async (text: string) => {
+    if (!draft) return undefined;
+    const anchor: ThreadAnchor = "file" in draft ? { kind: "file", path: file.path } : { kind: "line", path: file.path, side: draft.side, line: draft.line, quote: draft.quote, ...(draft.side === "old" && from ? { from } : {}) };
+    const err = await startThread(anchor, text);
+    if (!err) setDraft(undefined);
+    return err;
   };
-  const remove = (id: string) => setReview(session, review, (r) => ({ ...r, notes: r.notes.filter((n) => n.id !== id) }));
 
-  const startNote = (side: "old" | "new", line: number, quote: string) => {
-    if (canNote) setDraft({ side, line, quote });
+  const startComment = (side: "old" | "new", line: number, quote: string) => {
+    if (canComment && inView) setDraft({ side, line, quote });
   };
+  const view = (t: ReviewThread, where?: string) => <ThreadView key={t.id} t={t} where={where} head={head} canReply={canComment} actions={actions} outdated={outdated.has(t.id)} focused={focused === t.id} />;
   const noteRows = (keys: string[], cols: number) => {
     const out: ReactNode[] = [];
     for (const key of keys) {
-      for (const n of byKey.get(key) ?? [])
+      for (const t of byKey.get(key) ?? [])
         out.push(
-          <tr key={n.id} className="rv-note-row">
-            <td colSpan={cols}>{draft?.id === n.id ? <NoteEditor initial={n.text} line={n.line} onSave={save} onCancel={() => setDraft(undefined)} /> : <NoteView n={n} canEdit={canNote} onEdit={() => setDraft({ side: n.side, line: n.line, quote: n.quote, id: n.id })} onDelete={() => remove(n.id)} />}</td>
+          <tr key={t.id} className="rv-note-row">
+            <td colSpan={cols}>{view(t)}</td>
           </tr>,
         );
-      if (draft && !draft.id && noteKey(file.path, draft.side, draft.line) === key)
+      if (draft && !("file" in draft) && noteKey(file.path, draft.side, draft.line) === key)
         out.push(
           <tr key="draft" className="rv-note-row">
             <td colSpan={cols}>
-              <NoteEditor line={draft.line} onSave={save} onCancel={() => setDraft(undefined)} />
+              <CommentEditor placeholder={`Ask Claude about line ${draft.line}, or ask for a change`} onSend={send} onCancel={() => setDraft(undefined)} />
             </td>
           </tr>,
         );
@@ -550,15 +773,15 @@ const FileSection = memo(function FileSection({ ref, session, ask, review, head,
     return out;
   };
 
-  // A line number, which leaves a note on its row's line: the new side's, but for a removed line.
+  // A line number, which starts a thread on its row's line: the new side's, but for a removed line.
   const lineNo = (n: number | undefined, r: ReviewRow, cls = "") => {
     if (n === undefined) return <td className={`rv-n ${cls}`} />;
-    if (!canNote) return <td className={`rv-n ${cls}`}>{n}</td>;
+    if (!canComment || !inView) return <td className={`rv-n ${cls}`}>{n}</td>;
     const side = r.kind === "remove" ? "old" : "new";
     const line = side === "old" ? r.old! : r.new!;
     return (
       <td className={`rv-n ${cls}`}>
-        <button type="button" className="rv-n-btn" aria-label={`Leave a note on ${side === "old" ? "removed " : ""}line ${line}`} onClick={() => startNote(side, line, r.text)}>
+        <button type="button" className="rv-n-btn" aria-label={`Comment on ${side === "old" ? "removed " : ""}line ${line}`} onClick={() => startComment(side, line, r.text)}>
           {n}
         </button>
       </td>
@@ -673,6 +896,22 @@ const FileSection = memo(function FileSection({ ref, session, ask, review, head,
         {file.flagged && <span className="tool-tag rv-tag-warn">⚠ CI config</span>}
         {viewed === "changed" && <span className="tool-tag rv-tag-warn">changed since viewed</span>}
         <span className="rv-spacer" />
+        {canComment && (
+          <button
+            type="button"
+            className="rv-fh-comment"
+            aria-label={`Comment on ${file.path}`}
+            title="Comment on this file"
+            onClick={() => {
+              setFolded(false);
+              setDraft({ file: true });
+            }}
+          >
+            <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+            </svg>
+          </button>
+        )}
         <span className="line-counts">{file.binary ? <span className="dim">binary</span> : <Counts f={file} />}</span>
         {viewed !== undefined && (
           <label className={`rv-viewed${viewed === "yes" ? " is-on" : ""}`}>
@@ -693,11 +932,11 @@ const FileSection = memo(function FileSection({ ref, session, ask, review, head,
             </div>
           )}
           {error && <p className="rv-error">{error}</p>}
-          {elsewhere.length > 0 && (
+          {(fileThreads.length > 0 || elsewhere.length > 0 || (draft && "file" in draft)) && (
             <div className="rv-elsewhere">
-              {elsewhere.map((n) => (
-                <NoteView key={n.id} n={n} canEdit={false} onDelete={canNote ? () => remove(n.id) : undefined} where={n.head === head ? "hidden" : "earlier"} />
-              ))}
+              {fileThreads.map((t) => view(t, "On the file"))}
+              {draft && "file" in draft && <CommentEditor placeholder={`Ask Claude about ${file.path}, or ask for a change`} onSend={send} onCancel={() => setDraft(undefined)} />}
+              {elsewhere.map((t) => view(t, lineWhere(t)))}
             </div>
           )}
           {body()}
@@ -713,62 +952,3 @@ const target = (path: string, r: ReviewRow) => (r.kind === "remove" ? noteKey(pa
 function Code({ r, tokens }: { r: ReviewRow; tokens: ReadonlyMap<string, Token[]> }) {
   return <Highlighted text={r.text} tokens={tokens.get(rowKey(r))} mark={r.mark} markClass="rv-mark" />;
 }
-
-/** A note; `where` says why it isn't on its line: left at an earlier commit, or on a line the diff doesn't show. */
-function NoteView({ n, canEdit, onEdit, onDelete, where }: { n: ReviewNote; canEdit: boolean; onEdit?(): void; onDelete?(): void; where?: "earlier" | "hidden" }) {
-  const line = `${n.side === "old" ? "removed " : ""}line ${n.line}`;
-  return (
-    <div className="rv-note">
-      <div className="rv-note-h">
-        <b>You</b> on {where === "earlier" ? `${line} at ${short(n.head)}, an earlier commit` : where === "hidden" ? `${line}, not in the diff now` : line}
-        <span className="rv-spacer" />
-        {canEdit && onEdit && (
-          <button type="button" className="link-btn" onClick={onEdit}>
-            Edit
-          </button>
-        )}
-        {onDelete && (canEdit || where) && (
-          <button type="button" className="link-btn" onClick={onDelete}>
-            Delete
-          </button>
-        )}
-      </div>
-      <div className="rv-note-b">{n.text}</div>
-    </div>
-  );
-}
-
-function NoteEditor({ initial = "", line, onSave, onCancel }: { initial?: string; line: number; onSave(text: string): void; onCancel(): void }) {
-  const [text, setText] = useState(initial);
-  return (
-    <div className="rv-note is-editing">
-      <textarea
-        className="rv-note-ta"
-        autoFocus
-        value={text}
-        placeholder={`A note for Claude on line ${line}`}
-        aria-label={`Note on line ${line}`}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") {
-            e.preventDefault();
-            onCancel();
-          } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-            e.preventDefault();
-            onSave(text);
-          }
-        }}
-      />
-      <div className="rv-note-f">
-        <span className="rv-note-hint">Goes to Claude when you request changes</span>
-        <button type="button" className="btn btn-secondary btn-compact" onClick={onCancel}>
-          Cancel
-        </button>
-        <button type="button" className="btn btn-primary btn-compact" disabled={!text.trim() && !initial} onClick={() => onSave(text)}>
-          {initial ? "Save" : "Add note"}
-        </button>
-      </div>
-    </div>
-  );
-}
-

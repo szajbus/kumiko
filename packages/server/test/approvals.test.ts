@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
-import type { AgentAsk, ApprovalCard, AskAnswer, Attachment, DeliverCard, SessionEvent, SessionInfo } from "@kumiko/shared";
+import { LIVE_SESSION_STATUSES, type AgentAsk, type ApprovalCard, type AskAnswer, type Attachment, type DeliverCard, type ReviewThread, type SessionEvent, type SessionInfo, threadUnread, unreadReplies } from "@kumiko/shared";
 import { Approvals, cardsOf, untrusted, type ApprovalSessions } from "../src/approvals.js";
 import { GitHub } from "../src/github.js";
 import { land, squashMessage } from "../src/landing.js";
@@ -28,7 +28,7 @@ class FakeSessions implements ApprovalSessions {
   ev: SessionEvent[] = [];
   answers: { id: string; answer: AskAnswer }[] = [];
   closed = new Set<string>();
-  readonly info = { id: "s1", sandbox: "web" } as SessionInfo;
+  readonly info = { id: "s1", sandbox: "web", status: "idle" } as SessionInfo;
   get(id: string) {
     return id === "s1" ? this.info : undefined;
   }
@@ -43,9 +43,18 @@ class FakeSessions implements ApprovalSessions {
     this.answers.push({ id: askId, answer });
     this.ev.push({ seq: this.ev.length, kind: "ask_answer", payload: { id: askId, answer } });
   }
-  prompts: { text: string; attachments: Attachment[] }[] = [];
-  prompt(_id: string, text: string, attachments: Attachment[]) {
-    this.prompts.push({ text, attachments });
+  prompts: { text: string; attachments: Attachment[]; review?: { thread?: string; ask: string; where?: string; text: string } }[] = [];
+  prompt(_id: string, text: string, attachments: Attachment[], _files: unknown[] = [], review?: { thread?: string; ask: string; where?: string; text: string }) {
+    if (!LIVE_SESSION_STATUSES.includes(this.info.status)) throw new Error("ended");
+    this.prompts.push({ text, attachments, ...(review ? { review } : {}) });
+  }
+  putThread(_id: string, thread: ReviewThread) {
+    this.ev.push({ seq: this.ev.length, kind: "thread", payload: thread });
+  }
+  thread(id: string) {
+    let t: ReviewThread | undefined;
+    for (const e of this.ev) if (e.kind === "thread" && e.payload.id === id) t = e.payload;
+    return t;
   }
   card(id: string) {
     return cardsOf(this.ev).get(id);
@@ -881,5 +890,132 @@ describe("delivering", () => {
     assert.equal(squashMessage("Subject", "* a", [t]), `Subject\n\n* a\n\n${t}\n`);
     assert.equal(squashMessage("Subject", `* a\n\n${t}`, [t]), `Subject\n\n* a\n\n${t}\n`);
     assert.equal(squashMessage("Subject", "", []), "Subject\n");
+  });
+
+  describe("review threads", () => {
+    const comment = (r: { id: string }, text: string, anchor: Parameters<Approvals["comment"]>[2]["anchor"] = { kind: "change" }) => approvals.comment("s1", r.id, { anchor, text });
+
+    it("stops Claude waiting on the first comment, keeps the card open, and gives Claude the thread", async () => {
+      fresh();
+      const head = await branch("talk", { "t.ts": "one\ntwo\n" });
+      const r = await ask({ branch: "talk", title: "Talk", body: "b" });
+      const t = comment(r, "Why two lines?", { kind: "line", path: "t.ts", side: "new", line: 2, quote: "two" });
+      assert.equal(t.review, "acme/widget#talk");
+      assert.equal(t.head, head);
+      assert.equal(sessions.card(r.id)!.state, "open");
+      assert.equal(sessions.card(r.id)!.discussing, true);
+      const denied = sessions.answer(r.id);
+      assert.equal(denied?.kind, "deny");
+      assert.match((denied as { message: string }).message, /commented on it, so you're not waiting for the card any more/);
+      const p = sessions.prompts.at(-1)!;
+      assert.equal(p.text, "Why two lines?");
+      assert.deepEqual({ ...p.review, text: undefined }, { thread: t.id, ask: r.id, where: "t.ts:2", text: undefined });
+      assert.match(p.review!.text, new RegExp(`^The user commented in review thread ${t.id}, on talk at ${head.slice(0, 7)}, on t\\.ts:2:\n\n> two\n\nUser: Why two lines\\?\n\nAnswer with review_reply`));
+
+      // Claude answers in the thread, and says it will change something; the user replies, and Claude hears it all.
+      const replied = await approvals.call(sessions.info, "review_reply", { thread: t.id, text: "I'll make it one.", willChange: true }, "tool-r1");
+      assert.equal(replied.isError, undefined, replied.text);
+      assert.equal(sessions.thread(t.id)!.willChange, true);
+      assert.deepEqual(sessions.thread(t.id)!.messages.map((m) => m.by), ["user", "claude"]);
+      approvals.comment("s1", r.id, { thread: t.id, text: "Good." });
+      assert.match(sessions.prompts.at(-1)!.review!.text, /User: Why two lines\?\n\nYou: I'll make it one\.\n\nUser: Good\./);
+      assert.equal(sessions.answers.length, 1, "Claude was told to stop waiting only once");
+
+      assert.equal(approvals.markThread("s1", t.id, { resolved: true }).resolved, true);
+      assert.equal(approvals.markThread("s1", t.id, { resolved: false }).resolved, undefined);
+
+      // A reply is unread until the user reads it, or replies.
+      assert.equal(threadUnread(sessions.thread(t.id)!), 0, "the user's reply read what came before");
+      await approvals.call(sessions.info, "review_reply", { thread: t.id, text: "Done talking?" }, "tool-r4");
+      assert.equal(unreadReplies(sessions.ev), 1);
+      approvals.readAll("s1", "acme/widget#other");
+      assert.equal(unreadReplies(sessions.ev), 1);
+      approvals.readAll("s1", t.review);
+      assert.equal(unreadReplies(sessions.ev), 0);
+      await approvals.call(sessions.info, "review_reply", { thread: t.id, text: "Still there?" }, "tool-r5");
+      approvals.markThread("s1", t.id, { read: true });
+      assert.equal(unreadReplies(sessions.ev), 0);
+      await approvals.call(sessions.info, "review_reply", { thread: t.id, text: "Hello?" }, "tool-r8");
+      assert.equal(unreadReplies(sessions.ev), 1);
+      await approvals.decide("s1", r.id, { action: "decline" });
+      assert.equal(unreadReplies(sessions.ev), 0, "a decided card's replies stop waiting on the user");
+    });
+
+    it("refuses comments and replies where nobody would read them", async () => {
+      fresh();
+      await branch("quiet", { q: "q\n" });
+      const r = await ask({ branch: "quiet", title: "Quiet", body: "b" });
+      assert.throws(() => comment(r, "  "), /empty/);
+      assert.throws(() => comment(r, "x", { kind: "commit", sha: "0".repeat(40) }), /isn't one of the card's/);
+      assert.throws(() => approvals.comment("s1", r.id, { thread: "t_nope", text: "x" }), /no such thread/);
+      const bad = await approvals.call(sessions.info, "review_reply", { thread: "t_nope", text: "x" }, "tool-r2");
+      assert.equal(bad.isError, true);
+      const t = comment(r, "Hm?");
+      await approvals.decide("s1", r.id, { action: "decline", reason: "No." });
+      const late = await approvals.call(sessions.info, "review_reply", { thread: t.id, text: "x" }, "tool-r3");
+      assert.match(late.text, /decided already/);
+      assert.throws(() => comment(r, "More?"), /decided already/);
+      sessions.info.status = "ended";
+      try {
+        const r2 = await ask({ branch: "quiet", title: "Quiet", body: "b" });
+        assert.throws(() => comment(r2, "Hello?"), /session has ended/);
+      } finally {
+        sessions.info.status = "idle";
+      }
+    });
+
+    it("lands an approved card Claude no longer waits on by itself, and tells Claude how it went", async () => {
+      fresh();
+      await branch("solo", { solo: "s\n" });
+      const r = await ask({ branch: "solo", title: "Solo", body: "b" });
+      const t = comment(r, "Looks fine?");
+      await approvals.call(sessions.info, "review_reply", { thread: t.id, text: "I'll tidy it.", willChange: true }, "tool-r7");
+      const done = await approvals.decide("s1", r.id, { action: "approve", decision: { kind: "deliver", route: "main", method: "merge" } });
+      assert.equal(done.state, "done", done.receipt?.meta);
+      assert.match(done.receipt!.text, /^Merged solo into main as [0-9a-f]{7}$/);
+      const told = sessions.prompts.at(-1)!;
+      assert.equal(told.review?.thread, undefined);
+      assert.equal(sessions.thread(t.id)!.resolved, true, "approved without it");
+      assert.match(told.review!.text, /^The user approved delivering solo on its card\. They approved it without the change you said you'd make in the review\. Delivered solo to main as [0-9a-f]{7} \(merge commit, signed\)/);
+      assert.match(git(bare, ["cat-file", "commit", onGitHub("refs/heads/main")!]), /\n\nMerge branch 'solo'\n$/);
+      // A late call of Claude's for it lands nothing more.
+      const main = onGitHub("refs/heads/main");
+      const call = await approvals.call(sessions.info, "deliver", r.input, r.toolUseId);
+      assert.match(call.text, /^Done already/);
+      assert.equal(onGitHub("refs/heads/main"), main);
+    });
+
+    it("sends a request for changes to Claude as a message, and rebinds a moved card in place", async () => {
+      fresh();
+      await branch("redo", { redo: "1\n" });
+      const r = await ask({ branch: "redo", title: "Redo", body: "b" });
+      const t = comment(r, "Rename it.", { kind: "file", path: "redo" });
+      // Claude pushes while the user reads: approving finds the branch moved, and the card goes out of date.
+      const moved = await branch("redo", { redo: "2\n" }, { from: "redo" });
+      const stale = await approvals.decide("s1", r.id, { action: "approve", decision: { kind: "deliver", route: "main", method: "merge" } });
+      assert.equal(stale.state, "stale");
+      assert.equal(stale.discussing, true);
+      const again = await approvals.decide("s1", r.id, { action: "refresh" });
+      assert.equal(again.state, "open");
+      assert.equal((again.card as DeliverCard).head, moved);
+      assert.equal(again.discussing, true);
+      assert.equal(sessions.thread(t.id)!.head, (r.card!.card as DeliverCard).head, "the thread stays on its commit");
+      await approvals.call(sessions.info, "review_reply", { thread: t.id, text: "Will rename.", willChange: true }, "tool-r6");
+      const declined = await approvals.decide("s1", r.id, { action: "decline", reason: "Please rename it." });
+      assert.equal(declined.state, "declined");
+      assert.equal(sessions.thread(t.id)!.requested, true, "the request carried it");
+      assert.match(sessions.prompts.at(-1)!.review!.text, /the user declined delivering redo: “Please rename it\.”/);
+    });
+
+    it("retires a card Claude no longer waits on once Claude delivers the branch again", async () => {
+      fresh();
+      await branch("twice", { tw: "1\n" });
+      const r = await ask({ branch: "twice", title: "Twice", body: "b" });
+      comment(r, "Hm.");
+      const r2 = await ask({ branch: "twice", title: "Twice", body: "b" });
+      assert.equal(sessions.card(r.id)!.state, "failed");
+      assert.match(sessions.card(r.id)!.receipt!.text, /^Replaced/);
+      assert.equal(sessions.card(r2.id)!.state, "open");
+    });
   });
 });

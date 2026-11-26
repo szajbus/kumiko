@@ -48,7 +48,7 @@ export type ChatItem =
    * to. `merged` if Claude took it up in the middle of a turn it was already taking, rather than starting one for it.
    * `shell`: the run id of the command the user ran that this prompt gave Claude (see userShell.ts).
    */
-  | { type: "user"; key: string; text: string; id: string; replayed?: boolean; merged?: boolean; attachments?: Attachment[]; shell?: string }
+  | { type: "user"; key: string; text: string; id: string; replayed?: boolean; merged?: boolean; attachments?: Attachment[]; shell?: string; review?: { thread?: string; ask: string; where?: string } }
   /** A command the user ran that ended without going to Claude: its session ended, or was closing, or Kumiko restarted. */
   | { type: "shell"; key: string; id: string }
   /** One assistant message: finished blocks, then the ones still streaming (by content index). */
@@ -400,7 +400,7 @@ function applyChatEvent(s: ChatState, ev: SessionEvent): ChatState {
 
   switch (ev.kind) {
     case "user_prompt": {
-      const item: UserItem = { type: "user", key, text: ev.payload.text, id: ev.payload.id, ...(ev.payload.attachments ? { attachments: ev.payload.attachments } : {}), ...(ev.payload.shell ? { shell: ev.payload.shell } : {}) };
+      const item: UserItem = { type: "user", key, text: ev.payload.text, id: ev.payload.id, ...(ev.payload.attachments ? { attachments: ev.payload.attachments } : {}), ...(ev.payload.shell ? { shell: ev.payload.shell } : {}), ...(ev.payload.review ? { review: ev.payload.review } : {}) };
       // Sent while Claude works, it waits until Claude takes it up; see `take`.
       const next = s.inTurn ? { ...s, queued: [...s.queued, item], suggestion: undefined } : startTurn({ ...push(item), suggestion: undefined });
       // Claude hears of what was shared with the first prompt after it that isn't a command; see `sharesWaiting`.

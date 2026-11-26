@@ -138,6 +138,8 @@ export function cardAction(card: ApprovalCard): string {
  * sending a message instead. Undefined while it is open.
  */
 export function cardClosed(card: ApprovalCard | undefined, answer: AskAnswer | undefined, closed: AskClosedReason | undefined): string | undefined {
+  // The user commented on it, so Claude stopped waiting: the card is the user's now.
+  if (card?.discussing) return undefined;
   if (answer?.kind === "message") return "You sent a message instead; nothing was done.";
   if (closed && card?.state !== "done" && card?.state !== "failed" && card?.state !== "working") return "Claude stopped waiting; nothing was done.";
   return undefined;

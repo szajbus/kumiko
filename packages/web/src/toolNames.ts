@@ -24,6 +24,8 @@ export function toolLine(name: string, input: Record<string, unknown>): ToolLine
   switch (name.startsWith(KUMIKO) ? name.slice(KUMIKO.length) : name === "ToolSearch" || name === "Skill" ? name : "") {
     case "deliver":
       return { label: "Asked to deliver", title: str(input.branch), mono: true };
+    case "review_reply":
+      return { label: input.willChange === true ? "Replied in the review, will change it" : "Replied in the review" };
     case "github_issue_view":
       return { label: "Read issue", title: inRepo(n ? `#${n}` : undefined) };
     case "github_pr_view":

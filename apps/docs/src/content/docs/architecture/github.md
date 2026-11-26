@@ -142,6 +142,21 @@ You pick a route and a method. The card starts at what you picked last time in t
 
 If the branch moved after the card was shown, the approval is refused. The card delivers exactly the commit you saw.
 
+### A card the agent no longer waits on
+
+Your first comment in the review answers the agent's `deliver` call with a denial that says the card stays open, so
+the agent can read the comment and answer it. The card is marked `discussing`, and no tool call of the agent's is
+waiting on it any more. A decision on it doesn't wait for one either:
+
+- Approving checks the branch is still at the card's commit, then lands it from Kumiko, as the call would have. Kumiko
+  then sends the agent the result in a message, the same text the call would have returned.
+- Declining, or requesting changes, sends the agent a message with your reason.
+- **Review again** works the card out again in place, for the branch as it is now.
+
+The approval stays bound to the commit the card shows, and only your click on the card approves. Threads are session
+events, kept with the session like cards, so a rewind or a fork takes them along. The agent's `review_reply` adds to a
+thread only while the branch has a card open.
+
 ## Signing
 
 When your git config names a signing key, or GPG has a usable key for your email, Kumiko signs on your Mac. It signs

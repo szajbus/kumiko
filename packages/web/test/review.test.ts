@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ReviewFile } from "@kumiko/shared";
-import { byFolder, changesReason, initialScope, newCommits, noteFits, prUpdate, restamp, reviewRows, splitRows, viewedCount, viewedMarks, viewedState, type Review, type ReviewNote } from "../src/review.ts";
+import type { ReviewThread } from "@kumiko/shared";
+import { byFolder, changesReason, initialScope, newCommits, noteComment, noteFits, prUpdate, restamp, reviewRows, splitRows, threadCounts, threadState, touched, unreadOrder, viewedCount, viewedMarks, viewedState, type Review, type ReviewNote } from "../src/review.ts";
 
 const file = (hunks: ReviewFile["hunks"], status: ReviewFile["status"] = "modified") => ({ hunks, status });
 const short = (rows: ReturnType<typeof reviewRows>) => rows.map((r) => (r.kind === "gap" ? `gap ${r.skipped ?? "?"}` : `${r.kind[0]} ${r.old ?? "-"} ${r.new ?? "-"} ${r.text}`));
@@ -67,18 +68,57 @@ describe("a review's marks and notes", () => {
     assert.equal(restamp(r, "h2", [{ ...f, hunks: [] }]).viewed["old.ts"].head, "h2");
   });
 
-  it("tells Claude the user's words, then each note with its line, in file order", () => {
-    const notes: ReviewNote[] = [
-      { id: "2", path: "z.ts", side: "new", line: 9, quote: "  return x;", text: "Return y.", head: "abcdef123" },
-      { id: "3", path: "b.ts", side: "new", line: 1, quote: "b", text: "Earlier.", head: "0123456789" },
-      { id: "1", path: "a.ts", side: "old", line: 3, quote: "old()", text: "Keep this.", head: "abcdef123" },
+  it("tells Claude the user's words, then each thread it said it would change, with its conversation", () => {
+    const m = (by: "user" | "claude", text: string) => ({ id: text, by, text, at: "" });
+    const threads: ReviewThread[] = [
+      { id: "t1", review: "r", ask: "a", head: "abcdef123", anchor: { kind: "line", path: "z.ts", side: "new", line: 9, quote: "  return x;" }, messages: [m("user", "Return y."), m("claude", "Will do.")], willChange: true },
+      { id: "t2", review: "r", ask: "a", head: "abcdef123", anchor: { kind: "change" }, messages: [m("user", "Why?"), m("claude", "Because.")] },
+      { id: "t5", review: "r", ask: "a", head: "abcdef123", anchor: { kind: "change" }, messages: [m("user", "Tests?"), m("claude", "Adding one.")], willChange: true },
+      { id: "t3", review: "r", ask: "a", head: "0123456789", anchor: { kind: "file", path: "b.ts" }, messages: [m("user", "Split it."), m("claude", "OK.")], willChange: true },
+      { id: "t4", review: "r", ask: "a", head: "abcdef123", anchor: { kind: "commit", sha: "c".repeat(40) }, messages: [m("user", "Reword."), m("claude", "Sure.")], willChange: true, resolved: true },
     ];
     assert.equal(
-      changesReason({ branch: "fix", head: "abcdef123" }, notes, " Close, but: "),
-      "Close, but:\n\nNotes on fix at abcdef1:\n\na.ts, line 3 before the change\n> old()\nKeep this.\n\nz.ts:9\n> return x;\nReturn y." +
-        "\n\nNotes on fix at 0123456, an earlier commit of the branch:\n\nb.ts:1\n> b\nEarlier.",
+      changesReason({ branch: "fix", head: "abcdef123" }, threads, " Close, but: "),
+      "Close, but:\n\nWhat you said you'd change, in the review of fix:\n\nz.ts:9, thread t1\n> return x;\nUser: Return y.\n\nYou: Will do." +
+        "\n\nThe whole change, thread t5\nUser: Tests?\n\nYou: Adding one." +
+        "\n\nb.ts (at 0123456, an earlier commit of the branch), thread t3\nUser: Split it.\n\nYou: OK.",
     );
     assert.equal(changesReason({ branch: "fix", head: "abc" }, [], "  "), "");
+    assert.deepEqual(threads.map(threadState), ["will-change", "answered", "will-change", "will-change", "resolved"]);
+    assert.deepEqual(threadCounts(threads), { open: 4, willChange: 3, unread: 5 });
+  });
+
+  it("goes through unread replies in the order the pane shows them", () => {
+    const t = (id: string, anchor: ReviewThread["anchor"], read = false): ReviewThread => ({ id, review: "r", ask: "a", head: "h", anchor, messages: [{ id: "u", by: "user", text: "?", at: "" }, { id: "c", by: "claude", text: "!", at: "" }], ...(read ? { readTo: "c" } : {}) });
+    const threads = [
+      t("b9", { kind: "line", path: "b.ts", side: "new", line: 9, quote: "" }),
+      t("a", { kind: "file", path: "a.ts" }),
+      t("b2", { kind: "line", path: "b.ts", side: "new", line: 2, quote: "" }),
+      t("read", { kind: "file", path: "a.ts" }, true),
+      t("all", { kind: "change" }),
+      t("c2", { kind: "commit", sha: "2" }),
+      t("c1", { kind: "commit", sha: "1" }),
+    ];
+    assert.deepEqual(unreadOrder(threads, ["a.ts", "b.ts"], ["1", "2"]).map((x) => x.id), ["all", "c1", "c2", "a", "b2", "b9"]);
+  });
+
+  it("says whether a thread's line changed since its commit", () => {
+    const t = (anchor: ReviewThread["anchor"]): ReviewThread => ({ id: "t", review: "r", ask: "a", head: "h", anchor, messages: [] });
+    const hunks = [{ oldStart: 10, oldLines: 3, newStart: 10, newLines: 1, lines: [] }];
+    const line = (n: number, side: "old" | "new" = "new") => t({ kind: "line", path: "a", side, line: n, quote: "" });
+    assert.equal(touched(line(11), { hunks }), true);
+    assert.equal(touched(line(13), { hunks }), false);
+    assert.equal(touched(line(9), { hunks }), false);
+    assert.equal(touched(line(1, "old"), { hunks }), true, "a removed line's thread counts the file changing");
+    assert.equal(touched(t({ kind: "file", path: "a" }), { hunks }), true);
+    assert.equal(touched(line(11), undefined), false, "the file didn't change");
+    assert.equal(touched(line(5), { hunks: [{ oldStart: 4, oldLines: 0, newStart: 5, newLines: 2, lines: [] }] }), true, "lines added right after it");
+  });
+
+  it("sends a note from before threads on its line, or on its file if it was at another commit", () => {
+    const n: ReviewNote = { id: "1", path: "a.ts", side: "new", line: 4, quote: "x()", text: "Why?", head: "h" };
+    assert.deepEqual(noteComment(n, "h"), { anchor: { kind: "line", path: "a.ts", side: "new", line: 4, quote: "x()" }, text: "Why?" });
+    assert.deepEqual(noteComment({ ...n, head: "abcdef123" }, "h"), { anchor: { kind: "file", path: "a.ts" }, text: "On line 4 at abcdef1 (“x()”): Why?" });
   });
 
   it("groups files by folder, folders in order", () => {
@@ -124,8 +164,4 @@ describe("a card that adds to an open PR", () => {
     assert.equal(noteFits({ ...note, head: "x" }, "h", "g"), false);
   });
 
-  it("tells Claude which commit a removed line is in", () => {
-    const n: ReviewNote = { id: "1", path: "a.ts", side: "old", line: 4, quote: "old()", text: "Why?", head: "h", from: "abcdef123" };
-    assert.equal(changesReason({ branch: "fix", head: "h" }, [n], ""), "Notes on fix at h:\n\na.ts, line 4 at abcdef1, before the later commits\n> old()\nWhy?");
-  });
 });

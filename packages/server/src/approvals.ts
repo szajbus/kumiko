@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { AgentFile, AgentMessage, ToolResult, ToolSpec } from "@kumiko/agent";
@@ -18,7 +18,14 @@ import {
   type DeliverRoute,
   type SessionEvent,
   type SessionInfo,
+  type ReviewThread,
+  type ThreadAnchor,
   MAX_REASON,
+  MAX_THREAD_TEXT,
+  reviewOf,
+  threadsOf,
+  threadUnread,
+  threadWhere,
 } from "@kumiko/shared";
 import { apiPath, apiText, logText, runSummary } from "./actions.js";
 import { replaceFile } from "./files.js";
@@ -35,8 +42,12 @@ export interface ApprovalSessions {
   events(id: string): readonly SessionEvent[];
   putCard(id: string, card: ApprovalCard): void;
   answerAsk(id: string, askId: string, answer: { kind: "allow" } | { kind: "deny"; message: string }): void;
-  /** Sends Claude a message from the user, as the composer would. */
-  prompt(id: string, text: string, attachments: Attachment[], files: AgentFile[]): void;
+  /**
+   * Sends Claude a message from the user, as the composer would. With `review`, Claude gets `review.text`, and the chat
+   * shows one line: a comment in thread `review.thread`, or what the user decided on card `review.ask`.
+   */
+  prompt(id: string, text: string, attachments: Attachment[], files: AgentFile[], review?: { thread?: string; ask: string; where?: string; text: string }): void;
+  putThread(id: string, thread: ReviewThread): void;
   /** The open sessions, for where to ask about a push. */
   list(): SessionInfo[];
 }
@@ -73,6 +84,21 @@ const DELIVER: ToolSpec = {
   approval: true,
 };
 
+
+const REVIEW_REPLY: ToolSpec = {
+  name: "review_reply",
+  description:
+    "Answer a comment the user left on a deliver card's changes, in its review thread: the user reads it there, next to the code, not in the chat. When the comment asks for a change, say what you'll do and set willChange; make the change only once the user requests changes on the card. A later reply with willChange false takes it back.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      thread: { type: "string", description: "The thread, as the comment named it." },
+      text: { type: "string", description: "Your reply, in Markdown." },
+      willChange: { type: "boolean", description: "You'll change something for this if the user requests changes." },
+    },
+    required: ["thread", "text"],
+  },
+};
 
 const GITHUB_TOOLS: ToolSpec[] = [
   {
@@ -273,6 +299,21 @@ const str = (v: unknown, name: string, max: number, required = true): string | u
   return v;
 };
 
+/**
+ * What Claude gets for a comment in a review thread: where it is, the conversation so far, and how to answer. The
+ * comment is the user's own, so it isn't marked as untrusted.
+ */
+export function threadPrompt(c: Pick<DeliverCard, "branch" | "head">, t: ReviewThread): string {
+  const a = t.anchor;
+  const at = t.head === c.head ? `${c.branch} at ${t.head.slice(0, 7)}` : `${c.branch} at ${t.head.slice(0, 7)}, an earlier commit (the card is at ${c.head.slice(0, 7)} now)`;
+  const where = a.kind === "line" && a.side === "old" && a.from ? `${a.path}, line ${a.line} at ${a.from.slice(0, 7)}, before the later commits` : threadWhere(a);
+  const parts = [`The user commented in review thread ${t.id}, on ${at}, on ${where}:`];
+  if (a.kind === "line" && a.quote.trim()) parts.push(`> ${a.quote.trim()}`);
+  parts.push(t.messages.map((m) => `${m.by === "user" ? "User" : "You"}: ${m.text}`).join("\n\n"));
+  parts.push(`Answer with review_reply (thread "${t.id}"), not in the chat. If they ask for a change, say what you'll do and set willChange, and make it only once they request changes on the card.`);
+  return parts.join("\n\n");
+}
+
 /** The latest card for each ask in a session's events. */
 export function cardsOf(events: readonly SessionEvent[]): Map<string, ApprovalCard> {
   const cards = new Map<string, ApprovalCard>();
@@ -297,7 +338,7 @@ export class Approvals {
   ) {}
 
   list(): ToolSpec[] {
-    return [DELIVER, ...GITHUB_TOOLS];
+    return [DELIVER, REVIEW_REPLY, ...GITHUB_TOOLS];
   }
 
   /** Claude asked to call a tool that needs approval: show its card, or say why not. Never throws. */
@@ -316,6 +357,15 @@ export class Approvals {
         return;
       }
       if (!this.isOpen(info.id, ask.id)) return;
+      // A card for the branch that Claude no longer waits on gives way to the new one, which goes on with its review.
+      if (card.card.kind === "deliver") {
+        const review = reviewOf(card.card);
+        for (const old of cardsOf(this.sessions.events(info.id)).values()) {
+          if (old.discussing && (old.state === "open" || old.state === "stale") && old.card.kind === "deliver" && reviewOf(old.card) === review) {
+            this.sessions.putCard(info.id, { ...old, state: "failed", receipt: { ok: false, text: `Replaced: ${what(old)}`, meta: "Claude delivered the branch again" } });
+          }
+        }
+      }
       this.sessions.putCard(info.id, card);
     })();
   }
@@ -522,8 +572,9 @@ export class Approvals {
     const info = this.sessions.get(session);
     if (!info) throw new ApprovalError("This session is gone.");
     const card = this.card(session, askId);
-    if (!this.isOpen(session, askId)) throw new ApprovalError("Claude isn't waiting for this any more.");
+    if (!card.discussing && !this.isOpen(session, askId)) throw new ApprovalError("Claude isn't waiting for this any more.");
     if (card.state !== "open" && card.state !== "stale") throw new ApprovalError("This has been decided already.");
+    if (card.discussing) return this.decideDiscussed(info, card, action);
     if (action.action === "decline") {
       // Room for a review's notes, each with the line it is on.
       const full = action.reason?.trim();
@@ -564,16 +615,11 @@ export class Approvals {
     const decision = action.decision;
     if (decision.kind !== card.card.kind) throw new ApprovalError("That decision isn't for this card.");
     if (card.card.kind === "deliver" && decision.kind === "deliver") {
-      if (card.card.pr && decision.route === "pr" && card.card.github === card.card.head) throw new ApprovalError(`PR #${card.card.pr.number} has all of ${card.card.branch} already.`);
-      // Bound to the commit the card shows: if the branch moved, nothing is approved.
-      await this.opts.mirrors.fetch(card.card.repo, { force: true }).catch(() => {});
-      const now = await this.opts.mirrors.branchHead(card.card.repo, card.card.branch);
-      if (now !== card.card.head) {
-        const commits = now ? await this.opts.mirrors.countBetween(card.card.repo, card.card.head, now) : 0;
+      const moved = await this.moved(card, decision);
+      if (moved) {
         this.stillWaiting(session, askId);
-        const next: ApprovalCard = { ...card, state: "stale", moved: { to: now ?? "", commits } };
-        this.sessions.putCard(session, next);
-        return next;
+        this.sessions.putCard(session, moved);
+        return moved;
       }
       await this.saveChoice(info.sandbox, decision.route, decision.method);
     }
@@ -597,6 +643,197 @@ export class Approvals {
     return next;
   }
 
+  /**
+   * Checks a deliver card is still for the branch as it is: undefined if so, else the card gone stale, with where the
+   * branch moved to. Approving is bound to the commit the card shows.
+   */
+  private async moved(card: ApprovalCard, decision: Extract<CardDecision, { kind: "deliver" }>): Promise<ApprovalCard | undefined> {
+    const c = card.card as DeliverCard;
+    if (c.pr && decision.route === "pr" && c.github === c.head) throw new ApprovalError(`PR #${c.pr.number} has all of ${c.branch} already.`);
+    await this.opts.mirrors.fetch(c.repo, { force: true }).catch(() => {});
+    const now = await this.opts.mirrors.branchHead(c.repo, c.branch);
+    if (now === c.head) return undefined;
+    const commits = now ? await this.opts.mirrors.countBetween(c.repo, c.head, now) : 0;
+    return { ...card, state: "stale", moved: { to: now ?? "", commits } };
+  }
+
+  /**
+   * The user decided on a card Claude no longer waits on, as they commented on it: Kumiko does what they approved
+   * itself, and tells Claude what they decided, and how it went, in a message. "refresh" works the card out again in
+   * place, for the branch as it is now, keeping its review.
+   */
+  private async decideDiscussed(info: SessionInfo, card: ApprovalCard, action: DecideAction): Promise<ApprovalCard> {
+    const session = info.id;
+    const c = card.card as DeliverCard;
+    const tell = (text: string, attachments: Attachment[] = [], files: AgentFile[] = [], shown = text) => {
+      try {
+        this.sessions.prompt(session, shown, attachments, files, { ask: card.id, text });
+      } catch {
+        // The session has ended: what was decided stands, and the card says so.
+      }
+    };
+    if (action.action === "decline") {
+      const full = action.reason?.trim();
+      const reason = full && full.length > MAX_REASON ? `${full.slice(0, MAX_REASON)}\n[Kumiko cut the rest: it was longer than ${MAX_REASON} characters.]` : full;
+      const next: ApprovalCard = { ...card, state: "declined", ...(reason ? { reason } : {}) };
+      this.sessions.putCard(session, next);
+      // The request for changes carried what Claude said it would change: done with, unless Claude says so again.
+      for (const t of this.pending(session, reviewOf(c))) this.sessions.putThread(session, { ...t, requested: true });
+      const { attachments = [], files = [] } = action;
+      tell(`On the card you're no longer waiting on, the user declined ${what(card)}${reason ? `: “${reason}”` : "."}`, attachments, files, reason || attachments.map((a) => a.name).join(", ") || `Declined ${what(card)}`);
+      return next;
+    }
+    if (action.action === "refresh") {
+      let body: ApprovalCard["card"];
+      try {
+        body = await this.cardFor(info, "deliver", this.askOf(session, card.id).input);
+      } catch (err) {
+        if (!(err instanceof NotDeliverable || err instanceof ApprovalError)) throw err;
+        const next: ApprovalCard = { ...card, state: "failed", receipt: { ok: false, text: err.message } };
+        this.sessions.putCard(session, next);
+        tell(`The user reviewed ${c.branch} again on its card, and Kumiko couldn't show it: ${err.message}`);
+        return next;
+      }
+      const next: ApprovalCard = { ...card, card: body, state: "open" };
+      delete next.moved;
+      this.sessions.putCard(session, next);
+      return next;
+    }
+    if (card.state === "stale") throw new ApprovalError("The branch moved since this card was shown: review the new state first.");
+    const decision = action.decision;
+    if (decision.kind !== "deliver") throw new ApprovalError("That decision isn't for this card.");
+    const moved = await this.moved(card, decision);
+    if (moved) {
+      this.sessions.putCard(session, moved);
+      return moved;
+    }
+    await this.saveChoice(info.sandbox, decision.route, decision.method);
+    // Approved as it is: what Claude said it would change is dropped.
+    const dropped = this.pending(session, reviewOf(c));
+    for (const t of dropped) this.sessions.putThread(session, { ...t, resolved: true });
+    const without = dropped.length ? ` They approved it without the ${dropped.length === 1 ? "change" : `${dropped.length} changes`} you said you'd make in the review.` : "";
+    const working: ApprovalCard = { ...card, state: "working", decision };
+    this.sessions.putCard(session, working);
+    try {
+      const { result, receipt } = await this.run(info, working);
+      const done: ApprovalCard = { ...working, state: "done", receipt };
+      this.sessions.putCard(session, done);
+      tell(`The user approved ${what(card)} on its card.${without} ${result.text}`, [], [], receipt.text);
+      return done;
+    } catch (err) {
+      const message = err instanceof BranchMoved ? `${c.branch} moved after the user approved it, so nothing was delivered.` : err instanceof Error ? err.message : String(err);
+      const failed: ApprovalCard = { ...working, state: "failed", receipt: { ok: false, text: `Couldn't ${what(card)}`, meta: message } };
+      this.sessions.putCard(session, failed);
+      tell(`The user approved ${what(card)} on its card, and nothing was done: ${message}`);
+      return failed;
+    }
+  }
+
+  // ---- review threads ------------------------------------------------------------------------
+
+  /** Review `review`'s threads Claude said it would change something for, that no request for changes carried yet. */
+  private pending(session: string, review: string): ReviewThread[] {
+    return [...this.threads(session).values()].filter((t) => t.review === review && t.willChange && !t.requested && !t.resolved);
+  }
+
+  private threads(session: string): Map<string, ReviewThread> {
+    return threadsOf(this.sessions.events(session));
+  }
+
+  /** The deliver card a thread can be added to now: card `askId`, open or out of date, in a live session. */
+  private commentable(session: string, askId: string): { info: SessionInfo; card: ApprovalCard; c: DeliverCard } {
+    const info = this.sessions.get(session);
+    if (!info) throw new ApprovalError("This session is gone.");
+    if (!LIVE_SESSION_STATUSES.includes(info.status)) throw new ApprovalError("This session has ended, so Claude can't answer.");
+    const card = this.card(session, askId);
+    if (card.card.kind !== "deliver") throw new ApprovalError("Only a deliver card's changes take comments.");
+    if (card.state !== "open" && card.state !== "stale") throw new ApprovalError("This card has been decided already.");
+    if (!card.discussing && !this.isOpen(session, askId)) throw new ApprovalError("Claude isn't waiting for this card any more.");
+    return { info, card, c: card.card };
+  }
+
+  /**
+   * The user commented on card `askId`'s changes, starting a thread at `anchor`, or replying in `thread`. Claude gets it
+   * now: if it still waits on the card, it stops waiting, and the card stays open without it. Returns the thread.
+   */
+  comment(session: string, askId: string, input: { anchor?: ThreadAnchor; thread?: string; text: string }): ReviewThread {
+    const text = input.text.trim();
+    if (!text) throw new ApprovalError("The comment is empty.");
+    if (text.length > MAX_THREAD_TEXT) throw new ApprovalError(`The comment is longer than ${MAX_THREAD_TEXT} characters.`);
+    const { card, c } = this.commentable(session, askId);
+    const review = reviewOf(c);
+    let thread: ReviewThread;
+    const message = { id: randomUUID(), by: "user" as const, text, at: new Date().toISOString() };
+    if (input.thread !== undefined) {
+      const was = this.threads(session).get(input.thread);
+      if (!was || was.review !== review) throw new ApprovalError("There's no such thread on this card's branch.");
+      thread = { ...was, messages: [...was.messages, message], readTo: message.id };
+      delete thread.resolved;
+    } else {
+      if (!input.anchor) throw new ApprovalError("Say where the comment goes.");
+      const anchor = input.anchor;
+      if (anchor.kind === "commit" && !c.commits.some((x) => x.sha === anchor.sha)) throw new ApprovalError("That commit isn't one of the card's.");
+      thread = { id: `t_${randomBytes(4).toString("hex")}`, review, ask: card.id, head: c.head, anchor, messages: [message], readTo: message.id };
+    }
+    if (!card.discussing) {
+      const next: ApprovalCard = { ...card, discussing: true };
+      this.sessions.putCard(session, next);
+      if (this.isOpen(session, card.id)) {
+        try {
+          this.sessions.answerAsk(session, card.id, {
+            kind: "deny",
+            message: `The user is reviewing ${c.branch} at ${c.head.slice(0, 7)} on the card and commented on it, so you're not waiting for the card any more: their comment comes next. The card stays open: they approve it, request changes or decline it there, and you're told. Don't call deliver again unless you change the branch.`,
+          });
+        } catch {
+          // Claude stopped waiting meanwhile: the comment goes all the same.
+        }
+      }
+    }
+    this.sessions.putThread(session, thread);
+    this.sessions.prompt(session, text, [], [], { thread: thread.id, ask: card.id, where: threadWhere(thread.anchor), text: threadPrompt(c, thread) });
+    return thread;
+  }
+
+  /**
+   * The user resolved thread `id`, or opened it again, or read Claude's replies in it. Claude isn't told: these are the
+   * user's own to-do.
+   */
+  markThread(session: string, id: string, change: { resolved?: boolean; read?: boolean }): ReviewThread {
+    const was = this.threads(session).get(id);
+    if (!was) throw new ApprovalError("There's no such thread.");
+    const thread = { ...was };
+    if (change.resolved === true) thread.resolved = true;
+    else if (change.resolved === false) delete thread.resolved;
+    if (change.read) thread.readTo = was.messages.at(-1)!.id;
+    if (JSON.stringify(thread) !== JSON.stringify(was)) this.sessions.putThread(session, thread);
+    return thread;
+  }
+
+  /** The user read every reply in review `review`'s threads (see `reviewOf`). */
+  readAll(session: string, review: string): void {
+    for (const t of this.threads(session).values()) if (t.review === review && threadUnread(t)) this.sessions.putThread(session, { ...t, readTo: t.messages.at(-1)!.id });
+  }
+
+  /** Claude's review_reply: its answer goes into the thread, while the branch's card is still open. */
+  private reply(info: SessionInfo, args: Record<string, unknown>): ToolResult {
+    if (typeof args.thread !== "string") return { text: "thread must be the thread's id, as the comment named it.", isError: true };
+    if (typeof args.text !== "string" || !args.text.trim()) return { text: "text must be your reply.", isError: true };
+    if (args.text.length > MAX_THREAD_TEXT) return { text: `text is longer than ${MAX_THREAD_TEXT} characters.`, isError: true };
+    if (args.willChange !== undefined && typeof args.willChange !== "boolean") return { text: "willChange is true or false.", isError: true };
+    const was = this.threads(info.id).get(args.thread);
+    if (!was) return { text: `There's no review thread ${args.thread} in this session.`, isError: true };
+    const open = [...cardsOf(this.sessions.events(info.id)).values()].some((x) => x.card.kind === "deliver" && reviewOf(x.card) === was.review && (x.state === "open" || x.state === "stale"));
+    if (!open) return { text: "The card for this branch has been decided already, so the user won't read a reply there. Answer in the chat instead.", isError: true };
+    const thread: ReviewThread = { ...was, messages: [...was.messages, { id: randomUUID(), by: "claude", text: args.text.trim(), at: new Date().toISOString() }] };
+    if (args.willChange !== undefined) {
+      delete thread.requested;
+      if (args.willChange) thread.willChange = true;
+      else delete thread.willChange;
+    }
+    this.sessions.putThread(info.id, thread);
+    return { text: `Replied in the thread${thread.willChange ? ", marked will change" : ""}. The card is still open: the user decides there, and you're told.` };
+  }
+
   /** Throws unless Claude still waits on the card, as it was when the decision began. */
   private stillWaiting(session: string, askId: string) {
     const card = cardsOf(this.sessions.events(session)).get(askId);
@@ -613,6 +850,7 @@ export class Approvals {
    * approved with, and only once.
    */
   async call(info: SessionInfo, name: string, args: Record<string, unknown>, toolUseId: string | undefined): Promise<ToolResult> {
+    if (name === REVIEW_REPLY.name) return this.reply(info, args);
     if (!GITHUB_TOOLS.some((t) => t.name === name && t.approval) && name !== DELIVER.name) return this.read(info, name, args).catch((err) => ({ text: err instanceof Error ? err.message : String(err), isError: true }));
     const events = this.sessions.events(info.id);
     const card = toolUseId ? [...cardsOf(events).values()].find((c) => c.toolUseId === toolUseId) : undefined;

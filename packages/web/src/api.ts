@@ -38,6 +38,8 @@ import type {
   UnpushedResponse,
   ReviewDiff,
   WindowState,
+  ReviewThread,
+  ThreadAnchor,
 } from "@kumiko/shared";
 
 declare global {
@@ -183,6 +185,10 @@ export const api = {
   answerAsk: (id: string, ask: string, answer: AskAnswer) => request("POST", `/api/sessions/${id}/asks/${encodeURIComponent(ask)}`, answer),
   /** Decides on an approval card: approve with the choices made on it, decline with a reason, or look again. */
   decideCard: (id: string, ask: string, action: unknown) => request("POST", `/api/sessions/${id}/cards/${encodeURIComponent(ask)}`, action),
+  /** Comments on card `ask`'s changes: a new thread at `anchor`, or a reply in `thread`. */
+  comment: (id: string, ask: string, c: { anchor: ThreadAnchor; text: string } | { thread: string; text: string }) => request<ReviewThread>("POST", `/api/sessions/${id}/cards/${encodeURIComponent(ask)}/threads`, c),
+  markThread: (id: string, thread: string, change: { resolved?: boolean; read?: true }) => request<ReviewThread>("PATCH", `/api/sessions/${id}/threads/${encodeURIComponent(thread)}`, change),
+  readThreads: (id: string, review: string) => request("POST", `/api/sessions/${id}/threads/read`, { review }),
   /** Has Claude plan first and wait for approval, or work without asking. */
   setPlanMode: (id: string, plan: boolean) => request("POST", `/api/sessions/${id}/plan-mode`, { plan }),
   /** Closes one of the session window's panes; its widget stays, hidden. */

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
-import { CHAT, chatWindow, artifactsOf, edgeShare, WINDOW, LIVE_SESSION_STATUSES, MIN_RATIO, resize, paneOf, windowState, type ArtifactState, type ReviewState, type SessionEvent, type SessionInfo, type PaneId, type SplitPath, type WidgetId, type WindowState } from "@kumiko/shared";
+import { CHAT, chatWindow, artifactsOf, edgeShare, WINDOW, LIVE_SESSION_STATUSES, MIN_RATIO, resize, paneOf, windowState, type ArtifactState, type ReviewState, type ReviewThread, threadsOf, type SessionEvent, type SessionInfo, type PaneId, type SplitPath, type WidgetId, type WindowState } from "@kumiko/shared";
 import { api, onPaneRequest, useSessionEvents, type PaneRequest } from "./api";
 import type { ComposerHandle } from "./Composer";
 import { ArtifactView } from "./ArtifactView";
@@ -43,6 +43,7 @@ export function Window({ session, onForked, active = true, sessionNames = NO_NAM
   const composer = useRef<ComposerHandle>(null);
   const live = LIVE_SESSION_STATUSES.includes(session.status);
   const writes = useMemo(() => streamingWrites(stream.events), [stream.events]);
+  const threads = useThreads(stream.events);
   const changed = useMemo(() => lastChanges(stream.events), [stream.events]);
   const artifacts = useDocuments(win, changed, stream.history);
   const box = useRef<HTMLDivElement>(null);
@@ -75,12 +76,13 @@ export function Window({ session, onForked, active = true, sessionNames = NO_NAM
       move: (pane, to, side) => void api.movePane(session.id, pane, to, side).catch((err) => console.error(err)),
       sessionNames,
       session: session.id,
+      threads,
       review: (ask, open) => void api.toggleReview(session.id, ask, open).catch((err) => console.error(err)),
       revealable: (text) => revealablePath(text, shared),
       reveal: (path) => api.reveal(session.id, path).then(() => {}),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [win, artifacts, live, active, session.id, arrange, JSON.stringify([...rects]), sessionNames, JSON.stringify(shared ?? [])],
+    [win, artifacts, live, active, session.id, arrange, JSON.stringify([...rects]), sessionNames, JSON.stringify(shared ?? []), threads],
   );
 
   const widget = (pane: PaneId) => {
@@ -412,4 +414,17 @@ function useWidth(ref: RefObject<HTMLElement | null>): number | undefined {
     return () => watch.disconnect();
   }, [ref]);
   return width;
+}
+
+/** The session's review threads, as the events have them: a new list only when a thread changes. */
+function useThreads(events: readonly SessionEvent[]): readonly ReviewThread[] {
+  let last = -1;
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].kind === "thread") {
+      last = events[i].seq;
+      break;
+    }
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  return useMemo(() => [...threadsOf(events).values()], [last, events.length === 0]);
 }

@@ -1,11 +1,11 @@
-import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { MAX_REASON, REVIEW, type ApprovalCard as Card, type DeliverCard, type ReviewState, type AttachmentInput, type CardDecision, type CardFlag, type CloseReason, type CardFile } from "@kumiko/shared";
 import { approveLabel, barShares, cardAction, cardClosed, cardVerb, commitsLabel, deliverChoices, deliverDecision, filesLabel, initialChoice, lostHeading, unsignedWarning, whereLabel, type DeliverChoice } from "./cards";
 import { hasFiles, readFiles, toInput, type ComposerFile } from "./attachments";
 import type { ChatItem } from "./chat";
 import { FileChips } from "./Composer";
 import { Markdown } from "./Markdown";
-import { changesReason, getReview, newCommits, onRequestChanges, reviewOf, setReview, subscribeReviews, viewedCount, type Review } from "./review";
+import { changesReason, getReview, newCommits, onRequestChanges, reviewOf, subscribeReviews, threadCounts, viewedCount, type Review } from "./review";
 import { WindowContext } from "./windowContext";
 
 type AskItem = Extract<ChatItem, { type: "ask" }>;
@@ -75,6 +75,7 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
   const [refused, setRefused] = useState<string>();
   const [dropping, setDropping] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
 
   const send = async (action: CardAction) => {
     if (!decide || busy) return false;
@@ -85,9 +86,11 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
   };
   const win = useContext(WindowContext);
   const review = useSyncExternalStore(subscribeReviews, () => (win && c.kind === "deliver" ? getReview(win.session, reviewOf(c)) : NO_REVIEW));
-  const notes = review.notes;
+  const allThreads = win?.threads;
+  const threads = useMemo(() => (c.kind === "deliver" ? (allThreads ?? []).filter((t) => t.review === reviewOf(c)) : []), [allThreads, c]);
+  const counts = threadCounts(threads);
   const box = useRef<HTMLDivElement>(null);
-  // The review pane's Request changes: this card opens its box for a message to go with the notes.
+  // The review pane's Request changes: this card opens its box for a message to go with the threads.
   useEffect(
     () =>
       onRequestChanges((ask) => {
@@ -112,23 +115,27 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
         return { kind: "edit", ...(c.title !== undefined ? { title: title.trim() } : {}), ...(c.body !== undefined ? { body } : {}) };
     }
   };
-  const approve = () => {
+  const approve = (anyway = false) => {
     const d = decision();
-    if (d && card.state === "open") void send({ action: "approve", decision: d });
+    if (!d || card.state !== "open") return;
+    // Claude said it would change things: approving drops them, so the user says so first.
+    if (counts.willChange && !anyway) {
+      setConfirming(true);
+      return;
+    }
+    setConfirming(false);
+    void send({ action: "approve", decision: d });
   };
 
   const declineNow = () => {
     if (!decide || busy) return;
-    const text = c.kind === "deliver" && notes.length ? changesReason(c, notes, reason) : reason.trim();
-    // Cut, the notes at the end would be lost without a word: the user shortens them instead.
+    const text = c.kind === "deliver" && counts.willChange ? changesReason(c, threads, reason) : reason.trim();
+    // Cut, the threads at the end would be lost without a word: the user resolves some instead.
     if (text.length > MAX_REASON) {
-      setRefused(`That's ${text.length.toLocaleString()} characters with the notes, more than the ${MAX_REASON.toLocaleString()} Claude is sent. Shorten or delete some notes.`);
+      setRefused(`That's ${text.length.toLocaleString()} characters with the threads, more than the ${MAX_REASON.toLocaleString()} Claude is sent. Resolve some threads, or shorten what you wrote.`);
       return;
     }
-    void send({ action: "decline", ...(text ? { reason: text } : {}), ...(files.length ? { attachments: files.map(toInput) } : {}) }).then((ok) => {
-      // The notes went to Claude with it.
-      if (ok && win && notes.length && c.kind === "deliver") setReview(win.session, reviewOf(c), (r) => ({ ...r, notes: [] }));
-    });
+    void send({ action: "decline", ...(text ? { reason: text } : {}), ...(files.length ? { attachments: files.map(toInput) } : {}) });
   };
   const attach = async (picked: File[]) => {
     if (!picked.length) return;
@@ -160,8 +167,8 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
   );
 
   const decline = (
-    <button type="button" className={`btn btn-compact ${notes.length ? "btn-warn" : "btn-secondary"}`} disabled={busy || !decide} onClick={() => setDeclining(true)}>
-      {notes.length ? `Request changes (${notes.length})` : "Decline…"}
+    <button type="button" className={`btn btn-compact ${counts.willChange ? "btn-warn" : "btn-secondary"}`} disabled={busy || !decide} onClick={() => setDeclining(true)}>
+      {counts.willChange ? `Request changes (${counts.willChange})` : "Decline…"}
     </button>
   );
   const primary = stale ? (
@@ -169,9 +176,9 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
       Review again
     </button>
   ) : c.kind === "deliver" ? (
-    <SplitButton key="approve" label={approveLabel(c, choice)} disabled={busy || !decide || !decision()} menuDisabled={busy || !decide} onClick={approve} choices={deliverChoices(c)} choice={choice} onChoose={setChoice} />
+    <SplitButton key="approve" label={approveLabel(c, choice)} disabled={busy || !decide || !decision()} menuDisabled={busy || !decide} onClick={() => approve()} choices={deliverChoices(c)} choice={choice} onChoose={setChoice} />
   ) : (
-    <button key="approve" type="button" className="btn btn-primary btn-compact" disabled={busy || !decide || !decision()} onClick={approve}>
+    <button key="approve" type="button" className="btn btn-primary btn-compact" disabled={busy || !decide || !decision()} onClick={() => approve()}>
       {approveLabel(c)}
     </button>
   );
@@ -195,7 +202,8 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
         </div>
       )}
       {c.kind === "deliver" && !stale && <Flags flags={c.flags} />}
-      {c.kind === "deliver" && win && <ReviewStrip c={c} review={review} open={reviewOpen(win.window, card.id)} onToggle={() => win.review(card.id)} />}
+      {c.kind === "deliver" && win && <ReviewStrip c={c} review={review} counts={counts} open={reviewOpen(win.window, card.id)} onToggle={() => win.review(card.id)} />}
+      {card.discussing && <div className="ac-note">Claude isn't waiting on this card while you talk. Kumiko does what you decide here, and tells Claude.</div>}
       {stale && c.kind === "deliver" && (
         <div className="ac-stale">
           {c.branch} moved to {short(card.moved?.to ?? "")} ({card.moved?.commits ?? 0} new commit{card.moved?.commits === 1 ? "" : "s"}) after this card was shown.
@@ -265,7 +273,7 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
             <textarea
               className="ac-ta"
               autoFocus
-              placeholder={notes.length ? `Anything to add to your ${notes.length === 1 ? "note" : `${notes.length} notes`}, for Claude (optional)` : "Why not, for Claude (optional)"}
+              placeholder={counts.willChange ? `Anything to add to the ${counts.willChange === 1 ? "change" : `${counts.willChange} changes`} Claude said it would make (optional)` : "Why not, for Claude (optional)"}
               aria-label="Reason for declining, for Claude"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
@@ -284,7 +292,13 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
             <FileChips files={files} onChange={setFiles} />
           </div>
           {refused && <div className="ac-refused">{refused}</div>}
+          {counts.unread > 0 && <div className="ac-note">{counts.unread === 1 ? "1 reply" : `${counts.unread} replies`} in the review you haven't read. One may change what you ask for.</div>}
         </>
+      )}
+      {confirming && (
+        <div className="ac-note is-warn">
+          Claude said it would change {counts.willChange === 1 ? "1 thing" : `${counts.willChange} things`} in the review. Approving drops {counts.willChange === 1 ? "it" : "them"}, and tells Claude.
+        </div>
       )}
       <div className="ac-foot-bar">
         <span className="chat-proposal-buttons">
@@ -294,7 +308,16 @@ function OpenCard({ card, decide }: { card: Card; decide?: (askId: string, actio
                 Back
               </button>
               <button type="button" className="btn btn-secondary btn-compact" disabled={busy || !decide} onClick={declineNow}>
-                {notes.length ? "Request changes" : "Decline and tell Claude"}
+                {counts.willChange ? "Request changes" : "Decline and tell Claude"}
+              </button>
+            </>
+          ) : confirming ? (
+            <>
+              <button type="button" className="btn btn-secondary btn-compact" disabled={busy} onClick={() => setConfirming(false)}>
+                Back
+              </button>
+              <button type="button" className="btn btn-primary btn-compact" disabled={busy || !decide} onClick={() => approve(true)}>
+                Approve anyway
               </button>
             </>
           ) : (
@@ -500,16 +523,16 @@ const reviewOpen = (w: { panes: Record<string, string>; widgets: Record<string, 
   Object.values(w.panes).includes(REVIEW) && (w.widgets[REVIEW]?.state as ReviewState | undefined)?.ask === ask;
 
 /** How far the user got reading the card's changes in the review pane, and the button that opens it. */
-function ReviewStrip({ c, review, open, onToggle }: { c: DeliverCard; review: Review; open: boolean; onToggle(): void }) {
+function ReviewStrip({ c, review, counts, open, onToggle }: { c: DeliverCard; review: Review; counts: { open: number; willChange: number; unread: number }; open: boolean; onToggle(): void }) {
   const done = viewedCount(review, c);
   const all = c.files.length;
-  const notes = review.notes.length;
+  const sub = [counts.open && `${counts.open} open thread${counts.open === 1 ? "" : "s"}`, counts.willChange && `${counts.willChange} will change`, counts.unread && `${counts.unread} new repl${counts.unread === 1 ? "y" : "ies"}`].filter(Boolean).join(" · ");
   return (
     <div className={`ac-review${open ? " is-open" : ""}${all && done === all ? " is-done" : ""}`}>
       <span className="ac-ring" style={{ "--p": all ? Math.round((done / all) * 100) : 0 } as CSSProperties} aria-hidden="true" />
       <div className="ac-review-text">
         <b>{all && done === all ? `All ${all} files reviewed` : `${done} of ${all} file${all === 1 ? "" : "s"} reviewed`}</b>
-        {notes > 0 && <div className="ac-review-sub">{notes === 1 ? "1 note" : `${notes} notes`} for Claude</div>}
+        {sub && <div className={`ac-review-sub${counts.unread ? " is-unread" : ""}`}>{sub}</div>}
       </div>
       <button type="button" className="btn btn-secondary btn-compact" aria-pressed={open} onClick={onToggle}>
         {open ? "Close review" : "Review"}

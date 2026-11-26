@@ -136,7 +136,7 @@ describe("widgets", () => {
     assert.ok(existsSync(join(kumikoHome, "artifacts", id)), "the session's folder is made");
     assert.match(await ask(s, id, "system prompt"), new RegExp(`${kumikoHome}/artifacts/${id}/`));
     const tools = JSON.parse(await ask(s, id, "tools")) as { name: string; description: string }[];
-    assert.deepEqual(tools.map((t) => t.name).sort(), ["artifact_capture", "artifact_open", "artifact_reload", "artifact_remove", "artifact_share", "deliver", "github_api_get", "github_issue_close", "github_issue_comment", "github_issue_create", "github_issue_edit", "github_issue_list", "github_issue_reopen", "github_issue_view", "github_label_list", "github_pr_close", "github_pr_comment", "github_pr_edit", "github_pr_list", "github_pr_reopen", "github_pr_view", "github_run_logs", "session_list", "session_rename", "session_start", "window_close", "window_list"]);
+    assert.deepEqual(tools.map((t) => t.name).sort(), ["artifact_capture", "artifact_open", "artifact_reload", "artifact_remove", "artifact_share", "deliver", "github_api_get", "github_issue_close", "github_issue_comment", "github_issue_create", "github_issue_edit", "github_issue_list", "github_issue_reopen", "github_issue_view", "github_label_list", "github_pr_close", "github_pr_comment", "github_pr_edit", "github_pr_list", "github_pr_reopen", "github_pr_view", "github_run_logs", "review_reply", "session_list", "session_rename", "session_start", "window_close", "window_list"]);
     // The tool names the session's folder itself, so Claude needn't find it in its instructions.
     assert.ok(tools.find((t) => t.name === "artifact_open")?.description.includes(`${kumikoHome}/artifacts/${id}/`));
     s.close();

@@ -78,6 +78,22 @@ doesn't merge cleanly has to be fixed by the agent before a card appears.
 
 **Instead of.** Letting the agent push to GitHub and open pull requests itself.
 
+## Review comments that free the agent, and approval without it
+
+Your first comment on a deliver card's changes stops the agent waiting on the card, so it can answer in the thread.
+The card stays open without a tool call behind it. Approving it then lands the branch from Kumiko itself, and the
+agent hears what happened in a message. Before, a branch landed only inside the agent's own `deliver` call.
+
+**Why.** While a tool call waits, the agent reads nothing. To answer questions about the change, the agent has to stop
+waiting, and the card has to outlive the call. Asking the agent to call `deliver` again after you approve would need
+another turn, and would land nothing if the agent didn't make the call.
+
+**Costs.** Landing no longer always happens inside a tool call of the agent's. The approval is still bound to the
+commit the card shows, and only your click approves. If the session has ended, the agent isn't told what landed until
+you tell it.
+
+**Instead of.** A chat message closing the card, as any message does while the agent waits.
+
 ## An agent home per sandbox
 
 Each sandbox's agent configuration is a folder on your Mac, mounted into the sandbox. Your own is never mounted.

@@ -19,6 +19,7 @@ import {
   NAME_PATTERN,
   parseAskAnswer,
   parseCardDecision,
+  parseThreadAnchor,
   parseRepo,
   parseSavedTabs,
   SESSION_ID_PATTERN,
@@ -503,7 +504,8 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       events: (id) => sessions.events(id),
       putCard: (id, card) => sessions.putCard(id, card),
       answerAsk: (id, ask, answer) => sessions.answerAsk(id, ask, answer),
-      prompt: (id, text, atts, files) => sessions.prompt(id, text, atts, files),
+      prompt: (id, text, atts, files, review) => sessions.prompt(id, text, atts, files, undefined, review),
+      putThread: (id, thread) => sessions.putThread(id, thread),
       list: () => sessions.list(),
     },
     {
@@ -1504,6 +1506,46 @@ async function serveHome(opts: ServerOptions, home: string, lock: Awaited<Return
       return c.json(await approvals.decide(id, ask, action));
     } catch (err) {
       if (err instanceof ApprovalError || err instanceof AskRefused) throw new HttpError(409, err.message);
+      throw err;
+    }
+  });
+
+  /**
+   * Comments on a deliver card's changes: `{ anchor, text }` starts a thread, `{ thread, text }` replies in one. Claude
+   * gets it at once, and the card stays open. Answers with the thread.
+   */
+  app.post("/api/sessions/:id/cards/:ask/threads", async (c) => {
+    const req = await body<{ anchor?: unknown; thread?: unknown; text?: unknown }>(c, "Send { anchor, text } or { thread, text }.");
+    if (typeof req.text !== "string") throw new HttpError(400, "text must be the comment.");
+    if (req.thread !== undefined && typeof req.thread !== "string") throw new HttpError(400, "thread must be a thread's id.");
+    const anchor = req.anchor === undefined ? undefined : parseThreadAnchor(req.anchor);
+    if (req.anchor !== undefined && !anchor) throw new HttpError(400, "anchor must be a line, a file, a commit or the whole change.");
+    if ((anchor === undefined) === (req.thread === undefined)) throw new HttpError(400, "Send an anchor for a new thread, or the thread to reply in.");
+    try {
+      return c.json(approvals.comment(sessionOf(c).id, c.req.param("ask"), { text: req.text, ...(anchor ? { anchor } : {}), ...(typeof req.thread === "string" ? { thread: req.thread } : {}) }));
+    } catch (err) {
+      if (err instanceof ApprovalError || err instanceof AskRefused) throw new HttpError(409, err.message);
+      throw err;
+    }
+  });
+
+  /** Marks every reply in a review's threads read: `{ review }`, as `reviewOf` names it. */
+  app.post("/api/sessions/:id/threads/read", async (c) => {
+    const req = await body<{ review?: unknown }>(c, "Send { review }.");
+    if (typeof req.review !== "string") throw new HttpError(400, "review must be a review's name.");
+    approvals.readAll(sessionOf(c).id, req.review);
+    return c.json({ ok: true });
+  });
+
+  /** Resolves a review thread or opens it again, `{ resolved }`, and marks its replies read, `{ read: true }`. */
+  app.patch("/api/sessions/:id/threads/:thread", async (c) => {
+    const req = await body<{ resolved?: unknown; read?: unknown }>(c, "Send { resolved } or { read: true }.");
+    if (req.resolved !== undefined && typeof req.resolved !== "boolean") throw new HttpError(400, "resolved must be true or false.");
+    if (req.read !== undefined && req.read !== true) throw new HttpError(400, "read can only be true.");
+    try {
+      return c.json(approvals.markThread(sessionOf(c).id, c.req.param("thread"), { ...(typeof req.resolved === "boolean" ? { resolved: req.resolved } : {}), ...(req.read === true ? { read: true } : {}) }));
+    } catch (err) {
+      if (err instanceof ApprovalError) throw new HttpError(409, err.message);
       throw err;
     }
   });
