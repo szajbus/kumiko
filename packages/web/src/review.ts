@@ -1,8 +1,8 @@
 // The review pane's logic: a file's diff as rows, with the unchanged lines between hunks as gaps to open; what the
-// user marked viewed and the notes they left, kept in the browser per card; and the reason a request for changes
-// sends Claude.
+// user marked viewed, kept in the browser per card; the threads of comments and replies on the changes; and the
+// reason a request for changes sends Claude.
 
-import type { DeliverCard, ReviewFile } from "@kumiko/shared";
+import { reviewOf, threadUnread, threadWhere, type DeliverCard, type ReviewFile, type ReviewThread, type SessionEvent, type ThreadAnchor } from "@kumiko/shared";
 import { marked, type DiffRow } from "./diff.ts";
 
 /** A row of a review diff: a line, or a gap of unchanged lines, which `gap` says where to find. */
@@ -83,7 +83,10 @@ export function splitRows(rows: ReviewRow[]): SplitRow[] {
   return out;
 }
 
-/** A note the user left on a line, for Claude. `side` says which version `line` is in: before or after. */
+/**
+ * A note the user left on a line before notes became threads, kept in the browser until they are sent as comments
+ * or deleted. `side` says which version `line` is in: before or after.
+ */
 export interface ReviewNote {
   id: string;
   path: string;
@@ -159,21 +162,94 @@ export function restamp(review: Review, head: string, files: ReviewFile[]): Revi
 
 const short = (sha: string) => sha.slice(0, 7);
 
+// ---- threads -----------------------------------------------------------------------------------
+
+/** Review `review`'s threads, from the session's events, in the order they were started. */
+export function reviewThreads(events: readonly SessionEvent[], review: string): ReviewThread[] {
+  const threads = new Map<string, ReviewThread>();
+  for (const e of events) if (e.kind === "thread" && e.payload.review === review) threads.set(e.payload.id, e.payload);
+  return [...threads.values()];
+}
+
+/** Where a thread is on a line, by `noteKey`; undefined for one that isn't on a line. */
+export const threadKey = (t: ReviewThread) => (t.anchor.kind === "line" ? noteKey(t.anchor.path, t.anchor.side, t.anchor.line) : undefined);
+
+/** The file a thread is about, if it is on one: a line of it, or all of it. */
+export const threadPath = (a: ThreadAnchor) => (a.kind === "line" || a.kind === "file" ? a.path : undefined);
+
+/** Whether line thread `t` is on a line of the diff from `from` (see `scopeFrom`) to `head`. */
+export const threadFits = (t: ReviewThread, head: string, from: string | undefined) => t.anchor.kind === "line" && noteFits({ head: t.head, side: t.anchor.side, from: t.anchor.from }, head, from);
+
 /**
- * What a request for changes tells Claude: the user's own words, then each note with the line it is on, under the
- * commit it was left at.
+ * Where a thread stands: resolved by the user; marked by Claude as something it will change; waiting for Claude's
+ * reply to the user's last comment; or answered.
  */
-export function changesReason(card: Pick<DeliverCard, "branch" | "head">, notes: ReviewNote[], text: string): string {
+export function threadState(t: ReviewThread): "resolved" | "requested" | "will-change" | "waiting" | "answered" {
+  if (t.resolved) return "resolved";
+  if (t.willChange && t.requested) return "requested";
+  if (t.willChange) return "will-change";
+  return t.messages.at(-1)?.by === "user" ? "waiting" : "answered";
+}
+
+/** The threads Claude said it would change something for, and the user hasn't resolved: what a request for changes asks. */
+export const toChange = (threads: readonly ReviewThread[]) => threads.filter((t) => t.willChange && !t.requested && !t.resolved);
+
+/** Counts for the card and the pane: open threads, those Claude will change something for, and unread replies. */
+export function threadCounts(threads: readonly ReviewThread[]): { open: number; willChange: number; unread: number } {
+  return { open: threads.filter((t) => !t.resolved).length, willChange: toChange(threads).length, unread: threads.reduce((n, t) => n + threadUnread(t), 0) };
+}
+
+/**
+ * The threads with unread replies, in the order the pane shows them: the whole change's, the commits' (in the card's
+ * order), then the files' in `files` order, by line.
+ */
+export function unreadOrder(threads: readonly ReviewThread[], files: readonly string[], commits: readonly string[]): ReviewThread[] {
+  const rank = (t: ReviewThread): [number, number, number] => {
+    const a = t.anchor;
+    if (a.kind === "change") return [0, 0, 0];
+    if (a.kind === "commit") return [1, commits.indexOf(a.sha), 0];
+    const f = files.indexOf(a.path);
+    return [2, f < 0 ? files.length : f, a.kind === "file" ? 0 : a.line];
+  };
+  return threads
+    .filter((t) => threadUnread(t) > 0)
+    .map((t) => [t, rank(t)] as const)
+    .sort(([, x], [, y]) => x[0] - y[0] || x[1] - y[1] || x[2] - y[2])
+    .map(([t]) => t);
+}
+
+/**
+ * Whether `file`, as a diff since the thread's commit has it, changes what thread `t` is on: the line (on the side
+ * after the change, as the thread numbered it), or for a file thread, anything in the file. A removed line's thread
+ * counts the file changing. `file` undefined: the file didn't change since.
+ */
+export function touched(t: ReviewThread, file: Pick<ReviewFile, "hunks"> | undefined): boolean {
+  if (!file) return false;
+  const a = t.anchor;
+  if (a.kind !== "line" || a.side === "old") return true;
+  return file.hunks.some((h) => (h.oldLines === 0 ? a.line === h.oldStart || a.line === h.oldStart + 1 : a.line >= h.oldStart && a.line < h.oldStart + h.oldLines));
+}
+
+/** A thread's conversation, as Claude reads it: the user's comments and its own replies. */
+const conversation = (t: ReviewThread) => t.messages.map((m) => `${m.by === "user" ? "User" : "You"}: ${m.text.trim()}`).join("\n\n");
+
+/**
+ * What a request for changes tells Claude: the user's own words, then each thread Claude said it would change
+ * something for, with where it is and its conversation, under the commit it was started at.
+ */
+export function changesReason(card: Pick<DeliverCard, "branch" | "head">, threads: readonly ReviewThread[], text: string): string {
   const parts = [text.trim()].filter(Boolean);
-  const heads = [...new Set(notes.map((n) => n.head))].sort((a, b) => Number(a !== card.head) - Number(b !== card.head));
-  for (const head of heads) {
-    const sorted = notes.filter((n) => n.head === head).sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line);
+  const todo = toChange(threads);
+  if (todo.length) {
     parts.push(
-      `Notes on ${card.branch} at ${short(head)}${head === card.head ? "" : ", an earlier commit of the branch"}:\n\n` +
-        sorted
-          .map((n) => {
-            const where = n.side === "new" ? `${n.path}:${n.line}` : n.from ? `${n.path}, line ${n.line} at ${short(n.from)}, before the later commits` : `${n.path}, line ${n.line} before the change`;
-            return `${where}\n> ${n.quote.trim()}\n${n.text.trim()}`;
+      `What you said you'd change, in the review of ${card.branch}:\n\n` +
+        todo
+          .map((t) => {
+            const a = t.anchor;
+            const at = t.head === card.head ? "" : ` (at ${short(t.head)}, an earlier commit of the branch)`;
+            const quote = a.kind === "line" && a.quote.trim() ? `\n> ${a.quote.trim()}` : "";
+            const where = a.kind === "change" ? "The whole change" : a.kind === "commit" ? `Commit ${short(a.sha)}` : threadWhere(a);
+            return `${where}${at}, thread ${t.id}${quote}\n${conversation(t)}`;
           })
           .join("\n\n"),
     );
@@ -181,13 +257,19 @@ export function changesReason(card: Pick<DeliverCard, "branch" | "head">, notes:
   return parts.join("\n\n");
 }
 
+/**
+ * A note from before threads, as the comment that starts its thread: on its line, if it was left at the card's
+ * commit; else on its file, saying where it was.
+ */
+export function noteComment(n: ReviewNote, head: string): { anchor: ThreadAnchor; text: string } {
+  if (n.head === head) return { anchor: { kind: "line", path: n.path, side: n.side, line: n.line, quote: n.quote, ...(n.from ? { from: n.from } : {}) }, text: n.text };
+  const where = `${n.side === "old" ? "removed " : ""}line ${n.line} at ${short(n.head)}`;
+  return { anchor: { kind: "file", path: n.path }, text: `On ${where}${n.quote.trim() ? ` (“${n.quote.trim()}”)` : ""}: ${n.text}` };
+}
+
 // ---- kept per branch, in the browser ------------------------------------------------------------
 
-/**
- * Which review a card's is: its branch's, in its session. Delivering the branch again after a request for changes
- * makes a new card, which goes on with the same review.
- */
-export const reviewOf = (card: Pick<DeliverCard, "repo" | "branch">) => `${card.repo}#${card.branch}`;
+export { reviewOf };
 
 const KEY = (session: string, review: string) => `kumiko.review.${session}.${review}`;
 const cache = new Map<string, Review>();
@@ -202,7 +284,7 @@ function parse(raw: string | null): Review {
   }
 }
 
-/** Review `review` (see `reviewOf`): what the user viewed and the notes they left. */
+/** Review `review` (see `reviewOf`): what the user viewed, and notes left from before threads. */
 export function getReview(session: string, review: string): Review {
   const key = KEY(session, review);
   let r = cache.get(key);
@@ -233,11 +315,11 @@ export function subscribeReviews(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
-// ---- the pane asking the card to send the notes ---------------------------------------------
+// ---- the pane asking the card to send what Claude will change ----------------------------------
 
 const asking = new Set<(ask: string) => void>();
 
-/** The pane's Request changes: the card opens its box for a message to go with the notes. */
+/** The pane's Request changes: the card opens its box for a message to go with the threads. */
 export function requestChanges(ask: string): void {
   for (const l of asking) l(ask);
 }
@@ -245,6 +327,30 @@ export function requestChanges(ask: string): void {
 export function onRequestChanges(listener: (ask: string) => void): () => void {
   asking.add(listener);
   return () => asking.delete(listener);
+}
+
+// ---- the chat asking the pane to show a thread ------------------------------------------------
+
+let focusing: { ask: string; thread: string } | undefined;
+const focusListeners = new Set<() => void>();
+
+/** Asks the review pane for card `ask` to show thread `thread`, once it shows that card. */
+export function focusThread(ask: string, thread: string): void {
+  focusing = { ask, thread };
+  for (const l of focusListeners) l();
+}
+
+/** The thread the pane for card `ask` is asked to show, taken: undefined if none. */
+export function takeFocus(ask: string): string | undefined {
+  if (focusing?.ask !== ask) return undefined;
+  const t = focusing.thread;
+  focusing = undefined;
+  return t;
+}
+
+export function onFocusThread(listener: () => void): () => void {
+  focusListeners.add(listener);
+  return () => focusListeners.delete(listener);
 }
 
 // ---- how the pane shows diffs, one choice for every review ------------------------------------

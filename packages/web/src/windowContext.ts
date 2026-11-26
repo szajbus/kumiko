@@ -1,5 +1,5 @@
 import { createContext, type PointerEvent } from "react";
-import type { ArtifactType, Side, PaneId, WidgetId, WindowState } from "@kumiko/shared";
+import type { ArtifactType, ReviewThread, Side, PaneId, WidgetId, WindowState } from "@kumiko/shared";
 import type { PaneRect } from "./widgets";
 
 /** One of the window's artifacts, as an artifact pane's switcher lists it. */
@@ -50,6 +50,8 @@ export interface WindowApi {
   sessionNames: ReadonlyMap<string, string>;
   /** The session's id. */
   session: string;
+  /** The session's review threads, every review's, in the order they were started. */
+  threads: readonly ReviewThread[];
   /** Shows the review pane for deliver card `ask` beside the chat, or closes it if it shows that card; `open` only shows it. */
   review(ask: string, open?: boolean): void;
   /** The path in `text` (code Claude wrote), if it is a file on this Mac that `reveal` can show. */

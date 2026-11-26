@@ -62,5 +62,8 @@ The next and previous tab skip the tabs of sandboxes whose tabs you hid.
 | <kbd>j</kbd> | Go to the next file |
 | <kbd>k</kbd> | Go to the previous file |
 | <kbd>v</kbd> | Mark the file viewed |
-| <kbd>Cmd</kbd>+<kbd>Enter</kbd> in a note | Save the note |
-| <kbd>Esc</kbd> in a note | Drop the note |
+| <kbd>n</kbd> | Go to the next unread reply |
+| <kbd>Shift</kbd>+<kbd>n</kbd> | Go to the previous unread reply |
+| <kbd>a</kbd> | Mark the replies in the thread you went to read |
+| <kbd>Cmd</kbd>+<kbd>Enter</kbd> in a comment | Send the comment to Claude |
+| <kbd>Esc</kbd> in a comment | Drop the comment |

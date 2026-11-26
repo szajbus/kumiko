@@ -32,6 +32,7 @@ import { WakeBanner, type WakeContext } from "./WakeBanner";
 import { toolLine, toolName } from "./toolNames";
 import { widgetLine } from "./widgets";
 import { WindowContext } from "./windowContext";
+import { focusThread } from "./review";
 import { MonitorEvents, MonitorLine, MoveToBackground, onReveal, PlainLine, TaskEndLine, TasksButton, TaskToolMeta } from "./TasksPane";
 import { emptyTasks, foldMonitorTurns, type TasksState } from "./tasks";
 
@@ -87,7 +88,7 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
   const totalCost = useMemo(() => chat.items.reduce((sum, i) => sum + (i.type === "turn" ? (i.costUsd ?? 0) : 0), 0), [chat.items]);
   // What was sent so far, for Up in the composer; a message sent again right after itself is there once.
   const history = useMemo(
-    () => [...chat.items, ...chat.queued].flatMap((i) => (i.type === "user" ? [i.text] : [])).filter((t, n, all) => t && t !== all[n - 1]),
+    () => [...chat.items, ...chat.queued].flatMap((i) => (i.type === "user" && !i.review ? [i.text] : [])).filter((t, n, all) => t && t !== all[n - 1]),
     [chat.items, chat.queued],
   );
   const [error, setError] = useState<string | undefined>();
@@ -155,7 +156,7 @@ export function SessionView({ session, stream, onForked, composerRef, active = t
   const busy = live && !idle;
   // The last message waiting for Claude can be taken back to be edited; not one with files, which the box can't get
   // back, nor a command's, which has run.
-  const waiting = chat.queued.filter((i) => !takenBack.includes(i.id) && !i.shell).at(-1);
+  const waiting = chat.queued.filter((i) => !takenBack.includes(i.id) && !i.shell && !i.review).at(-1);
   const takeBack =
     live && waiting && !waiting.attachments?.length
       ? async () => {
@@ -832,6 +833,9 @@ const Item = memo(function Item({ item, from, to, open, onRewind, onFork, noRewi
       );
       // A command the user ran shows as itself, where the prompt that gave it to Claude is.
       if (item.shell) return <ShellCard id={item.shell} prompted actions={buttons} />;
+      // A comment in a review thread, or what the user decided on a card Claude no longer waited on: one line, as
+      // the thread or the card shows it all.
+      if (item.review) return <ReviewLine review={item.review} />;
       return (
         <div className="msg-user-row">
           {buttons}
@@ -1231,5 +1235,23 @@ function ToolIcon({ state }: { state: ToolState }) {
     <svg width="14" height="14" viewBox="0 0 14 14" aria-label="Stopped">
       <path d="M4 7h6" stroke={COLORS.stopped} strokeWidth="1.7" strokeLinecap="round" />
     </svg>
+  );
+}
+
+/** A user prompt that came from the review: one line, which opens the review pane on its thread. */
+function ReviewLine({ review }: { review: { thread?: string; ask: string; where?: string } }) {
+  const win = useContext(WindowContext);
+  if (!review.thread) return <div className="chat-quiet">Told Claude what you decided on the card</div>;
+  const open = () => {
+    focusThread(review.ask, review.thread!);
+    win?.review(review.ask, true);
+  };
+  return (
+    <div className="chat-quiet chat-review-line">
+      You commented on{" "}
+      <button type="button" className="link-btn" onClick={open}>
+        <code>{review.where ?? "the change"}</code>
+      </button>
+    </div>
   );
 }

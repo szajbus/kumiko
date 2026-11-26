@@ -124,6 +124,9 @@ its buffer was replaced. Then reconnect from the start.
 | `POST /api/sessions/:id/cards/:ask` | Decides an approval card: `approve`, `decline`, or `refresh` a stale one. |
 | `GET /api/sessions/:id/cards/:ask/diff` | A deliver card's changes, file by file. |
 | `GET /api/sessions/:id/cards/:ask/blob/:blob` | A file's content in the card's repository, for the review pane. |
+| `POST /api/sessions/:id/cards/:ask/threads` | Comments on a deliver card's changes: starts a thread at an `anchor`, or replies in a `thread`. Claude gets it at once. |
+| `PATCH /api/sessions/:id/threads/:thread` | Resolves a review thread or opens it again, or marks its replies read. |
+| `POST /api/sessions/:id/threads/read` | Marks every reply in a review's threads read. |
 | `POST /api/sessions/:id/proposals/:proposal` | Accepts or declines Claude's proposal to start a new session. |
 
 ### Login

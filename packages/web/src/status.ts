@@ -170,6 +170,8 @@ const ownState = (s: SessionInfo) =>
     ? { text: "Sandbox stopped", color: COLORS.stopped }
     : s.asking
       ? { text: s.asking === "plan" ? "Plan to review" : s.asking === "approval" ? "Waiting for your approval" : "Has a question for you", color: COLORS.warn }
+      : s.replies && s.status === "idle"
+      ? { text: "Replies to read", color: COLORS.warn }
       : isWaiting(s) && s.status === "idle"
       ? { text: "Waiting on you", color: COLORS.warn }
       : isBusy(s)

@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { answerFits, applyWindowOp, chatWindow, chunksLength, compactWindow, isBusy, isCommand, isCompactSummary, keepEnds, LIVE_SESSION_STATUSES, mergeChunks, sharedNote, sharesWaiting, SHELL_COMMAND_MAX, SHELL_KEEP_HEAD, SHELL_KEEP_TAIL, SHELL_PROMPT_CHARS, shellPrompt, windowState, type Attachment, type ShellChunk, type ShellEnd, type ShellStop, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo, type WindowOp, type WindowState, type AgentAsk, type AskAnswer, type AskClosedReason, type ApprovalCard, REVIEW, type ReviewState } from "@kumiko/shared";
+import { unreadReplies, answerFits, applyWindowOp, chatWindow, chunksLength, compactWindow, isBusy, isCommand, isCompactSummary, keepEnds, LIVE_SESSION_STATUSES, mergeChunks, sharedNote, sharesWaiting, SHELL_COMMAND_MAX, SHELL_KEEP_HEAD, SHELL_KEEP_TAIL, SHELL_PROMPT_CHARS, shellPrompt, windowState, type Attachment, type ShellChunk, type ShellEnd, type ShellStop, type EndReason, type ResumableSession, type RewindRequest, type SessionEvent, type SessionInfo, type WindowOp, type WindowState, type AgentAsk, type AskAnswer, type AskClosedReason, type ApprovalCard, REVIEW, type ReviewState, type ReviewThread } from "@kumiko/shared";
 import { TOOL_TIMEOUT_MS, type AgentDriver, type AgentFile, type AgentMessage, type StartOptions, type TaskOutput, type ToolHost } from "@kumiko/agent";
 import { chatEvents, type SessionStore, type StoredSession } from "./store.js";
 import { trimMessage } from "./trim.js";
@@ -281,12 +281,16 @@ function openAsks(events: readonly SessionEvent[]): AgentAsk[] {
 }
 
 /** The events that open or settle a card waiting for the user's decision. */
-const CARD_EVENTS = new Set<SessionEvent["kind"]>(["ask", "ask_answer", "ask_closed", "proposal", "proposal_answer"]);
+const CARD_EVENTS = new Set<SessionEvent["kind"]>(["ask", "ask_answer", "ask_closed", "card", "thread", "proposal", "proposal_answer"]);
 
 /** How many cards wait for the user's decision: open asks, and proposals not answered yet. */
 function openCards(events: readonly SessionEvent[]): number {
   const answered = new Set(events.flatMap((e) => (e.kind === "proposal_answer" ? [e.payload.id] : [])));
-  return openAsks(events).length + events.filter((e) => e.kind === "proposal" && !answered.has(e.payload.id)).length;
+  // A card Claude stopped waiting on, as the user commented on it, still waits for the user.
+  const cards = new Map<string, ApprovalCard>();
+  for (const e of events) if (e.kind === "card") cards.set(e.payload.id, e.payload);
+  const discussed = [...cards.values()].filter((c) => c.discussing && (c.state === "open" || c.state === "stale")).length;
+  return openAsks(events).length + discussed + events.filter((e) => e.kind === "proposal" && !answered.has(e.payload.id)).length;
 }
 
 /**
@@ -577,7 +581,7 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     for (const ev of seed) this.push(s, ev);
     for (const ev of lostShells(s.events, s.userShells)) this.push(s, ev);
     this.dropShellOutput(s);
-    s.info = { ...info, bufferBytes: s.bytes, cards: openCards(s.events) || undefined };
+    s.info = { ...info, bufferBytes: s.bytes, cards: openCards(s.events) || undefined, replies: unreadReplies(s.events) || undefined };
     return s;
   }
 
@@ -661,6 +665,14 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
       const op = { type: "update", widget: REVIEW, op: { ask: card.id, refreshed: was.card.head } satisfies ReviewState } as const;
       this.push(s, { kind: "window", payload: { op } }, applyWindowOp(s.window, op));
     }
+    this.save(s);
+  }
+
+  /** Puts review thread `thread` into the session, or its new state; saved at once, like a card. */
+  putThread(id: string, thread: ReviewThread): void {
+    const s = this.sessions.get(id);
+    if (!s) throw new SessionNotFound(`No session ${id}.`);
+    this.push(s, { kind: "thread", payload: thread });
     this.save(s);
   }
 
@@ -895,9 +907,10 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     for (const sub of s.subscribers) sub.event(full);
     if (CARD_EVENTS.has(full.kind)) {
       const cards = openCards(s.events) || undefined;
+      const replies = unreadReplies(s.events) || undefined;
       // A session still being opened isn't listed yet: it is announced once it is, with its count.
-      if (this.sessions.get(s.info.id) === s) this.setInfo(s, { cards });
-      else s.info = { ...s.info, cards };
+      if (this.sessions.get(s.info.id) === s) this.setInfo(s, { cards, replies });
+      else s.info = { ...s.info, cards, replies };
     }
   }
 
@@ -910,9 +923,11 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
 
   /**
    * Sends a prompt; `attachments` are what the session records of `files`, which Claude gets. With `shell`, the prompt
-   * gives Claude a command the user ran, which Claude gets as `shell.text` while the chat shows `text`.
+   * gives Claude a command the user ran, which Claude gets as `shell.text` while the chat shows `text`. With `review`, it
+   * is a comment in review thread `review.thread`, or what the user decided on a card Claude no longer waits on (no
+   * thread): Claude gets `review.text`, and the chat shows one line for it.
    */
-  prompt(id: string, text: string, attachments: Attachment[] = [], files: AgentFile[] = [], shell?: { id: string; text: string }): void {
+  prompt(id: string, text: string, attachments: Attachment[] = [], files: AgentFile[] = [], shell?: { id: string; text: string }, review?: { thread?: string; ask: string; where?: string; text: string }): void {
     const s = this.live(id);
     // Claude reads nothing more until what it asked is settled: a message sent meanwhile answers it, and comes next.
     for (const ask of openAsks(s.events)) {
@@ -925,10 +940,11 @@ export class Sessions extends EventEmitter<{ changed: []; rateLimit: [sandbox: s
     const promptId = randomUUID();
     // Artifacts other sessions shared since the last message: Claude hears of them with this one, unless it is a command.
     const note = isCommand(text) ? "" : sharedNote(sharesWaiting(s.events));
-    this.push(s, { kind: "user_prompt", payload: { text, id: promptId, ...(attachments.length ? { attachments } : {}), ...(shell ? { shell: shell.id } : {}) } });
-    s.pendingModel = shell ? undefined : /^\/model\s+(\S+)/.exec(text)?.[1];
+    const about = review ? { review: { ask: review.ask, ...(review.thread ? { thread: review.thread } : {}), ...(review.where ? { where: review.where } : {}) } } : {};
+    this.push(s, { kind: "user_prompt", payload: { text, id: promptId, ...(attachments.length ? { attachments } : {}), ...(shell ? { shell: shell.id } : {}), ...about } });
+    s.pendingModel = shell || review ? undefined : /^\/model\s+(\S+)/.exec(text)?.[1];
     s.waiting = [...(s.waiting ?? []), promptId];
-    s.driver.send((shell?.text ?? text) + note, promptId, files);
+    s.driver.send((shell?.text ?? review?.text ?? text) + note, promptId, files);
     if (s.info.status === "idle") this.setInfo(s, { status: "running" });
     // Kumiko's own record of the prompt is nowhere in Claude's output, so it is saved now.
     this.save(s);

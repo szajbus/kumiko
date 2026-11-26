@@ -10,6 +10,7 @@ import type { WindowOp } from "./window.js";
 import type { AgentAsk, AskAnswer, AskClosedReason } from "./asks.js";
 import type { ApprovalCard } from "./cards.js";
 import type { ShellChunk, ShellStop } from "./userShell.js";
+import type { ReviewThread } from "./review.js";
 
 export const VM_PREFIX = "kumiko-";
 
@@ -482,6 +483,8 @@ export interface SessionInfo {
    * proposals to start a new session, which it doesn't wait on; none when missing.
    */
   cards?: number;
+  /** Claude's replies in review threads the user hasn't read yet; none when missing. */
+  replies?: number;
   /** Claude is in plan mode: it plans, and waits for the user to approve the plan before it changes anything. */
   planMode?: boolean;
 }
@@ -491,7 +494,7 @@ export interface SessionInfo {
  * itself) and nobody has looked since.
  */
 export function isWaiting(s: SessionInfo): boolean {
-  return s.asking !== undefined || (s.unread === true && !isBusy(s));
+  return s.asking !== undefined || ((s.unread === true || Boolean(s.replies)) && !isBusy(s));
 }
 
 /**
@@ -514,7 +517,11 @@ export type EndReason = "user" | "sandbox" | "quit" | "exit";
 export type SessionEvent =
   | { seq: number; kind: "claude"; payload: Record<string, unknown> & { type: string } }
   /** `shell`: the id of the `user_shell` this prompt gives Claude, its `text` being "!" and the command. */
-  | { seq: number; kind: "user_prompt"; payload: { text: string; id: string; attachments?: Attachment[]; shell?: string } }
+  /**
+   * `review`: a comment of the user's in review thread `thread`, which the chat shows as one line naming `where`, while
+   * Claude gets the thread as `text` says it.
+   */
+  | { seq: number; kind: "user_prompt"; payload: { text: string; id: string; attachments?: Attachment[]; shell?: string; review?: { thread?: string; ask: string; where?: string } } }
   /** Prompt `id`, sent while Claude worked, taken back before Claude read it, to be edited: it never runs. */
   | { seq: number; kind: "prompt_withdrawn"; payload: { id: string } }
   | { seq: number; kind: "interrupt"; payload: Record<string, never> }
@@ -543,6 +550,8 @@ export type SessionEvent =
   | { seq: number; kind: "ask_closed"; payload: { id: string; reason: AskClosedReason } }
   /** The card for an approval ask, whole, each time it changes; the latest for an id is how it is. */
   | { seq: number; kind: "card"; payload: ApprovalCard }
+  /** A thread on a deliver card's changes, whole, each time it changes; the latest for an id is how it is. */
+  | { seq: number; kind: "thread"; payload: ReviewThread }
   /**
    * The end of what background task `taskId` (Claude's id: a shell or a monitor) printed, read once it ended, so it can
    * still be read once Claude, which keeps it, is gone. `totalBytes` it printed in all; `truncated` if this is only the end.

@@ -1289,6 +1289,8 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
 .ac-lost .ac-sha { color: inherit; opacity: 0.8; }
 .ac-lost .ac-why { margin-top: 4px; }
 .ac-unsigned { margin: 0 14px 10px; color: #f0cf96; font-size: 12.5px; }
+.ac-note { margin: 0 14px 10px; color: var(--muted); font-size: 12.5px; }
+.ac-note.is-warn { color: #f0cf96; }
 .ac-stale { margin: 0 14px 10px; padding: 8px 10px; border: 1px solid #5c2b2e; background: rgba(240, 122, 106, 0.06); border-radius: 7px; font-size: 13px; color: #f6b3aa; }
 .ac-foot-bar { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 10px 14px 12px; border-top: 1px solid var(--border); background: rgba(0, 0, 0, 0.12); border-radius: 0 0 10px 10px; }
 .ac-split { position: relative; display: inline-flex; }
@@ -1476,6 +1478,48 @@ textarea.chat-proposal-prompt { field-sizing: content; min-height: 3lh; border: 
 .rv-note-f { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 6px 8px; border-top: 1px solid var(--border); }
 .rv-note-f .btn-compact { min-height: 28px; padding: 0 10px; font-size: 12px; }
 .rv-note-hint { margin-right: auto; font-size: 11.5px; color: var(--muted); }
+/* Threads: the user's comments on the changes, and Claude's replies. */
+.rv-thread { position: sticky; left: 62px; max-width: min(680px, calc(100cqw - 350px)); margin: 6px 12px 8px 62px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); font: 13px/1.5 var(--sans); }
+.rv-elsewhere .rv-thread, .rv-top .rv-thread { margin-left: 12px; }
+.rv-thread.is-will-change, .rv-thread.is-requested { border-color: #6b5530; }
+.rv-thread.is-unread { border-color: #4a5a8a; }
+.rv-thread.is-focused { box-shadow: 0 0 0 2px rgba(143, 166, 240, 0.45); }
+.rv-thread.is-resolved { opacity: 0.75; }
+.rv-thread-h { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; padding: 5px 10px; border-bottom: 1px solid var(--border-soft); font-size: 12px; color: var(--muted); }
+.rv-thread.is-resolved .rv-thread-h { border-bottom: 0; }
+.rv-thread-h .link-btn { font-size: 12px; color: var(--muted); }
+.rv-thread-h .link-btn:hover { color: var(--text); }
+.rv-thread-where { color: var(--text-2); font-weight: 600; }
+.rv-thread-at { font-family: var(--mono); font-size: 11.5px; }
+.rv-tag-change { border-color: #6b5530; color: #f0cf96; }
+.rv-unread-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.rv-thread-quote { margin: 0; padding: 4px 10px; border-bottom: 1px solid var(--border-soft); color: var(--muted); font: 12px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.rv-msg { padding: 6px 10px; border-bottom: 1px solid var(--border-soft); }
+.rv-msg:last-of-type { border-bottom: 0; }
+.rv-msg-by { font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.rv-msg.is-claude .rv-msg-by { color: var(--accent); }
+.rv-msg.is-unread { background: rgba(143, 166, 240, 0.06); }
+.rv-msg-text { color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.rv-msg .md { color: var(--text-2); }
+.rv-msg .md > :first-child { margin-top: 0; }
+.rv-msg .md > :last-child { margin-bottom: 0; }
+.rv-thread-done { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-top: 1px solid var(--border-soft); color: #f0cf96; font-size: 12.5px; }
+.rv-thread-done .btn-compact { min-height: 26px; padding: 0 10px; font-size: 12px; }
+.rv-thread-reply { display: block; width: 100%; padding: 6px 10px; border: 0; border-top: 1px solid var(--border-soft); border-radius: 0 0 8px 8px; background: none; color: var(--muted); font: 12.5px var(--sans); text-align: left; cursor: text; }
+.rv-thread-reply:hover { color: var(--text); background: var(--surface-2); }
+.rv-thread .rv-editor { position: static; max-width: none; margin: 0; border: 0; border-top: 1px solid var(--border-soft); border-radius: 0 0 8px 8px; }
+.rv-editor-error { padding: 4px 10px; color: #f19a9a; font-size: 12px; }
+.rv-top { margin-bottom: 12px; }
+.rv-top .rv-editor { margin: 6px 12px 8px; }
+.rv-top-add { width: auto; margin: 0 12px; border: 1px dashed var(--border); border-radius: 8px; }
+.rv-replies { display: inline-flex; align-items: center; gap: 8px; margin-right: 12px; font-size: 12.5px; color: var(--accent); }
+.rv-replies .btn-compact { min-height: 24px; padding: 0 8px; font-size: 12px; }
+.rv-replies .link-btn { font-size: 12px; }
+.rv-moved { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; }
+.rv-fh-comment { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
+.rv-fh-comment:hover { border-color: var(--border); color: var(--text); }
+.ac-review-sub.is-unread { color: var(--accent); }
+.chat-review-line code { font-size: 12px; }
 
 .rv-foot { flex: none; display: flex; align-items: center; gap: 10px; padding: 7px 14px; border-top: 1px solid var(--border); background: var(--surface); font-size: 12.5px; }
 .rv-foot .btn-compact { min-height: 30px; }

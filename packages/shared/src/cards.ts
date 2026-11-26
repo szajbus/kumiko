@@ -172,6 +172,11 @@ export interface ApprovalCard {
   /** Where the branch moved to, for a stale card. */
   moved?: { to: string; commits: number };
   decision?: CardDecision;
+  /**
+   * The user commented on the card's changes, so Claude stopped waiting on it to answer: the card stays open for the
+   * user to decide without a call of Claude's, and what they decide reaches Claude as a message.
+   */
+  discussing?: boolean;
   /** The reason the user gave Claude for declining. */
   reason?: string;
   receipt?: CardReceipt;
